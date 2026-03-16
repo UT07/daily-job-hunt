@@ -1,12 +1,12 @@
-"""Cover letter generator using Claude API.
+"""Cover letter generator using multi-provider AI client.
 
 Generates professional, tailored cover letters in LaTeX format.
 """
 
 from __future__ import annotations
-import anthropic
 from pathlib import Path
 from scrapers.base import Job
+from ai_client import AIClient
 
 
 COVER_LETTER_SYSTEM_PROMPT = r"""You are an expert cover letter writer for software engineering and DevOps/SRE roles. You write concise, compelling cover letters that get interviews.
@@ -21,8 +21,8 @@ RULES:
 7. Address the Stamp 1G visa status naturally if relevant (e.g., "I am based in Dublin and authorized for full-time employment in Ireland").
 8. Use the candidate's actual contact details.
 
-Return ONLY the complete LaTeX source code for the cover letter. No explanations.
-Use a clean, modern LaTeX format that matches the candidate's resume style."""
+Return ONLY the body paragraphs of the cover letter (3-4 paragraphs of plain text).
+Do NOT include any LaTeX commands, headers, dates, or closings — just the body text."""
 
 
 COVER_LETTER_TEMPLATE = r"""\documentclass[10pt,a4paper]{{article}}
@@ -69,17 +69,13 @@ Utkarsh Singh
 def generate_cover_letter(
     job: Job,
     resume_tex: str,
-    api_key: str,
+    ai_client: AIClient,
     output_dir: Path,
-    model: str = "claude-sonnet-4-20250514",
-    temperature: float = 0.7,
 ) -> str:
     """Generate a tailored cover letter for a specific job.
 
     Returns the path to the cover letter .tex file.
     """
-    client = anthropic.Anthropic(api_key=api_key)
-
     user_prompt = f"""Write a cover letter for this job application:
 
 JOB LISTING:
@@ -106,15 +102,13 @@ Do NOT include the header, date, salutation, or closing — I'll add those from 
 Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
 
     try:
-        response = client.messages.create(
-            model=model,
-            max_tokens=2048,
-            temperature=temperature,
+        body_text = ai_client.complete(
+            prompt=user_prompt,
             system=COVER_LETTER_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_prompt}],
+            temperature=0.7,
+            skip_cache=True,  # Cover letters should be unique each time
         )
-
-        body_text = response.content[0].text.strip()
+        body_text = body_text.strip()
 
         # Escape LaTeX special characters in the body
         body_text = body_text.replace("&", r"\&")
@@ -142,6 +136,6 @@ Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
         print(f"  [COVER LETTER] {job.title} @ {job.company} -> {tex_path.name}")
         return str(tex_path)
 
-    except anthropic.APIError as e:
-        print(f"  [ERROR] API error generating cover letter for {job.company}: {e}")
+    except Exception as e:
+        print(f"  [ERROR] Error generating cover letter for {job.company}: {e}")
         return ""

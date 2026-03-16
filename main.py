@@ -34,6 +34,7 @@ from scrapers import (
     WorkAtAStartupScraper, HackerNewsScraper,
 )
 from scrapers.base import Job, BaseScraper
+from ai_client import AIClient
 from matcher import match_jobs
 from tailorer import tailor_resume
 from cover_letter import generate_cover_letter
@@ -241,18 +242,18 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
         return
 
     # --- Step 4: Load resumes and match ---
-    print(f"\n[STEP 4] Loading resumes and matching...")
+    print(f"\n[STEP 4] Loading resumes and initializing AI client...")
     resumes = load_resumes(config)
     if not resumes:
         print("[FATAL] No resumes loaded. Check paths in config.yaml")
         sys.exit(1)
 
-    anthropic_key = resolve_api_key(config, "anthropic")
-    if not anthropic_key:
-        print("[FATAL] Anthropic API key not found. Set ANTHROPIC_API_KEY or update config.yaml")
+    try:
+        ai_client = AIClient.from_config(config)
+    except Exception as e:
+        print(f"[FATAL] {e}")
         sys.exit(1)
 
-    claude_config = config.get("claude", {})
     max_jobs = config["search"].get("max_jobs_per_run", 20)
     min_score = config["search"].get("min_match_score", 60)
 
@@ -263,9 +264,7 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
     matched_jobs = match_jobs(
         jobs=jobs_to_match,
         resumes=resumes,
-        api_key=anthropic_key,
-        model=claude_config.get("model", "claude-sonnet-4-20250514"),
-        temperature=claude_config.get("analytical_temperature", 0.3),
+        ai_client=ai_client,
         min_score=min_score,
     )
     print(f"\n  Matched jobs (score >= {min_score}): {len(matched_jobs)}")
@@ -294,10 +293,8 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
         tailor_resume(
             job=job,
             base_tex=base_tex,
-            api_key=anthropic_key,
+            ai_client=ai_client,
             output_dir=resumes_dir,
-            model=claude_config.get("model", "claude-sonnet-4-20250514"),
-            temperature=claude_config.get("analytical_temperature", 0.3),
         )
 
     # --- Step 6: Generate cover letters ---
@@ -312,10 +309,8 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
         generate_cover_letter(
             job=job,
             resume_tex=resume_for_cl,
-            api_key=anthropic_key,
+            ai_client=ai_client,
             output_dir=coverletters_dir,
-            model=claude_config.get("model", "claude-sonnet-4-20250514"),
-            temperature=claude_config.get("creative_temperature", 0.7),
         )
 
     # --- Step 7: Compile LaTeX → PDF ---
@@ -347,6 +342,10 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
     print(f"  Cover letters:       {cls_generated}")
     print(f"  Tracker:             {tracker_path}")
     print(f"  Output directory:    {daily_dir}")
+    ai_stats = ai_client.stats
+    print(f"  AI cache hits:       {ai_stats['cache_hits']}")
+    print(f"  AI cache misses:     {ai_stats['cache_misses']}")
+    print(f"  AI provider calls:   {ai_stats['provider_calls']}")
     print(f"{'='*60}\n")
 
     # Save run metadata

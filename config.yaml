@@ -79,23 +79,17 @@ search:
   min_match_score: 60
 
 # --- API Keys ---
-# IMPORTANT: Replace these with your actual API keys
+# Set these as environment variables (or replace the ${...} placeholders)
 api_keys:
-  # Claude API (for resume tailoring + cover letter generation)
-  # Get yours at: https://console.anthropic.com/
-  anthropic: "${ANTHROPIC_API_KEY}"
+  # AI providers (need at least ONE — Groq recommended, it's free)
+  groq: "${GROQ_API_KEY}"               # https://console.groq.com/keys (free: 30 RPM, 14,400 RPD)
+  openrouter: "${OPENROUTER_API_KEY}"    # https://openrouter.ai/keys (free models available)
+  anthropic: "${ANTHROPIC_API_KEY}"      # https://console.anthropic.com/ (paid, optional fallback)
 
-  # SerpAPI (for Google Jobs scraping) - $50/mo, most reliable
-  # Get yours at: https://serpapi.com/
-  serpapi: "${SERPAPI_API_KEY}"
-
-  # JSearch via RapidAPI (free tier: 200 req/mo)
-  # Get yours at: https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch
-  jsearch: "${JSEARCH_API_KEY}"
-
-  # Adzuna API (free tier: 250 req/mo, great for Ireland/UK)
-  # Get yours at: https://developer.adzuna.com/
-  adzuna_app_id: "${ADZUNA_APP_ID}"
+  # Job scraper APIs (at least ONE recommended; browser scrapers work without keys)
+  serpapi: "${SERPAPI_API_KEY}"           # https://serpapi.com/ (~$50/mo, best coverage)
+  jsearch: "${JSEARCH_API_KEY}"          # https://rapidapi.com/.../jsearch (free: 200 req/mo)
+  adzuna_app_id: "${ADZUNA_APP_ID}"      # https://developer.adzuna.com/ (free: 250 req/mo)
   adzuna_app_key: "${ADZUNA_APP_KEY}"
 
 # --- Scraper Settings ---
@@ -135,11 +129,19 @@ output:
   # Keep artifacts for this many days
   retention_days: 30
 
-# --- Claude API Settings ---
-claude:
-  model: "claude-sonnet-4-20250514"
-  max_tokens: 4096
-  # Temperature for creative tasks (cover letters)
-  creative_temperature: 0.7
-  # Temperature for analytical tasks (matching, tailoring)
-  analytical_temperature: 0.3
+# --- AI Provider Settings ---
+# Priority order: Groq → OpenRouter → Anthropic (failover chain)
+ai:
+  # Groq (primary — free, fast, Llama 3.3 70B)
+  groq_model: "llama-3.3-70b-versatile"
+
+  # OpenRouter (failover — free models aggregator)
+  openrouter_model: "qwen/qwen-2.5-72b-instruct:free"
+
+  # Anthropic (paid fallback only — uncomment if you want it)
+  # anthropic_model: "claude-sonnet-4-20250514"
+
+  # Response cache (avoids re-processing identical prompts)
+  cache:
+    path: "output/.ai_cache.db"
+    ttl_hours: 72   # Cache responses for 3 days

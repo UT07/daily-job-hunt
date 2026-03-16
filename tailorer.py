@@ -1,14 +1,13 @@
-"""Resume tailoring engine using Claude API.
+"""Resume tailoring engine using multi-provider AI client.
 
 Takes the base LaTeX resume and tweaks it for each specific job,
 emphasizing relevant skills, adjusting the summary, and reordering bullet points.
 """
 
 from __future__ import annotations
-import json
-import anthropic
 from pathlib import Path
 from scrapers.base import Job
+from ai_client import AIClient
 
 
 TAILOR_SYSTEM_PROMPT = r"""You are an expert resume writer who specializes in tailoring technical resumes for specific job listings. You work with LaTeX resumes.
@@ -32,17 +31,13 @@ Return ONLY the complete, modified LaTeX source code. No explanations, no markdo
 def tailor_resume(
     job: Job,
     base_tex: str,
-    api_key: str,
+    ai_client: AIClient,
     output_dir: Path,
-    model: str = "claude-sonnet-4-20250514",
-    temperature: float = 0.3,
 ) -> str:
     """Tailor a LaTeX resume for a specific job listing.
 
     Returns the path to the tailored .tex file.
     """
-    client = anthropic.Anthropic(api_key=api_key)
-
     # Get tailoring suggestions from the matching step if available
     suggestions = ""
     if hasattr(job, "_match_data") and job._match_data:
@@ -73,19 +68,21 @@ BASE RESUME (LaTeX):
 Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end with \\end{{document}}."""
 
     try:
-        response = client.messages.create(
-            model=model,
-            max_tokens=8192,
-            temperature=temperature,
+        tailored_tex = ai_client.complete(
+            prompt=user_prompt,
             system=TAILOR_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": user_prompt}],
+            temperature=0.3,
         )
+        tailored_tex = tailored_tex.strip()
 
-        tailored_tex = response.content[0].text.strip()
+        # Strip markdown code fences if present
+        if tailored_tex.startswith("```"):
+            lines = tailored_tex.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            tailored_tex = "\n".join(lines)
 
         # Sanity check: must start with \documentclass
         if not tailored_tex.startswith("\\documentclass"):
-            # Try to extract LaTeX from response
             start = tailored_tex.find("\\documentclass")
             if start >= 0:
                 tailored_tex = tailored_tex[start:]
@@ -108,6 +105,6 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
         print(f"  [TAILORED] {job.title} @ {job.company} -> {tex_path.name}")
         return str(tex_path)
 
-    except anthropic.APIError as e:
-        print(f"  [ERROR] API error tailoring for {job.company}: {e}")
+    except Exception as e:
+        print(f"  [ERROR] Error tailoring for {job.company}: {e}")
         return ""

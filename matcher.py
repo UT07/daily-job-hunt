@@ -1,4 +1,4 @@
-"""Job-resume matching engine using Claude API.
+"""Job-resume matching engine using multi-provider AI client.
 
 Scores each job against your resume profiles and determines
 which resume variant is the best fit.
@@ -6,9 +6,9 @@ which resume variant is the best fit.
 
 from __future__ import annotations
 import json
-import anthropic
-from typing import List, Dict, Tuple
+from typing import List, Dict
 from scrapers.base import Job
+from ai_client import AIClient
 
 
 MATCH_SYSTEM_PROMPT = """You are an expert technical recruiter and career advisor. Your job is to score how well a candidate matches a job listing.
@@ -43,18 +43,14 @@ Return ONLY valid JSON (no markdown, no code fences):
 
 def match_jobs(
     jobs: List[Job],
-    resumes: Dict[str, str],  # {"sre_devops": "<tex content>", "fullstack": "<tex content>"}
-    api_key: str,
-    model: str = "claude-sonnet-4-20250514",
-    temperature: float = 0.3,
+    resumes: Dict[str, str],
+    ai_client: AIClient,
     min_score: int = 60,
 ) -> List[Job]:
     """Score and filter jobs against resume profiles.
 
     Returns only jobs that meet the minimum match score, sorted by score descending.
-    Each returned Job has match_score, match_reasoning, and matched_resume populated.
     """
-    client = anthropic.Anthropic(api_key=api_key)
     matched_jobs = []
 
     # Combine resumes into context
@@ -86,23 +82,25 @@ CANDIDATE INFO:
 - Target: Fresh grad roles (where experience gives an edge) and mid-level roles"""
 
         try:
-            response = client.messages.create(
-                model=model,
-                max_tokens=1024,
-                temperature=temperature,
+            result_text = ai_client.complete(
+                prompt=user_prompt,
                 system=MATCH_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_prompt}],
+                temperature=0.3,
             )
 
-            result_text = response.content[0].text.strip()
-            # Parse JSON response
+            # Clean up response — some models wrap in code fences
+            result_text = result_text.strip()
+            if result_text.startswith("```"):
+                result_text = result_text.split("```")[1]
+                if result_text.startswith("json"):
+                    result_text = result_text[4:]
+            result_text = result_text.strip()
+
             result = json.loads(result_text)
 
             job.match_score = result.get("score", 0)
             job.match_reasoning = result.get("reasoning", "")
             job.matched_resume = result.get("best_resume", "fullstack")
-
-            # Store extra data for tailoring
             job._match_data = result
 
             if job.match_score >= min_score:
@@ -113,8 +111,9 @@ CANDIDATE INFO:
 
         except json.JSONDecodeError as e:
             print(f"  [ERROR] Failed to parse match result for {job.title}: {e}")
-        except anthropic.APIError as e:
-            print(f"  [ERROR] API error matching {job.title}: {e}")
+            print(f"          Response was: {result_text[:200]}")
+        except Exception as e:
+            print(f"  [ERROR] Error matching {job.title}: {e}")
 
     matched_jobs.sort(key=lambda j: j.match_score, reverse=True)
     return matched_jobs

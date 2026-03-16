@@ -1,12 +1,8 @@
 # Job Automation Pipeline - Dependencies
-# Install: pip install -r requirements.txt
 
 # Core
 pyyaml>=6.0
 requests>=2.31.0
-
-# Anthropic Claude API (for matching, tailoring, cover letters)
-anthropic>=0.39.0
 
 # Excel tracker
 openpyxl>=3.1.2
@@ -20,3 +16,6 @@ playwright-stealth>=1.0.6
 
 # Async support
 nest-asyncio>=1.5.8
+
+# Optional: Anthropic SDK (only needed if using Claude as paid fallback)
+# anthropic>=0.39.0

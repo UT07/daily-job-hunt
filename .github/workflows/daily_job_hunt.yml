@@ -48,7 +48,11 @@ jobs:
 
       - name: Run job hunt pipeline
         env:
+          # AI providers (free — need at least one)
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Job scraper APIs
           SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
           JSEARCH_API_KEY: ${{ secrets.JSEARCH_API_KEY }}
           ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
