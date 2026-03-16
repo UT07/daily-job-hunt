@@ -81,9 +81,10 @@ search:
 # --- API Keys ---
 # Set these as environment variables (or replace the ${...} placeholders)
 api_keys:
-  # AI providers (need at least ONE — Groq recommended, it's free)
+  # AI providers (need at least ONE — all free)
   groq: "${GROQ_API_KEY}"               # https://console.groq.com/keys (free: 30 RPM, 14,400 RPD)
-  openrouter: "${OPENROUTER_API_KEY}"    # https://openrouter.ai/keys (free models available)
+  deepseek: "${DEEPSEEK_API_KEY}"       # https://platform.deepseek.com/ (free: 60 RPM)
+  openrouter: "${OPENROUTER_API_KEY}"    # https://openrouter.ai/keys (free models: Qwen, Llama)
   anthropic: "${ANTHROPIC_API_KEY}"      # https://console.anthropic.com/ (paid, optional fallback)
 
   # Job scraper APIs (at least ONE recommended; browser scrapers work without keys)
@@ -132,10 +133,13 @@ output:
 # --- AI Provider Settings ---
 # Priority order: Groq → OpenRouter → Anthropic (failover chain)
 ai:
-  # Groq (primary — free, fast, Llama 3.3 70B)
+  # Groq (primary — free, fastest inference)
   groq_model: "llama-3.3-70b-versatile"
 
-  # OpenRouter (failover — free models aggregator)
+  # DeepSeek (secondary — free, strong on structured output)
+  deepseek_model: "deepseek-chat"
+
+  # OpenRouter (tertiary — free models aggregator)
   openrouter_model: "qwen/qwen-2.5-72b-instruct:free"
 
   # Anthropic (paid fallback only — uncomment if you want it)

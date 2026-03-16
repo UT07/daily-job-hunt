@@ -2,9 +2,10 @@
 Multi-provider AI client with rate limiting, caching, and automatic failover.
 
 Supported providers (all have free tiers):
-  1. Groq (Llama 3.3 70B)     — 30 RPM, 14,400 RPD, 6,000 TPM (primary)
-  2. OpenRouter (free models)  — Qwen 2.5 72B, Llama 3.3, etc. (failover)
-  3. Anthropic Claude          — paid, used as premium fallback only
+  1. Groq (Llama 3.3 70B)     — 30 RPM, 14,400 RPD (primary, fastest)
+  2. DeepSeek (DeepSeek V3)    — 60 RPM, ~500K tokens/day (strong structured output)
+  3. OpenRouter (free models)  — Qwen 2.5 72B, Llama 3.3, etc. (aggregator failover)
+  4. Anthropic Claude          — paid, used as premium fallback only
 
 The client tries providers in order and fails over automatically.
 Responses are cached in SQLite to avoid burning quota on repeated requests.
@@ -294,6 +295,52 @@ class OpenRouterProvider(AIProvider):
         return data["choices"][0]["message"]["content"]
 
 
+class DeepSeekProvider(AIProvider):
+    """DeepSeek API — free tier, very capable for structured tasks.
+
+    DeepSeek V3 is competitive with GPT-4o and Claude Sonnet on coding
+    and structured output tasks. The API is OpenAI-compatible.
+    Free tier: ~500K tokens/day, 60 RPM.
+    Sign up: https://platform.deepseek.com/
+    """
+
+    def __init__(self, api_key: str, model: str = "deepseek-chat", **kwargs):
+        super().__init__(
+            name="deepseek",
+            model=model,
+            api_key=api_key,
+            rate_limiter=RateLimiter(requests_per_minute=60, requests_per_day=5000),
+            base_url="https://api.deepseek.com/v1",
+            **kwargs,
+        )
+
+    def complete(self, prompt: str, system: str = "", temperature: float = None) -> str:
+        import requests
+
+        if not self.rate_limiter.acquire():
+            raise RateLimitError(f"[{self.name}] Rate limit exceeded")
+
+        temp = temperature if temperature is not None else self.temperature
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        resp = requests.post(
+            f"{self.base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            json={"model": self.model, "messages": messages, "temperature": temp, "max_tokens": self.max_tokens},
+            timeout=120,  # DeepSeek can be slower than Groq
+        )
+
+        if resp.status_code == 429:
+            raise RateLimitError(f"[{self.name}] HTTP 429 — rate limited")
+        resp.raise_for_status()
+
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
+
+
 class AnthropicProvider(AIProvider):
     """Anthropic Claude — paid fallback."""
 
@@ -419,14 +466,21 @@ class AIClient:
             providers.append(GroqProvider(api_key=groq_key, model=model))
             print(f"[AI] Groq provider: {model}")
 
-        # 2. OpenRouter (free models aggregator — failover)
+        # 2. DeepSeek (free, very strong on structured tasks)
+        ds_key = get_key("deepseek", "DEEPSEEK_API_KEY")
+        if ds_key:
+            model = ai_cfg.get("deepseek_model", "deepseek-chat")
+            providers.append(DeepSeekProvider(api_key=ds_key, model=model))
+            print(f"[AI] DeepSeek provider: {model}")
+
+        # 3. OpenRouter (free models aggregator — extra failover)
         or_key = get_key("openrouter", "OPENROUTER_API_KEY")
         if or_key:
-            model = ai_cfg.get("openrouter_model", "google/gemini-2.0-flash-exp:free")
+            model = ai_cfg.get("openrouter_model", "qwen/qwen-2.5-72b-instruct:free")
             providers.append(OpenRouterProvider(api_key=or_key, model=model))
             print(f"[AI] OpenRouter provider: {model}")
 
-        # 3. Anthropic (paid fallback — only if you want it)
+        # 4. Anthropic (paid fallback — only if you want it)
         anthropic_key = get_key("anthropic", "ANTHROPIC_API_KEY")
         if anthropic_key:
             model = ai_cfg.get("anthropic_model", "claude-sonnet-4-20250514")
@@ -437,6 +491,7 @@ class AIClient:
             raise ProviderError(
                 "No AI providers configured. Set at least one API key:\n"
                 "  GROQ_API_KEY      — https://console.groq.com/keys (free, recommended)\n"
+                "  DEEPSEEK_API_KEY  — https://platform.deepseek.com/ (free)\n"
                 "  OPENROUTER_API_KEY — https://openrouter.ai/keys (free models available)\n"
                 "  ANTHROPIC_API_KEY  — https://console.anthropic.com/ (paid)"
             )
