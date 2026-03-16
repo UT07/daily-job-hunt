@@ -3,6 +3,7 @@
 from __future__ import annotations
 import requests
 import time
+import threading
 from datetime import datetime, timedelta
 from typing import List
 from .base import BaseScraper, Job
@@ -18,14 +19,27 @@ class AdzunaScraper(BaseScraper):
 
     name = "adzuna"
 
+    # Class-level rate limiter — Adzuna free tier is very strict
+    _rate_lock = threading.Lock()
+    _last_request_time = 0.0
+
     def __init__(self, app_id: str, app_key: str, delay: float = 2.0):
         self.app_id = app_id
         self.app_key = app_key
         self.delay = delay
-        # Use Ireland endpoint by default; can also query GB, US, etc.
         self.base_url = "https://api.adzuna.com/v1/api/jobs/{country}/search/{page}"
 
+    def _rate_wait(self):
+        """Ensure minimum 2s between Adzuna requests across all threads."""
+        with self._rate_lock:
+            now = time.time()
+            elapsed = now - AdzunaScraper._last_request_time
+            if elapsed < 2.0:
+                time.sleep(2.0 - elapsed)
+            AdzunaScraper._last_request_time = time.time()
+
     def search(self, query: str, location: str, days_back: int = 1, **kwargs) -> List[Job]:
+        self._rate_wait()
         jobs = []
 
         # Determine country code from location
@@ -55,16 +69,18 @@ class AdzunaScraper(BaseScraper):
 
         # Add location filter (not for remote searches)
         if not is_remote_search and location:
-            # Adzuna uses 'where' for location text search
             clean_loc = location.replace(", Ireland", "").replace(", UK", "").strip()
             if clean_loc.lower() not in ["ireland", "remote"]:
                 params["where"] = clean_loc
 
         try:
-            headers = {"Content-Type": "application/json"}
-            resp = requests.get(url, params=params, headers=headers, timeout=30)
+            resp = requests.get(url, params=params, timeout=30)
             if resp.status_code == 404:
-                print(f"[Adzuna] 404 for '{query}' — check your app_id ({self.app_id}) at https://developer.adzuna.com/admin/applications")
+                # Don't spam logs — just silently skip
+                return []
+            if resp.status_code == 429:
+                print(f"[Adzuna] Rate limited for '{query}' — backing off 5s")
+                time.sleep(5)
                 return []
             resp.raise_for_status()
             data = resp.json()
@@ -99,7 +115,9 @@ class AdzunaScraper(BaseScraper):
                     remote=is_remote or is_remote_search,
                 ))
 
-            time.sleep(self.delay)
+            if jobs:
+                print(f"  [Adzuna] '{query}' in '{location}' -> {len(jobs)} jobs")
+
         except requests.RequestException as e:
             print(f"[Adzuna] Error searching '{query}' in '{location}': {e}")
         except (KeyError, IndexError) as e:

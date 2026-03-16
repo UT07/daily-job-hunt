@@ -205,7 +205,7 @@ def scrape_all_jobs(scrapers: List[BaseScraper], config: dict) -> List[Job]:
 
     # Build tasks — different strategies for API vs browser
     # Rate-limited scrapers (jsearch: 200 req/mo free) get fewer tasks
-    RATE_LIMITED = {"jsearch"}
+    RATE_LIMITED = {"jsearch", "adzuna"}
     api_tasks = []
     browser_tasks = []
 
