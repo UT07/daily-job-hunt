@@ -150,6 +150,19 @@ def load_resumes(config: dict) -> Dict[str, str]:
     return resumes
 
 
+BROWSER_SCRAPERS = {"linkedin", "indeed", "irishjobs"}
+
+# Consolidated queries for browser scrapers — broad enough to catch everything,
+# few enough to not take 30 minutes. Each of these covers multiple specific titles.
+BROWSER_QUERIES = [
+    "DevOps OR SRE OR Platform Engineer",
+    "Software Engineer OR Developer",
+    "Full Stack OR Backend OR Frontend",
+    "Cloud Engineer OR Infrastructure",
+    "Graduate OR Junior Engineer",
+]
+
+
 def _scrape_single(scraper: BaseScraper, query: str, location: str, days_back: int) -> List[Job]:
     """Run one scraper query (used for parallel execution)."""
     try:
@@ -163,50 +176,94 @@ def _scrape_single(scraper: BaseScraper, query: str, location: str, days_back: i
 
 
 def scrape_all_jobs(scrapers: List[BaseScraper], config: dict) -> List[Job]:
-    """Run all scrapers in parallel using ThreadPoolExecutor.
+    """Run all scrapers with smart query routing.
 
-    API scrapers and browser scrapers run concurrently, cutting total
-    scrape time from ~20 min to ~5-8 min.
+    Strategy:
+    - API scrapers (fast, no browser): run ALL queries × ALL locations
+    - Browser scrapers (slow, stealth): run 5 consolidated queries × primary locations only
+    - Global timeout: abort if scraping exceeds max_scrape_minutes
+
+    This keeps total scrape time under 10 minutes instead of 45+.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
+    import time as _time
 
     all_jobs = []
     queries = config["search"]["queries"]
     primary_locs = config["search"]["locations"]["primary"]
     secondary_locs = config["search"]["locations"]["secondary"]
     days_back = config["search"].get("days_back", 3)
+    max_scrape_min = config.get("scrapers", {}).get("max_scrape_minutes", 12)
+    deadline = _time.time() + max_scrape_min * 60
 
-    # Build all (scraper, query, location) tasks
-    tasks = []
-    for scraper in scrapers:
+    # Separate scrapers into fast (API) and slow (browser)
+    api_scrapers = [s for s in scrapers if s.name not in BROWSER_SCRAPERS]
+    browser_scrapers = [s for s in scrapers if s.name in BROWSER_SCRAPERS]
+
+    # Build tasks — different strategies for API vs browser
+    api_tasks = []
+    browser_tasks = []
+
+    for scraper in api_scrapers:
         for query in queries:
+            for location in primary_locs + secondary_locs:
+                api_tasks.append((scraper, query, location))
+
+    for scraper in browser_scrapers:
+        # Browser scrapers: consolidated queries × primary locations only
+        for query in BROWSER_QUERIES:
             for location in primary_locs:
-                tasks.append((scraper, query, location))
-        # Secondary locations: top queries only for API scrapers, skip for browser scrapers
-        is_browser = scraper.name in ("linkedin", "indeed", "irishjobs")
-        secondary_queries = queries[:3] if is_browser else queries[:5]
-        for query in secondary_queries:
-            for location in secondary_locs:
-                tasks.append((scraper, query, location))
+                browser_tasks.append((scraper, query, location))
 
-    print(f"  Running {len(tasks)} scraper tasks across {len(scrapers)} scrapers...")
+    total = len(api_tasks) + len(browser_tasks)
+    print(f"  API tasks: {len(api_tasks)}, Browser tasks: {len(browser_tasks)} (total: {total})")
+    print(f"  Deadline: {max_scrape_min} minutes")
 
-    # API scrapers can run with high parallelism; browser scrapers
-    # should be limited to avoid detection. Use 8 workers total.
     max_workers = config.get("scrapers", {}).get("max_workers", 8)
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {
-            executor.submit(_scrape_single, s, q, l, days_back): (s.name, q, l)
-            for s, q, l in tasks
-        }
-        for future in as_completed(futures):
-            try:
-                jobs = future.result()
-                all_jobs.extend(jobs)
-            except Exception as e:
-                name, q, l = futures[future]
-                print(f"  [{name}] Task failed for '{q}': {e}")
+    # Phase 1: Run API scrapers (fast, high parallelism)
+    if api_tasks:
+        print(f"\n  [Phase 1] Running {len(api_tasks)} API scraper tasks...")
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_scrape_single, s, q, l, days_back): (s.name, q, l)
+                for s, q, l in api_tasks
+            }
+            for future in as_completed(futures):
+                if _time.time() > deadline:
+                    print("  [TIMEOUT] API phase exceeded deadline, moving on...")
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
+                try:
+                    jobs = future.result(timeout=30)
+                    all_jobs.extend(jobs)
+                except Exception as e:
+                    name, q, l = futures[future]
+                    print(f"  [{name}] Failed: '{q}' — {e}")
+
+    # Phase 2: Run browser scrapers (slow, limited parallelism)
+    # Only 2 workers for browser scrapers to avoid overwhelming Playwright
+    if browser_tasks and _time.time() < deadline:
+        remaining = int(deadline - _time.time())
+        print(f"\n  [Phase 2] Running {len(browser_tasks)} browser tasks ({remaining}s remaining)...")
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = {
+                executor.submit(_scrape_single, s, q, l, days_back): (s.name, q, l)
+                for s, q, l in browser_tasks
+            }
+            for future in as_completed(futures):
+                if _time.time() > deadline:
+                    print("  [TIMEOUT] Browser phase exceeded deadline, stopping.")
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
+                try:
+                    jobs = future.result(timeout=60)
+                    all_jobs.extend(jobs)
+                except Exception as e:
+                    name, q, l = futures[future]
+                    print(f"  [{name}] Failed: '{q}' — {e}")
+    elif browser_tasks:
+        print("  [SKIP] No time left for browser scrapers")
 
     return all_jobs
 

@@ -122,13 +122,16 @@ scrapers:
   # Parallel scraping workers (ThreadPoolExecutor)
   max_workers: 8
 
+  # Max time (minutes) for the scraping phase — pipeline moves on after this
+  max_scrape_minutes: 12
+
   # Request delays to be respectful
   delay_between_requests: 2  # seconds
 
   # Browser scraper settings
   browser:
     headless: true       # Run in headless mode (set false for debugging)
-    max_pages: 2         # Pages to scrape per query (more = slower + riskier)
+    max_pages: 1         # Pages to scrape per query (1 = fast, 2 = more results but slower)
     indeed_country: "ie" # ie, co.uk, com
     linkedin_geo_id: "104738515"  # Ireland=104738515, UK=101165590
 
