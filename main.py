@@ -37,6 +37,8 @@ from scrapers.base import Job, BaseScraper
 from ai_client import AIClient
 from matcher import match_jobs
 from tailorer import tailor_resume
+from resume_scorer import score_and_improve
+from contact_finder import find_contacts_batch
 from cover_letter import generate_cover_letter
 from latex_compiler import compile_tex_to_pdf
 from excel_tracker import create_or_update_tracker
@@ -370,14 +372,15 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
         create_or_update_tracker([], str(tracker_path), run_date)
         return
 
-    # --- Step 5: Tailor resumes ---
-    print(f"\n[STEP 5] Tailoring resumes for {len(matched_jobs)} jobs...")
+    # --- Step 5: Tailor resumes + 3-score validation ---
+    print(f"\n[STEP 5] Tailoring resumes with 3-score validation (target: 85+)...")
     for job in matched_jobs:
         base_tex = resumes.get(job.matched_resume, "")
         if not base_tex:
             print(f"  [SKIP] No base resume found for profile: {job.matched_resume}")
             continue
 
+        # First pass: tailor the resume
         tailor_resume(
             job=job,
             base_tex=base_tex,
@@ -385,10 +388,37 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
             output_dir=resumes_dir,
         )
 
-    # --- Step 6: Generate cover letters ---
-    print(f"\n[STEP 6] Generating cover letters...")
+        # Second pass: score from 3 perspectives and iteratively improve
+        if job.tailored_tex_path and Path(job.tailored_tex_path).exists():
+            tailored_tex = Path(job.tailored_tex_path).read_text(encoding="utf-8")
+            print(f"  [SCORING] {job.title} @ {job.company}...")
+
+            improved_tex, scores = score_and_improve(
+                tailored_tex=tailored_tex,
+                job=job,
+                ai_client=ai_client,
+                min_score=85,
+                max_rounds=3,
+            )
+
+            # Update scores on the job object
+            job.ats_score = scores.get("ats_score", 0)
+            job.hiring_manager_score = scores.get("hiring_manager_score", 0)
+            job.tech_recruiter_score = scores.get("tech_recruiter_score", 0)
+
+            # Save the improved version if it changed
+            if improved_tex != tailored_tex:
+                Path(job.tailored_tex_path).write_text(improved_tex, encoding="utf-8")
+                print(f"  [IMPROVED] {job.title} @ {job.company}")
+
+    # --- Step 6: Find LinkedIn contacts ---
+    print(f"\n[STEP 6] Finding LinkedIn contacts for networking...")
+    find_contacts_batch(matched_jobs, ai_client)
+
+    # --- Step 7: Generate cover letters ---
+    print(f"\n[STEP 7] Generating cover letters...")
     for job in matched_jobs:
-        # Use the tailored resume for context if available
+        # Use the tailored (and scored/improved) resume for context
         if job.tailored_tex_path and Path(job.tailored_tex_path).exists():
             resume_for_cl = Path(job.tailored_tex_path).read_text(encoding="utf-8")
         else:
@@ -401,8 +431,8 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
             output_dir=coverletters_dir,
         )
 
-    # --- Step 7: Compile LaTeX → PDF ---
-    print(f"\n[STEP 7] Compiling LaTeX to PDF...")
+    # --- Step 8: Compile LaTeX → PDF ---
+    print(f"\n[STEP 8] Compiling LaTeX to PDF...")
     for job in matched_jobs:
         if job.tailored_tex_path:
             pdf = compile_tex_to_pdf(job.tailored_tex_path)
@@ -411,14 +441,15 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
             pdf = compile_tex_to_pdf(job.cover_letter_tex_path)
             job.cover_letter_pdf_path = pdf
 
-    # --- Step 8: Update Excel tracker ---
-    print(f"\n[STEP 8] Updating Excel tracker...")
+    # --- Step 9: Update master Excel tracker ---
+    print(f"\n[STEP 9] Updating master Excel tracker...")
     tracker_path = base_dir / config["output"]["tracker_filename"]
     create_or_update_tracker(matched_jobs, str(tracker_path), run_date)
 
     # --- Summary ---
     resumes_generated = sum(1 for j in matched_jobs if j.tailored_pdf_path)
     cls_generated = sum(1 for j in matched_jobs if j.cover_letter_pdf_path)
+    all_85_count = sum(1 for j in matched_jobs if j.ats_score >= 85 and j.hiring_manager_score >= 85 and j.tech_recruiter_score >= 85)
 
     print(f"\n{'='*60}")
     print(f"  PIPELINE COMPLETE — {run_date}")
@@ -426,6 +457,7 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
     print(f"  Jobs scraped:        {len(raw_jobs)}")
     print(f"  Unique jobs:         {len(unique_jobs)}")
     print(f"  Jobs matched:        {len(matched_jobs)}")
+    print(f"  All 3 scores 85+:   {all_85_count}/{len(matched_jobs)}")
     print(f"  Resumes generated:   {resumes_generated}")
     print(f"  Cover letters:       {cls_generated}")
     print(f"  Tracker:             {tracker_path}")

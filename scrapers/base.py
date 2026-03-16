@@ -34,6 +34,18 @@ class Job:
     cover_letter_tex_path: str = ""
     cover_letter_pdf_path: str = ""
 
+    # 3-score validation (populated before tailoring)
+    ats_score: float = 0.0
+    hiring_manager_score: float = 0.0
+    tech_recruiter_score: float = 0.0
+
+    # LinkedIn contacts for networking
+    linkedin_contacts: str = ""  # JSON string of contacts list
+
+    # Application tracking
+    applied: str = "No"
+    application_status: str = "New"  # New, Applied, Interview, Offer, Rejected, Withdrawn
+
     def __post_init__(self):
         if not self.job_id:
             raw = f"{self.title}|{self.company}|{self.location}|{self.source}"
