@@ -357,12 +357,12 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
         ai_client=ai_client,
         min_score=min_score,
     )
-    print(f"\n  Matched jobs (score >= {min_score}): {len(matched_jobs)}")
+    print(f"\n  Matched jobs (avg >= {min_score}): {len(matched_jobs)}")
 
     if dry_run:
         print(f"\n[DRY-RUN MODE] Would process {len(matched_jobs)} jobs:")
         for j in matched_jobs:
-            print(f"  [{j.match_score}%] {j.title} @ {j.company} -> {j.matched_resume}")
+            print(f"  ATS={j.ats_score} HM={j.hiring_manager_score} TR={j.tech_recruiter_score} (avg={j.match_score}) | {j.title} @ {j.company} -> {j.matched_resume}")
         return
 
     if not matched_jobs:
@@ -373,14 +373,20 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
         return
 
     # --- Step 5: Tailor resumes + 3-score validation ---
-    print(f"\n[STEP 5] Tailoring resumes with 3-score validation (target: 85+)...")
+    # Initial ATS/HM/TR scores from matching are against the BASE resume.
+    # After tailoring, we re-score the TAILORED resume and iteratively
+    # improve until all 3 scores hit 85+ (up to 3 rounds).
+    print(f"\n[STEP 5] Tailoring resumes + scoring to 85+ (ATS, HM, TR)...")
     for job in matched_jobs:
         base_tex = resumes.get(job.matched_resume, "")
         if not base_tex:
             print(f"  [SKIP] No base resume found for profile: {job.matched_resume}")
             continue
 
-        # First pass: tailor the resume
+        print(f"\n  --- {job.title} @ {job.company} ---")
+        print(f"  Base scores: ATS={job.ats_score} HM={job.hiring_manager_score} TR={job.tech_recruiter_score}")
+
+        # First pass: tailor the resume using match data
         tailor_resume(
             job=job,
             base_tex=base_tex,
@@ -388,10 +394,9 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
             output_dir=resumes_dir,
         )
 
-        # Second pass: score from 3 perspectives and iteratively improve
+        # Second pass: re-score the tailored version and improve until 85+
         if job.tailored_tex_path and Path(job.tailored_tex_path).exists():
             tailored_tex = Path(job.tailored_tex_path).read_text(encoding="utf-8")
-            print(f"  [SCORING] {job.title} @ {job.company}...")
 
             improved_tex, scores = score_and_improve(
                 tailored_tex=tailored_tex,
@@ -401,15 +406,15 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
                 max_rounds=3,
             )
 
-            # Update scores on the job object
+            # Update with post-tailoring scores (these go into the tracker)
             job.ats_score = scores.get("ats_score", 0)
             job.hiring_manager_score = scores.get("hiring_manager_score", 0)
             job.tech_recruiter_score = scores.get("tech_recruiter_score", 0)
+            job.match_score = round((job.ats_score + job.hiring_manager_score + job.tech_recruiter_score) / 3, 1)
 
-            # Save the improved version if it changed
+            # Save the improved version
             if improved_tex != tailored_tex:
                 Path(job.tailored_tex_path).write_text(improved_tex, encoding="utf-8")
-                print(f"  [IMPROVED] {job.title} @ {job.company}")
 
     # --- Step 6: Find LinkedIn contacts ---
     print(f"\n[STEP 6] Finding LinkedIn contacts for networking...")
