@@ -3,6 +3,7 @@
 from __future__ import annotations
 import requests
 import time
+import threading
 from datetime import datetime, timedelta
 from typing import List
 from .base import BaseScraper, Job
@@ -18,12 +19,26 @@ class JSearchScraper(BaseScraper):
 
     name = "jsearch"
 
+    # Class-level rate limiter — max 5 requests per second across all threads
+    _rate_lock = threading.Lock()
+    _last_request_time = 0.0
+
     def __init__(self, api_key: str, delay: float = 2.0):
         self.api_key = api_key
         self.delay = delay
         self.base_url = "https://jsearch.p.rapidapi.com/search"
 
+    def _rate_wait(self):
+        """Ensure minimum 1.5s between requests across all threads."""
+        with self._rate_lock:
+            now = time.time()
+            elapsed = now - JSearchScraper._last_request_time
+            if elapsed < 1.5:
+                time.sleep(1.5 - elapsed)
+            JSearchScraper._last_request_time = time.time()
+
     def search(self, query: str, location: str, days_back: int = 1, **kwargs) -> List[Job]:
+        self._rate_wait()
         jobs = []
         # Build date filter
         date_posted = "today" if days_back <= 1 else "3days" if days_back <= 3 else "week"

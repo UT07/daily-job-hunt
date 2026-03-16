@@ -68,6 +68,9 @@ jobs:
           JSEARCH_API_KEY: ${{ secrets.JSEARCH_API_KEY }}
           ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
           ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
         run: |
           MODE="${{ github.event.inputs.mode || 'full' }}"
           case "$MODE" in
@@ -94,44 +97,5 @@ jobs:
           git diff --staged --quiet || git commit -m "Daily job hunt: $(date +%Y-%m-%d)"
           git push || echo "Push failed — will retry next run"
 
-      - name: Send email summary (optional)
-        if: success() && env.SENDGRID_API_KEY != ''
-        env:
-          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
-          NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}
-        run: |
-          pip install sendgrid
-          python -c "
-          import json, os
-          from pathlib import Path
-          from datetime import date
-
-          today = date.today().isoformat()
-          meta_file = Path(f'output/{today}/run_metadata.json')
-          if not meta_file.exists():
-              print('No metadata found, skipping email')
-              exit(0)
-
-          meta = json.loads(meta_file.read_text())
-          total = meta.get('raw_jobs', 0)
-          matched = meta.get('matched_jobs', 0)
-          top_jobs = meta.get('matched_details', [])[:5]
-
-          body = f'Daily Job Hunt — {today}\n\n'
-          body += f'Scraped: {total} | Matched: {matched}\n\n'
-          body += 'Top matches:\n'
-          for j in top_jobs:
-              body += f\"  - {j['title']} @ {j['company']} (score: {j['score']}) — {j['apply_url']}\n\"
-
-          import sendgrid
-          from sendgrid.helpers.mail import Mail
-          sg = sendgrid.SendGridAPIClient(os.environ['SENDGRID_API_KEY'])
-          msg = Mail(
-              from_email='jobhunt@bot.dev',
-              to_emails=os.environ['NOTIFY_EMAIL'],
-              subject=f'Job Hunt: {matched} matches found ({today})',
-              plain_text_content=body,
-          )
-          sg.send(msg)
-          print(f'Email sent to {os.environ[\"NOTIFY_EMAIL\"]}')
-          "
+      # Email is handled by the pipeline itself (Step 10)
+      # Set GMAIL_ADDRESS + GMAIL_APP_PASSWORD secrets to enable

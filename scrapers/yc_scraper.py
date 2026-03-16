@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 import json
 import requests
+import threading
 from datetime import datetime, timedelta
 from typing import List
 from .base import BaseScraper, Job
@@ -38,7 +39,6 @@ class WorkAtAStartupScraper(BaseScraper):
         })
 
     def search(self, query: str, location: str = "", days_back: int = 7, **kwargs) -> List[Job]:
-        # WATS API doesn't have fine date filtering, so we fetch and filter
         jobs = []
 
         try:
@@ -53,20 +53,17 @@ class WorkAtAStartupScraper(BaseScraper):
         """Try the internal WATS API."""
         jobs = []
 
-        # Build query params
         params = {
             "query": query,
             "page": 1,
         }
 
-        # Location filter
         loc_lower = location.lower()
         if "remote" in loc_lower:
             params["remote"] = "true"
         if any(w in loc_lower for w in ["ireland", "dublin", "europe", "eu"]):
             params["regions"] = "europe"
 
-        # Role type filter based on query
         q_lower = query.lower()
         if any(w in q_lower for w in ["sre", "devops", "infrastructure", "platform"]):
             params["role_types"] = "devops-infra"
@@ -79,17 +76,16 @@ class WorkAtAStartupScraper(BaseScraper):
 
         companies = data if isinstance(data, list) else data.get("companies", data.get("results", []))
 
-        for company in companies[:30]:  # Limit to avoid processing too many
+        for company in companies[:30]:
             company_name = company.get("name", "")
             company_url = company.get("website", "")
-            batch = company.get("batch", "")  # e.g. "W24", "S23"
+            batch = company.get("batch", "")
 
             for job_data in company.get("jobs", []):
                 title = job_data.get("title", "")
                 if not title:
                     continue
 
-                # Check relevance to query
                 combined = (title + " " + job_data.get("description", "")).lower()
                 query_words = query.lower().split()
                 if not any(w in combined for w in query_words):
@@ -163,29 +159,63 @@ class WorkAtAStartupScraper(BaseScraper):
 class HackerNewsScraper(BaseScraper):
     """Scrapes Hacker News 'Who is Hiring?' monthly threads.
 
-    These are plain-text posts on HN — no Cloudflare, no anti-bot.
-    Uses the HN Algolia API which is fast and reliable.
-    Great for startup and remote opportunities.
+    IMPORTANT: The thread is fetched ONCE and cached. All queries filter
+    against the cached data so we don't hammer the HN API with 70+ requests.
     """
 
     name = "hn_hiring"
     ALGOLIA_URL = "https://hn.algolia.com/api/v1/search"
 
+    # Class-level cache: fetch thread once, filter many times
+    _cache_lock = threading.Lock()
+    _cached_thread_id: str | None = None
+    _cached_comments: list[dict] | None = None
+
     def search(self, query: str, location: str = "", days_back: int = 30, **kwargs) -> List[Job]:
         jobs = []
 
-        # Find the latest "Who is hiring?" thread
         try:
-            thread_id = self._find_latest_thread()
-            if not thread_id:
-                print("  [HN] No recent 'Who is hiring?' thread found")
+            # Fetch and cache the thread once across all queries
+            self._ensure_cache()
+
+            if self._cached_comments is None:
                 return jobs
 
-            jobs = self._parse_thread(thread_id, query, location)
+            jobs = self._filter_comments(query, location)
         except Exception as e:
             print(f"  [HN] Error: {e}")
 
         return self.deduplicate(jobs)
+
+    def _ensure_cache(self):
+        """Fetch the latest hiring thread once, cache for all queries."""
+        with self._cache_lock:
+            if self._cached_comments is not None:
+                return  # Already cached
+
+            thread_id = self._find_latest_thread()
+            if not thread_id:
+                print("  [HN] No recent 'Who is hiring?' thread found")
+                self._cached_comments = []
+                return
+
+            self._cached_thread_id = thread_id
+
+            resp = requests.get(
+                f"https://hn.algolia.com/api/v1/items/{thread_id}",
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            # Parse all comments into structured dicts once
+            self._cached_comments = []
+            for comment in data.get("children", [])[:300]:
+                parsed = self._parse_comment(comment)
+                if parsed:
+                    self._cached_comments.append(parsed)
+
+            print(f"  [HN] Cached {len(self._cached_comments)} job postings from thread {thread_id}")
 
     def _find_latest_thread(self) -> str | None:
         """Find the latest 'Ask HN: Who is hiring?' thread."""
@@ -202,85 +232,101 @@ class HackerNewsScraper(BaseScraper):
                 return hit.get("objectID")
         return None
 
-    def _parse_thread(self, thread_id: str, query: str, location: str) -> List[Job]:
-        """Parse comments from a Who is Hiring thread."""
-        jobs = []
-        query_words = set(query.lower().split())
-        loc_words = set(location.lower().replace(",", "").split()) if location else set()
+    def _parse_comment(self, comment: dict) -> dict | None:
+        """Parse a single HN hiring comment into a structured dict."""
+        text = comment.get("text", "")
+        if not text or len(text) < 50:
+            return None
 
-        # Fetch all comments (top-level only)
-        resp = requests.get(
-            f"https://hn.algolia.com/api/v1/items/{thread_id}",
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
+        first_line = text.split("<p>")[0].split("\n")[0]
+        first_line = re.sub(r"<[^>]+>", "", first_line).strip()
 
-        for comment in data.get("children", [])[:200]:
-            text = comment.get("text", "")
-            if not text or len(text) < 50:
-                continue
+        parts = [p.strip() for p in first_line.split("|")]
+        if len(parts) < 2:
+            return None
 
-            # Parse the standard HN hiring format:
-            # "Company Name | Role | Location | Remote | URL"
-            first_line = text.split("<p>")[0].split("\n")[0]
-            # Strip HTML tags
-            first_line = re.sub(r"<[^>]+>", "", first_line).strip()
+        company = parts[0] if parts else ""
+        title_parts = []
+        loc_parts = []
+        is_remote = False
+        url = ""
 
-            parts = [p.strip() for p in first_line.split("|")]
-
-            if len(parts) < 2:
-                continue
-
-            company = parts[0] if parts else ""
-            title_parts = []
-            loc_parts = []
-            is_remote = False
-            url = ""
-
-            for part in parts[1:]:
-                p_lower = part.lower().strip()
-                if "http" in p_lower:
-                    url = re.findall(r'https?://\S+', part)
-                    url = url[0] if url else ""
-                elif p_lower in ["remote", "onsite", "hybrid"] or "remote" in p_lower:
-                    is_remote = "remote" in p_lower
-                    if "onsite" not in p_lower:
-                        loc_parts.append(part)
-                elif any(geo in p_lower for geo in ["sf", "nyc", "london", "dublin", "berlin",
-                         "ireland", "eu", "us", "uk", "remote", "worldwide"]):
+        for part in parts[1:]:
+            p_lower = part.lower().strip()
+            if "http" in p_lower:
+                urls = re.findall(r'https?://\S+', part)
+                url = urls[0] if urls else ""
+            elif p_lower in ["remote", "onsite", "hybrid"] or "remote" in p_lower:
+                is_remote = "remote" in p_lower
+                if "onsite" not in p_lower:
                     loc_parts.append(part)
-                else:
-                    title_parts.append(part)
+            elif any(geo in p_lower for geo in ["sf", "nyc", "london", "dublin", "berlin",
+                     "ireland", "eu", "us", "uk", "remote", "worldwide",
+                     "canada", "australia", "germany", "france", "india"]):
+                loc_parts.append(part)
+            else:
+                title_parts.append(part)
 
-            title = " | ".join(title_parts) if title_parts else first_line
-            job_location = ", ".join(loc_parts) if loc_parts else ""
+        title = " | ".join(title_parts) if title_parts else first_line
+        job_location = ", ".join(loc_parts) if loc_parts else ""
 
-            # Clean HTML from full description
-            full_text = re.sub(r"<[^>]+>", " ", text).strip()
-            full_text = re.sub(r"\s+", " ", full_text)
+        full_text = re.sub(r"<[^>]+>", " ", text).strip()
+        full_text = re.sub(r"\s+", " ", full_text)
 
-            # Relevance check
-            combined = (title + " " + full_text).lower()
-            if not any(w in combined for w in query_words):
+        hn_url = f"https://news.ycombinator.com/item?id={comment.get('id', '')}"
+
+        return {
+            "title": title[:100],
+            "company": company[:80],
+            "location": job_location or ("Remote" if is_remote else "Unknown"),
+            "description": full_text[:500],
+            "apply_url": url or hn_url,
+            "remote": is_remote,
+            "searchable": (company + " " + title + " " + full_text).lower(),
+        }
+
+    def _filter_comments(self, query: str, location: str) -> List[Job]:
+        """Filter cached comments by query and location. Strict matching."""
+        jobs = []
+        query_lower = query.lower()
+
+        # Build strict keyword sets — require at least 2 matches for multi-word queries
+        query_words = [w for w in query_lower.split() if len(w) > 2]
+        loc_words = set()
+        if location:
+            loc_words = {w for w in location.lower().replace(",", "").split() if len(w) > 2}
+
+        for entry in self._cached_comments:
+            text = entry["searchable"]
+
+            # Strict relevance: require the full query phrase OR 2+ individual words
+            phrase_match = query_lower in text
+            word_matches = sum(1 for w in query_words if w in text)
+
+            if not phrase_match and word_matches < min(2, len(query_words)):
                 continue
 
-            # Location check (if specified)
-            if loc_words and not is_remote:
-                if not any(w in (job_location + " " + full_text).lower() for w in loc_words):
-                    continue
+            # Location check
+            if loc_words:
+                entry_loc = entry["location"].lower() + " " + text
+                is_remote_search = "remote" in location.lower()
+                is_remote_job = entry["remote"]
 
-            hn_url = f"https://news.ycombinator.com/item?id={comment.get('id', '')}"
+                if is_remote_search:
+                    if not is_remote_job:
+                        continue
+                else:
+                    if not any(w in entry_loc for w in loc_words) and not is_remote_job:
+                        continue
 
             jobs.append(Job(
-                title=title[:100],
-                company=company[:80],
-                location=job_location or ("Remote" if is_remote else "Unknown"),
-                description=full_text[:500],
-                apply_url=url or hn_url,
+                title=entry["title"],
+                company=entry["company"],
+                location=entry["location"],
+                description=entry["description"],
+                apply_url=entry["apply_url"],
                 source="hn_hiring",
-                remote=is_remote,
+                remote=entry["remote"],
             ))
 
-        print(f"  [HN] Found {len(jobs)} relevant jobs for '{query}'")
         return jobs

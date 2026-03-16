@@ -42,6 +42,7 @@ from contact_finder import find_contacts_batch
 from cover_letter import generate_cover_letter
 from latex_compiler import compile_tex_to_pdf
 from excel_tracker import create_or_update_tracker
+from email_notifier import send_summary_email
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
@@ -203,13 +204,24 @@ def scrape_all_jobs(scrapers: List[BaseScraper], config: dict) -> List[Job]:
     browser_scrapers = [s for s in scrapers if s.name in BROWSER_SCRAPERS]
 
     # Build tasks — different strategies for API vs browser
+    # Rate-limited scrapers (jsearch: 200 req/mo free) get fewer tasks
+    RATE_LIMITED = {"jsearch"}
     api_tasks = []
     browser_tasks = []
 
     for scraper in api_scrapers:
-        for query in queries:
-            for location in primary_locs + secondary_locs:
-                api_tasks.append((scraper, query, location))
+        if scraper.name in RATE_LIMITED:
+            # Conserve quota: primary locations only, top 5 queries on secondary
+            for query in queries:
+                for location in primary_locs:
+                    api_tasks.append((scraper, query, location))
+            for query in queries[:5]:
+                for location in secondary_locs:
+                    api_tasks.append((scraper, query, location))
+        else:
+            for query in queries:
+                for location in primary_locs + secondary_locs:
+                    api_tasks.append((scraper, query, location))
 
     for scraper in browser_scrapers:
         # Browser scrapers: consolidated queries × primary locations only
@@ -496,6 +508,23 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
     meta_path = daily_dir / "run_metadata.json"
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)
+
+    # --- Step 10: Email notification ---
+    gmail_addr = os.environ.get("GMAIL_ADDRESS", "")
+    gmail_pass = os.environ.get("GMAIL_APP_PASSWORD", "")
+    notify_email = os.environ.get("NOTIFY_EMAIL", gmail_addr)
+    if gmail_addr and gmail_pass:
+        print(f"\n[STEP 10] Sending email summary...")
+        send_summary_email(
+            matched_jobs=matched_jobs,
+            raw_count=len(raw_jobs),
+            unique_count=len(unique_jobs),
+            gmail_address=gmail_addr,
+            gmail_app_password=gmail_pass,
+            recipient=notify_email,
+        )
+    else:
+        print(f"\n[STEP 10] Email skipped (set GMAIL_ADDRESS + GMAIL_APP_PASSWORD to enable)")
 
 
 def main():
