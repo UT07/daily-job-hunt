@@ -43,17 +43,27 @@ resumes:
 search:
   # Keywords to search for (one search per keyword group)
   queries:
+    # SRE / DevOps / Platform
     - "Site Reliability Engineer"
     - "DevOps Engineer"
     - "Platform Engineer"
     - "Cloud Engineer"
+    - "Infrastructure Engineer"
+    # Full-Stack / Backend
     - "Software Engineer"
     - "Full Stack Developer"
-    - "Python Developer"
+    - "Full Stack Engineer"
     - "Backend Engineer"
+    - "Python Developer"
+    - "Node.js Developer"
+    - "React Developer"
+    - "TypeScript Developer"
+    - "Web Developer"
+    # Graduate / Junior level
     - "Junior Software Engineer"
     - "Graduate Software Engineer"
     - "Graduate DevOps Engineer"
+    - "Junior DevOps Engineer"
 
   # Location preferences (priority order)
   locations:
@@ -70,10 +80,10 @@ search:
     - "mid_level"        # Mid-level (you have an edge here)
 
   # How many days back to search for new postings
-  days_back: 1  # Only fetch jobs posted in the last 24 hours
+  days_back: 3  # Fetch jobs posted in the last 3 days for better coverage
 
   # Maximum jobs to process per run (to manage API costs)
-  max_jobs_per_run: 20
+  max_jobs_per_run: 30
 
   # Minimum match score (0-100) to generate resume + cover letter
   min_match_score: 60
@@ -108,6 +118,9 @@ scrapers:
     # Startup-focused (API/HTML — lightweight, no Cloudflare):
     - "yc_wats"      # YC Work at a Startup
     - "hn_hiring"    # Hacker News "Who is Hiring?" threads
+
+  # Parallel scraping workers (ThreadPoolExecutor)
+  max_workers: 8
 
   # Request delays to be respectful
   delay_between_requests: 2  # seconds

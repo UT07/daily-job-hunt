@@ -51,7 +51,6 @@ class AdzunaScraper(BaseScraper):
             "results_per_page": 20,
             "max_days_old": days_back,
             "sort_by": "date",
-            "content-type": "application/json",
         }
 
         # Add location filter (not for remote searches)
@@ -62,7 +61,11 @@ class AdzunaScraper(BaseScraper):
                 params["where"] = clean_loc
 
         try:
-            resp = requests.get(url, params=params, timeout=30)
+            headers = {"Content-Type": "application/json"}
+            resp = requests.get(url, params=params, headers=headers, timeout=30)
+            if resp.status_code == 404:
+                print(f"[Adzuna] 404 for '{query}' — check your app_id ({self.app_id}) at https://developer.adzuna.com/admin/applications")
+                return []
             resp.raise_for_status()
             data = resp.json()
 

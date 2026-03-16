@@ -88,7 +88,7 @@ class LinkedInScraper(BaseScraper):
                 url = f"https://www.linkedin.com/jobs/search/?{urllib.parse.urlencode(params)}"
                 print(f"  [LinkedIn] Scraping: {query} (page {page_num + 1})")
 
-                success = await browser.safe_goto(page, url, wait_until="networkidle", timeout=20000)
+                success = await browser.safe_goto(page, url, wait_until="domcontentloaded", timeout=15000)
                 if not success:
                     print(f"  [LinkedIn] Blocked or failed on page {page_num + 1}")
                     break
