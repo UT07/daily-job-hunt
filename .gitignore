@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Output (except tracker and seen_jobs which we commit)
+output/*/resumes/
+output/*/cover_letters/
+output/*/run_metadata.json
+
+# LaTeX artifacts
+*.aux
+*.log
+*.out
+*.toc
+*.nav
+*.snm
+
+# Environment
+.env
+*.env
+
+# macOS
+.DS_Store

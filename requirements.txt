@@ -1,0 +1,22 @@
+# Job Automation Pipeline - Dependencies
+# Install: pip install -r requirements.txt
+
+# Core
+pyyaml>=6.0
+requests>=2.31.0
+
+# Anthropic Claude API (for matching, tailoring, cover letters)
+anthropic>=0.39.0
+
+# Excel tracker
+openpyxl>=3.1.2
+
+# Optional: for data analysis of tracker
+pandas>=2.0.0
+
+# Browser-based scrapers (LinkedIn, Indeed, IrishJobs)
+playwright>=1.40.0
+playwright-stealth>=1.0.6
+
+# Async support
+nest-asyncio>=1.5.8

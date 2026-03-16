@@ -1,0 +1,145 @@
+# ============================================================
+#  Job Automation Configuration
+#  Edit this file to customize your job search automation
+# ============================================================
+
+# --- Your Profile ---
+profile:
+  name: "Utkarsh Singh"
+  email: "254utkarsh@gmail.com"
+  phone: "+353 892515620"
+  location: "Dublin, Ireland"
+  visa_status: "Stamp 1G - eligible for full-time employment in Ireland"
+  citizenship: "Indian"
+  github: "https://github.com/UT07"
+  linkedin: "https://www.linkedin.com/in/utkarshsingh2001/"
+  website: "https://utworld.netlify.app"
+
+# --- Resume Paths (LaTeX source files) ---
+resumes:
+  sre_devops:
+    tex_path: "../DevOps:SRE/resume.tex"
+    label: "SRE / DevOps Engineer"
+    target_roles:
+      - "Site Reliability Engineer"
+      - "DevOps Engineer"
+      - "Platform Engineer"
+      - "Infrastructure Engineer"
+      - "Cloud Engineer"
+      - "SRE"
+  fullstack:
+    tex_path: "../FullStack/resume_servicenow.tex"
+    label: "Full-Stack Software Engineer"
+    target_roles:
+      - "Software Engineer"
+      - "Full Stack Developer"
+      - "Full Stack Engineer"
+      - "Backend Engineer"
+      - "Python Developer"
+      - "Software Developer"
+      - "Web Developer"
+
+# --- Job Search Parameters ---
+search:
+  # Keywords to search for (one search per keyword group)
+  queries:
+    - "Site Reliability Engineer"
+    - "DevOps Engineer"
+    - "Platform Engineer"
+    - "Cloud Engineer"
+    - "Software Engineer"
+    - "Full Stack Developer"
+    - "Python Developer"
+    - "Backend Engineer"
+    - "Junior Software Engineer"
+    - "Graduate Software Engineer"
+    - "Graduate DevOps Engineer"
+
+  # Location preferences (priority order)
+  locations:
+    primary:
+      - "Dublin, Ireland"
+      - "Ireland"
+    secondary:
+      - "Remote"
+      - "Remote - Worldwide"
+
+  # Experience level filters
+  experience_levels:
+    - "entry_level"      # Fresh grad roles
+    - "mid_level"        # Mid-level (you have an edge here)
+
+  # How many days back to search for new postings
+  days_back: 1  # Only fetch jobs posted in the last 24 hours
+
+  # Maximum jobs to process per run (to manage API costs)
+  max_jobs_per_run: 20
+
+  # Minimum match score (0-100) to generate resume + cover letter
+  min_match_score: 60
+
+# --- API Keys ---
+# IMPORTANT: Replace these with your actual API keys
+api_keys:
+  # Claude API (for resume tailoring + cover letter generation)
+  # Get yours at: https://console.anthropic.com/
+  anthropic: "${ANTHROPIC_API_KEY}"
+
+  # SerpAPI (for Google Jobs scraping) - $50/mo, most reliable
+  # Get yours at: https://serpapi.com/
+  serpapi: "${SERPAPI_API_KEY}"
+
+  # JSearch via RapidAPI (free tier: 200 req/mo)
+  # Get yours at: https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch
+  jsearch: "${JSEARCH_API_KEY}"
+
+  # Adzuna API (free tier: 250 req/mo, great for Ireland/UK)
+  # Get yours at: https://developer.adzuna.com/
+  adzuna_app_id: "${ADZUNA_APP_ID}"
+  adzuna_app_key: "${ADZUNA_APP_KEY}"
+
+# --- Scraper Settings ---
+scrapers:
+  # Enable/disable individual scrapers
+  # API-based (reliable, never blocked):
+  enabled:
+    - "serpapi"      # Google Jobs via SerpAPI — indexes LinkedIn + Indeed + all boards (~$50/mo)
+    - "jsearch"      # JSearch via RapidAPI (free tier: 200 req/mo)
+    - "adzuna"       # Adzuna API (free tier: 250 req/mo, great for Ireland)
+    # Browser-based (Playwright stealth — can occasionally get blocked):
+    - "linkedin"     # LinkedIn public job search via Playwright
+    - "indeed"       # Indeed via Playwright (Cloudflare protected)
+    - "irishjobs"    # IrishJobs.ie via Playwright
+    # Startup-focused (API/HTML — lightweight, no Cloudflare):
+    - "yc_wats"      # YC Work at a Startup
+    - "hn_hiring"    # Hacker News "Who is Hiring?" threads
+
+  # Request delays to be respectful
+  delay_between_requests: 2  # seconds
+
+  # Browser scraper settings
+  browser:
+    headless: true       # Run in headless mode (set false for debugging)
+    max_pages: 2         # Pages to scrape per query (more = slower + riskier)
+    indeed_country: "ie" # ie, co.uk, com
+    linkedin_geo_id: "104738515"  # Ireland=104738515, UK=101165590
+
+# --- Output Settings ---
+output:
+  # Base directory for daily output (relative to this config)
+  base_dir: "./output"
+
+  # Excel tracker filename
+  tracker_filename: "job_tracker.xlsx"
+
+  # Keep artifacts for this many days
+  retention_days: 30
+
+# --- Claude API Settings ---
+claude:
+  model: "claude-sonnet-4-20250514"
+  max_tokens: 4096
+  # Temperature for creative tasks (cover letters)
+  creative_temperature: 0.7
+  # Temperature for analytical tasks (matching, tailoring)
+  analytical_temperature: 0.3
