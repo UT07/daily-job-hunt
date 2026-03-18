@@ -22,7 +22,7 @@ on:
 jobs:
   hunt:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -53,10 +53,24 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: playwright install-deps chromium
 
+      - name: Cache LaTeX packages
+        id: latex-cache
+        uses: actions/cache@v4
+        with:
+          path: /usr/share/texlive
+          key: texlive-${{ runner.os }}-v1
+
       - name: Install LaTeX (for PDF compilation)
+        if: steps.latex-cache.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq texlive-latex-base texlive-latex-extra texlive-fonts-recommended texlive-latex-recommended lmodern
+
+      - name: Install LaTeX deps (cached packages still need binaries)
+        if: steps.latex-cache.outputs.cache-hit == 'true'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq texlive-latex-base lmodern
 
       - name: Run job hunt pipeline
         env:
