@@ -627,84 +627,76 @@ class AIClient:
                 val = os.environ.get(env_var, "")
             return val
 
-        # ── LLM Council: multiple free models, spread load across all ──
-        # Each API key spawns multiple provider instances with different models.
-        # The failover chain tries each in order, maximizing free tier usage.
+        # ── LLM Council: all free models, ordered by preference ──
+        # Strategy: Qwen (preferred) → Groq (fastest) → NVIDIA NIM (deep catalog)
+        # → OpenRouter (many free models) → DeepSeek (if credits remain).
+        # DeepSeek is accessed via NVIDIA NIM + OpenRouter too (free there).
+        # No paid providers (Anthropic removed).
 
-        # ── LLM Council: spread load across many free models ──
-        # Strategy: Groq (fastest, 30 RPM) → OpenRouter (many free models,
-        # 20 RPM shared) → DeepSeek (if credits remain). Each key spawns
-        # multiple model instances so when one rate-limits, the next takes over.
+        # 1. Qwen (Alibaba DashScope — user preferred, free tier)
+        qwen_key = get_key("qwen", "QWEN_API_KEY")
+        if qwen_key:
+            qwen_models = [
+                "qwen-plus",          # Best quality
+                "qwen-turbo",         # Fast
+                "qwen-max",           # Largest
+            ]
+            for model in qwen_models:
+                providers.append(QwenProvider(api_key=qwen_key, model=model))
+            logger.info(f"[AI] Qwen council: {len(qwen_models)} models (preferred)")
 
-        # 1. Groq — fast inference, multiple free models
+        # 2. Groq — fastest inference, multiple free models
         groq_key = get_key("groq", "GROQ_API_KEY")
         if groq_key:
             groq_models = [
-                "llama-3.3-70b-versatile",                 # Best overall, 128K context
-                "qwen/qwen3-32b",                          # Strong at structured JSON
-                "meta-llama/llama-4-scout-17b-16e-instruct",  # Fast, good quality
-                "llama-3.1-8b-instant",                     # Smallest — single-job fallback only
+                "llama-3.3-70b-versatile",                     # Best overall, 128K
+                "qwen/qwen3-32b",                              # Strong JSON
+                "moonshotai/kimi-k2-instruct",                 # Kimi K2 on Groq
+                "meta-llama/llama-4-scout-17b-16e-instruct",   # Fast
+                "llama-3.1-8b-instant",                        # Lightweight fallback
             ]
             for model in groq_models:
                 providers.append(GroqProvider(api_key=groq_key, model=model))
             logger.info(f"[AI] Groq council: {len(groq_models)} models")
 
-        # 2. OpenRouter — free model aggregator (20 RPM shared across models)
+        # 3. NVIDIA NIM — free credits, DeepSeek + Kimi + Qwen available here
+        nvidia_key = get_key("nvidia", "NVIDIA_API_KEY")
+        if nvidia_key:
+            nvidia_models = [
+                "deepseek-ai/deepseek-v3.2",                      # Top open model (free via NIM)
+                "moonshotai/kimi-k2.5",                            # Kimi K2.5 (free via NIM)
+                "qwen/qwen3.5-122b-a10b",                         # Large Qwen MoE
+                "meta/llama-3.3-70b-instruct",                     # Solid general
+                "nvidia/llama-3.3-nemotron-super-49b-v1.5",        # Strong structured output
+                "mistralai/mistral-small-3.1-24b-instruct-2503",   # Fast
+                "nvidia/nemotron-3-super-120b-a12b",               # NVIDIA flagship
+            ]
+            for model in nvidia_models:
+                providers.append(NvidiaNIMProvider(api_key=nvidia_key, model=model))
+            logger.info(f"[AI] NVIDIA NIM council: {len(nvidia_models)} models (incl. DeepSeek, Kimi)")
+
+        # 4. OpenRouter — free model aggregator (DeepSeek available here too)
         or_key = get_key("openrouter", "OPENROUTER_API_KEY")
         if or_key:
             or_models = [
-                "meta-llama/llama-3.3-70b-instruct:free",          # Best free, 128K
-                "nousresearch/hermes-3-llama-3.1-405b:free",       # Largest free model
-                "nvidia/nemotron-3-super-120b-a12b:free",          # Strong structured output
-                "mistralai/mistral-small-3.1-24b-instruct:free",   # Fast, good JSON
-                "google/gemma-3-27b-it:free",                      # Google quality, 131K
-                "qwen/qwen3-coder:free",                           # Good at technical tasks
-                "stepfun/step-3.5-flash:free",                     # 256K context
-                "z-ai/glm-4.5-air:free",                           # Chinese model, good coverage
+                "meta-llama/llama-3.3-70b-instruct:free",
+                "nousresearch/hermes-3-llama-3.1-405b:free",
+                "nvidia/nemotron-3-super-120b-a12b:free",
+                "mistralai/mistral-small-3.1-24b-instruct:free",
+                "google/gemma-3-27b-it:free",
+                "qwen/qwen3-coder:free",
+                "stepfun/step-3.5-flash:free",
+                "z-ai/glm-4.5-air:free",
             ]
             for model in or_models:
                 providers.append(OpenRouterProvider(api_key=or_key, model=model))
             logger.info(f"[AI] OpenRouter council: {len(or_models)} free models")
 
-        # 3. NVIDIA NIM — free credits, huge model catalog
-        nvidia_key = get_key("nvidia", "NVIDIA_API_KEY")
-        if nvidia_key:
-            nvidia_models = [
-                "meta/llama-3.3-70b-instruct",                    # Best general
-                "nvidia/llama-3.3-nemotron-super-49b-v1.5",       # Strong structured output
-                "deepseek-ai/deepseek-v3.2",                      # Top open model
-                "qwen/qwen3.5-122b-a10b",                         # Large MoE
-                "mistralai/mistral-small-3.1-24b-instruct-2503",  # Fast, good JSON
-                "nvidia/nemotron-3-super-120b-a12b",              # NVIDIA flagship
-            ]
-            for model in nvidia_models:
-                providers.append(NvidiaNIMProvider(api_key=nvidia_key, model=model))
-            logger.info(f"[AI] NVIDIA NIM council: {len(nvidia_models)} models")
-
-        # 4. Qwen (Alibaba DashScope — free tier)
-        qwen_key = get_key("qwen", "QWEN_API_KEY")
-        if qwen_key:
-            qwen_models = [
-                "qwen-plus",          # Best quality free model
-                "qwen-turbo",         # Faster, lighter
-            ]
-            for model in qwen_models:
-                providers.append(QwenProvider(api_key=qwen_key, model=model))
-            logger.info(f"[AI] Qwen council: {len(qwen_models)} models")
-
-        # 5. DeepSeek — only if credits remain (402 = expired)
+        # 5. DeepSeek direct API — last resort (may have expired credits)
         ds_key = get_key("deepseek", "DEEPSEEK_API_KEY")
         if ds_key:
-            model = ai_cfg.get("deepseek_model", "deepseek-chat")
-            providers.append(DeepSeekProvider(api_key=ds_key, model=model))
-            logger.info(f"[AI] DeepSeek provider: {model} (if credits remain)")
-
-        # 5. Anthropic (paid fallback — last resort)
-        anthropic_key = get_key("anthropic", "ANTHROPIC_API_KEY")
-        if anthropic_key:
-            model = ai_cfg.get("anthropic_model", "claude-sonnet-4-20250514")
-            providers.append(AnthropicProvider(api_key=anthropic_key, model=model))
-            logger.info(f"[AI] Anthropic provider: {model} (paid fallback)")
+            providers.append(DeepSeekProvider(api_key=ds_key, model="deepseek-chat"))
+            logger.info("[AI] DeepSeek direct: deepseek-chat (if credits remain)")
 
         if not providers:
             raise ProviderError(
