@@ -391,6 +391,86 @@ class DeepSeekProvider(AIProvider):
         return data["choices"][0]["message"]["content"]
 
 
+class NvidiaNIMProvider(AIProvider):
+    """NVIDIA NIM — free API access to top open models. OpenAI-compatible."""
+
+    def __init__(self, api_key: str, model: str = "meta/llama-3.3-70b-instruct", **kwargs):
+        super().__init__(
+            name="nvidia",
+            model=model,
+            api_key=api_key,
+            rate_limiter=RateLimiter(requests_per_minute=20, requests_per_day=5000),
+            base_url="https://integrate.api.nvidia.com/v1",
+            **kwargs,
+        )
+
+    def complete(self, prompt: str, system: str = "", temperature: float = None) -> str:
+        import requests
+
+        if not self.rate_limiter.acquire():
+            raise RateLimitError(f"[{self.name}] Rate limit exceeded")
+
+        temp = temperature if temperature is not None else self.temperature
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        resp = requests.post(
+            f"{self.base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            json={"model": self.model, "messages": messages, "temperature": temp, "max_tokens": self.max_tokens},
+            timeout=120,
+        )
+
+        if resp.status_code == 429:
+            raise RateLimitError(f"[{self.name}] HTTP 429 — rate limited")
+        resp.raise_for_status()
+
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
+
+
+class QwenProvider(AIProvider):
+    """Alibaba Qwen via DashScope API (OpenAI-compatible). Free tier available."""
+
+    def __init__(self, api_key: str, model: str = "qwen-plus", **kwargs):
+        super().__init__(
+            name="qwen",
+            model=model,
+            api_key=api_key,
+            rate_limiter=RateLimiter(requests_per_minute=30, requests_per_day=5000),
+            base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+            **kwargs,
+        )
+
+    def complete(self, prompt: str, system: str = "", temperature: float = None) -> str:
+        import requests
+
+        if not self.rate_limiter.acquire():
+            raise RateLimitError(f"[{self.name}] Rate limit exceeded")
+
+        temp = temperature if temperature is not None else self.temperature
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        resp = requests.post(
+            f"{self.base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            json={"model": self.model, "messages": messages, "temperature": temp, "max_tokens": self.max_tokens},
+            timeout=120,
+        )
+
+        if resp.status_code == 429:
+            raise RateLimitError(f"[{self.name}] HTTP 429 — rate limited")
+        resp.raise_for_status()
+
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
+
+
 class AnthropicProvider(AIProvider):
     """Anthropic Claude — paid fallback."""
 
@@ -560,14 +640,37 @@ class AIClient:
                 providers.append(OpenRouterProvider(api_key=or_key, model=model))
             logger.info(f"[AI] OpenRouter council: {len(or_models)} free models")
 
-        # 3. DeepSeek — only if credits remain (402 = expired)
+        # 3. NVIDIA NIM — free API credits, top open models
+        nvidia_key = get_key("nvidia", "NVIDIA_API_KEY")
+        if nvidia_key:
+            nvidia_models = [
+                "meta/llama-3.3-70b-instruct",
+                "nvidia/llama-3.1-nemotron-70b-instruct",
+                "qwen/qwen2.5-72b-instruct",
+            ]
+            for model in nvidia_models:
+                providers.append(NvidiaNIMProvider(api_key=nvidia_key, model=model))
+            logger.info(f"[AI] NVIDIA NIM council: {len(nvidia_models)} models")
+
+        # 4. Qwen (Alibaba DashScope — free tier)
+        qwen_key = get_key("qwen", "QWEN_API_KEY")
+        if qwen_key:
+            qwen_models = [
+                "qwen-plus",          # Best quality free model
+                "qwen-turbo",         # Faster, lighter
+            ]
+            for model in qwen_models:
+                providers.append(QwenProvider(api_key=qwen_key, model=model))
+            logger.info(f"[AI] Qwen council: {len(qwen_models)} models")
+
+        # 5. DeepSeek — only if credits remain (402 = expired)
         ds_key = get_key("deepseek", "DEEPSEEK_API_KEY")
         if ds_key:
             model = ai_cfg.get("deepseek_model", "deepseek-chat")
             providers.append(DeepSeekProvider(api_key=ds_key, model=model))
             logger.info(f"[AI] DeepSeek provider: {model} (if credits remain)")
 
-        # 4. Anthropic (paid fallback — last resort)
+        # 5. Anthropic (paid fallback — last resort)
         anthropic_key = get_key("anthropic", "ANTHROPIC_API_KEY")
         if anthropic_key:
             model = ai_cfg.get("anthropic_model", "claude-sonnet-4-20250514")
