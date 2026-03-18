@@ -520,10 +520,15 @@ class AIClient:
         response = client.complete("Analyze this job posting...", system="You are a job matcher.")
     """
 
+    # Permanent error codes — provider is broken, don't retry this session
+    _DEAD_CODES = {401, 402, 403, 404}
+
     def __init__(self, providers: List[AIProvider], cache: Optional[ResponseCache] = None):
         self.providers = providers
         self.cache = cache or ResponseCache()
         self._stats = {"cache_hits": 0, "cache_misses": 0, "provider_calls": {}, "failovers": 0}
+        # Track dead providers (permanent errors) — skip them in future calls
+        self._dead_providers: set = set()  # Set of (provider.name, provider.model)
 
     def complete(self, prompt: str, system: str = "", temperature: float = None,
                  skip_cache: bool = False, cache_extra: str = "") -> str:
@@ -548,14 +553,24 @@ class AIClient:
 
         self._stats["cache_misses"] += 1
         last_error = None
+        import requests as _req
 
-        for i, provider in enumerate(self.providers):
+        alive_providers = [
+            p for p in self.providers
+            if (p.name, p.model) not in self._dead_providers
+        ]
+        if not alive_providers:
+            # All dead — reset and try again (maybe rate limits have reset)
+            logger.warning("[AI] All providers marked dead — resetting health status")
+            self._dead_providers.clear()
+            alive_providers = self.providers
+
+        for i, provider in enumerate(alive_providers):
             try:
                 if i > 0:
                     self._stats["failovers"] += 1
                     logger.info(f"[AI] Failing over to {provider.name} ({provider.model})")
 
-                # Use retry wrapper — retries transient errors before failing over
                 response = provider.complete_with_retry(prompt, system=system, temperature=temperature)
 
                 # Cache the response
@@ -568,6 +583,17 @@ class AIClient:
 
             except RateLimitError as e:
                 logger.warning(f"[AI] {e} — trying next provider...")
+                last_error = e
+                continue
+            except _req.HTTPError as e:
+                # Detect permanent failures (402 payment required, 404 model not found, etc.)
+                status = e.response.status_code if hasattr(e, 'response') and e.response else 0
+                if status in self._DEAD_CODES:
+                    key = (provider.name, provider.model)
+                    self._dead_providers.add(key)
+                    logger.warning(f"[AI] {provider.name}:{provider.model} permanently failed ({status}) — removed from council")
+                else:
+                    logger.warning(f"[AI] {provider.name} error: {e} — trying next provider...")
                 last_error = e
                 continue
             except Exception as e:
@@ -640,13 +666,16 @@ class AIClient:
                 providers.append(OpenRouterProvider(api_key=or_key, model=model))
             logger.info(f"[AI] OpenRouter council: {len(or_models)} free models")
 
-        # 3. NVIDIA NIM — free API credits, top open models
+        # 3. NVIDIA NIM — free credits, huge model catalog
         nvidia_key = get_key("nvidia", "NVIDIA_API_KEY")
         if nvidia_key:
             nvidia_models = [
-                "meta/llama-3.3-70b-instruct",
-                "nvidia/llama-3.1-nemotron-70b-instruct",
-                "qwen/qwen2.5-72b-instruct",
+                "meta/llama-3.3-70b-instruct",                    # Best general
+                "nvidia/llama-3.3-nemotron-super-49b-v1.5",       # Strong structured output
+                "deepseek-ai/deepseek-v3.2",                      # Top open model
+                "qwen/qwen3.5-122b-a10b",                         # Large MoE
+                "mistralai/mistral-small-3.1-24b-instruct-2503",  # Fast, good JSON
+                "nvidia/nemotron-3-super-120b-a12b",              # NVIDIA flagship
             ]
             for model in nvidia_models:
                 providers.append(NvidiaNIMProvider(api_key=nvidia_key, model=model))
