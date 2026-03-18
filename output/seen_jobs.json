@@ -7,10 +7,10 @@
     "score": 0,
     "matched": false
   },
-  "403e1c11a60e": {
+  "44d1eea40f41": {
     "first_seen": "2026-03-18",
     "last_seen": "2026-03-18",
-    "title": "Senior Product Software Engineer (S14)",
+    "title": "Senior Product Engineer, Agentic AI (S14)",
     "company": "Hive",
     "score": 0,
     "matched": false
@@ -95,18 +95,18 @@
     "score": 0,
     "matched": false
   },
-  "ba06e99e6eaf": {
+  "85557ac75178": {
     "first_seen": "2026-03-18",
     "last_seen": "2026-03-18",
-    "title": "Firmware Engineer (W26)",
+    "title": "Mechanical Engineer - Wearable Systems (W26)",
     "company": "Human Archive",
     "score": 0,
     "matched": false
   },
-  "eb29cf0ec14a": {
+  "ba06e99e6eaf": {
     "first_seen": "2026-03-18",
     "last_seen": "2026-03-18",
-    "title": "QA / Hardware Test Engineer (W26)",
+    "title": "Firmware Engineer (W26)",
     "company": "Human Archive",
     "score": 0,
     "matched": false
@@ -119,18 +119,18 @@
     "score": 0,
     "matched": false
   },
-  "f18f447c3830": {
+  "c7be15f9732c": {
     "first_seen": "2026-03-18",
     "last_seen": "2026-03-18",
-    "title": "Backend Engineer (F25)",
+    "title": "Engineering Intern (F25)",
     "company": "Leadbay",
     "score": 0,
     "matched": false
   },
-  "f58d7e51656c": {
+  "f18f447c3830": {
     "first_seen": "2026-03-18",
     "last_seen": "2026-03-18",
-    "title": "Frontend Engineer (F25)",
+    "title": "Backend Engineer (F25)",
     "company": "Leadbay",
     "score": 0,
     "matched": false
@@ -159,18 +159,18 @@
     "score": 0,
     "matched": false
   },
-  "e20d87fb20ef": {
-    "first_seen": "2026-03-18",
-    "last_seen": "2026-03-18",
-    "title": "Founding Engineer (Full-Stack) (F25)",
-    "company": "Uplane",
-    "score": 0,
-    "matched": false
-  },
   "6d3c95e9b729": {
     "first_seen": "2026-03-18",
     "last_seen": "2026-03-18",
     "title": "Founding AI Engineer (F25)",
+    "company": "Uplane",
+    "score": 0,
+    "matched": false
+  },
+  "e20d87fb20ef": {
+    "first_seen": "2026-03-18",
+    "last_seen": "2026-03-18",
+    "title": "Founding Engineer (Full-Stack) (F25)",
     "company": "Uplane",
     "score": 0,
     "matched": false
@@ -191,6 +191,14 @@
     "score": 0,
     "matched": false
   },
+  "300596a56192": {
+    "first_seen": "2026-03-18",
+    "last_seen": "2026-03-18",
+    "title": "Senior Software Engineer (S25)",
+    "company": "Idler",
+    "score": 0,
+    "matched": false
+  },
   "f68dda48361f": {
     "first_seen": "2026-03-18",
     "last_seen": "2026-03-18",
@@ -207,18 +215,18 @@
     "score": 0,
     "matched": false
   },
-  "f47c90c3c691": {
-    "first_seen": "2026-03-18",
-    "last_seen": "2026-03-18",
-    "title": "Mission Software Engineer (S25)",
-    "company": "EffiGov",
-    "score": 0,
-    "matched": false
-  },
   "fe40339e6e37": {
     "first_seen": "2026-03-18",
     "last_seen": "2026-03-18",
     "title": "Founding Engineer (S25)",
+    "company": "EffiGov",
+    "score": 0,
+    "matched": false
+  },
+  "f47c90c3c691": {
+    "first_seen": "2026-03-18",
+    "last_seen": "2026-03-18",
+    "title": "Mission Software Engineer (S25)",
     "company": "EffiGov",
     "score": 0,
     "matched": false
@@ -236,8 +244,8 @@
     "last_seen": "2026-03-18",
     "title": "DevOps Engineer | Full Time | tpfg.com",
     "company": "The Pacific Financial Group",
-    "score": 0,
-    "matched": false
+    "score": 75.0,
+    "matched": true
   },
   "0f1fd89692b9": {
     "first_seen": "2026-03-18",
@@ -252,7 +260,7 @@
     "last_seen": "2026-03-18",
     "title": "DevOps Engineer (+ More) | Full Time",
     "company": "The Julia Lab (MIT)",
-    "score": 88.3,
+    "score": 78.3,
     "matched": true
   },
   "7a12692f6b94": {
@@ -364,8 +372,8 @@
     "last_seen": "2026-03-18",
     "title": "San Francisco, CA | Software Engineer, Product Engineer, Data Engineer, Data Scientist, SRE",
     "company": "Airtable",
-    "score": 0,
-    "matched": false
+    "score": 65.0,
+    "matched": true
   },
   "f2c6bff1f458": {
     "first_seen": "2026-03-18",
@@ -468,8 +476,8 @@
     "last_seen": "2026-03-18",
     "title": "Full-time | Full Stack Javascript Developer",
     "company": "Localize",
-    "score": 60.0,
-    "matched": true
+    "score": 0,
+    "matched": false
   },
   "e73e620fd35c": {
     "first_seen": "2026-03-18",
@@ -484,8 +492,8 @@
     "last_seen": "2026-03-18",
     "title": "Frontend Engineer, Tooling Engineer, Full Stack Engineer (Junior, Mid and Senior) | Full-time",
     "company": "Stile Education (https:&#x2F;&#x2F;stileeducation.com&#x2F;)",
-    "score": 0,
-    "matched": false
+    "score": 65.0,
+    "matched": true
   },
   "2b0e70cbb98e": {
     "first_seen": "2026-03-18",
@@ -516,8 +524,8 @@
     "last_seen": "2026-03-18",
     "title": "Software Engineer | San Francisco, CA",
     "company": "Metabase",
-    "score": 0,
-    "matched": false
+    "score": 65.0,
+    "matched": true
   },
   "f688d53d39e9": {
     "first_seen": "2026-03-18",
@@ -548,8 +556,8 @@
     "last_seen": "2026-03-18",
     "title": "Full Stack Developer | Full-Time",
     "company": "ProcedureFlow",
-    "score": 0,
-    "matched": false
+    "score": 65.0,
+    "matched": true
   },
   "05126a1411fd": {
     "first_seen": "2026-03-18",
@@ -604,7 +612,7 @@
     "last_seen": "2026-03-18",
     "title": "Nashville, TN | Backend Software Engineer | Fulltime",
     "company": "Very Real Help",
-    "score": 63.3,
+    "score": 65.0,
     "matched": true
   },
   "f4259f8c67c8": {
@@ -684,8 +692,8 @@
     "last_seen": "2026-03-18",
     "title": "Full Stack Engineer | Full time",
     "company": "Atom Finance (https:&#x2F;&#x2F;atom.finance)",
-    "score": 68.3,
-    "matched": true
+    "score": 0,
+    "matched": false
   },
   "4df6438223f8": {
     "first_seen": "2026-03-18",
@@ -708,8 +716,8 @@
     "last_seen": "2026-03-18",
     "title": "Backend Python Web Developer | Full Time",
     "company": "Zipari",
-    "score": 78.3,
-    "matched": true
+    "score": 0,
+    "matched": false
   },
   "141ed174e5ea": {
     "first_seen": "2026-03-18",
@@ -756,7 +764,7 @@
     "last_seen": "2026-03-18",
     "title": "The company behind Ubuntu | Software Engineer for Ubuntu Server | Full-Time",
     "company": "Canonical",
-    "score": 85.0,
+    "score": 78.3,
     "matched": true
   },
   "d4d77c7ed826": {
@@ -780,8 +788,8 @@
     "last_seen": "2026-03-18",
     "title": "Full Time | Senior Backend Engineer",
     "company": "Ferrum Health",
-    "score": 0,
-    "matched": false
+    "score": 80.0,
+    "matched": true
   },
   "16a18b902b14": {
     "first_seen": "2026-03-18",
@@ -812,8 +820,8 @@
     "last_seen": "2026-03-18",
     "title": "Full Stack Engineers, Product Managers, Senior QA | Los Angeles, CA + San Diego, CA + Portland, OR",
     "company": "Silversheet",
-    "score": 85.0,
-    "matched": true
+    "score": 0,
+    "matched": false
   },
   "dc2a88d969b9": {
     "first_seen": "2026-03-18",
@@ -836,8 +844,8 @@
     "last_seen": "2026-03-18",
     "title": "Full Stack Engineer | Full-time",
     "company": "Cortico",
-    "score": 85.0,
-    "matched": true
+    "score": 0,
+    "matched": false
   },
   "81803d7f024e": {
     "first_seen": "2026-03-18",
@@ -916,16 +924,16 @@
     "last_seen": "2026-03-18",
     "title": "Software Developer - New Grad | Irvine, CA | Full-time",
     "company": "RepSpark",
-    "score": 78.3,
-    "matched": true
+    "score": 0,
+    "matched": false
   },
   "be14fb66ac9a": {
     "first_seen": "2026-03-18",
     "last_seen": "2026-03-18",
     "title": "Full Time | Frontend Developer (Vue.js + ASP.NET Core)",
     "company": "TestDome",
-    "score": 0,
-    "matched": false
+    "score": 68.3,
+    "matched": true
   },
   "f2b94e7e1084": {
     "first_seen": "2026-03-18",
@@ -956,8 +964,8 @@
     "last_seen": "2026-03-18",
     "title": "Senior Full Stack Engineer | $150K - $162K | Full-time",
     "company": "Follow Up Boss",
-    "score": 0,
-    "matched": false
+    "score": 90.0,
+    "matched": true
   },
   "32a597cfea42": {
     "first_seen": "2026-03-18",
@@ -996,8 +1004,8 @@
     "last_seen": "2026-03-18",
     "title": "PART Time or Full Time | Web application and Full Stack Developers",
     "company": "Abine - the online privacy company",
-    "score": 85.0,
-    "matched": true
+    "score": 0,
+    "matched": false
   },
   "e6eb87b688ea": {
     "first_seen": "2026-03-18",
@@ -1052,8 +1060,8 @@
     "last_seen": "2026-03-18",
     "title": "Senior Backend Engineer | Full-time",
     "company": "SerpApi",
-    "score": 70.0,
-    "matched": true
+    "score": 0,
+    "matched": false
   },
   "9dc366e305ea": {
     "first_seen": "2026-03-18",

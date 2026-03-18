@@ -521,35 +521,53 @@ class AIClient:
                 val = os.environ.get(env_var, "")
             return val
 
-        # 1. Gemini (free, generous quota — primary provider)
-        gemini_key = get_key("gemini", "GEMINI_API_KEY")
-        if gemini_key:
-            model = ai_cfg.get("gemini_model", "gemini-2.0-flash")
-            providers.append(GeminiProvider(api_key=gemini_key, model=model))
-            logger.info(f"[AI] Gemini provider: {model}")
+        # ── LLM Council: multiple free models, spread load across all ──
+        # Each API key spawns multiple provider instances with different models.
+        # The failover chain tries each in order, maximizing free tier usage.
 
-        # 2. Groq (fast, free Llama 3.3)
+        # ── LLM Council: spread load across many free models ──
+        # Strategy: Groq (fastest, 30 RPM) → OpenRouter (many free models,
+        # 20 RPM shared) → DeepSeek (if credits remain). Each key spawns
+        # multiple model instances so when one rate-limits, the next takes over.
+
+        # 1. Groq — fast inference, multiple free models
         groq_key = get_key("groq", "GROQ_API_KEY")
         if groq_key:
-            model = ai_cfg.get("groq_model", "llama-3.3-70b-versatile")
-            providers.append(GroqProvider(api_key=groq_key, model=model))
-            logger.info(f"[AI] Groq provider: {model}")
+            groq_models = [
+                "llama-3.3-70b-versatile",                 # Best overall, 128K context
+                "qwen/qwen3-32b",                          # Strong at structured JSON
+                "meta-llama/llama-4-scout-17b-16e-instruct",  # Fast, good quality
+                "llama-3.1-8b-instant",                     # Smallest — single-job fallback only
+            ]
+            for model in groq_models:
+                providers.append(GroqProvider(api_key=groq_key, model=model))
+            logger.info(f"[AI] Groq council: {len(groq_models)} models")
 
-        # 3. DeepSeek (free, very strong on structured tasks)
+        # 2. OpenRouter — free model aggregator (20 RPM shared across models)
+        or_key = get_key("openrouter", "OPENROUTER_API_KEY")
+        if or_key:
+            or_models = [
+                "meta-llama/llama-3.3-70b-instruct:free",          # Best free, 128K
+                "nousresearch/hermes-3-llama-3.1-405b:free",       # Largest free model
+                "nvidia/nemotron-3-super-120b-a12b:free",          # Strong structured output
+                "mistralai/mistral-small-3.1-24b-instruct:free",   # Fast, good JSON
+                "google/gemma-3-27b-it:free",                      # Google quality, 131K
+                "qwen/qwen3-coder:free",                           # Good at technical tasks
+                "stepfun/step-3.5-flash:free",                     # 256K context
+                "z-ai/glm-4.5-air:free",                           # Chinese model, good coverage
+            ]
+            for model in or_models:
+                providers.append(OpenRouterProvider(api_key=or_key, model=model))
+            logger.info(f"[AI] OpenRouter council: {len(or_models)} free models")
+
+        # 3. DeepSeek — only if credits remain (402 = expired)
         ds_key = get_key("deepseek", "DEEPSEEK_API_KEY")
         if ds_key:
             model = ai_cfg.get("deepseek_model", "deepseek-chat")
             providers.append(DeepSeekProvider(api_key=ds_key, model=model))
-            logger.info(f"[AI] DeepSeek provider: {model}")
+            logger.info(f"[AI] DeepSeek provider: {model} (if credits remain)")
 
-        # 4. OpenRouter (free models aggregator — extra failover)
-        or_key = get_key("openrouter", "OPENROUTER_API_KEY")
-        if or_key:
-            model = ai_cfg.get("openrouter_model", "qwen/qwen-2.5-72b-instruct:free")
-            providers.append(OpenRouterProvider(api_key=or_key, model=model))
-            logger.info(f"[AI] OpenRouter provider: {model}")
-
-        # 5. Anthropic (paid fallback — only if you want it)
+        # 4. Anthropic (paid fallback — last resort)
         anthropic_key = get_key("anthropic", "ANTHROPIC_API_KEY")
         if anthropic_key:
             model = ai_cfg.get("anthropic_model", "claude-sonnet-4-20250514")
@@ -559,12 +577,13 @@ class AIClient:
         if not providers:
             raise ProviderError(
                 "No AI providers configured. Set at least one API key:\n"
-                "  GEMINI_API_KEY     — https://aistudio.google.com/apikey (free, recommended)\n"
-                "  GROQ_API_KEY       — https://console.groq.com/keys (free)\n"
+                "  GROQ_API_KEY       — https://console.groq.com/keys (free, recommended)\n"
+                "  OPENROUTER_API_KEY — https://openrouter.ai/keys (free models)\n"
                 "  DEEPSEEK_API_KEY   — https://platform.deepseek.com/ (free)\n"
-                "  OPENROUTER_API_KEY — https://openrouter.ai/keys (free models available)\n"
                 "  ANTHROPIC_API_KEY  — https://console.anthropic.com/ (paid)"
             )
+
+        logger.info(f"[AI] Total providers in council: {len(providers)}")
 
         # Cache setup
         cache_cfg = ai_cfg.get("cache", {})
