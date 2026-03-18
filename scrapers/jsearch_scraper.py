@@ -1,12 +1,15 @@
 """JSearch scraper via RapidAPI - good free tier (200 req/mo)."""
 
 from __future__ import annotations
+import logging
 import requests
 import time
 import threading
 from datetime import datetime, timedelta
 from typing import List
 from .base import BaseScraper, Job
+
+logger = logging.getLogger(__name__)
 
 
 class JSearchScraper(BaseScraper):
@@ -111,8 +114,8 @@ class JSearchScraper(BaseScraper):
 
             time.sleep(self.delay)
         except requests.RequestException as e:
-            print(f"[JSearch] Error searching '{query}' in '{location}': {e}")
+            logger.error(f"[JSearch] Error searching '{query}' in '{location}': {e}")
         except (KeyError, IndexError) as e:
-            print(f"[JSearch] Parse error for '{query}': {e}")
+            logger.error(f"[JSearch] Parse error for '{query}': {e}")
 
         return self.deduplicate(jobs)

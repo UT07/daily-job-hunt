@@ -1,12 +1,15 @@
 """Adzuna API scraper - excellent for Ireland/UK job market."""
 
 from __future__ import annotations
+import logging
 import requests
 import time
 import threading
 from datetime import datetime, timedelta
 from typing import List
 from .base import BaseScraper, Job
+
+logger = logging.getLogger(__name__)
 
 
 class AdzunaScraper(BaseScraper):
@@ -79,7 +82,7 @@ class AdzunaScraper(BaseScraper):
                 # Don't spam logs — just silently skip
                 return []
             if resp.status_code == 429:
-                print(f"[Adzuna] Rate limited for '{query}' — backing off 5s")
+                logger.warning(f"[Adzuna] Rate limited for '{query}' — backing off 5s")
                 time.sleep(5)
                 return []
             resp.raise_for_status()
@@ -116,11 +119,11 @@ class AdzunaScraper(BaseScraper):
                 ))
 
             if jobs:
-                print(f"  [Adzuna] '{query}' in '{location}' -> {len(jobs)} jobs")
+                logger.info(f"[Adzuna] '{query}' in '{location}' -> {len(jobs)} jobs")
 
         except requests.RequestException as e:
-            print(f"[Adzuna] Error searching '{query}' in '{location}': {e}")
+            logger.error(f"[Adzuna] Error searching '{query}' in '{location}': {e}")
         except (KeyError, IndexError) as e:
-            print(f"[Adzuna] Parse error for '{query}': {e}")
+            logger.error(f"[Adzuna] Parse error for '{query}': {e}")
 
         return self.deduplicate(jobs)

@@ -1,9 +1,12 @@
 """LaTeX to PDF compiler with fallback strategies."""
 
 from __future__ import annotations
+import logging
 import subprocess
 import shutil
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 def compile_tex_to_pdf(tex_path: str, output_dir: str = None) -> str:
@@ -13,7 +16,7 @@ def compile_tex_to_pdf(tex_path: str, output_dir: str = None) -> str:
     """
     tex_path = Path(tex_path)
     if not tex_path.exists():
-        print(f"  [ERROR] TeX file not found: {tex_path}")
+        logger.error(f"TeX file not found: {tex_path}")
         return ""
 
     if output_dir:
@@ -24,7 +27,7 @@ def compile_tex_to_pdf(tex_path: str, output_dir: str = None) -> str:
     # Check for pdflatex
     pdflatex = shutil.which("pdflatex")
     if not pdflatex:
-        print("  [WARN] pdflatex not found. Trying tectonic...")
+        logger.warning("pdflatex not found. Trying tectonic...")
         return _compile_with_tectonic(tex_path, out_dir)
 
     try:
@@ -51,22 +54,22 @@ def compile_tex_to_pdf(tex_path: str, output_dir: str = None) -> str:
                 aux = out_dir / (tex_path.stem + ext)
                 if aux.exists():
                     aux.unlink()
-            print(f"  [PDF] Compiled -> {pdf_path.name}")
+            logger.info(f"[PDF] Compiled -> {pdf_path.name}")
             return str(pdf_path)
         else:
-            print(f"  [ERROR] pdflatex failed for {tex_path.name}")
-            # Print last 20 lines of log for debugging
+            logger.error(f"pdflatex failed for {tex_path.name}")
+            # Log last 20 lines of log for debugging
             log_lines = result.stdout.split("\n")[-20:]
             for line in log_lines:
                 if line.strip():
-                    print(f"    {line}")
+                    logger.debug(f"  {line}")
             return ""
 
     except subprocess.TimeoutExpired:
-        print(f"  [ERROR] pdflatex timed out for {tex_path.name}")
+        logger.error(f"pdflatex timed out for {tex_path.name}")
         return ""
     except FileNotFoundError:
-        print("  [ERROR] pdflatex not found")
+        logger.error("pdflatex not found")
         return ""
 
 
@@ -74,7 +77,7 @@ def _compile_with_tectonic(tex_path: Path, out_dir: Path) -> str:
     """Fallback: compile with tectonic if pdflatex isn't available."""
     tectonic = shutil.which("tectonic")
     if not tectonic:
-        print("  [ERROR] Neither pdflatex nor tectonic found. Install texlive or tectonic.")
+        logger.error("Neither pdflatex nor tectonic found. Install texlive or tectonic.")
         return ""
 
     try:
@@ -87,14 +90,14 @@ def _compile_with_tectonic(tex_path: Path, out_dir: Path) -> str:
 
         pdf_path = out_dir / (tex_path.stem + ".pdf")
         if pdf_path.exists():
-            print(f"  [PDF] Compiled (tectonic) -> {pdf_path.name}")
+            logger.info(f"[PDF] Compiled (tectonic) -> {pdf_path.name}")
             return str(pdf_path)
         else:
-            print(f"  [ERROR] tectonic failed: {result.stderr[-500:]}")
+            logger.error(f"tectonic failed: {result.stderr[-500:]}")
             return ""
 
     except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-        print(f"  [ERROR] tectonic error: {e}")
+        logger.error(f"tectonic error: {e}")
         return ""
 
 

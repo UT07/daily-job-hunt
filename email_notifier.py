@@ -12,6 +12,7 @@ Setup:
 """
 
 from __future__ import annotations
+import logging
 import smtplib
 import json
 from email.mime.text import MIMEText
@@ -20,6 +21,8 @@ from datetime import date
 from pathlib import Path
 from typing import List
 from scrapers.base import Job
+
+logger = logging.getLogger(__name__)
 
 
 def send_summary_email(
@@ -137,8 +140,8 @@ def send_summary_email(
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(gmail_address, gmail_app_password)
             server.send_message(msg)
-        print(f"  [EMAIL] Summary sent to {recipient}")
+        logger.info(f"[EMAIL] Summary sent to {recipient}")
         return True
     except Exception as e:
-        print(f"  [EMAIL] Failed to send: {e}")
+        logger.error(f"[EMAIL] Failed to send: {e}")
         return False

@@ -10,9 +10,13 @@ your browser to find and connect with the right people.
 
 from __future__ import annotations
 import json
+import logging
 import urllib.parse
 from scrapers.base import Job
 from ai_client import AIClient
+from matcher import extract_json
+
+logger = logging.getLogger(__name__)
 
 
 CONTACT_SYSTEM_PROMPT = """You are a job search networking strategist. Given a job listing, identify the types of people the candidate should connect with on LinkedIn to improve their chances.
@@ -66,14 +70,7 @@ The candidate is applying for this role and wants to network with the right peop
             temperature=0.4,
         )
 
-        result_text = result_text.strip()
-        if result_text.startswith("```"):
-            result_text = result_text.split("```")[1]
-            if result_text.startswith("json"):
-                result_text = result_text[4:]
-        result_text = result_text.strip()
-
-        data = json.loads(result_text)
+        data = extract_json(result_text)
 
         for contact in data.get("contacts", []):
             role = contact.get("role", "")
@@ -94,10 +91,10 @@ The candidate is applying for this role and wants to network with the right peop
                 "search_url": search_url,
             })
 
-        print(f"  [CONTACTS] {job.company}: found {len(contacts)} contact suggestions")
+        logger.info(f"[CONTACTS] {job.company}: found {len(contacts)} contact suggestions")
 
     except (json.JSONDecodeError, Exception) as e:
-        print(f"  [CONTACTS] Error finding contacts for {job.company}: {e}")
+        logger.error(f"[CONTACTS] Error finding contacts for {job.company}: {e}")
         # Fallback: generate basic search URLs without AI
         contacts = _fallback_contacts(job)
 

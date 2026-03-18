@@ -12,11 +12,43 @@ failures. The SerpAPI fallback ensures you always get LinkedIn jobs.
 """
 
 from __future__ import annotations
+import html
+import logging
 import re
 import urllib.parse
 from typing import List
 from .base import BaseScraper, Job
 from .browser import stealth_browser, run_async
+
+logger = logging.getLogger(__name__)
+
+# Max jobs to fetch full descriptions for per query (speed + anti-detection)
+_MAX_DESCRIPTION_FETCHES = 15
+
+# Selectors for the job description container on LinkedIn job detail pages.
+# LinkedIn A/B tests layouts frequently — try these in order.
+_DESCRIPTION_SELECTORS = [
+    ".description__text",
+    ".show-more-less-html__markup",
+    "[class*='description__text']",
+    ".jobs-description__content",
+    ".jobs-box__html-content",
+    "[class*='jobs-description']",
+    "article",  # fallback — the whole article
+]
+
+
+def _strip_html(raw: str) -> str:
+    """Remove HTML tags, decode entities, and normalise whitespace."""
+    # Remove script/style blocks
+    raw = re.sub(r"<(script|style)[^>]*>.*?</(script|style)>", "", raw, flags=re.DOTALL | re.IGNORECASE)
+    # Strip remaining tags
+    raw = re.sub(r"<[^>]+>", " ", raw)
+    # Decode HTML entities
+    raw = html.unescape(raw)
+    # Collapse whitespace
+    raw = re.sub(r"\s+", " ", raw).strip()
+    return raw
 
 
 class LinkedInScraper(BaseScraper):
@@ -86,11 +118,11 @@ class LinkedInScraper(BaseScraper):
                     params["f_WT"] = "2"  # Remote filter
 
                 url = f"https://www.linkedin.com/jobs/search/?{urllib.parse.urlencode(params)}"
-                print(f"  [LinkedIn] Scraping: {query} (page {page_num + 1})")
+                logger.info(f"[LinkedIn] Scraping: {query} (page {page_num + 1})")
 
                 success = await browser.safe_goto(page, url, wait_until="domcontentloaded", timeout=15000)
                 if not success:
-                    print(f"  [LinkedIn] Blocked or failed on page {page_num + 1}")
+                    logger.warning(f"[LinkedIn] Blocked or failed on page {page_num + 1}")
                     break
 
                 await browser.human_delay(3000, 6000)
@@ -108,9 +140,9 @@ class LinkedInScraper(BaseScraper):
                         # Check if we hit the auth wall
                         content = await page.content()
                         if "authwall" in content.lower() or "sign in" in content.lower():
-                            print("  [LinkedIn] Hit auth wall — LinkedIn is blocking this session")
+                            logger.warning("[LinkedIn] Hit auth wall — LinkedIn is blocking this session")
                             break
-                        print(f"  [LinkedIn] No cards found on page {page_num + 1}")
+                        logger.info(f"[LinkedIn] No cards found on page {page_num + 1}")
                         break
 
                     for card in cards:
@@ -122,13 +154,35 @@ class LinkedInScraper(BaseScraper):
                             continue
 
                 except Exception as e:
-                    print(f"  [LinkedIn] Error parsing page {page_num + 1}: {e}")
+                    logger.error(f"[LinkedIn] Error parsing page {page_num + 1}: {e}")
                     break
 
                 # Extra delay for LinkedIn — they're watching
                 await browser.human_delay(5000, 10000)
 
-        print(f"  [LinkedIn] Found {len(jobs)} jobs for '{query}'")
+            # Fetch descriptions for the top N jobs (still inside browser context).
+            # Navigate to each job URL directly — more reliable than the side panel.
+            if jobs:
+                to_fetch = jobs[:_MAX_DESCRIPTION_FETCHES]
+                logger.info(f"[LinkedIn] Fetching descriptions for {len(to_fetch)} jobs...")
+                desc_page = await browser.new_page()
+                for i, job in enumerate(to_fetch):
+                    if not job.apply_url:
+                        continue
+                    try:
+                        desc = await self._fetch_description(browser, desc_page, job.apply_url)
+                        if desc:
+                            job.description = desc
+                    except Exception as e:
+                        logger.warning(f"[LinkedIn] Description fetch failed for job {i + 1}: {e}")
+                    # Generous delay — LinkedIn watches inter-request timing
+                    await browser.human_delay(3000, 8000)
+                try:
+                    await desc_page.close()
+                except Exception:
+                    pass
+
+        logger.info(f"[LinkedIn] Found {len(jobs)} jobs for '{query}'")
         return self.deduplicate(jobs)
 
     async def _parse_card(self, card) -> Job | None:
@@ -166,9 +220,75 @@ class LinkedInScraper(BaseScraper):
             title=title,
             company=company,
             location=location,
-            description="",  # Full description requires clicking into the job
+            description="",  # Full description fetched separately by _fetch_description
             apply_url=href,
             source="linkedin",
             posted_date=posted,
             remote=is_remote,
         )
+
+    async def _fetch_description(self, browser, page, url: str) -> str:
+        """Navigate to a LinkedIn job detail page and extract the description text.
+
+        LinkedIn renders the description inside a collapsible section.  We try
+        multiple CSS selectors in order of specificity and fall back gracefully.
+
+        Returns the stripped plain-text description (up to 4000 chars), or ""
+        if nothing could be extracted.
+        """
+        success = await browser.safe_goto(page, url, wait_until="domcontentloaded", timeout=20000)
+        if not success:
+            return ""
+
+        # Brief wait for dynamic content to settle
+        await browser.human_delay(2000, 4000)
+
+        # Check for auth wall — if we're being blocked, bail out early
+        try:
+            content = await page.content()
+            if "authwall" in content.lower() or "sign-in" in content.lower():
+                logger.warning("[LinkedIn] Auth wall hit during description fetch — skipping remaining")
+                return ""
+        except Exception:
+            pass
+
+        # Try to click "Show more" / "See more" to expand the full description
+        for expand_selector in [
+            "button.show-more-less-html__button",
+            "button[aria-label*='more']",
+            "[class*='show-more-less'] button",
+            "button.jobs-description__footer-button",
+        ]:
+            try:
+                btn = await page.query_selector(expand_selector)
+                if btn:
+                    await btn.click()
+                    await browser.human_delay(800, 1500)
+                    break
+            except Exception:
+                pass
+
+        # Extract description text using selector fallbacks
+        for selector in _DESCRIPTION_SELECTORS:
+            try:
+                el = await page.query_selector(selector)
+                if el:
+                    raw_html = await el.inner_html()
+                    text = _strip_html(raw_html)
+                    if len(text) > 100:  # sanity-check: ignore trivially short matches
+                        return text[:4000]
+            except Exception:
+                continue
+
+        # Last-resort: pull the whole page body and hope for the best
+        try:
+            body_el = await page.query_selector("body")
+            if body_el:
+                raw_html = await body_el.inner_html()
+                text = _strip_html(raw_html)
+                if len(text) > 200:
+                    return text[:4000]
+        except Exception:
+            pass
+
+        return ""

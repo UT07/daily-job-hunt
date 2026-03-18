@@ -5,18 +5,22 @@ Scores each job against the candidate's BASE resume from three viewpoints:
 2. Hiring Manager — impact, relevance, culture fit, growth potential
 3. Technical Recruiter — required/preferred skills coverage, experience level
 
+Jobs are scored in batches of 5 to reduce API calls and token usage.
 A job passes matching if the average of all 3 scores meets the threshold.
-After tailoring, the same 3 scores must each individually be 85+.
 """
 
 from __future__ import annotations
 import json
+import logging
+import re
 from typing import List, Dict
 from scrapers.base import Job
 from ai_client import AIClient
 
+logger = logging.getLogger(__name__)
 
-MATCH_SYSTEM_PROMPT = """You are an expert job-candidate evaluator. Score how well a candidate's resume matches a job listing from THREE distinct perspectives.
+
+MATCH_SYSTEM_PROMPT = """You are an expert job-candidate evaluator. Score how well a candidate's resume matches MULTIPLE job listings from THREE distinct perspectives.
 
 SCORING PERSPECTIVES (each 0-100):
 
@@ -47,39 +51,215 @@ IMPORTANT candidate context:
 
 Be honest and strict. Don't inflate scores — this determines which jobs are worth applying to.
 
+Return ONLY a valid JSON array (no markdown, no code fences). One object per job, in the same order as presented:
+[
+    {
+        "job_index": 0,
+        "ats_score": <0-100>,
+        "hiring_manager_score": <0-100>,
+        "tech_recruiter_score": <0-100>,
+        "best_resume": "<sre_devops or fullstack>",
+        "reasoning": "<2-3 sentences>",
+        "key_matches": ["<skill1>", ...],
+        "gaps": ["<gap1>", ...],
+        "tailoring_suggestions": ["<suggestion1>", ...]
+    },
+    ...
+]"""
+
+# Fallback for single-job matching (used when batch fails)
+SINGLE_MATCH_SYSTEM_PROMPT = """You are an expert job-candidate evaluator. Score how well a candidate's resume matches a job listing from THREE distinct perspectives.
+
+SCORING PERSPECTIVES (each 0-100):
+
+1. **ATS Score** — keyword match, formatting, section structure, title alignment
+2. **Hiring Manager Score** — relevant impact, experience narrative, culture fit, growth potential
+3. **Technical Recruiter Score** — required/preferred skills coverage, experience level, red flags
+
+Candidate context:
+- Fresh MSc Cloud Computing graduate with 2+ years of industry experience
+- Stamp 1G work authorization in Ireland (full-time eligible)
+- Two resume variants: sre_devops and fullstack
+
+Be honest and strict.
+
 Return ONLY valid JSON (no markdown, no code fences):
 {
     "ats_score": <0-100>,
     "hiring_manager_score": <0-100>,
     "tech_recruiter_score": <0-100>,
     "best_resume": "<sre_devops or fullstack>",
-    "reasoning": "<2-3 sentences explaining the match and which perspective scored lowest and why>",
-    "key_matches": ["<skill1>", "<skill2>", ...],
-    "gaps": ["<missing skill/requirement>", ...],
-    "tailoring_suggestions": ["<specific tweak to make resume stronger>", ...]
+    "reasoning": "<2-3 sentences>",
+    "key_matches": ["<skill1>", ...],
+    "gaps": ["<gap1>", ...],
+    "tailoring_suggestions": ["<suggestion1>", ...]
 }"""
 
 
-def match_jobs(
-    jobs: List[Job],
-    resumes: Dict[str, str],
-    ai_client: AIClient,
-    min_score: int = 60,
-) -> List[Job]:
-    """Score and filter jobs using 3-perspective evaluation.
+def extract_json(text: str):
+    """Robustly extract JSON from LLM response text.
 
-    A job passes if the AVERAGE of (ATS, HM, TR) meets min_score.
-    Returns matched jobs sorted by average score descending.
+    Handles: markdown fences, trailing text, partial responses,
+    arrays and objects.
     """
-    matched_jobs = []
+    text = text.strip()
 
-    # Combine resumes into context
-    resume_context = ""
-    for key, tex in resumes.items():
-        resume_context += f"\n\n=== RESUME VARIANT: {key} ===\n{tex}\n"
+    # Remove markdown code fences
+    if "```" in text:
+        # Find content between first and last ```
+        parts = text.split("```")
+        if len(parts) >= 3:
+            inner = parts[1]
+            # Strip language identifier (json, JSON, etc.)
+            if inner.startswith(("json", "JSON")):
+                inner = inner[4:]
+            text = inner.strip()
+        elif len(parts) == 2:
+            # Only opening fence, no closing
+            inner = parts[1]
+            if inner.startswith(("json", "JSON")):
+                inner = inner[4:]
+            text = inner.strip()
 
-    for job in jobs:
-        user_prompt = f"""Evaluate this job match from all 3 perspectives:
+    # Try parsing as-is first
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Try to find a JSON array
+    array_match = re.search(r'\[[\s\S]*\]', text)
+    if array_match:
+        try:
+            return json.loads(array_match.group())
+        except json.JSONDecodeError:
+            pass
+
+    # Try to find a JSON object
+    obj_match = re.search(r'\{[\s\S]*\}', text)
+    if obj_match:
+        try:
+            return json.loads(obj_match.group())
+        except json.JSONDecodeError:
+            pass
+
+    raise json.JSONDecodeError("No valid JSON found in response", text, 0)
+
+
+def _format_job_for_prompt(job: Job, index: int) -> str:
+    """Format a single job for inclusion in a batch prompt."""
+    desc = job.description[:2500] if job.description else "(No description available)"
+    return f"""--- JOB {index} ---
+- Title: {job.title}
+- Company: {job.company}
+- Location: {job.location}
+- Remote: {job.remote}
+- Salary: {job.salary or 'Not specified'}
+- Type: {job.job_type or 'Not specified'}
+
+Description:
+{desc}"""
+
+
+def _apply_scores(job: Job, result: dict, min_score: int) -> bool:
+    """Apply parsed scores to a job object. Returns True if it passes."""
+    ats = result.get("ats_score", 0)
+    hm = result.get("hiring_manager_score", 0)
+    tr = result.get("tech_recruiter_score", 0)
+    avg_score = round((ats + hm + tr) / 3, 1)
+
+    job.ats_score = ats
+    job.hiring_manager_score = hm
+    job.tech_recruiter_score = tr
+    job.match_score = avg_score
+    job.match_reasoning = result.get("reasoning", "")
+    job.matched_resume = result.get("best_resume", "fullstack")
+    job._match_data = result
+
+    if avg_score >= min_score:
+        logger.info(f"[MATCH] {job.title} @ {job.company} — ATS={ats} HM={hm} TR={tr} (avg={avg_score}) -> {job.matched_resume}")
+        return True
+    else:
+        logger.info(f"[SKIP]  {job.title} @ {job.company} — ATS={ats} HM={hm} TR={tr} (avg={avg_score})")
+        return False
+
+
+def _match_batch(
+    batch: List[Job],
+    resume_context: str,
+    ai_client: AIClient,
+    min_score: int,
+    batch_num: int,
+) -> List[Job]:
+    """Score a batch of jobs in a single AI call."""
+    matched = []
+
+    jobs_text = "\n\n".join(
+        _format_job_for_prompt(job, i) for i, job in enumerate(batch)
+    )
+
+    user_prompt = f"""Evaluate these {len(batch)} jobs from all 3 perspectives:
+
+{jobs_text}
+
+CANDIDATE RESUMES:
+{resume_context}
+
+CANDIDATE INFO:
+- Location: Dublin, Ireland
+- Visa: Stamp 1G (eligible for full-time work in Ireland)
+- Citizenship: Indian (would need sponsorship for roles outside Ireland)
+- Target: Fresh grad roles (where experience gives an edge) and mid-level roles
+
+Return a JSON array with {len(batch)} objects, one per job in order."""
+
+    try:
+        result_text = ai_client.complete(
+            prompt=user_prompt,
+            system=MATCH_SYSTEM_PROMPT,
+            temperature=0.3,
+        )
+
+        results = extract_json(result_text)
+
+        # Handle case where model returns a single object instead of array
+        if isinstance(results, dict):
+            results = [results]
+
+        for i, job in enumerate(batch):
+            if i < len(results):
+                result = results[i]
+                if _apply_scores(job, result, min_score):
+                    matched.append(job)
+            else:
+                logger.warning(f"Batch {batch_num}: no result for job {i} ({job.title})")
+
+    except json.JSONDecodeError as e:
+        logger.warning(f"Batch {batch_num} JSON parse failed: {e}")
+        logger.info("Falling back to single-job matching for this batch...")
+        for job in batch:
+            result = _match_single(job, resume_context, ai_client)
+            if result and _apply_scores(job, result, min_score):
+                matched.append(job)
+
+    except Exception as e:
+        logger.error(f"Batch {batch_num} failed: {e}")
+        # Fallback to single matching
+        for job in batch:
+            try:
+                result = _match_single(job, resume_context, ai_client)
+                if result and _apply_scores(job, result, min_score):
+                    matched.append(job)
+            except Exception as inner_e:
+                logger.error(f"Single match failed for {job.title}: {inner_e}")
+
+    return matched
+
+
+def _match_single(job: Job, resume_context: str, ai_client: AIClient) -> dict | None:
+    """Score a single job (fallback when batch fails)."""
+    desc = job.description[:4000] if job.description else "(No description available)"
+    user_prompt = f"""Evaluate this job match from all 3 perspectives:
 
 JOB LISTING:
 - Title: {job.title}
@@ -90,7 +270,7 @@ JOB LISTING:
 - Type: {job.job_type or 'Not specified'}
 
 JOB DESCRIPTION:
-{job.description[:4000]}
+{desc}
 
 CANDIDATE RESUMES:
 {resume_context}
@@ -99,50 +279,50 @@ CANDIDATE INFO:
 - Location: Dublin, Ireland
 - Visa: Stamp 1G (eligible for full-time work in Ireland)
 - Citizenship: Indian (would need sponsorship for roles outside Ireland)
-- Target: Fresh grad roles (where experience gives an edge) and mid-level roles"""
+- Target: Fresh grad roles and mid-level roles"""
 
-        try:
-            result_text = ai_client.complete(
-                prompt=user_prompt,
-                system=MATCH_SYSTEM_PROMPT,
-                temperature=0.3,
-            )
+    try:
+        result_text = ai_client.complete(
+            prompt=user_prompt,
+            system=SINGLE_MATCH_SYSTEM_PROMPT,
+            temperature=0.3,
+        )
+        return extract_json(result_text)
+    except Exception as e:
+        logger.error(f"Failed to match {job.title}: {e}")
+        return None
 
-            # Clean up response — some models wrap in code fences
-            result_text = result_text.strip()
-            if result_text.startswith("```"):
-                result_text = result_text.split("```")[1]
-                if result_text.startswith("json"):
-                    result_text = result_text[4:]
-            result_text = result_text.strip()
 
-            result = json.loads(result_text)
+def match_jobs(
+    jobs: List[Job],
+    resumes: Dict[str, str],
+    ai_client: AIClient,
+    min_score: int = 60,
+    batch_size: int = 5,
+) -> List[Job]:
+    """Score and filter jobs using 3-perspective evaluation.
 
-            ats = result.get("ats_score", 0)
-            hm = result.get("hiring_manager_score", 0)
-            tr = result.get("tech_recruiter_score", 0)
-            avg_score = round((ats + hm + tr) / 3, 1)
+    Jobs are processed in batches of `batch_size` to reduce API calls.
+    A job passes if the AVERAGE of (ATS, HM, TR) meets min_score.
+    Returns matched jobs sorted by average score descending.
+    """
+    matched_jobs = []
 
-            # Store all scores on the job object
-            job.ats_score = ats
-            job.hiring_manager_score = hm
-            job.tech_recruiter_score = tr
-            job.match_score = avg_score
-            job.match_reasoning = result.get("reasoning", "")
-            job.matched_resume = result.get("best_resume", "fullstack")
-            job._match_data = result
+    # Combine resumes into context
+    resume_context = ""
+    for key, tex in resumes.items():
+        resume_context += f"\n\n=== RESUME VARIANT: {key} ===\n{tex}\n"
 
-            if avg_score >= min_score:
-                matched_jobs.append(job)
-                print(f"  [MATCH] {job.title} @ {job.company} — ATS={ats} HM={hm} TR={tr} (avg={avg_score}) -> {job.matched_resume}")
-            else:
-                print(f"  [SKIP]  {job.title} @ {job.company} — ATS={ats} HM={hm} TR={tr} (avg={avg_score})")
+    # Process in batches
+    total_batches = (len(jobs) + batch_size - 1) // batch_size
+    for batch_num in range(total_batches):
+        start = batch_num * batch_size
+        end = min(start + batch_size, len(jobs))
+        batch = jobs[start:end]
 
-        except json.JSONDecodeError as e:
-            print(f"  [ERROR] Failed to parse match result for {job.title}: {e}")
-            print(f"          Response was: {result_text[:200]}")
-        except Exception as e:
-            print(f"  [ERROR] Error matching {job.title}: {e}")
+        logger.info(f"[Batch {batch_num + 1}/{total_batches}] Matching {len(batch)} jobs...")
+        batch_matches = _match_batch(batch, resume_context, ai_client, min_score, batch_num + 1)
+        matched_jobs.extend(batch_matches)
 
     matched_jobs.sort(key=lambda j: j.match_score, reverse=True)
     return matched_jobs

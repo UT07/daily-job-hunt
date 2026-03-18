@@ -92,6 +92,7 @@ search:
 # Set these as environment variables (or replace the ${...} placeholders)
 api_keys:
   # AI providers (need at least ONE — all free)
+  gemini: "${GEMINI_API_KEY}"            # https://aistudio.google.com/apikey (free: 15 RPM, 1500 RPD)
   groq: "${GROQ_API_KEY}"               # https://console.groq.com/keys (free: 30 RPM, 14,400 RPD)
   deepseek: "${DEEPSEEK_API_KEY}"       # https://platform.deepseek.com/ (free: 60 RPM)
   openrouter: "${OPENROUTER_API_KEY}"    # https://openrouter.ai/keys (free models: Qwen, Llama)
@@ -114,7 +115,7 @@ scrapers:
     # Browser-based (Playwright stealth — can occasionally get blocked):
     - "linkedin"     # LinkedIn public job search via Playwright
     - "indeed"       # Indeed via Playwright (Cloudflare protected)
-    - "irishjobs"    # IrishJobs.ie via Playwright
+    # - "irishjobs"    # IrishJobs.ie via Playwright (disabled — Akamai blocks all access)
     # Startup-focused (API/HTML — lightweight, no Cloudflare):
     - "yc_wats"      # YC Work at a Startup
     - "hn_hiring"    # Hacker News "Who is Hiring?" threads
@@ -147,12 +148,15 @@ output:
   retention_days: 30
 
 # --- AI Provider Settings ---
-# Priority order: Groq → OpenRouter → Anthropic (failover chain)
+# Priority order: Gemini → Groq → DeepSeek → OpenRouter → Anthropic
 ai:
-  # Groq (primary — free, fastest inference)
+  # Gemini (primary — free, generous quota)
+  gemini_model: "gemini-2.0-flash"
+
+  # Groq (secondary — free, fastest inference)
   groq_model: "llama-3.3-70b-versatile"
 
-  # DeepSeek (secondary — free, strong on structured output)
+  # DeepSeek (tertiary — free, strong on structured output)
   deepseek_model: "deepseek-chat"
 
   # OpenRouter (tertiary — free models aggregator)

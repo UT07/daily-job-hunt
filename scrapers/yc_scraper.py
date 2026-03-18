@@ -9,6 +9,7 @@ and remote work than traditional companies.
 """
 
 from __future__ import annotations
+import logging
 import re
 import json
 import requests
@@ -18,110 +19,105 @@ from typing import List
 from .base import BaseScraper, Job
 from .browser import stealth_browser, run_async
 
+logger = logging.getLogger(__name__)
+
 
 class WorkAtAStartupScraper(BaseScraper):
     """Scrapes YC's Work at a Startup job board.
 
-    Uses their internal API which returns JSON — no Playwright needed
-    for the API path. Falls back to browser scraping if the API changes.
+    The site uses Inertia.js with SSR — job data is embedded in the HTML
+    as a JSON blob in the data-page attribute. No browser needed.
     """
 
     name = "yc_wats"
-    API_URL = "https://www.workatastartup.com/companies/fetch"
-    SEARCH_URL = "https://www.workatastartup.com/companies"
+    JOBS_URL = "https://www.workatastartup.com/jobs"
 
     def __init__(self):
         self.session = requests.Session()
         self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-            "Accept": "application/json",
-            "Referer": "https://www.workatastartup.com/companies",
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml",
         })
 
     def search(self, query: str, location: str = "", days_back: int = 7, **kwargs) -> List[Job]:
         jobs = []
 
         try:
-            jobs = self._search_api(query, location, days_back)
+            jobs = self._search_inertia(query, location)
         except Exception as e:
-            print(f"  [YC-WATS] API failed ({e}), trying browser scrape...")
+            logger.warning(f"[YC-WATS] Inertia parse failed ({e}), trying browser scrape...")
             jobs = run_async(self._search_browser(query, location))
 
         return self.deduplicate(jobs)
 
-    def _search_api(self, query: str, location: str, days_back: int) -> List[Job]:
-        """Try the internal WATS API."""
+    def _search_inertia(self, query: str, location: str) -> List[Job]:
+        """Parse job data from Inertia.js SSR HTML."""
         jobs = []
 
-        params = {
-            "query": query,
-            "page": 1,
-        }
-
-        loc_lower = location.lower()
-        if "remote" in loc_lower:
-            params["remote"] = "true"
-        if any(w in loc_lower for w in ["ireland", "dublin", "europe", "eu"]):
-            params["regions"] = "europe"
+        params = {"query": query}
 
         q_lower = query.lower()
         if any(w in q_lower for w in ["sre", "devops", "infrastructure", "platform"]):
-            params["role_types"] = "devops-infra"
+            params["role_type"] = "devops-infra"
         elif any(w in q_lower for w in ["fullstack", "full stack", "software engineer", "backend"]):
-            params["role_types"] = "eng"
+            params["role_type"] = "eng"
 
-        resp = self.session.get(self.API_URL, params=params, timeout=30)
+        resp = self.session.get(self.JOBS_URL, params=params, timeout=30)
         resp.raise_for_status()
-        data = resp.json()
 
-        companies = data if isinstance(data, list) else data.get("companies", data.get("results", []))
+        # Extract Inertia.js data-page attribute containing SSR JSON
+        match = re.search(r'data-page="([^"]+)"', resp.text)
+        if not match:
+            raise ValueError("No Inertia data-page attribute found")
 
-        for company in companies[:30]:
-            company_name = company.get("name", "")
-            company_url = company.get("website", "")
-            batch = company.get("batch", "")
+        raw = match.group(1).replace("&quot;", '"').replace("&amp;", "&")
+        data = json.loads(raw)
+        job_list = data.get("props", {}).get("jobs", [])
 
-            for job_data in company.get("jobs", []):
-                title = job_data.get("title", "")
-                if not title:
-                    continue
+        loc_lower = location.lower()
 
-                combined = (title + " " + job_data.get("description", "")).lower()
-                query_words = query.lower().split()
-                if not any(w in combined for w in query_words):
-                    continue
+        for item in job_list:
+            title = item.get("title", "")
+            if not title:
+                continue
 
-                job_url = f"https://www.workatastartup.com/jobs/{job_data.get('id', '')}"
-                loc = job_data.get("pretty_location", "")
-                is_remote = job_data.get("remote", False)
+            company_name = item.get("companyName", "")
+            batch = item.get("companyBatch", "")
+            job_loc = item.get("location", "")
+            job_type = item.get("jobType", "")
+            is_remote = "remote" in job_loc.lower() if job_loc else False
+            apply_url = item.get("applyUrl", "")
+            if not apply_url:
+                job_id = item.get("id", "")
+                slug = item.get("companySlug", "")
+                apply_url = f"https://www.workatastartup.com/companies/{slug}" if slug else ""
 
-                salary = ""
-                sal_min = job_data.get("salary_min")
-                sal_max = job_data.get("salary_max")
-                if sal_min and sal_max:
-                    salary = f"${sal_min:,} - ${sal_max:,}"
+            # Location filtering
+            if loc_lower and "remote" not in loc_lower:
+                if job_loc and not any(w in job_loc.lower() for w in loc_lower.split()):
+                    if not is_remote:
+                        continue
 
-                exp = job_data.get("experience_level", "")
+            display_title = f"{title} ({batch})" if batch else title
 
-                jobs.append(Job(
-                    title=f"{title} ({batch})" if batch else title,
-                    company=company_name,
-                    location=loc or ("Remote" if is_remote else ""),
-                    description=job_data.get("description", "")[:500],
-                    apply_url=job_url or company_url,
-                    source="yc_wats",
-                    salary=salary,
-                    experience_level=exp,
-                    remote=is_remote or "remote" in loc.lower(),
-                ))
+            jobs.append(Job(
+                title=display_title,
+                company=company_name,
+                location=job_loc or ("Remote" if is_remote else ""),
+                description=item.get("companyOneLiner", ""),
+                apply_url=apply_url,
+                source="yc_wats",
+                job_type=job_type,
+                remote=is_remote,
+            ))
 
-        print(f"  [YC-WATS] Found {len(jobs)} jobs for '{query}'")
+        logger.info(f"[YC-WATS] Found {len(jobs)} jobs for '{query}'")
         return jobs
 
     async def _search_browser(self, query: str, location: str) -> List[Job]:
-        """Fallback: scrape WATS with Playwright if API changes."""
+        """Fallback: scrape WATS with Playwright if Inertia parsing fails."""
         jobs = []
-        url = f"{self.SEARCH_URL}?query={query}"
+        url = f"{self.JOBS_URL}?query={query}"
 
         async with stealth_browser() as browser:
             page = await browser.new_page()
@@ -132,12 +128,12 @@ class WorkAtAStartupScraper(BaseScraper):
             await browser.human_delay(3000, 5000)
             await browser.scroll_page(page, scrolls=5)
 
-            cards = await page.query_selector_all('[class*="company-row"], [class*="job-listing"], .company-card')
+            cards = await page.query_selector_all('[class*="company-row"], [class*="job-listing"], .company-card, a[href*="/companies/"]')
             for card in cards:
                 try:
                     title_el = await card.query_selector('[class*="job-name"], [class*="title"], h4')
                     company_el = await card.query_selector('[class*="company-name"], h2, h3')
-                    link_el = await card.query_selector('a[href*="/jobs/"]')
+                    link_el = await card.query_selector('a[href*="/companies/"]')
 
                     title = (await title_el.inner_text()).strip() if title_el else ""
                     company = (await company_el.inner_text()).strip() if company_el else ""
@@ -183,7 +179,7 @@ class HackerNewsScraper(BaseScraper):
 
             jobs = self._filter_comments(query, location)
         except Exception as e:
-            print(f"  [HN] Error: {e}")
+            logger.error(f"[HN] Error: {e}")
 
         return self.deduplicate(jobs)
 
@@ -195,7 +191,7 @@ class HackerNewsScraper(BaseScraper):
 
             thread_id = self._find_latest_thread()
             if not thread_id:
-                print("  [HN] No recent 'Who is hiring?' thread found")
+                logger.warning("[HN] No recent 'Who is hiring?' thread found")
                 self._cached_comments = []
                 return
 
@@ -215,7 +211,7 @@ class HackerNewsScraper(BaseScraper):
                 if parsed:
                     self._cached_comments.append(parsed)
 
-            print(f"  [HN] Cached {len(self._cached_comments)} job postings from thread {thread_id}")
+            logger.info(f"[HN] Cached {len(self._cached_comments)} job postings from thread {thread_id}")
 
     def _find_latest_thread(self) -> str | None:
         """Find the latest 'Ask HN: Who is hiring?' thread."""

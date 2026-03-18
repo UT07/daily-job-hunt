@@ -12,10 +12,13 @@ Designed to be your central application tracking hub with:
 
 from __future__ import annotations
 import json
+import logging
 from pathlib import Path
 from datetime import datetime
 from typing import List
 from openpyxl import Workbook, load_workbook
+
+logger = logging.getLogger(__name__)
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -124,7 +127,7 @@ def create_or_update_tracker(
 
     skipped = len(jobs) - len(new_jobs)
     if skipped > 0:
-        print(f"  [EXCEL] Skipped {skipped} duplicate jobs already in tracker")
+        logger.info(f"[EXCEL] Skipped {skipped} duplicate jobs already in tracker")
 
     # Add new job rows
     for i, job in enumerate(new_jobs):
@@ -228,7 +231,7 @@ def create_or_update_tracker(
     ws.freeze_panes = "F2"
 
     wb.save(str(tracker_path))
-    print(f"  [EXCEL] Master tracker updated: {tracker_path} ({len(new_jobs)} new jobs added)")
+    logger.info(f"[EXCEL] Master tracker updated: {tracker_path} ({len(new_jobs)} new jobs added)")
     return str(tracker_path)
 
 

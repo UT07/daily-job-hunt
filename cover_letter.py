@@ -4,9 +4,12 @@ Generates professional, tailored cover letters in LaTeX format.
 """
 
 from __future__ import annotations
+import logging
 from pathlib import Path
 from scrapers.base import Job
 from ai_client import AIClient
+
+logger = logging.getLogger(__name__)
 
 
 COVER_LETTER_SYSTEM_PROMPT = r"""You are an expert cover letter writer for software engineering and DevOps/SRE roles. You write concise, compelling cover letters that get interviews.
@@ -133,9 +136,9 @@ Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
         tex_path.write_text(full_tex, encoding="utf-8")
 
         job.cover_letter_tex_path = str(tex_path)
-        print(f"  [COVER LETTER] {job.title} @ {job.company} -> {tex_path.name}")
+        logger.info(f"[COVER LETTER] {job.title} @ {job.company} -> {tex_path.name}")
         return str(tex_path)
 
     except Exception as e:
-        print(f"  [ERROR] Error generating cover letter for {job.company}: {e}")
+        logger.error(f"Error generating cover letter for {job.company}: {e}")
         return ""

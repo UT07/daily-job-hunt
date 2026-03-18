@@ -5,11 +5,14 @@ This scraper uses a real browser with stealth patches to bypass protections.
 """
 
 from __future__ import annotations
+import logging
 import re
 import urllib.parse
 from typing import List
 from .base import BaseScraper, Job
 from .browser import stealth_browser, run_async
+
+logger = logging.getLogger(__name__)
 
 
 class IndeedScraper(BaseScraper):
@@ -54,11 +57,11 @@ class IndeedScraper(BaseScraper):
                 })
                 url = f"{base}/jobs?{params}"
 
-                print(f"  [Indeed] Scraping: {query} in {location} (page {page_num + 1})")
+                logger.info(f"[Indeed] Scraping: {query} in {location} (page {page_num + 1})")
 
                 success = await browser.safe_goto(page, url)
                 if not success:
-                    print(f"  [Indeed] Failed to load page {page_num + 1}")
+                    logger.warning(f"[Indeed] Failed to load page {page_num + 1}")
                     break
 
                 await browser.human_delay(2000, 4000)
@@ -72,7 +75,7 @@ class IndeedScraper(BaseScraper):
                         cards = await page.query_selector_all('[data-jk]')
 
                     if not cards:
-                        print(f"  [Indeed] No job cards found on page {page_num + 1}")
+                        logger.info(f"[Indeed] No job cards found on page {page_num + 1}")
                         break
 
                     for card in cards:
@@ -84,12 +87,12 @@ class IndeedScraper(BaseScraper):
                             continue
 
                 except Exception as e:
-                    print(f"  [Indeed] Error parsing page {page_num + 1}: {e}")
+                    logger.error(f"[Indeed] Error parsing page {page_num + 1}: {e}")
                     break
 
                 await browser.human_delay(3000, 7000)
 
-        print(f"  [Indeed] Found {len(jobs)} jobs for '{query}'")
+        logger.info(f"[Indeed] Found {len(jobs)} jobs for '{query}'")
         return self.deduplicate(jobs)
 
     async def _parse_card(self, card, page, base_url: str) -> Job | None:

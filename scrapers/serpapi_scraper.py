@@ -1,10 +1,13 @@
 """Google Jobs scraper via SerpAPI - the most reliable aggregator."""
 
 from __future__ import annotations
+import logging
 import requests
 import time
 from typing import List
 from .base import BaseScraper, Job
+
+logger = logging.getLogger(__name__)
 
 
 class SerpAPIScraper(BaseScraper):
@@ -79,8 +82,8 @@ class SerpAPIScraper(BaseScraper):
 
             time.sleep(self.delay)
         except requests.RequestException as e:
-            print(f"[SerpAPI] Error searching '{query}' in '{location}': {e}")
+            logger.error(f"[SerpAPI] Error searching '{query}' in '{location}': {e}")
         except (KeyError, IndexError) as e:
-            print(f"[SerpAPI] Parse error for '{query}': {e}")
+            logger.error(f"[SerpAPI] Parse error for '{query}': {e}")
 
         return self.deduplicate(jobs)

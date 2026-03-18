@@ -12,8 +12,12 @@ ready. If any score is below 85, the AI iteratively improves the resume
 
 from __future__ import annotations
 import json
+import logging
 from scrapers.base import Job
 from ai_client import AIClient
+from matcher import extract_json
+
+logger = logging.getLogger(__name__)
 
 
 SCORER_SYSTEM_PROMPT = r"""You are an expert at evaluating resumes from three distinct perspectives. You must score a TAILORED resume against a specific job listing.
@@ -104,17 +108,10 @@ Evaluate from all 3 perspectives (ATS, Hiring Manager, Technical Recruiter)."""
             temperature=0.2,
         )
 
-        result_text = result_text.strip()
-        if result_text.startswith("```"):
-            result_text = result_text.split("```")[1]
-            if result_text.startswith("json"):
-                result_text = result_text[4:]
-        result_text = result_text.strip()
-
-        return json.loads(result_text)
+        return extract_json(result_text)
 
     except (json.JSONDecodeError, Exception) as e:
-        print(f"  [SCORER] Error scoring resume for {job.company}: {e}")
+        logger.error(f"[SCORER] Error scoring resume for {job.company}: {e}")
         return {
             "ats_score": 0, "ats_feedback": "Error",
             "hiring_manager_score": 0, "hm_feedback": "Error",
@@ -185,7 +182,7 @@ Return the COMPLETE improved LaTeX source. Start with \\documentclass and end wi
         return improved
 
     except Exception as e:
-        print(f"  [SCORER] Error improving resume for {job.company}: {e}")
+        logger.error(f"[SCORER] Error improving resume for {job.company}: {e}")
         return tailored_tex
 
 
@@ -209,13 +206,11 @@ def score_and_improve(
         hm = scores.get("hiring_manager_score", 0)
         tr = scores.get("tech_recruiter_score", 0)
 
-        print(f"    Round {round_num}: ATS={ats}, HM={hm}, TR={tr}", end="")
-
         if ats >= min_score and hm >= min_score and tr >= min_score:
-            print(" ✓ All pass!")
+            logger.info(f"Round {round_num}: ATS={ats}, HM={hm}, TR={tr} — all pass")
             return current_tex, scores
 
-        print(f" — improving...")
+        logger.info(f"Round {round_num}: ATS={ats}, HM={hm}, TR={tr} — improving...")
         current_tex = improve_resume(current_tex, job, scores, ai_client)
 
     # Final score after last improvement
@@ -223,6 +218,6 @@ def score_and_improve(
     ats = final_scores.get("ats_score", 0)
     hm = final_scores.get("hiring_manager_score", 0)
     tr = final_scores.get("tech_recruiter_score", 0)
-    print(f"    Final: ATS={ats}, HM={hm}, TR={tr}")
+    logger.info(f"Final: ATS={ats}, HM={hm}, TR={tr}")
 
     return current_tex, final_scores

@@ -14,6 +14,7 @@ Responses are cached in SQLite to avoid burning quota on repeated requests.
 from __future__ import annotations
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import time
@@ -21,6 +22,15 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List, Dict, Any
+
+logger = logging.getLogger(__name__)
+
+# Retryable HTTP status codes for transient server-side errors
+_RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+# Max retry attempts per provider (so up to MAX_RETRIES+1 total attempts per provider)
+_MAX_RETRIES = 2
+# Initial backoff in seconds; doubles each retry
+_BACKOFF_BASE = 2.0
 
 
 # ── Rate Limiter (Token Bucket) ──────────────────────────────────────────
@@ -105,12 +115,12 @@ class ResponseCache:
         self._conn.commit()
         self._cleanup()
 
-    def _make_key(self, prompt: str, system: str = "") -> str:
-        raw = f"{system}|||{prompt}"
+    def _make_key(self, prompt: str, system: str = "", cache_extra: str = "") -> str:
+        raw = f"{system}|||{prompt}|||{cache_extra}"
         return hashlib.sha256(raw.encode()).hexdigest()
 
-    def get(self, prompt: str, system: str = "") -> Optional[str]:
-        key = self._make_key(prompt, system)
+    def get(self, prompt: str, system: str = "", cache_extra: str = "") -> Optional[str]:
+        key = self._make_key(prompt, system, cache_extra)
         cutoff = time.time() - self.ttl_seconds
         row = self._conn.execute(
             "SELECT response FROM cache WHERE key = ? AND created_at > ?",
@@ -120,8 +130,8 @@ class ResponseCache:
             return row[0]
         return None
 
-    def put(self, prompt: str, response: str, provider: str = "", model: str = "", system: str = ""):
-        key = self._make_key(prompt, system)
+    def put(self, prompt: str, response: str, provider: str = "", model: str = "", system: str = "", cache_extra: str = ""):
+        key = self._make_key(prompt, system, cache_extra)
         self._conn.execute(
             "INSERT OR REPLACE INTO cache (key, response, provider, model, created_at) VALUES (?, ?, ?, ?, ?)",
             (key, response, provider, model, time.time()),
@@ -153,6 +163,46 @@ class AIProvider:
 
     def complete(self, prompt: str, system: str = "", temperature: float = None) -> str:
         raise NotImplementedError
+
+    def complete_with_retry(self, prompt: str, system: str = "", temperature: float = None) -> str:
+        """Call complete() with exponential backoff retry for transient errors.
+
+        Retries up to _MAX_RETRIES times (so up to _MAX_RETRIES+1 total attempts)
+        for HTTP 429/5xx errors and RateLimitError. Non-retryable errors (4xx other
+        than 429, JSON errors, etc.) propagate immediately.
+        """
+        import requests as _requests
+
+        last_error = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                return self.complete(prompt, system=system, temperature=temperature)
+            except RateLimitError as e:
+                # 429 from rate limiter or provider — retryable
+                last_error = e
+            except _requests.exceptions.HTTPError as e:
+                status = e.response.status_code if e.response is not None else 0
+                if status in _RETRYABLE_STATUS_CODES:
+                    last_error = e
+                else:
+                    # Non-retryable HTTP error (400, 401, 403, 404, …)
+                    raise
+            except (_requests.exceptions.ConnectionError,
+                    _requests.exceptions.Timeout) as e:
+                # Connection-level transient errors
+                last_error = e
+            except Exception as e:
+                # Anything else (JSON parse error, SDK exception, etc.) — don't retry
+                raise
+
+            if attempt < _MAX_RETRIES:
+                wait = _BACKOFF_BASE * (2 ** attempt)  # 2s, 4s
+                logger.warning(f"[AI] {self.name} transient error ({last_error}); retrying in {wait:.0f}s "
+                               f"(attempt {attempt + 1}/{_MAX_RETRIES})...")
+                time.sleep(wait)
+
+        # All retries exhausted — re-raise the last error to trigger failover
+        raise last_error
 
 
 class GeminiProvider(AIProvider):
@@ -396,12 +446,22 @@ class AIClient:
         self._stats = {"cache_hits": 0, "cache_misses": 0, "provider_calls": {}, "failovers": 0}
 
     def complete(self, prompt: str, system: str = "", temperature: float = None,
-                 skip_cache: bool = False) -> str:
-        """Send a prompt through the provider chain with caching and failover."""
+                 skip_cache: bool = False, cache_extra: str = "") -> str:
+        """Send a prompt through the provider chain with caching and failover.
+
+        Args:
+            prompt: The user prompt.
+            system: Optional system message.
+            temperature: Override the provider's default temperature.
+            skip_cache: If True, bypass the cache for both read and write.
+            cache_extra: Extra string hashed into the cache key (e.g. a resume
+                content hash) so that logically different inputs that happen to
+                produce the same prompt text are cached separately.
+        """
 
         # Check cache first
         if not skip_cache and self.cache:
-            cached = self.cache.get(prompt, system)
+            cached = self.cache.get(prompt, system, cache_extra=cache_extra)
             if cached:
                 self._stats["cache_hits"] += 1
                 return cached
@@ -413,23 +473,25 @@ class AIClient:
             try:
                 if i > 0:
                     self._stats["failovers"] += 1
-                    print(f"  [AI] Failing over to {provider.name} ({provider.model})")
+                    logger.info(f"[AI] Failing over to {provider.name} ({provider.model})")
 
-                response = provider.complete(prompt, system=system, temperature=temperature)
+                # Use retry wrapper — retries transient errors before failing over
+                response = provider.complete_with_retry(prompt, system=system, temperature=temperature)
 
                 # Cache the response
                 if self.cache and not skip_cache:
-                    self.cache.put(prompt, response, provider=provider.name, model=provider.model, system=system)
+                    self.cache.put(prompt, response, provider=provider.name,
+                                   model=provider.model, system=system, cache_extra=cache_extra)
 
                 self._stats["provider_calls"][provider.name] = self._stats["provider_calls"].get(provider.name, 0) + 1
                 return response
 
             except RateLimitError as e:
-                print(f"  [AI] {e} — trying next provider...")
+                logger.warning(f"[AI] {e} — trying next provider...")
                 last_error = e
                 continue
             except Exception as e:
-                print(f"  [AI] {provider.name} error: {e} — trying next provider...")
+                logger.warning(f"[AI] {provider.name} error: {e} — trying next provider...")
                 last_error = e
                 continue
 
@@ -459,39 +521,47 @@ class AIClient:
                 val = os.environ.get(env_var, "")
             return val
 
-        # 1. Groq (fast, free Llama 3.3 — primary provider)
+        # 1. Gemini (free, generous quota — primary provider)
+        gemini_key = get_key("gemini", "GEMINI_API_KEY")
+        if gemini_key:
+            model = ai_cfg.get("gemini_model", "gemini-2.0-flash")
+            providers.append(GeminiProvider(api_key=gemini_key, model=model))
+            logger.info(f"[AI] Gemini provider: {model}")
+
+        # 2. Groq (fast, free Llama 3.3)
         groq_key = get_key("groq", "GROQ_API_KEY")
         if groq_key:
             model = ai_cfg.get("groq_model", "llama-3.3-70b-versatile")
             providers.append(GroqProvider(api_key=groq_key, model=model))
-            print(f"[AI] Groq provider: {model}")
+            logger.info(f"[AI] Groq provider: {model}")
 
-        # 2. DeepSeek (free, very strong on structured tasks)
+        # 3. DeepSeek (free, very strong on structured tasks)
         ds_key = get_key("deepseek", "DEEPSEEK_API_KEY")
         if ds_key:
             model = ai_cfg.get("deepseek_model", "deepseek-chat")
             providers.append(DeepSeekProvider(api_key=ds_key, model=model))
-            print(f"[AI] DeepSeek provider: {model}")
+            logger.info(f"[AI] DeepSeek provider: {model}")
 
-        # 3. OpenRouter (free models aggregator — extra failover)
+        # 4. OpenRouter (free models aggregator — extra failover)
         or_key = get_key("openrouter", "OPENROUTER_API_KEY")
         if or_key:
             model = ai_cfg.get("openrouter_model", "qwen/qwen-2.5-72b-instruct:free")
             providers.append(OpenRouterProvider(api_key=or_key, model=model))
-            print(f"[AI] OpenRouter provider: {model}")
+            logger.info(f"[AI] OpenRouter provider: {model}")
 
-        # 4. Anthropic (paid fallback — only if you want it)
+        # 5. Anthropic (paid fallback — only if you want it)
         anthropic_key = get_key("anthropic", "ANTHROPIC_API_KEY")
         if anthropic_key:
             model = ai_cfg.get("anthropic_model", "claude-sonnet-4-20250514")
             providers.append(AnthropicProvider(api_key=anthropic_key, model=model))
-            print(f"[AI] Anthropic provider: {model} (paid fallback)")
+            logger.info(f"[AI] Anthropic provider: {model} (paid fallback)")
 
         if not providers:
             raise ProviderError(
                 "No AI providers configured. Set at least one API key:\n"
-                "  GROQ_API_KEY      — https://console.groq.com/keys (free, recommended)\n"
-                "  DEEPSEEK_API_KEY  — https://platform.deepseek.com/ (free)\n"
+                "  GEMINI_API_KEY     — https://aistudio.google.com/apikey (free, recommended)\n"
+                "  GROQ_API_KEY       — https://console.groq.com/keys (free)\n"
+                "  DEEPSEEK_API_KEY   — https://platform.deepseek.com/ (free)\n"
                 "  OPENROUTER_API_KEY — https://openrouter.ai/keys (free models available)\n"
                 "  ANTHROPIC_API_KEY  — https://console.anthropic.com/ (paid)"
             )

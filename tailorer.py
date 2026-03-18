@@ -5,9 +5,13 @@ emphasizing relevant skills, adjusting the summary, and reordering bullet points
 """
 
 from __future__ import annotations
+import hashlib
+import logging
 from pathlib import Path
 from scrapers.base import Job
 from ai_client import AIClient
+
+logger = logging.getLogger(__name__)
 
 
 TAILOR_SYSTEM_PROMPT = r"""You are an expert resume writer who specializes in tailoring technical resumes for specific job listings. You work with LaTeX resumes.
@@ -68,10 +72,15 @@ BASE RESUME (LaTeX):
 Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end with \\end{{document}}."""
 
     try:
+        # Include a hash of the base resume in the cache key so that a changed
+        # base resume always produces a fresh tailoring result, even if the rest
+        # of the prompt text happens to be identical.
+        resume_hash = hashlib.md5(base_tex.encode()).hexdigest()
         tailored_tex = ai_client.complete(
             prompt=user_prompt,
             system=TAILOR_SYSTEM_PROMPT,
             temperature=0.3,
+            cache_extra=resume_hash,
         )
         tailored_tex = tailored_tex.strip()
 
@@ -87,7 +96,7 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
             if start >= 0:
                 tailored_tex = tailored_tex[start:]
             else:
-                print(f"  [WARN] Tailored resume for {job.company} doesn't look like LaTeX, using base")
+                logger.warning(f"Tailored resume for {job.company} doesn't look like LaTeX, using base")
                 tailored_tex = base_tex
 
         # Ensure it ends with \end{document}
@@ -102,9 +111,9 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
         tex_path.write_text(tailored_tex, encoding="utf-8")
 
         job.tailored_tex_path = str(tex_path)
-        print(f"  [TAILORED] {job.title} @ {job.company} -> {tex_path.name}")
+        logger.info(f"[TAILORED] {job.title} @ {job.company} -> {tex_path.name}")
         return str(tex_path)
 
     except Exception as e:
-        print(f"  [ERROR] Error tailoring for {job.company}: {e}")
+        logger.error(f"Error tailoring for {job.company}: {e}")
         return ""

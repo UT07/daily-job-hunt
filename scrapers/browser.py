@@ -6,18 +6,22 @@ browser-based scrapers.
 
 from __future__ import annotations
 import asyncio
+import logging
 import random
 import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
+logger = logging.getLogger(__name__)
+
 # Lazy imports — fail gracefully if playwright not installed
 _pw = None
-_stealth = None
+_stealth_obj = None
+_stealth_checked = False
 
 
 def _ensure_imports():
-    global _pw, _stealth
+    global _pw, _stealth_obj, _stealth_checked
     if _pw is None:
         try:
             from playwright.async_api import async_playwright
@@ -28,14 +32,14 @@ def _ensure_imports():
                 "  pip install playwright playwright-stealth\n"
                 "  playwright install chromium"
             )
-    if _stealth is None:
+    if not _stealth_checked:
+        _stealth_checked = True
         try:
-            from playwright_stealth import stealth_async
-            _stealth = stealth_async
+            from playwright_stealth import Stealth
+            _stealth_obj = Stealth()
         except ImportError:
-            # Stealth is optional but strongly recommended
-            _stealth = None
-            print("  [WARN] playwright-stealth not installed. Anti-detection will be limited.")
+            _stealth_obj = None
+            logger.warning("[BROWSER] playwright-stealth not installed. Anti-detection will be limited.")
 
 
 # Realistic browser fingerprints
@@ -78,6 +82,7 @@ class StealthBrowser:
                 "--disable-blink-features=AutomationControlled",
                 "--disable-dev-shm-usage",
                 "--no-sandbox",
+                "--disable-http2",  # fixes ERR_HTTP2_PROTOCOL_ERROR with Akamai/Cloudflare CDNs
                 f"--window-size={vp['width']},{vp['height']}",
             ],
         )
@@ -91,18 +96,18 @@ class StealthBrowser:
             java_script_enabled=True,
         )
 
-        # Apply stealth patches if available
-        if _stealth:
+        # Apply stealth patches if available (playwright-stealth v2 API)
+        if _stealth_obj:
             for page in self._context.pages:
-                await _stealth(page)
+                await _stealth_obj.apply_stealth_async(page)
 
         return self
 
     async def new_page(self):
         """Create a new stealth page."""
         page = await self._context.new_page()
-        if _stealth:
-            await _stealth(page)
+        if _stealth_obj:
+            await _stealth_obj.apply_stealth_async(page)
 
         # Override navigator.webdriver detection
         await page.add_init_script("""
@@ -123,7 +128,7 @@ class StealthBrowser:
                 # Check for Cloudflare challenge page
                 content = await page.content()
                 if "challenge-platform" in content or "Just a moment" in content:
-                    print(f"  [BROWSER] Cloudflare challenge detected, waiting...")
+                    logger.info("[BROWSER] Cloudflare challenge detected, waiting...")
                     await page.wait_for_timeout(random.randint(5000, 10000))
                     # Wait for challenge to resolve
                     try:
@@ -133,7 +138,7 @@ class StealthBrowser:
                         )
                     except Exception:
                         if attempt < retries:
-                            print(f"  [BROWSER] Challenge didn't resolve, retry {attempt + 1}...")
+                            logger.warning(f"[BROWSER] Challenge didn't resolve, retry {attempt + 1}...")
                             await page.wait_for_timeout(random.randint(3000, 6000))
                             continue
                         return False
@@ -148,10 +153,10 @@ class StealthBrowser:
 
             except Exception as e:
                 if attempt < retries:
-                    print(f"  [BROWSER] Navigation error (attempt {attempt + 1}): {e}")
+                    logger.warning(f"[BROWSER] Navigation error (attempt {attempt + 1}): {e}")
                     await page.wait_for_timeout(random.randint(3000, 8000))
                 else:
-                    print(f"  [BROWSER] Failed to load {url}: {e}")
+                    logger.error(f"[BROWSER] Failed to load {url}: {e}")
                     return False
 
         return False
