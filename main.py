@@ -797,16 +797,19 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
     gdrive_creds = gdrive_config.get("credentials_path", "google_credentials.json")
     if gdrive_config.get("enabled") and Path(gdrive_creds).exists():
         logger.info("Uploading artifacts to Google Drive...")
-        drive_urls = drive_upload_artifacts(
-            matched_jobs, run_date,
-            credentials_path=gdrive_creds,
-            share_with=gdrive_config.get("share_with", ""),
-            root_folder_id=gdrive_config.get("folder_id", ""),
-        )
-        for job in matched_jobs:
-            urls = drive_urls.get(job.job_id, {})
-            job.resume_drive_url = urls.get("resume_drive_url", "")
-            job.cover_letter_drive_url = urls.get("cover_letter_drive_url", "")
+        try:
+            drive_urls = drive_upload_artifacts(
+                matched_jobs, run_date,
+                credentials_path=gdrive_creds,
+                share_with=gdrive_config.get("share_with", ""),
+                root_folder_id=gdrive_config.get("folder_id", ""),
+            )
+            for job in matched_jobs:
+                urls = drive_urls.get(job.job_id, {})
+                job.resume_drive_url = urls.get("resume_drive_url", "")
+                job.cover_letter_drive_url = urls.get("cover_letter_drive_url", "")
+        except Exception as e:
+            logger.warning(f"Google Drive upload failed (continuing without): {e}")
     else:
         logger.info("Google Drive upload skipped (not configured or credentials missing)")
 
@@ -825,14 +828,17 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
     # --- Step 9c: Upload tracker to Google Drive ---
     drive_tracker_url = None
     if gdrive_config.get("enabled") and Path(gdrive_creds).exists():
-        drive_tracker_url = drive_upload_tracker(
-            str(tracker_path), run_date,
-            credentials_path=gdrive_creds,
-            share_with=gdrive_config.get("share_with", ""),
-            root_folder_id=gdrive_config.get("folder_id", ""),
-        )
-        if drive_tracker_url:
-            logger.info(f"Tracker available on Google Drive")
+        try:
+            drive_tracker_url = drive_upload_tracker(
+                str(tracker_path), run_date,
+                credentials_path=gdrive_creds,
+                share_with=gdrive_config.get("share_with", ""),
+                root_folder_id=gdrive_config.get("folder_id", ""),
+            )
+            if drive_tracker_url:
+                logger.info(f"Tracker available on Google Drive")
+        except Exception as e:
+            logger.warning(f"Google Drive tracker upload failed (continuing without): {e}")
 
     # --- Summary ---
     resumes_generated = sum(1 for j in matched_jobs if j.tailored_pdf_path)
