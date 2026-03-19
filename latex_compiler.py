@@ -31,18 +31,21 @@ def compile_tex_to_pdf(tex_path: str, output_dir: str = None) -> str:
         return _compile_with_tectonic(tex_path, out_dir)
 
     try:
+        # Use absolute paths to avoid working directory issues
+        abs_tex = str(tex_path.resolve())
+        abs_out = str(out_dir.resolve())
         result = subprocess.run(
             [
                 "pdflatex",
                 "-interaction=nonstopmode",
                 "-halt-on-error",
-                f"-output-directory={out_dir}",
-                str(tex_path),
+                f"-output-directory={abs_out}",
+                abs_tex,
             ],
             capture_output=True,
             text=True,
             timeout=60,
-            cwd=str(tex_path.parent),
+            cwd=str(tex_path.parent.resolve()),
         )
 
         pdf_name = tex_path.stem + ".pdf"
