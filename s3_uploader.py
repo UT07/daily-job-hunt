@@ -27,8 +27,8 @@ from scrapers.base import Job
 
 logger = logging.getLogger(__name__)
 
-# Presigned URL expiry: 30 days in seconds
-PRESIGN_EXPIRY = 30 * 24 * 60 * 60
+# Presigned URL expiry: 7 days (S3 maximum for IAM user credentials)
+PRESIGN_EXPIRY = 7 * 24 * 60 * 60
 
 
 def _get_s3_client():

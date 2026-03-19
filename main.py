@@ -513,17 +513,30 @@ def _rank_jobs_locally(jobs: List[Job], config: dict) -> List[Job]:
             if "remote" in loc:
                 score += 10
 
-        # Recency bonus
+        # Recency bonus (strong gradient: today >> yesterday >> 3 days >> week)
         if job.posted_date:
             try:
                 posted = datetime.fromisoformat(job.posted_date.replace("Z", "+00:00"))
                 days_old = (datetime.now(posted.tzinfo) - posted).days if posted.tzinfo else 0
                 if days_old <= 1:
-                    score += 10
+                    score += 25
+                elif days_old <= 2:
+                    score += 15
                 elif days_old <= 3:
+                    score += 10
+                elif days_old <= 5:
                     score += 5
+                # 6-7 days: no bonus, but not penalized
             except (ValueError, TypeError):
                 pass
+
+        # Experience level preference: junior/mid >> senior
+        if any(w in title_lower for w in ["junior", "graduate", "entry", "jr.", "jr "]):
+            score += 20
+        elif "senior" in title_lower or "sr." in title_lower or "sr " in title_lower:
+            score -= 15  # Deprioritize but don't exclude
+        elif "lead" in title_lower or "staff" in title_lower:
+            score -= 25
 
         # Has description bonus
         if len(desc_lower) > 100:
@@ -538,12 +551,14 @@ def _rank_jobs_locally(jobs: List[Job], config: dict) -> List[Job]:
 
 _REJECT_TITLE_PATTERNS = [
     "director", "vice president", "vp ", "vp,", "chief ",
-    "head of", "principal architect",
+    "head of", "principal architect", "staff engineer",
+    "distinguished", "fellow",
 ]
 
 _REJECT_DESC_PATTERNS = [
     "security clearance required", "ts/sci", "top secret",
     "10+ years", "12+ years", "15+ years", "8+ years of experience",
+    "7+ years of experience",
 ]
 
 

@@ -97,7 +97,7 @@ search:
     - "mid_level"
 
   # How many days back to search for new postings
-  days_back: 3
+  days_back: 7
 
   # Maximum jobs to process per run (to manage API costs)
   max_jobs_per_run: 15
