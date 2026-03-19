@@ -78,7 +78,15 @@ jobs:
 
       - name: Setup Google Drive credentials
         if: env.GOOGLE_CREDENTIALS_JSON != ''
-        run: echo "$GOOGLE_CREDENTIALS_JSON" | base64 -d > google_credentials.json
+        run: |
+          # Try base64 decode first, fall back to raw JSON
+          if echo "$GOOGLE_CREDENTIALS_JSON" | base64 -d > google_credentials.json 2>/dev/null; then
+            echo "Decoded base64 credentials"
+          else
+            echo "$GOOGLE_CREDENTIALS_JSON" > google_credentials.json
+            echo "Used raw JSON credentials"
+          fi
+          python3 -c "import json; json.load(open('google_credentials.json')); print('Credentials valid JSON')"
         env:
           GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
 
