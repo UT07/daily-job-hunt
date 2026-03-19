@@ -46,6 +46,8 @@ COLUMNS = [
     ("Apply Link", 15),
     ("Resume PDF", 20),
     ("Cover Letter", 20),
+    ("Resume (Drive)", 20),
+    ("CL (Drive)", 20),
     # Networking columns
     ("Contact 1", 25),
     ("Contact 1 LinkedIn", 15),
@@ -220,10 +222,28 @@ def create_or_update_tracker(
         else:
             cl_cell.value = "—"
 
-        # Col 18-25: LinkedIn contacts (up to 3)
-        # Contact 1: cols 18 (role), 19 (linkedin), 20 (message)
-        # Contact 2: cols 21 (role), 22 (linkedin), 23 (message)
-        # Contact 3: cols 24 (role), 25 (linkedin)
+        # Col 18: Resume (Drive link)
+        resume_drive_cell = ws.cell(row=row, column=18)
+        if job.resume_drive_url:
+            resume_drive_cell.value = "Open"
+            resume_drive_cell.hyperlink = job.resume_drive_url
+            resume_drive_cell.font = LINK_FONT
+        else:
+            resume_drive_cell.value = "—"
+
+        # Col 19: Cover Letter (Drive link)
+        cl_drive_cell = ws.cell(row=row, column=19)
+        if job.cover_letter_drive_url:
+            cl_drive_cell.value = "Open"
+            cl_drive_cell.hyperlink = job.cover_letter_drive_url
+            cl_drive_cell.font = LINK_FONT
+        else:
+            cl_drive_cell.value = "—"
+
+        # Col 20-27: LinkedIn contacts (up to 3)
+        # Contact 1: cols 20 (role), 21 (linkedin), 22 (message)
+        # Contact 2: cols 23 (role), 24 (linkedin), 25 (message)
+        # Contact 3: cols 26 (role), 27 (linkedin)
         for ci in range(3):
             c = contacts[ci] if ci < len(contacts) else {}
             c_role = c.get("role", "")
@@ -232,7 +252,7 @@ def create_or_update_tracker(
 
             if ci < 2:
                 # Contacts 1 & 2: role + linkedin + message (3 cols each)
-                base = 18 + ci * 3  # 18 or 21
+                base = 20 + ci * 3  # 20 or 23
                 ws.cell(row=row, column=base, value=c_role)
                 li_cell = ws.cell(row=row, column=base + 1)
                 if c_url:
@@ -244,8 +264,8 @@ def create_or_update_tracker(
                 ws.cell(row=row, column=base + 2, value=c_msg)
             else:
                 # Contact 3: role + linkedin only (2 cols)
-                ws.cell(row=row, column=24, value=c_role)
-                li_cell = ws.cell(row=row, column=25)
+                ws.cell(row=row, column=26, value=c_role)
+                li_cell = ws.cell(row=row, column=27)
                 if c_url:
                     li_cell.value = "Search"
                     li_cell.hyperlink = c_url
@@ -253,32 +273,32 @@ def create_or_update_tracker(
                 else:
                     li_cell.value = "—"
 
-        # Col 26-28: Application tracking
-        ws.cell(row=row, column=26, value="No")   # Applied?
-        ws.cell(row=row, column=27, value="")      # Applied Date
-        ws.cell(row=row, column=28, value="New")   # Status
+        # Col 28-30: Application tracking
+        ws.cell(row=row, column=28, value="No")   # Applied?
+        ws.cell(row=row, column=29, value="")      # Applied Date
+        ws.cell(row=row, column=30, value="New")   # Status
 
-        # Col 29-30: Follow-up dates (calculated when applied date is set)
-        ws.cell(row=row, column=29, value="")  # Follow-Up 1 (1 week after applied)
-        ws.cell(row=row, column=30, value="")  # Follow-Up 2 (2 weeks after applied)
+        # Col 31-32: Follow-up dates (calculated when applied date is set)
+        ws.cell(row=row, column=31, value="")  # Follow-Up 1 (1 week after applied)
+        ws.cell(row=row, column=32, value="")  # Follow-Up 2 (2 weeks after applied)
 
-        # Col 31-32: Follow-up messages
-        ws.cell(row=row, column=31, value=followup_1_msg)
-        ws.cell(row=row, column=32, value=followup_2_msg)
+        # Col 33-34: Follow-up messages
+        ws.cell(row=row, column=33, value=followup_1_msg)
+        ws.cell(row=row, column=34, value=followup_2_msg)
 
-        # Col 33: Apply Reminder
-        reminder_cell = ws.cell(row=row, column=33)
+        # Col 35: Apply Reminder
+        reminder_cell = ws.cell(row=row, column=35)
         reminder_cell.value = "APPLY NOW!"
         reminder_cell.fill = REMINDER_FILL
         reminder_cell.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
 
-        # Col 34: Notes
-        ws.cell(row=row, column=34, value="")
+        # Col 36: Notes
+        ws.cell(row=row, column=36, value="")
 
         # ── Format the row ──
         score_cols = {3, 4, 5, 6, 7}  # Match=3, Score=4, ATS=5, HM=6, TR=7
-        status_col = 28
-        reminder_col = 33
+        status_col = 30
+        reminder_col = 35
         for col in range(1, len(COLUMNS) + 1):
             cell = ws.cell(row=row, column=col)
             if not cell.font or cell.font == Font():
@@ -295,8 +315,8 @@ def create_or_update_tracker(
         _color_score_cell(ws.cell(row=row, column=6), job.hiring_manager_score)
         _color_score_cell(ws.cell(row=row, column=7), job.tech_recruiter_score)
 
-        # Color-code status (col 28)
-        ws.cell(row=row, column=28).fill = STATUS_COLORS.get("New", PatternFill())
+        # Color-code status (col 30)
+        ws.cell(row=row, column=30).fill = STATUS_COLORS.get("New", PatternFill())
 
     # Update summary
     if "Daily Summary" in wb.sheetnames:
@@ -449,14 +469,14 @@ def _add_data_validations(ws):
         type="list", formula1='"Yes,No"', allow_blank=True,
         showErrorMessage=True, errorTitle="Invalid", error="Select Yes or No",
     )
-    applied_dv.sqref = "Z2:Z5000"  # Col 26 = Z (Applied?)
+    applied_dv.sqref = "AB2:AB5000"  # Col 28 = AB (Applied?)
     ws.add_data_validation(applied_dv)
 
     status_dv = DataValidation(
         type="list", formula1='"New,Applied,Interview,Offer,Rejected,Withdrawn"',
         allow_blank=True, showErrorMessage=True, errorTitle="Invalid", error="Select a valid status",
     )
-    status_dv.sqref = "AB2:AB5000"  # Col 28 = AB (Status)
+    status_dv.sqref = "AD2:AD5000"  # Col 30 = AD (Status)
     ws.add_data_validation(status_dv)
 
 
