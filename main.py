@@ -101,6 +101,7 @@ from contact_finder import find_contacts_batch
 from cover_letter import generate_cover_letter
 from latex_compiler import compile_tex_to_pdf
 from excel_tracker import create_or_update_tracker
+from s3_uploader import upload_artifacts, upload_tracker
 from email_notifier import send_summary_email
 
 
@@ -727,10 +728,27 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
             pdf = compile_tex_to_pdf(job.cover_letter_tex_path)
             job.cover_letter_pdf_path = pdf
 
+    # --- Step 8b: Upload PDFs to S3 (if configured) ---
+    if os.environ.get("S3_BUCKET_NAME"):
+        logger.info("Uploading artifacts to S3...")
+        s3_urls = upload_artifacts(matched_jobs, run_date)
+        for job in matched_jobs:
+            urls = s3_urls.get(job.job_id, {})
+            job.resume_s3_url = urls.get("resume_url", "")
+            job.cover_letter_s3_url = urls.get("cover_letter_url", "")
+    else:
+        logger.info("S3 upload skipped (S3_BUCKET_NAME not set)")
+
     # --- Step 9: Update master Excel tracker ---
     logger.info("Updating master Excel tracker...")
     tracker_path = base_dir / config["output"]["tracker_filename"]
     create_or_update_tracker(matched_jobs, str(tracker_path), run_date)
+
+    # --- Step 9b: Upload tracker to S3 ---
+    if os.environ.get("S3_BUCKET_NAME"):
+        tracker_url = upload_tracker(str(tracker_path), run_date)
+        if tracker_url:
+            logger.info(f"Tracker available at S3 (30-day link)")
 
     # --- Summary ---
     resumes_generated = sum(1 for j in matched_jobs if j.tailored_pdf_path)

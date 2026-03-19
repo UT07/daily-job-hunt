@@ -5,6 +5,7 @@ Generates professional, tailored cover letters in LaTeX format.
 
 from __future__ import annotations
 import logging
+from datetime import datetime
 from pathlib import Path
 from scrapers.base import Job
 from ai_client import AIClient
@@ -129,9 +130,10 @@ Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
         )
 
         # Save cover letter .tex file
-        safe_company = "".join(c for c in job.company if c.isalnum() or c in " _-")[:30].strip()
         safe_title = "".join(c for c in job.title if c.isalnum() or c in " _-")[:30].strip()
-        filename = f"coverletter_{safe_company}_{safe_title}".replace(" ", "_")
+        safe_company = "".join(c for c in job.company if c.isalnum() or c in " _-")[:30].strip()
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        filename = f"Utkarsh_Singh_{safe_title}_{safe_company}_{date_str}_CoverLetter".replace(" ", "_")
         tex_path = output_dir / f"{filename}.tex"
         tex_path.write_text(full_tex, encoding="utf-8")
 

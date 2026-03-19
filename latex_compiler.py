@@ -57,12 +57,19 @@ def compile_tex_to_pdf(tex_path: str, output_dir: str = None) -> str:
             logger.info(f"[PDF] Compiled -> {pdf_path.name}")
             return str(pdf_path)
         else:
-            logger.error(f"pdflatex failed for {tex_path.name}")
-            # Log last 20 lines of log for debugging
-            log_lines = result.stdout.split("\n")[-20:]
-            for line in log_lines:
-                if line.strip():
-                    logger.debug(f"  {line}")
+            logger.error(f"pdflatex failed for {tex_path.name} (exit code {result.returncode})")
+            # Log the actual error lines from stdout and stderr
+            all_output = (result.stdout or "") + "\n" + (result.stderr or "")
+            error_lines = [l for l in all_output.split("\n") if l.strip() and ("!" in l or "Error" in l or "Fatal" in l or "Missing" in l)]
+            if error_lines:
+                for line in error_lines[:5]:
+                    logger.error(f"  LaTeX: {line.strip()}")
+            else:
+                # Fallback: last 10 lines
+                log_lines = all_output.strip().split("\n")[-10:]
+                for line in log_lines:
+                    if line.strip():
+                        logger.debug(f"  {line}")
             return ""
 
     except subprocess.TimeoutExpired:

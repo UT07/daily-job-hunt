@@ -7,6 +7,7 @@ emphasizing relevant skills, adjusting the summary, and reordering bullet points
 from __future__ import annotations
 import hashlib
 import logging
+from datetime import datetime
 from pathlib import Path
 from scrapers.base import Job
 from ai_client import AIClient
@@ -104,9 +105,10 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
             tailored_tex += "\n\\end{document}"
 
         # Save tailored .tex file
-        safe_company = "".join(c for c in job.company if c.isalnum() or c in " _-")[:30].strip()
         safe_title = "".join(c for c in job.title if c.isalnum() or c in " _-")[:30].strip()
-        filename = f"resume_{safe_company}_{safe_title}".replace(" ", "_")
+        safe_company = "".join(c for c in job.company if c.isalnum() or c in " _-")[:30].strip()
+        date_str = datetime.now().strftime("%Y-%m-%d")
+        filename = f"Utkarsh_Singh_{safe_title}_{safe_company}_{date_str}".replace(" ", "_")
         tex_path = output_dir / f"{filename}.tex"
         tex_path.write_text(tailored_tex, encoding="utf-8")
 

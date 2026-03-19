@@ -39,6 +39,10 @@ class Job:
     hiring_manager_score: float = 0.0
     tech_recruiter_score: float = 0.0
 
+    # S3 URLs for uploaded artifacts
+    resume_s3_url: str = ""
+    cover_letter_s3_url: str = ""
+
     # LinkedIn contacts for networking
     linkedin_contacts: str = ""  # JSON string of contacts list
 
