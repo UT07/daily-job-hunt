@@ -22,7 +22,7 @@ on:
 jobs:
   hunt:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
 
     steps:
       - name: Checkout repository
@@ -53,10 +53,24 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: playwright install-deps chromium
 
+      # Cache apt packages for LaTeX (~200MB) — avoids slow download each run
+      - name: Cache apt packages
+        id: apt-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/apt-cache
+          key: apt-texlive-${{ runner.os }}-texlive-latex-base-extra-fonts-lmodern
+
       - name: Install LaTeX (for PDF compilation)
         run: |
+          if [ -d ~/apt-cache ] && [ "$(ls -A ~/apt-cache 2>/dev/null)" ]; then
+            echo "Restoring cached .deb packages..."
+            sudo cp ~/apt-cache/*.deb /var/cache/apt/archives/ 2>/dev/null || true
+          fi
           sudo apt-get update -qq
           sudo apt-get install -y -qq texlive-latex-base texlive-latex-extra texlive-fonts-recommended texlive-latex-recommended lmodern
+          mkdir -p ~/apt-cache
+          cp /var/cache/apt/archives/*.deb ~/apt-cache/ 2>/dev/null || true
 
       - name: Run job hunt pipeline
         env:
@@ -66,8 +80,6 @@ jobs:
           QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
-          JSEARCH_API_KEY: ${{ secrets.JSEARCH_API_KEY }}
           ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
           ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
           # S3 storage for PDFs and tracker

@@ -30,6 +30,8 @@ logger = logging.getLogger(__name__)
 # ── Column definitions ──────────────────────────────────────────────────────
 COLUMNS = [
     ("Date Found", 12),
+    ("Posted Date", 12),
+    ("Match", 8),
     ("Score", 8),
     ("ATS", 7),
     ("HM", 7),
@@ -45,9 +47,14 @@ COLUMNS = [
     ("Resume PDF", 20),
     ("Cover Letter", 20),
     # Networking columns
-    ("Hiring Contact", 30),
-    ("Contact LinkedIn", 15),
-    ("Connection Message", 45),
+    ("Contact 1", 25),
+    ("Contact 1 LinkedIn", 15),
+    ("Contact 1 Message", 40),
+    ("Contact 2", 25),
+    ("Contact 2 LinkedIn", 15),
+    ("Contact 2 Message", 40),
+    ("Contact 3", 25),
+    ("Contact 3 LinkedIn", 15),
     # Application tracking
     ("Applied?", 10),
     ("Applied Date", 13),
@@ -144,19 +151,13 @@ def create_or_update_tracker(
         row = start_row + i
         is_zebra = (row % 2 == 0)
 
-        # Parse contacts
+        # Parse contacts (up to 3)
         contacts = []
         if job.linkedin_contacts:
             try:
                 contacts = json.loads(job.linkedin_contacts)
             except json.JSONDecodeError:
                 pass
-
-        # Primary contact (hiring manager or first contact)
-        primary_contact = contacts[0] if contacts else {}
-        contact_role = primary_contact.get("role", "")
-        contact_url = primary_contact.get("search_url", "")
-        connection_msg = primary_contact.get("message", "")
 
         # Follow-up message drafts
         followup_1_msg = f"Hi! I applied for the {job.title} role at {job.company} last week and wanted to follow up. I'm very excited about this opportunity and would love to discuss how my experience aligns. Would you have a few minutes for a quick chat?"
@@ -167,21 +168,29 @@ def create_or_update_tracker(
         safe_company = "".join(c for c in job.company if c.isalnum() or c in " _-")[:20].strip().replace(" ", "_")
         file_base = f"Utkarsh_Singh_{safe_role}_{safe_company}_{run_date}"
 
+        # Col 1: Date Found (pipeline run date)
         ws.cell(row=row, column=1, value=run_date)
-        ws.cell(row=row, column=2, value=job.match_score)
-        ws.cell(row=row, column=3, value=job.ats_score)
-        ws.cell(row=row, column=4, value=job.hiring_manager_score)
-        ws.cell(row=row, column=5, value=job.tech_recruiter_score)
-        ws.cell(row=row, column=6, value=job.title)
-        ws.cell(row=row, column=7, value=job.company)
-        ws.cell(row=row, column=8, value=job.location)
-        ws.cell(row=row, column=9, value="Yes" if job.remote else "No")
-        ws.cell(row=row, column=10, value=job.salary or "Not listed")
-        ws.cell(row=row, column=11, value=job.source)
-        ws.cell(row=row, column=12, value=job.matched_resume)
+        # Col 2: Posted Date (actual job posting date from scraper)
+        posted = job.posted_date[:10] if job.posted_date else ""
+        ws.cell(row=row, column=2, value=posted)
+        # Col 3: Initial match score (true job fit, before tailoring)
+        ws.cell(row=row, column=3, value=job.initial_match_score or job.match_score)
+        # Col 4-7: Post-tailoring scores
+        ws.cell(row=row, column=4, value=job.match_score)
+        ws.cell(row=row, column=5, value=job.ats_score)
+        ws.cell(row=row, column=6, value=job.hiring_manager_score)
+        ws.cell(row=row, column=7, value=job.tech_recruiter_score)
+        # Col 8-14: Job details
+        ws.cell(row=row, column=8, value=job.title)
+        ws.cell(row=row, column=9, value=job.company)
+        ws.cell(row=row, column=10, value=job.location)
+        ws.cell(row=row, column=11, value="Yes" if job.remote else "No")
+        ws.cell(row=row, column=12, value=job.salary or "Not listed")
+        ws.cell(row=row, column=13, value=job.source)
+        ws.cell(row=row, column=14, value=job.matched_resume)
 
-        # Apply link
-        apply_cell = ws.cell(row=row, column=13)
+        # Col 15: Apply link
+        apply_cell = ws.cell(row=row, column=15)
         if job.apply_url:
             apply_cell.value = "Apply"
             apply_cell.hyperlink = job.apply_url
@@ -189,8 +198,8 @@ def create_or_update_tracker(
         else:
             apply_cell.value = "No link"
 
-        # Resume PDF (with S3 link if available)
-        resume_cell = ws.cell(row=row, column=14)
+        # Col 16: Resume PDF (with S3 link if available)
+        resume_cell = ws.cell(row=row, column=16)
         if job.resume_s3_url:
             resume_cell.value = f"{file_base}.pdf"
             resume_cell.hyperlink = job.resume_s3_url
@@ -200,8 +209,8 @@ def create_or_update_tracker(
         else:
             resume_cell.value = "—"
 
-        # Cover letter (with S3 link if available)
-        cl_cell = ws.cell(row=row, column=15)
+        # Col 17: Cover letter (with S3 link if available)
+        cl_cell = ws.cell(row=row, column=17)
         if job.cover_letter_s3_url:
             cl_cell.value = f"{file_base}_CoverLetter.pdf"
             cl_cell.hyperlink = job.cover_letter_s3_url
@@ -211,48 +220,65 @@ def create_or_update_tracker(
         else:
             cl_cell.value = "—"
 
-        # Hiring contact
-        contact_cell = ws.cell(row=row, column=16)
-        contact_cell.value = contact_role
+        # Col 18-25: LinkedIn contacts (up to 3)
+        # Contact 1: cols 18 (role), 19 (linkedin), 20 (message)
+        # Contact 2: cols 21 (role), 22 (linkedin), 23 (message)
+        # Contact 3: cols 24 (role), 25 (linkedin)
+        for ci in range(3):
+            c = contacts[ci] if ci < len(contacts) else {}
+            c_role = c.get("role", "")
+            c_url = c.get("search_url", "")
+            c_msg = c.get("message", "")
 
-        # Contact LinkedIn search
-        li_cell = ws.cell(row=row, column=17)
-        if contact_url:
-            li_cell.value = "Search"
-            li_cell.hyperlink = contact_url
-            li_cell.font = LINK_FONT
-        else:
-            li_cell.value = "—"
+            if ci < 2:
+                # Contacts 1 & 2: role + linkedin + message (3 cols each)
+                base = 18 + ci * 3  # 18 or 21
+                ws.cell(row=row, column=base, value=c_role)
+                li_cell = ws.cell(row=row, column=base + 1)
+                if c_url:
+                    li_cell.value = "Search"
+                    li_cell.hyperlink = c_url
+                    li_cell.font = LINK_FONT
+                else:
+                    li_cell.value = "—"
+                ws.cell(row=row, column=base + 2, value=c_msg)
+            else:
+                # Contact 3: role + linkedin only (2 cols)
+                ws.cell(row=row, column=24, value=c_role)
+                li_cell = ws.cell(row=row, column=25)
+                if c_url:
+                    li_cell.value = "Search"
+                    li_cell.hyperlink = c_url
+                    li_cell.font = LINK_FONT
+                else:
+                    li_cell.value = "—"
 
-        # Connection message
-        ws.cell(row=row, column=18, value=connection_msg)
+        # Col 26-28: Application tracking
+        ws.cell(row=row, column=26, value="No")   # Applied?
+        ws.cell(row=row, column=27, value="")      # Applied Date
+        ws.cell(row=row, column=28, value="New")   # Status
 
-        # Application tracking
-        ws.cell(row=row, column=19, value="No")  # Applied?
-        ws.cell(row=row, column=20, value="")     # Applied Date
-        ws.cell(row=row, column=21, value="New")  # Status
+        # Col 29-30: Follow-up dates (calculated when applied date is set)
+        ws.cell(row=row, column=29, value="")  # Follow-Up 1 (1 week after applied)
+        ws.cell(row=row, column=30, value="")  # Follow-Up 2 (2 weeks after applied)
 
-        # Follow-up dates (calculated when applied date is set)
-        ws.cell(row=row, column=22, value="")  # Follow-Up 1 (1 week after applied)
-        ws.cell(row=row, column=23, value="")  # Follow-Up 2 (2 weeks after applied)
+        # Col 31-32: Follow-up messages
+        ws.cell(row=row, column=31, value=followup_1_msg)
+        ws.cell(row=row, column=32, value=followup_2_msg)
 
-        # Follow-up messages
-        ws.cell(row=row, column=24, value=followup_1_msg)
-        ws.cell(row=row, column=25, value=followup_2_msg)
-
-        # Apply Reminder
-        reminder_cell = ws.cell(row=row, column=26)
+        # Col 33: Apply Reminder
+        reminder_cell = ws.cell(row=row, column=33)
         reminder_cell.value = "APPLY NOW!"
         reminder_cell.fill = REMINDER_FILL
         reminder_cell.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
 
-        # Notes
-        ws.cell(row=row, column=27, value="")
+        # Col 34: Notes
+        ws.cell(row=row, column=34, value="")
 
         # ── Format the row ──
-        score_cols = {2, 3, 4, 5}
-        status_col = 21
-        reminder_col = 26
+        score_cols = {3, 4, 5, 6, 7}  # Match=3, Score=4, ATS=5, HM=6, TR=7
+        status_col = 28
+        reminder_col = 33
         for col in range(1, len(COLUMNS) + 1):
             cell = ws.cell(row=row, column=col)
             if not cell.font or cell.font == Font():
@@ -263,13 +289,14 @@ def create_or_update_tracker(
                 cell.fill = ZEBRA_FILL
 
         # Color-code scores
-        _color_score_cell(ws.cell(row=row, column=2), job.match_score)
-        _color_score_cell(ws.cell(row=row, column=3), job.ats_score)
-        _color_score_cell(ws.cell(row=row, column=4), job.hiring_manager_score)
-        _color_score_cell(ws.cell(row=row, column=5), job.tech_recruiter_score)
+        _color_score_cell(ws.cell(row=row, column=3), job.initial_match_score or job.match_score)
+        _color_score_cell(ws.cell(row=row, column=4), job.match_score)
+        _color_score_cell(ws.cell(row=row, column=5), job.ats_score)
+        _color_score_cell(ws.cell(row=row, column=6), job.hiring_manager_score)
+        _color_score_cell(ws.cell(row=row, column=7), job.tech_recruiter_score)
 
-        # Color-code status
-        ws.cell(row=row, column=status_col).fill = STATUS_COLORS.get("New", PatternFill())
+        # Color-code status (col 28)
+        ws.cell(row=row, column=28).fill = STATUS_COLORS.get("New", PatternFill())
 
     # Update summary
     if "Daily Summary" in wb.sheetnames:
@@ -280,7 +307,7 @@ def create_or_update_tracker(
     if last_row >= 2:
         ws.auto_filter.ref = f"A1:{get_column_letter(len(COLUMNS))}{last_row}"
 
-    ws.freeze_panes = "F2"
+    ws.freeze_panes = "H2"  # Freeze through Posted Date + Match + Score + ATS/HM/TR
 
     wb.save(str(tracker_path))
     logger.info(f"[EXCEL] Master tracker updated: {tracker_path} ({len(new_jobs)} new jobs added)")
@@ -288,19 +315,36 @@ def create_or_update_tracker(
 
 
 def _update_reminders(ws, run_date: str):
-    """Update Apply Reminder and Follow-Up dates for existing rows."""
+    """Update Apply Reminder and Follow-Up dates for existing rows.
+
+    Detects column layout from headers to handle both old and new formats.
+    """
     today = datetime.strptime(run_date, "%Y-%m-%d").date()
 
+    # Detect column indices from headers
+    col_map = {}
+    for col in range(1, ws.max_column + 1):
+        header = ws.cell(row=1, column=col).value
+        if header:
+            col_map[header] = col
+
+    applied_col = col_map.get("Applied?", 20)
+    applied_date_col = col_map.get("Applied Date", 21)
+    fu1_col = col_map.get("Follow-Up 1", 23)
+    fu2_col = col_map.get("Follow-Up 2", 24)
+    reminder_col = col_map.get("Apply Reminder", 27)
+    date_found_col = col_map.get("Date Found", 1)
+
     for row in range(2, ws.max_row + 1):
-        applied = ws.cell(row=row, column=19).value  # Applied?
-        applied_date_val = ws.cell(row=row, column=20).value  # Applied Date
+        applied = ws.cell(row=row, column=applied_col).value
+        applied_date_val = ws.cell(row=row, column=applied_date_col).value
 
         if applied and str(applied).strip().lower() == "yes" and applied_date_val:
             # Clear the reminder
-            reminder_cell = ws.cell(row=row, column=26)
-            reminder_cell.value = "Applied"
-            reminder_cell.fill = PatternFill("solid", fgColor="92D050")
-            reminder_cell.font = Font(name="Calibri", size=10, color="FFFFFF")
+            r_cell = ws.cell(row=row, column=reminder_col)
+            r_cell.value = "Applied"
+            r_cell.fill = PatternFill("solid", fgColor="92D050")
+            r_cell.font = Font(name="Calibri", size=10, color="FFFFFF")
 
             # Calculate follow-up dates
             try:
@@ -312,8 +356,8 @@ def _update_reminders(ws, run_date: str):
                 fu1 = applied_date + timedelta(days=7)
                 fu2 = applied_date + timedelta(days=14)
 
-                fu1_cell = ws.cell(row=row, column=22)
-                fu2_cell = ws.cell(row=row, column=23)
+                fu1_cell = ws.cell(row=row, column=fu1_col)
+                fu2_cell = ws.cell(row=row, column=fu2_col)
 
                 if not fu1_cell.value:
                     fu1_cell.value = fu1.isoformat()
@@ -332,7 +376,7 @@ def _update_reminders(ws, run_date: str):
         elif not applied or str(applied).strip().lower() != "yes":
             # Not yet applied — keep the reminder active
             days_since = 0
-            date_found = ws.cell(row=row, column=1).value
+            date_found = ws.cell(row=row, column=date_found_col).value
             if date_found:
                 try:
                     if isinstance(date_found, datetime):
@@ -343,23 +387,36 @@ def _update_reminders(ws, run_date: str):
                 except (ValueError, TypeError):
                     pass
 
-            reminder_cell = ws.cell(row=row, column=26)
+            r_cell = ws.cell(row=row, column=reminder_col)
             if days_since >= 3:
-                reminder_cell.value = f"URGENT! ({days_since}d)"
-                reminder_cell.fill = REMINDER_FILL
-                reminder_cell.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+                r_cell.value = f"URGENT! ({days_since}d)"
+                r_cell.fill = REMINDER_FILL
+                r_cell.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
             elif days_since >= 1:
-                reminder_cell.value = "APPLY NOW!"
-                reminder_cell.fill = REMINDER_FILL
-                reminder_cell.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
+                r_cell.value = "APPLY NOW!"
+                r_cell.fill = REMINDER_FILL
+                r_cell.font = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
 
 
 def _get_existing_keys(ws) -> set:
-    """Extract title|company keys from existing rows."""
+    """Extract title|company keys from existing rows.
+
+    Detects column layout from header row to handle both old (Title=6, Company=7)
+    and new (Title=7, Company=8) formats.
+    """
+    # Find Title and Company columns from header
+    title_col, company_col = 7, 8  # New defaults
+    for col in range(1, ws.max_column + 1):
+        header = ws.cell(row=1, column=col).value
+        if header == "Title":
+            title_col = col
+        elif header == "Company":
+            company_col = col
+
     keys = set()
     for row in range(2, ws.max_row + 1):
-        title = ws.cell(row=row, column=6).value or ""
-        company = ws.cell(row=row, column=7).value or ""
+        title = ws.cell(row=row, column=title_col).value or ""
+        company = ws.cell(row=row, column=company_col).value or ""
         key = f"{str(title).lower().strip()}|{str(company).lower().strip()}"
         keys.add(key)
     return keys
@@ -392,14 +449,14 @@ def _add_data_validations(ws):
         type="list", formula1='"Yes,No"', allow_blank=True,
         showErrorMessage=True, errorTitle="Invalid", error="Select Yes or No",
     )
-    applied_dv.sqref = "S2:S5000"
+    applied_dv.sqref = "Z2:Z5000"  # Col 26 = Z (Applied?)
     ws.add_data_validation(applied_dv)
 
     status_dv = DataValidation(
         type="list", formula1='"New,Applied,Interview,Offer,Rejected,Withdrawn"',
         allow_blank=True, showErrorMessage=True, errorTitle="Invalid", error="Select a valid status",
     )
-    status_dv.sqref = "U2:U5000"
+    status_dv.sqref = "AB2:AB5000"  # Col 28 = AB (Status)
     ws.add_data_validation(status_dv)
 
 

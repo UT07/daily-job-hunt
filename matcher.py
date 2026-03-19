@@ -44,10 +44,19 @@ SCORING PERSPECTIVES (each 0-100):
 
 IMPORTANT candidate context:
 - Fresh MSc Cloud Computing graduate with 2+ years of industry experience
-- Indian citizen with Stamp 1G work authorization in Ireland (full-time eligible)
+- Indian citizen residing in Dublin, Ireland
+- Work authorization:
+  * Ireland: Stamp 1G — eligible for full-time employment
+  * India: Indian citizen — eligible for full-time employment (remote only, based in Ireland)
+  * US: Requires visa sponsorship (H-1B/L-1) — only apply if company sponsors
 - Targeting both fresh-grad/entry-level AND mid-level roles
-- For remote roles outside Ireland, would need visa sponsorship
 - Has two resume variants: sre_devops (SRE/DevOps/Platform) and fullstack (Full-Stack/Backend)
+
+GEOGRAPHIC SCORING RULES:
+- Ireland-based roles: No visa penalty. Score normally.
+- India-based roles: Must be REMOTE. If in-office in India, score 0 (candidate lives in Ireland).
+- US/other roles: Must be REMOTE + company must sponsor visas. Penalize score by 10 if sponsorship unclear.
+- Salary: India roles below ₹10 LPA (~$12k USD) should score 0.
 
 Be honest and strict. Don't inflate scores — this determines which jobs are worth applying to.
 
@@ -78,8 +87,10 @@ SCORING PERSPECTIVES (each 0-100):
 
 Candidate context:
 - Fresh MSc Cloud Computing graduate with 2+ years of industry experience
-- Stamp 1G work authorization in Ireland (full-time eligible)
+- Indian citizen residing in Dublin, Ireland
+- Ireland: Stamp 1G (full-time eligible). India: remote only. US: needs sponsorship.
 - Two resume variants: sre_devops and fullstack
+- India roles must be remote and pay ≥₹10 LPA. US roles must sponsor visas.
 
 Be honest and strict.
 

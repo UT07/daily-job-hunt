@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from scrapers.base import Job
 from ai_client import AIClient
+from latex_compiler import _sanitize_latex
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +104,9 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
         # Ensure it ends with \end{document}
         if "\\end{document}" not in tailored_tex:
             tailored_tex += "\n\\end{document}"
+
+        # Sanitize LaTeX before saving (escape bare &, #, % from AI output)
+        tailored_tex = _sanitize_latex(tailored_tex)
 
         # Save tailored .tex file
         safe_title = "".join(c for c in job.title if c.isalnum() or c in " _-")[:30].strip()

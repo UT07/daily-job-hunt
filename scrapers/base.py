@@ -39,6 +39,12 @@ class Job:
     hiring_manager_score: float = 0.0
     tech_recruiter_score: float = 0.0
 
+    # Initial match scores (before tailoring overwrites them)
+    initial_match_score: float = 0.0
+    initial_ats_score: float = 0.0
+    initial_hm_score: float = 0.0
+    initial_tr_score: float = 0.0
+
     # S3 URLs for uploaded artifacts
     resume_s3_url: str = ""
     cover_letter_s3_url: str = ""

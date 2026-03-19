@@ -11,6 +11,10 @@ profile:
   location: "Dublin, Ireland"
   visa_status: "Stamp 1G - eligible for full-time employment in Ireland"
   citizenship: "Indian"
+  work_authorization:
+    ireland: "Stamp 1G - full-time eligible"
+    india: "Indian citizen - full-time eligible"
+    us: "Requires sponsorship (H-1B/L-1)"
   github: "https://github.com/UT07"
   linkedin: "https://www.linkedin.com/in/utkarshsingh2001/"
   website: "https://utworld.netlify.app"
@@ -55,32 +59,45 @@ search:
     - "Full Stack Engineer"
     - "Backend Engineer"
     - "Python Developer"
-    - "Node.js Developer"
-    - "React Developer"
-    - "TypeScript Developer"
-    - "Web Developer"
     # Graduate / Junior level
     - "Junior Software Engineer"
     - "Graduate Software Engineer"
     - "Graduate DevOps Engineer"
     - "Junior DevOps Engineer"
 
-  # Location preferences (priority order)
+  # Multi-geo search: Ireland (primary), India (remote only), US (remote + sponsorship)
+  # LinkedIn scrapers are created per geo region.
+  geo_regions:
+    - name: "Ireland"
+      geo_id: "104738515"     # LinkedIn geoId for Ireland
+      priority: 1             # Highest priority (80% of results)
+      remote_only: false
+    - name: "India"
+      geo_id: "102713980"     # LinkedIn geoId for India
+      priority: 2             # Lower priority (15%)
+      remote_only: true       # Only remote roles (residing in Ireland)
+      min_salary: "1000000"   # ₹10 LPA minimum
+    - name: "US (Remote)"
+      geo_id: ""              # No geo filter — worldwide remote
+      priority: 3             # Lowest priority (5%)
+      remote_only: true       # Remote only (no US work authorization)
+      sponsorship_note: "Requires visa sponsorship"
+
+  # Location preferences for API scrapers (Adzuna, etc.)
   locations:
     primary:
       - "Dublin, Ireland"
       - "Ireland"
     secondary:
       - "Remote"
-      - "Remote - Worldwide"
 
   # Experience level filters
   experience_levels:
-    - "entry_level"      # Fresh grad roles
-    - "mid_level"        # Mid-level (you have an edge here)
+    - "entry_level"
+    - "mid_level"
 
   # How many days back to search for new postings
-  days_back: 3  # Fetch jobs posted in the last 3 days for better coverage
+  days_back: 3
 
   # Maximum jobs to process per run (to manage API costs)
   max_jobs_per_run: 15
@@ -89,81 +106,57 @@ search:
   min_match_score: 60
 
 # --- API Keys ---
-# Set these as environment variables (or replace the ${...} placeholders)
 api_keys:
   # AI providers (need at least ONE — all free)
-  # gemini: "${GEMINI_API_KEY}"          # https://aistudio.google.com/apikey (free: 15 RPM, 1500 RPD)
-  groq: "${GROQ_API_KEY}"               # https://console.groq.com/keys (free: 30 RPM, 14,400 RPD)
-  deepseek: "${DEEPSEEK_API_KEY}"       # https://platform.deepseek.com/ (free: 60 RPM)
-  openrouter: "${OPENROUTER_API_KEY}"    # https://openrouter.ai/keys (free models: Qwen, Llama)
-  anthropic: "${ANTHROPIC_API_KEY}"      # https://console.anthropic.com/ (paid, optional fallback)
+  groq: "${GROQ_API_KEY}"
+  deepseek: "${DEEPSEEK_API_KEY}"
+  openrouter: "${OPENROUTER_API_KEY}"
+  anthropic: "${ANTHROPIC_API_KEY}"
 
-  # Job scraper APIs (at least ONE recommended; browser scrapers work without keys)
-  serpapi: "${SERPAPI_API_KEY}"           # https://serpapi.com/ (~$50/mo, best coverage)
-  jsearch: "${JSEARCH_API_KEY}"          # https://rapidapi.com/.../jsearch (free: 200 req/mo)
-  adzuna_app_id: "${ADZUNA_APP_ID}"      # https://developer.adzuna.com/ (free: 250 req/mo)
+  # Job scraper APIs
+  adzuna_app_id: "${ADZUNA_APP_ID}"
   adzuna_app_key: "${ADZUNA_APP_KEY}"
 
 # --- Scraper Settings ---
 scrapers:
-  # Enable/disable individual scrapers
-  # API-based (reliable, never blocked):
   enabled:
-    - "serpapi"      # Google Jobs via SerpAPI — indexes LinkedIn + Indeed + all boards (~$50/mo)
-    - "jsearch"      # JSearch via RapidAPI (free tier: 200 req/mo)
-    - "adzuna"       # Adzuna API (free tier: 250 req/mo, great for Ireland)
-    # Browser-based (Playwright stealth — can occasionally get blocked):
-    - "linkedin"     # LinkedIn public job search via Playwright
-    - "indeed"       # Indeed via Playwright (Cloudflare protected)
-    # - "irishjobs"    # IrishJobs.ie via Playwright (disabled — Akamai blocks all access)
-    # Startup-focused (API/HTML — lightweight, no Cloudflare):
-    - "yc_wats"      # YC Work at a Startup
+    # API-based (reliable, no bot detection):
+    - "adzuna"       # Adzuna API (free: 250 req/mo, strong for Ireland/UK)
+    # Irish job boards (lightweight HTML scrapers):
+    - "irishjobs"    # IrishJobs.ie (requests-first, Playwright fallback)
+    - "jobs_ie"      # Jobs.ie — major Irish job board
+    - "gradireland"  # GradIreland — graduate roles in Ireland
+    # LinkedIn (multi-geo via Playwright stealth):
+    - "linkedin"     # LinkedIn — one instance per geo_region above
+    # Startup-focused (API/HTML — lightweight):
+    - "yc_wats"      # YC Work at a Startup (US startups, some remote)
     - "hn_hiring"    # Hacker News "Who is Hiring?" threads
 
-  # Parallel scraping workers (ThreadPoolExecutor)
+  # Parallel scraping workers
   max_workers: 8
 
-  # Max time (minutes) for the scraping phase — pipeline moves on after this
-  max_scrape_minutes: 12
+  # Max time (minutes) for the scraping phase
+  max_scrape_minutes: 10
 
   # Request delays to be respectful
-  delay_between_requests: 2  # seconds
+  delay_between_requests: 2
 
   # Browser scraper settings
   browser:
-    headless: true       # Run in headless mode (set false for debugging)
-    max_pages: 1         # Pages to scrape per query (1 = fast, 2 = more results but slower)
-    indeed_country: "ie" # ie, co.uk, com
-    linkedin_geo_id: "104738515"  # Ireland=104738515, UK=101165590
+    headless: true
+    max_pages: 1
 
 # --- Output Settings ---
 output:
-  # Base directory for daily output (relative to this config)
   base_dir: "./output"
-
-  # Excel tracker filename
   tracker_filename: "job_tracker.xlsx"
-
-  # Keep artifacts for this many days
   retention_days: 30
 
 # --- AI Provider Settings ---
-# LLM Council: multiple free models spread load across providers.
-# Each key spawns multiple models. Groq→DeepSeek→OpenRouter→Gemini→Anthropic
 ai:
-  # Groq — spawns 3 models: llama-3.3-70b, llama-3.1-8b, gemma2-9b (30 RPM each)
   groq_model: "llama-3.3-70b-versatile"
-
-  # DeepSeek — single model, great at structured JSON (60 RPM)
   deepseek_model: "deepseek-chat"
-
-  # OpenRouter — spawns 8 free models (20 RPM shared)
   openrouter_model: "meta-llama/llama-3.3-70b-instruct:free"
-
-  # Anthropic (paid fallback only — uncomment if you want it)
-  # anthropic_model: "claude-sonnet-4-20250514"
-
-  # Response cache (avoids re-processing identical prompts)
   cache:
     path: "output/.ai_cache.db"
-    ttl_hours: 72   # Cache responses for 3 days
+    ttl_hours: 72

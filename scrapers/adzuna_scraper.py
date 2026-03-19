@@ -48,7 +48,9 @@ class AdzunaScraper(BaseScraper):
         # Determine country code from location
         country = "ie"  # default Ireland
         loc_lower = location.lower()
-        if any(w in loc_lower for w in ["uk", "united kingdom", "london", "england"]):
+        if any(w in loc_lower for w in ["india", "bangalore", "mumbai", "hyderabad", "pune", "delhi", "chennai"]):
+            country = "in"
+        elif any(w in loc_lower for w in ["uk", "united kingdom", "london", "england"]):
             country = "gb"
         elif any(w in loc_lower for w in ["us", "united states", "new york", "san francisco"]):
             country = "us"
@@ -71,15 +73,16 @@ class AdzunaScraper(BaseScraper):
         }
 
         # Add location filter (not for remote searches)
+        # Note: Adzuna's 'where' parameter is strict — use city names only
         if not is_remote_search and location:
             clean_loc = location.replace(", Ireland", "").replace(", UK", "").strip()
-            if clean_loc.lower() not in ["ireland", "remote"]:
+            if clean_loc.lower() not in ["ireland", "remote", ""]:
                 params["where"] = clean_loc
 
         try:
             resp = requests.get(url, params=params, timeout=30)
             if resp.status_code == 404:
-                # Don't spam logs — just silently skip
+                logger.debug(f"[Adzuna] 404 for '{query}' in '{location}' (country={country})")
                 return []
             if resp.status_code == 429:
                 logger.warning(f"[Adzuna] Rate limited for '{query}' — backing off 5s")
@@ -98,11 +101,11 @@ class AdzunaScraper(BaseScraper):
                 salary = ""
                 sal_min = item.get("salary_min")
                 sal_max = item.get("salary_max")
+                currencies = {"ie": "€", "gb": "£", "in": "₹", "us": "$"}
+                currency = currencies.get(country, "$")
                 if sal_min and sal_max:
-                    currency = "€" if country == "ie" else "£" if country == "gb" else "$"
                     salary = f"{currency}{sal_min:,.0f} - {currency}{sal_max:,.0f}"
                 elif sal_min:
-                    currency = "€" if country == "ie" else "£" if country == "gb" else "$"
                     salary = f"{currency}{sal_min:,.0f}+"
 
                 jobs.append(Job(

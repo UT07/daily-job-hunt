@@ -88,9 +88,9 @@ logger = logging.getLogger(__name__)
 
 
 from scrapers import (
-    SerpAPIScraper, JSearchScraper, AdzunaScraper,
-    IndeedScraper, IrishJobsScraper, LinkedInScraper,
+    AdzunaScraper, IrishJobsScraper, LinkedInScraper,
     WorkAtAStartupScraper, HackerNewsScraper,
+    JobsIeScraper, GradIrelandScraper,
 )
 from scrapers.base import Job, BaseScraper
 from ai_client import AIClient
@@ -130,8 +130,6 @@ def resolve_api_key(config: dict, key_name: str) -> str:
     if not val:
         env_map = {
             "anthropic": "ANTHROPIC_API_KEY",
-            "serpapi": "SERPAPI_API_KEY",
-            "jsearch": "JSEARCH_API_KEY",
             "adzuna_app_id": "ADZUNA_APP_ID",
             "adzuna_app_key": "ADZUNA_APP_KEY",
         }
@@ -140,25 +138,16 @@ def resolve_api_key(config: dict, key_name: str) -> str:
 
 
 def init_scrapers(config: dict) -> List[BaseScraper]:
-    """Initialize enabled scrapers with API keys."""
+    """Initialize enabled scrapers with API keys.
+
+    Multi-geo support: LinkedIn scrapers are created per geo region
+    (Ireland, India, US) based on config.search.geo_regions.
+    """
     scrapers = []
     enabled = config.get("scrapers", {}).get("enabled", [])
     delay = config.get("scrapers", {}).get("delay_between_requests", 2)
 
-    if "serpapi" in enabled:
-        key = resolve_api_key(config, "serpapi")
-        if key:
-            scrapers.append(SerpAPIScraper(api_key=key, delay=delay))
-        else:
-            logger.warning("SerpAPI enabled but no API key found. Skipping.")
-
-    if "jsearch" in enabled:
-        key = resolve_api_key(config, "jsearch")
-        if key:
-            scrapers.append(JSearchScraper(api_key=key, delay=delay))
-        else:
-            logger.warning("JSearch enabled but no API key found. Skipping.")
-
+    # --- API scrapers ---
     if "adzuna" in enabled:
         app_id = resolve_api_key(config, "adzuna_app_id")
         app_key = resolve_api_key(config, "adzuna_app_key")
@@ -167,25 +156,38 @@ def init_scrapers(config: dict) -> List[BaseScraper]:
         else:
             logger.warning("Adzuna enabled but missing credentials. Skipping.")
 
-    # Browser-based scrapers (no API key needed — just Playwright)
+    # --- Irish job boards (lightweight HTML, no browser) ---
+    if "irishjobs" in enabled:
+        scrapers.append(IrishJobsScraper(max_pages=1))
+        logger.info("IrishJobs.ie scraper enabled")
+
+    if "jobs_ie" in enabled:
+        scrapers.append(JobsIeScraper())
+        logger.info("Jobs.ie scraper enabled")
+
+    if "gradireland" in enabled:
+        scrapers.append(GradIrelandScraper())
+        logger.info("GradIreland scraper enabled")
+
+    # --- LinkedIn (multi-geo) ---
     browser_cfg = config.get("scrapers", {}).get("browser", {})
-    max_pages = browser_cfg.get("max_pages", 2)
+    max_pages = browser_cfg.get("max_pages", 1)
 
     if "linkedin" in enabled:
-        geo_id = browser_cfg.get("linkedin_geo_id", "104738515")
-        scrapers.append(LinkedInScraper(max_pages=max_pages, geo_id=geo_id))
-        logger.info("LinkedIn scraper enabled (Playwright stealth)")
+        geo_regions = config.get("search", {}).get("geo_regions", [])
+        if not geo_regions:
+            # Backward compat: single LinkedIn scraper with default geo
+            geo_id = browser_cfg.get("linkedin_geo_id", "104738515")
+            scrapers.append(LinkedInScraper(max_pages=max_pages, geo_id=geo_id))
+            logger.info(f"LinkedIn scraper enabled (geoId={geo_id})")
+        else:
+            for region in geo_regions:
+                geo_id = region.get("geo_id", "104738515")
+                name_tag = region.get("name", "unknown")
+                scrapers.append(LinkedInScraper(max_pages=max_pages, geo_id=geo_id))
+                logger.info(f"LinkedIn scraper enabled for {name_tag} (geoId={geo_id})")
 
-    if "indeed" in enabled:
-        country = browser_cfg.get("indeed_country", "ie")
-        scrapers.append(IndeedScraper(country=country, max_pages=max_pages))
-        logger.info("Indeed scraper enabled (Playwright stealth)")
-
-    if "irishjobs" in enabled:
-        scrapers.append(IrishJobsScraper(max_pages=max_pages))
-        logger.info("IrishJobs.ie scraper enabled (Playwright stealth)")
-
-    # Startup scrapers (lightweight, no browser needed)
+    # --- Startup scrapers (lightweight, no browser) ---
     if "yc_wats" in enabled:
         scrapers.append(WorkAtAStartupScraper())
         logger.info("YC Work at a Startup scraper enabled")
@@ -213,7 +215,7 @@ def load_resumes(config: dict) -> Dict[str, str]:
     return resumes
 
 
-BROWSER_SCRAPERS = {"linkedin", "indeed", "irishjobs"}
+BROWSER_SCRAPERS = {"linkedin", "irishjobs"}
 
 # Consolidated queries for browser scrapers — broad enough to catch everything,
 # few enough to not take 30 minutes. Each of these covers multiple specific titles.
@@ -264,27 +266,24 @@ def scrape_all_jobs(scrapers: List[BaseScraper], config: dict) -> List[Job]:
     browser_scrapers = [s for s in scrapers if s.name in BROWSER_SCRAPERS]
 
     # Build tasks — different strategies for API vs browser
-    # Rate-limited scrapers (jsearch: 200 req/mo free) get fewer tasks
-    RATE_LIMITED = {"jsearch", "adzuna"}
+    RATE_LIMITED = {"adzuna"}
     api_tasks = []
     browser_tasks = []
 
     for scraper in api_scrapers:
         if scraper.name in RATE_LIMITED:
-            # Conserve quota: primary locations only, top 5 queries on secondary
+            # Conserve quota: primary locations only, top 5 queries
+            for query in queries[:5]:
+                for location in primary_locs:
+                    api_tasks.append((scraper, query, location))
+        else:
+            # Lightweight scrapers (jobs_ie, gradireland, yc_wats, hn_hiring)
             for query in queries:
                 for location in primary_locs:
                     api_tasks.append((scraper, query, location))
-            for query in queries[:5]:
-                for location in secondary_locs:
-                    api_tasks.append((scraper, query, location))
-        else:
-            for query in queries:
-                for location in primary_locs + secondary_locs:
-                    api_tasks.append((scraper, query, location))
 
     for scraper in browser_scrapers:
-        # Browser scrapers: consolidated queries × primary locations only
+        # Browser scrapers: consolidated queries × primary locations
         for query in BROWSER_QUERIES:
             for location in primary_locs:
                 browser_tasks.append((scraper, query, location))
@@ -436,10 +435,11 @@ def _filter_new_jobs(jobs: List[Job], seen: dict, run_date: str) -> List[Job]:
 # ── Pre-Cutoff Ranking (Local, No AI) ──────────────────────────────────
 
 def _rank_jobs_locally(jobs: List[Job], config: dict) -> List[Job]:
-    """Rank jobs by keyword relevance + recency before the max_jobs cutoff.
+    """Rank jobs by keyword relevance + recency + geo preference.
 
-    This ensures we send the most promising jobs to AI matching,
-    not just whatever scraped first.
+    Geo weighting: Ireland 80%, India 15%, US/other 5%.
+    Ireland jobs get a massive bonus so they fill most of the max_jobs cutoff.
+    India jobs must mention remote. US jobs need sponsorship signals.
     """
     from datetime import datetime, timedelta
 
@@ -451,14 +451,30 @@ def _rank_jobs_locally(jobs: List[Job], config: dict) -> List[Job]:
                 if len(word) > 2:
                     target_roles.add(word)
 
-    # Also add query terms
     for query in config.get("search", {}).get("queries", []):
         for word in query.lower().split():
             if len(word) > 2:
                 target_roles.add(word)
 
+    def _detect_geo(job: Job) -> str:
+        """Detect which geo region a job belongs to."""
+        loc = job.location.lower()
+        title_desc = (job.title + " " + (job.description or "")).lower()
+        if any(w in loc for w in ["dublin", "ireland", "cork", "galway", "limerick", "waterford"]):
+            return "ireland"
+        if any(w in loc for w in ["india", "bangalore", "bengaluru", "mumbai", "hyderabad",
+                                   "pune", "delhi", "chennai", "noida", "gurgaon", "gurugram"]):
+            return "india"
+        if any(w in loc for w in ["us", "usa", "united states", "san francisco", "new york",
+                                   "seattle", "austin", "chicago", "boston"]):
+            return "us"
+        # Check description for India/US clues
+        if any(w in title_desc for w in ["india", "inr", "lpa", "bangalore", "mumbai"]):
+            return "india"
+        return "other"
+
     def score_job(job: Job) -> float:
-        """Local relevance score (0-100). Higher = more relevant."""
+        """Local relevance score. Higher = more relevant."""
         score = 0.0
         title_lower = job.title.lower()
         desc_lower = job.description.lower() if job.description else ""
@@ -466,21 +482,36 @@ def _rank_jobs_locally(jobs: List[Job], config: dict) -> List[Job]:
         # Title keyword matches (most important)
         title_words = set(title_lower.split())
         title_matches = len(title_words & target_roles)
-        score += title_matches * 15  # Up to ~60 points for 4 matches
+        score += title_matches * 15
 
-        # Description keyword matches (less weight)
+        # Description keyword matches
         if desc_lower:
             desc_matches = sum(1 for kw in target_roles if kw in desc_lower)
-            score += min(desc_matches * 3, 20)  # Cap at 20 points
+            score += min(desc_matches * 3, 20)
 
-        # Location bonus (Dublin/Ireland/Remote preferred)
+        # Geo preference bonus (Ireland >> India > US > other)
+        geo = _detect_geo(job)
         loc = job.location.lower()
-        if "dublin" in loc:
-            score += 10
-        elif "ireland" in loc:
-            score += 8
-        elif "remote" in loc:
-            score += 6
+
+        if geo == "ireland":
+            score += 40  # Strong preference for Ireland
+            if "dublin" in loc:
+                score += 10
+        elif geo == "india":
+            # India: must be remote
+            if job.remote or "remote" in loc or "remote" in title_lower:
+                score += 15
+            else:
+                score -= 50  # Penalize non-remote India roles heavily
+        elif geo == "us":
+            # US: must be remote (no authorization)
+            if job.remote or "remote" in loc or "remote" in title_lower:
+                score += 5
+            else:
+                score -= 50
+        else:
+            if "remote" in loc:
+                score += 10
 
         # Recency bonus
         if job.posted_date:
@@ -494,7 +525,7 @@ def _rank_jobs_locally(jobs: List[Job], config: dict) -> List[Job]:
             except (ValueError, TypeError):
                 pass
 
-        # Has description bonus (jobs with descriptions score better in AI matching)
+        # Has description bonus
         if len(desc_lower) > 100:
             score += 5
 
@@ -668,6 +699,12 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
         logger.info(f"--- {job.title} @ {job.company} ---")
         logger.info(f"Base scores: ATS={job.ats_score} HM={job.hiring_manager_score} TR={job.tech_recruiter_score}")
 
+        # Preserve initial match scores before tailoring overwrites them
+        job.initial_ats_score = job.ats_score
+        job.initial_hm_score = job.hiring_manager_score
+        job.initial_tr_score = job.tech_recruiter_score
+        job.initial_match_score = job.match_score
+
         # First pass: tailor the resume using match data
         tailor_resume(
             job=job,
@@ -684,8 +721,8 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
                 tailored_tex=tailored_tex,
                 job=job,
                 ai_client=ai_client,
-                min_score=85,
-                max_rounds=3,
+                min_score=80,
+                max_rounds=1,
             )
 
             # Update with post-tailoring scores (these go into the tracker)
@@ -745,6 +782,7 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
     create_or_update_tracker(matched_jobs, str(tracker_path), run_date)
 
     # --- Step 9b: Upload tracker to S3 ---
+    tracker_url = None
     if os.environ.get("S3_BUCKET_NAME"):
         tracker_url = upload_tracker(str(tracker_path), run_date)
         if tracker_url:
@@ -809,6 +847,8 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
             gmail_address=gmail_addr,
             gmail_app_password=gmail_pass,
             recipient=notify_email,
+            tracker_path=str(tracker_path),
+            tracker_url=tracker_url,
         )
     else:
         logger.info("Email skipped (set GMAIL_ADDRESS + GMAIL_APP_PASSWORD to enable)")

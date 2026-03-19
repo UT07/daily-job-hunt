@@ -72,6 +72,14 @@ def upload_artifacts(
 ) -> Dict[str, Dict[str, str]]:
     """Upload all PDF artifacts for matched jobs to S3.
 
+    S3 structure organized by date and resume type for easy browsing:
+        job-hunt/{date}/{resume_type}/resumes/{filename}.pdf
+        job-hunt/{date}/{resume_type}/cover-letters/{filename}.pdf
+
+    Example:
+        job-hunt/2026-03-19/sre_devops/resumes/Utkarsh_Singh_SRE_RedHat_2026-03-19.pdf
+        job-hunt/2026-03-19/fullstack/cover-letters/Utkarsh_Singh_FullStack_Keyrock_2026-03-19.pdf
+
     Args:
         matched_jobs: List of Job objects with tailored_pdf_path / cover_letter_pdf_path set.
         run_date: Date string (YYYY-MM-DD) for S3 path organization.
@@ -89,11 +97,12 @@ def upload_artifacts(
 
     for job in matched_jobs:
         job_urls: Dict[str, str] = {"resume_url": "", "cover_letter_url": ""}
+        resume_type = job.matched_resume or "general"
 
         # Upload resume PDF
         if job.tailored_pdf_path and Path(job.tailored_pdf_path).exists():
             filename = Path(job.tailored_pdf_path).name
-            s3_key = f"job-hunt/{run_date}/resumes/{filename}"
+            s3_key = f"job-hunt/{run_date}/{resume_type}/resumes/{filename}"
             url = upload_file(job.tailored_pdf_path, s3_key, bucket)
             if url:
                 job_urls["resume_url"] = url
@@ -101,7 +110,7 @@ def upload_artifacts(
         # Upload cover letter PDF
         if job.cover_letter_pdf_path and Path(job.cover_letter_pdf_path).exists():
             filename = Path(job.cover_letter_pdf_path).name
-            s3_key = f"job-hunt/{run_date}/cover-letters/{filename}"
+            s3_key = f"job-hunt/{run_date}/{resume_type}/cover-letters/{filename}"
             url = upload_file(job.cover_letter_pdf_path, s3_key, bucket)
             if url:
                 job_urls["cover_letter_url"] = url
