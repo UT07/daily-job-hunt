@@ -18,7 +18,7 @@ profile:
 # --- Resume Paths (LaTeX source files) ---
 resumes:
   sre_devops:
-    tex_path: "../DevOps:SRE/resume.tex"
+    tex_path: "resumes/sre_devops.tex"
     label: "SRE / DevOps Engineer"
     target_roles:
       - "Site Reliability Engineer"
@@ -28,7 +28,7 @@ resumes:
       - "Cloud Engineer"
       - "SRE"
   fullstack:
-    tex_path: "../FullStack/resume_servicenow.tex"
+    tex_path: "resumes/fullstack.tex"
     label: "Full-Stack Software Engineer"
     target_roles:
       - "Software Engineer"
