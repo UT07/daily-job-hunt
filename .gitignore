@@ -21,5 +21,12 @@ output/*/run_metadata.json
 .env
 *.env
 
+# Google credentials
+google_credentials.json
+
+# Node
+node_modules/
+web/dist/
+
 # macOS
 .DS_Store

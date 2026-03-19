@@ -37,6 +37,7 @@ def send_summary_email(
     recipient: str = None,
     tracker_path: str = None,
     tracker_url: str = None,
+    drive_tracker_url: str = None,
 ) -> bool:
     """Send a daily summary email with matched jobs, assets, and Excel tracker.
 
@@ -49,6 +50,7 @@ def send_summary_email(
         recipient: Email to send to (defaults to gmail_address)
         tracker_path: Local path to Excel tracker file (attached to email)
         tracker_url: S3 presigned URL for the tracker (included in email body)
+        drive_tracker_url: Google Drive URL for the tracker (permanent link)
 
     Returns:
         True if email sent successfully
@@ -83,17 +85,23 @@ def send_summary_email(
     </table>
     """
 
-    # Tracker download link
+    # Tracker download links
+    tracker_buttons = []
+    if drive_tracker_url:
+        tracker_buttons.append(f"""
+        <a href="{drive_tracker_url}" style="background: #0F9D58; color: white; padding: 10px 20px;
+           text-decoration: none; border-radius: 4px; font-weight: bold;">
+           Open Tracker (Google Drive)
+        </a>""")
     if tracker_url:
-        html += f"""
-    <p style="margin-bottom: 16px;">
+        tracker_buttons.append(f"""
         <a href="{tracker_url}" style="background: #1F4E79; color: white; padding: 10px 20px;
            text-decoration: none; border-radius: 4px; font-weight: bold;">
-           Download Full Tracker (Excel)
+           Download Tracker (S3)
         </a>
-        <span style="color: #999; font-size: 12px; margin-left: 8px;">Link expires in 30 days</span>
-    </p>
-    """
+        <span style="color: #999; font-size: 12px; margin-left: 8px;">Expires in 30 days</span>""")
+    if tracker_buttons:
+        html += '<p style="margin-bottom: 16px;">' + "\n".join(tracker_buttons) + "</p>\n"
     elif tracker_path and Path(tracker_path).exists():
         html += """
     <p style="margin-bottom: 16px; color: #666; font-size: 13px;">
@@ -133,11 +141,15 @@ def send_summary_email(
             # Apply link
             apply_link = f'<a href="{job.apply_url}" style="color: #0563C1;">Apply</a>' if job.apply_url else "—"
 
-            # Asset links (S3 presigned URLs)
+            # Asset links (Drive preferred, S3 fallback)
             asset_links = []
-            if job.resume_s3_url:
+            if job.resume_drive_url:
+                asset_links.append(f'<a href="{job.resume_drive_url}" style="color: #0F9D58; font-size: 11px;">Resume (Drive)</a>')
+            elif job.resume_s3_url:
                 asset_links.append(f'<a href="{job.resume_s3_url}" style="color: #0563C1; font-size: 11px;">Resume</a>')
-            if job.cover_letter_s3_url:
+            if job.cover_letter_drive_url:
+                asset_links.append(f'<a href="{job.cover_letter_drive_url}" style="color: #0F9D58; font-size: 11px;">CL (Drive)</a>')
+            elif job.cover_letter_s3_url:
                 asset_links.append(f'<a href="{job.cover_letter_s3_url}" style="color: #0563C1; font-size: 11px;">Cover Letter</a>')
             if not asset_links:
                 if job.tailored_pdf_path:
@@ -191,14 +203,21 @@ def send_summary_email(
     plain = f"Daily Job Hunt — {today}\n\n"
     plain += f"Scraped: {raw_count} | Unique: {unique_count} | Matched: {len(matched_jobs)} | All 85+: {all_85}\n"
     plain += f"Resumes: {resumes_count} | Cover Letters: {cls_count}\n\n"
+    if drive_tracker_url:
+        plain += f"Tracker (Drive): {drive_tracker_url}\n"
     if tracker_url:
-        plain += f"Tracker: {tracker_url}\n\n"
+        plain += f"Tracker (S3): {tracker_url}\n"
+    plain += "\n"
     for job in matched_jobs[:15]:
         init = job.initial_match_score or job.match_score
         plain += f"[{init}] {job.title} @ {job.company} — {job.apply_url}\n"
-        if job.resume_s3_url:
+        if job.resume_drive_url:
+            plain += f"  Resume: {job.resume_drive_url}\n"
+        elif job.resume_s3_url:
             plain += f"  Resume: {job.resume_s3_url}\n"
-        if job.cover_letter_s3_url:
+        if job.cover_letter_drive_url:
+            plain += f"  Cover Letter: {job.cover_letter_drive_url}\n"
+        elif job.cover_letter_s3_url:
             plain += f"  Cover Letter: {job.cover_letter_s3_url}\n"
 
     # --- Build email with mixed content (HTML + attachments) ---

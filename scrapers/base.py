@@ -49,6 +49,10 @@ class Job:
     resume_s3_url: str = ""
     cover_letter_s3_url: str = ""
 
+    # Google Drive URLs for uploaded artifacts
+    resume_drive_url: str = ""
+    cover_letter_drive_url: str = ""
+
     # LinkedIn contacts for networking
     linkedin_contacts: str = ""  # JSON string of contacts list
 

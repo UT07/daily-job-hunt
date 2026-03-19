@@ -102,6 +102,7 @@ from cover_letter import generate_cover_letter
 from latex_compiler import compile_tex_to_pdf
 from excel_tracker import create_or_update_tracker
 from s3_uploader import upload_artifacts, upload_tracker
+from drive_uploader import upload_artifacts as drive_upload_artifacts, upload_tracker as drive_upload_tracker
 from email_notifier import send_summary_email
 
 
@@ -791,6 +792,24 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
     else:
         logger.info("S3 upload skipped (S3_BUCKET_NAME not set)")
 
+    # --- Step 8c: Upload PDFs to Google Drive (if configured) ---
+    gdrive_config = config.get("google_drive", {})
+    gdrive_creds = gdrive_config.get("credentials_path", "google_credentials.json")
+    if gdrive_config.get("enabled") and Path(gdrive_creds).exists():
+        logger.info("Uploading artifacts to Google Drive...")
+        drive_urls = drive_upload_artifacts(
+            matched_jobs, run_date,
+            credentials_path=gdrive_creds,
+            share_with=gdrive_config.get("share_with", ""),
+            root_folder_id=gdrive_config.get("folder_id", ""),
+        )
+        for job in matched_jobs:
+            urls = drive_urls.get(job.job_id, {})
+            job.resume_drive_url = urls.get("resume_drive_url", "")
+            job.cover_letter_drive_url = urls.get("cover_letter_drive_url", "")
+    else:
+        logger.info("Google Drive upload skipped (not configured or credentials missing)")
+
     # --- Step 9: Update master Excel tracker ---
     logger.info("Updating master Excel tracker...")
     tracker_path = base_dir / config["output"]["tracker_filename"]
@@ -802,6 +821,18 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
         tracker_url = upload_tracker(str(tracker_path), run_date)
         if tracker_url:
             logger.info(f"Tracker available at S3 (30-day link)")
+
+    # --- Step 9c: Upload tracker to Google Drive ---
+    drive_tracker_url = None
+    if gdrive_config.get("enabled") and Path(gdrive_creds).exists():
+        drive_tracker_url = drive_upload_tracker(
+            str(tracker_path), run_date,
+            credentials_path=gdrive_creds,
+            share_with=gdrive_config.get("share_with", ""),
+            root_folder_id=gdrive_config.get("folder_id", ""),
+        )
+        if drive_tracker_url:
+            logger.info(f"Tracker available on Google Drive")
 
     # --- Summary ---
     resumes_generated = sum(1 for j in matched_jobs if j.tailored_pdf_path)
@@ -825,20 +856,25 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
     print(f"  AI provider calls:   {ai_stats['provider_calls']}")
     print(f"{'='*60}\n")
 
-    # Save run metadata
+    # Save run metadata (enriched for self-improvement analysis)
     meta = {
         "run_date": run_date,
         "run_time": run_time,
-        "raw_jobs": len(raw_jobs),
-        "unique_jobs": len(unique_jobs),
-        "matched_jobs": len(matched_jobs),
+        "jobs_scraped": len(raw_jobs),
+        "jobs_unique": len(unique_jobs),
+        "jobs_matched": len(matched_jobs),
+        "jobs_above_85": all_85_count,
         "resumes_generated": resumes_generated,
         "cover_letters_generated": cls_generated,
-        "matched_details": [
+        "matched_jobs": [
             {
                 "title": j.title,
                 "company": j.company,
+                "description": getattr(j, "description", "")[:500],
                 "score": j.match_score,
+                "ats_score": getattr(j, "ats_score", 0),
+                "hiring_manager_score": getattr(j, "hiring_manager_score", 0),
+                "tech_recruiter_score": getattr(j, "tech_recruiter_score", 0),
                 "resume_type": j.matched_resume,
                 "apply_url": j.apply_url,
             }
@@ -848,6 +884,16 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
     meta_path = daily_dir / "run_metadata.json"
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)
+
+    # --- Self-improvement analysis ---
+    try:
+        from self_improver import run_self_improvement
+        improvement_report = run_self_improvement(str(daily_dir))
+        logger.info("Self-improvement analysis complete: %d findings, %d suggestions",
+                    len(improvement_report.get("findings", [])),
+                    len(improvement_report.get("suggestions", [])))
+    except Exception as e:
+        logger.warning("Self-improvement analysis failed: %s", e)
 
     # --- Step 10: Email notification ---
     gmail_addr = os.environ.get("GMAIL_ADDRESS", "")
@@ -864,6 +910,7 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
             recipient=notify_email,
             tracker_path=str(tracker_path),
             tracker_url=tracker_url,
+            drive_tracker_url=drive_tracker_url,
         )
     else:
         logger.info("Email skipped (set GMAIL_ADDRESS + GMAIL_APP_PASSWORD to enable)")

@@ -152,6 +152,13 @@ output:
   tracker_filename: "job_tracker.xlsx"
   retention_days: 30
 
+# --- Google Drive Upload (shareable links in email) ---
+google_drive:
+  enabled: true
+  credentials_path: "google_credentials.json"
+  share_with: "254utkarsh@gmail.com"
+  folder_id: ""  # Optional: Drive folder for generated PDFs
+
 # --- AI Provider Settings ---
 ai:
   groq_model: "llama-3.3-70b-versatile"
