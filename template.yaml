@@ -1,12 +1,11 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: Job Hunt API — FastAPI on Lambda via Mangum
+Description: Job Hunt API — FastAPI on Lambda (container image with tectonic)
 
 Globals:
   Function:
     Timeout: 300
-    MemorySize: 512
-    Runtime: python3.12
+    MemorySize: 1024
 
 Parameters:
   GroqApiKey:
@@ -24,13 +23,12 @@ Parameters:
 
 Resources:
 
-  # --- Lambda Function ---
+  # --- Lambda Function (Docker container with tectonic) ---
   JobHuntApi:
     Type: AWS::Serverless::Function
     Properties:
-      Handler: app.handler
-      CodeUri: .
-      Description: Job Hunt FastAPI backend
+      PackageType: Image
+      Description: Job Hunt FastAPI backend with LaTeX (tectonic) support
       Environment:
         Variables:
           GROQ_API_KEY: !Ref GroqApiKey
@@ -44,6 +42,10 @@ Resources:
             ApiId: !Ref HttpApi
             Path: /{proxy+}
             Method: ANY
+    Metadata:
+      DockerTag: latest
+      DockerContext: .
+      Dockerfile: Dockerfile.lambda
 
   # --- HTTP API Gateway ---
   HttpApi:

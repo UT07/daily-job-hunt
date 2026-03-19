@@ -856,6 +856,14 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
     print(f"  AI provider calls:   {ai_stats['provider_calls']}")
     print(f"{'='*60}\n")
 
+    # Build scraper stats from raw jobs for self-improvement analysis
+    scraper_stats = {}
+    for job in raw_jobs:
+        src = getattr(job, "source", "unknown")
+        if src not in scraper_stats:
+            scraper_stats[src] = {"count": 0, "errors": 0}
+        scraper_stats[src]["count"] += 1
+
     # Save run metadata (enriched for self-improvement analysis)
     meta = {
         "run_date": run_date,
@@ -866,6 +874,7 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
         "jobs_above_85": all_85_count,
         "resumes_generated": resumes_generated,
         "cover_letters_generated": cls_generated,
+        "scraper_stats": scraper_stats,
         "matched_jobs": [
             {
                 "title": j.title,

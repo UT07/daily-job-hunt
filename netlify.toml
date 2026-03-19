@@ -6,10 +6,8 @@
 [build.environment]
   NODE_VERSION = "20"
 
-# Proxy API calls to your FastAPI backend (Lambda or local)
-# Update VITE_API_URL in Netlify env vars to point to your API Gateway URL
+# SPA fallback: serve index.html for all non-file routes
 [[redirects]]
-  from = "/api/*"
-  to = ":VITE_API_URL/api/:splat"
+  from = "/*"
+  to = "/index.html"
   status = 200
-  force = true

@@ -163,14 +163,19 @@ class _Job:
     """Lightweight job object compatible with pipeline modules."""
 
     def __init__(self, title: str, company: str, description: str):
-        self.id = f"web-{hash(title + company + description[:50]) & 0xFFFFFFFF:08x}"
+        self.job_id = f"web-{hash(title + company + description[:50]) & 0xFFFFFFFF:08x}"
         self.title = title
         self.company = company
         self.description = description
         self.location = ""
-        self.url = ""
+        self.apply_url = ""
         self.source = "web"
-        self.date_posted = ""
+        self.posted_date = ""
+        self.job_type = "Full-time"
+        self.salary = None
+        self.remote = False
+        self.experience_level = None
+        self.scraped_at = ""
         # Fields set by pipeline modules
         self.ats_score = 0
         self.hiring_manager_score = 0
@@ -179,7 +184,9 @@ class _Job:
         self.match_reasoning = ""
         self.matched_resume = ""
         self.tailored_tex_path = ""
+        self.tailored_pdf_path = ""
         self.cover_letter_tex_path = ""
+        self.cover_letter_pdf_path = ""
         self.linkedin_contacts = "[]"
         self._match_data = {}
 
@@ -191,12 +198,19 @@ def _upload_pdf_to_drive(pdf_path: str, filename: str) -> str:
         return ""
     try:
         from drive_uploader import _authenticate, _get_or_create_folder, _upload_file
-        service = _authenticate(drive_cfg.get("credentials_path", "google_credentials.json"))
+        creds_path = drive_cfg.get("credentials_path", "google_credentials.json")
+        # Lambda passes credentials as env var JSON; write to temp file if needed
+        if not Path(creds_path).exists() and os.environ.get("GOOGLE_CREDENTIALS_JSON"):
+            import json
+            creds_path = "/tmp/google_credentials.json"
+            with open(creds_path, "w") as f:
+                f.write(os.environ["GOOGLE_CREDENTIALS_JSON"])
+        service = _authenticate(creds_path)
         import datetime
         date_str = datetime.date.today().isoformat()
         root_id = drive_cfg.get("folder_id", "")
         parent_id = _get_or_create_folder(service, f"Job Hunt/{date_str}/web", root_id)
-        url = _upload_file(service, pdf_path, filename, parent_id,
+        url = _upload_file(service, pdf_path, parent_id,
                           share_with=drive_cfg.get("share_with", ""))
         return url
     except Exception as e:
