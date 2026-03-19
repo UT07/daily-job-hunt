@@ -123,11 +123,24 @@ Content must fill pages naturally with consistent spacing. No stretched whitespa
 
 ### Stack
 
-- **FastAPI + Jinja2 templates + Tailwind CSS (CDN)** — pure Python, single process
-- Serves both the API endpoints and the HTML pages
-- No Node.js, no build step, no separate frontend server
-- Deploy as a single Docker container or run locally with `uvicorn app:app`
+- **Frontend:** Static HTML + Tailwind CSS (CDN) + vanilla JS → hosted on S3 + CloudFront
+- **Backend:** FastAPI + Mangum adapter → deployed as AWS Lambda behind API Gateway
+- **Resume generation:** Google Docs API (same GCP project as the automated pipeline)
+- No Node.js, no dedicated server, scales to zero, ~$0/month at personal usage
+- Run locally with `uvicorn app:app`, deploy with SAM/CDK to Lambda
 - Designed as single-user for now, with clean API separation so multi-user can be added later
+
+### Deployment Architecture
+
+```
+Browser → CloudFront → S3 (static HTML/CSS/JS)
+                    ↘
+              API Gateway → Lambda (FastAPI + Mangum)
+                                ↓
+                         Google Docs API (clone, edit, export PDF)
+                                ↓
+                         S3 (store generated PDFs)
+```
 
 ### API Endpoints
 
@@ -160,7 +173,7 @@ POST /api/contacts
 
 ### UI Design
 
-Clean, professional single-page layout served by FastAPI with Jinja2 templates. No sidebar, no navigation complexity. Card-based result display. Tailwind CSS via CDN for styling. Loading states via vanilla JS fetch calls for AI operations (they take 5-15 seconds). No JavaScript framework needed.
+Clean, professional single-page layout. Static HTML served from S3/CloudFront. No sidebar, no navigation complexity. Card-based result display. Tailwind CSS via CDN. Vanilla JS fetch calls to API Gateway endpoints. Loading states for AI operations (5-15 seconds). No JavaScript framework needed.
 
 ## Part 3: Pipeline Improvements (Already Applied)
 
@@ -190,8 +203,10 @@ Clean, professional single-page layout served by FastAPI with Jinja2 templates. 
 |------|---------|
 | `google_docs_client.py` | Google Docs/Drive API wrapper |
 | `app.py` | FastAPI backend for landing page |
-| `templates/index.html` | Jinja2 template with Tailwind CSS (CDN) |
-| `static/style.css` | Minimal custom CSS overrides |
+| `web/index.html` | Static landing page (S3 hosted) |
+| `web/style.css` | Minimal custom CSS |
+| `web/app.js` | Vanilla JS: fetch calls to API Gateway |
+| `template.yaml` | AWS SAM template for Lambda + API Gateway + S3 |
 
 ## Files: Modified
 
