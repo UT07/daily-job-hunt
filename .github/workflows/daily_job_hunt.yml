@@ -69,10 +69,12 @@ jobs:
             echo "Using cached tectonic binary"
           else
             mkdir -p ~/tectonic
-            curl -fsSL https://drop-sh.fullyjustified.net | sh -s -- --to ~/tectonic
+            cd ~/tectonic
+            curl -fsSL https://drop-sh.fullyjustified.net | sh
+            cd -
           fi
           echo "$HOME/tectonic" >> "$GITHUB_PATH"
-          tectonic --version || ~/tectonic/tectonic --version
+          ~/tectonic/tectonic --version
 
       - name: Setup Google Drive credentials
         if: env.GOOGLE_CREDENTIALS_JSON != ''
