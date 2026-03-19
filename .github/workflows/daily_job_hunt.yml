@@ -53,24 +53,32 @@ jobs:
         if: steps.playwright-cache.outputs.cache-hit == 'true'
         run: playwright install-deps chromium
 
-      # Cache apt packages for LaTeX (~200MB) — avoids slow download each run
-      - name: Cache apt packages
-        id: apt-cache
+      # Tectonic: fast LaTeX engine (~15s install vs ~8min for texlive)
+      # Downloads only needed packages on first compile, cached afterward
+      - name: Cache tectonic binary + packages
         uses: actions/cache@v4
         with:
-          path: ~/apt-cache
-          key: apt-texlive-${{ runner.os }}-texlive-latex-base-extra-fonts-lmodern
+          path: |
+            ~/.cache/Tectonic
+            ~/tectonic
+          key: tectonic-${{ runner.os }}-v0.15
 
-      - name: Install LaTeX (for PDF compilation)
+      - name: Install tectonic
         run: |
-          if [ -d ~/apt-cache ] && [ "$(ls -A ~/apt-cache 2>/dev/null)" ]; then
-            echo "Restoring cached .deb packages..."
-            sudo cp ~/apt-cache/*.deb /var/cache/apt/archives/ 2>/dev/null || true
+          if [ -f ~/tectonic/tectonic ]; then
+            echo "Using cached tectonic binary"
+          else
+            mkdir -p ~/tectonic
+            curl -fsSL https://drop-sh.fullyjustified.net | sh -s -- --to ~/tectonic
           fi
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq texlive-latex-base texlive-latex-extra texlive-fonts-recommended texlive-latex-recommended lmodern
-          mkdir -p ~/apt-cache
-          cp /var/cache/apt/archives/*.deb ~/apt-cache/ 2>/dev/null || true
+          echo "$HOME/tectonic" >> "$GITHUB_PATH"
+          tectonic --version || ~/tectonic/tectonic --version
+
+      - name: Setup Google Drive credentials
+        if: env.GOOGLE_CREDENTIALS_JSON != ''
+        run: echo "$GOOGLE_CREDENTIALS_JSON" | base64 -d > google_credentials.json
+        env:
+          GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
 
       - name: Run job hunt pipeline
         env:

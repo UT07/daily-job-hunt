@@ -20,7 +20,7 @@ nest-asyncio>=1.5.8
 # S3 upload for artifacts
 boto3>=1.34.0
 
-# Google Docs/Drive API (for resume generation)
+# Google Drive API (upload PDFs for shareable links)
 google-api-python-client>=2.100.0
 google-auth>=2.25.0
 

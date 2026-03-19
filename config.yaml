@@ -152,19 +152,12 @@ output:
   tracker_filename: "job_tracker.xlsx"
   retention_days: 30
 
-# --- Google Docs Resume Generation ---
-# Replaces LaTeX pipeline: resumes are built as Google Docs, exported as PDF.
-# Set resume_format to "latex" to fall back to the old pdflatex pipeline.
-resume_format: "latex"  # "latex" (current) or "google_docs" (after template approval)
-
-google_docs:
+# --- Google Drive Upload (shareable links in email) ---
+google_drive:
+  enabled: true
   credentials_path: "google_credentials.json"
-  share_with: "254utkarsh@gmail.com"  # Auto-share generated docs with this email
-  folder_id: ""  # Optional: Google Drive folder ID for generated docs
-  templates:
-    sre_devops: ""     # Google Doc template ID (run create_templates.py to populate)
-    fullstack: ""
-    cover_letter: ""
+  share_with: "254utkarsh@gmail.com"
+  folder_id: ""  # Optional: Drive folder for generated PDFs
 
 # --- AI Provider Settings ---
 ai:
