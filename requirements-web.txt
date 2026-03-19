@@ -1,0 +1,10 @@
+fastapi>=0.109.0
+mangum>=0.17.0
+uvicorn>=0.27.0
+pydantic>=2.5.0
+# Google Drive API (also in requirements.txt)
+google-api-python-client>=2.100.0
+google-auth>=2.25.0
+# AI client deps (also in requirements.txt)
+pyyaml>=6.0
+requests>=2.31.0
