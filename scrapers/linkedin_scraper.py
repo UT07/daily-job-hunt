@@ -23,7 +23,7 @@ from .browser import stealth_browser, run_async
 logger = logging.getLogger(__name__)
 
 # Max jobs to fetch full descriptions for per query (speed + anti-detection)
-_MAX_DESCRIPTION_FETCHES = 15
+_MAX_DESCRIPTION_FETCHES = 8  # LinkedIn auth-walls after ~5-10 page loads
 
 # Selectors for the job description container on LinkedIn job detail pages.
 # LinkedIn A/B tests layouts frequently — try these in order.
@@ -162,21 +162,27 @@ class LinkedInScraper(BaseScraper):
 
             # Fetch descriptions for the top N jobs (still inside browser context).
             # Navigate to each job URL directly — more reliable than the side panel.
+            # Stop immediately if LinkedIn shows an auth wall.
             if jobs:
                 to_fetch = jobs[:_MAX_DESCRIPTION_FETCHES]
                 logger.info(f"[LinkedIn] Fetching descriptions for {len(to_fetch)} jobs...")
                 desc_page = await browser.new_page()
+                fetched = 0
                 for i, job in enumerate(to_fetch):
                     if not job.apply_url:
                         continue
                     try:
                         desc = await self._fetch_description(browser, desc_page, job.apply_url)
+                        if desc == "__AUTH_WALL__":
+                            logger.warning(f"[LinkedIn] Auth wall hit — stopping description fetch ({fetched} fetched)")
+                            break
                         if desc:
                             job.description = desc
+                            fetched += 1
                     except Exception as e:
                         logger.warning(f"[LinkedIn] Description fetch failed for job {i + 1}: {e}")
                     # Generous delay — LinkedIn watches inter-request timing
-                    await browser.human_delay(3000, 8000)
+                    await browser.human_delay(4000, 10000)
                 try:
                     await desc_page.close()
                 except Exception:
@@ -243,12 +249,11 @@ class LinkedInScraper(BaseScraper):
         # Brief wait for dynamic content to settle
         await browser.human_delay(2000, 4000)
 
-        # Check for auth wall — if we're being blocked, bail out early
+        # Check for auth wall — if we're being blocked, signal caller to stop
         try:
             content = await page.content()
             if "authwall" in content.lower() or "sign-in" in content.lower():
-                logger.warning("[LinkedIn] Auth wall hit during description fetch — skipping remaining")
-                return ""
+                return "__AUTH_WALL__"
         except Exception:
             pass
 
