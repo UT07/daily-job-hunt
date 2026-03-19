@@ -24,5 +24,9 @@ output/*/run_metadata.json
 # Google credentials
 google_credentials.json
 
+# Node
+node_modules/
+web/dist/
+
 # macOS
 .DS_Store

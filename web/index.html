@@ -1,92 +1,13 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Job Hunt — Resume Tailor</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        .spinner { border: 3px solid #e5e7eb; border-top-color: #3b82f6; border-radius: 50%; width: 20px; height: 20px; animation: spin 0.6s linear infinite; display: inline-block; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        .score-badge { display: inline-flex; align-items: center; justify-content: center; width: 48px; height: 48px; border-radius: 50%; font-weight: 700; font-size: 1.1rem; }
-        .score-green { background: #dcfce7; color: #166534; }
-        .score-yellow { background: #fef9c3; color: #854d0e; }
-        .score-red { background: #fee2e2; color: #991b1b; }
-        .fade-in { animation: fadeIn 0.3s ease-in; }
-        @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-    </style>
-</head>
-<body class="bg-gray-50 min-h-screen">
-
-    <!-- Header -->
-    <header class="bg-white border-b border-gray-200">
-        <div class="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-            <h1 class="text-xl font-bold text-gray-900">Job Hunt</h1>
-            <span class="text-sm text-gray-500">AI-powered resume tailoring</span>
-        </div>
-    </header>
-
-    <main class="max-w-4xl mx-auto px-4 py-8">
-
-        <!-- Input Section -->
-        <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6 mb-6">
-            <label class="block text-sm font-medium text-gray-700 mb-2">Job Description</label>
-            <textarea id="jd-input" rows="8" placeholder="Paste the full job description here..."
-                class="w-full border border-gray-300 rounded-lg px-4 py-3 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-y"></textarea>
-
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-4">
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Job Title</label>
-                    <input id="job-title" type="text" value="Software Engineer"
-                        class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500">
-                </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Company</label>
-                    <input id="company" type="text" placeholder="e.g. Google"
-                        class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500">
-                </div>
-                <div>
-                    <label class="block text-sm font-medium text-gray-700 mb-1">Resume Type</label>
-                    <select id="resume-type"
-                        class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500">
-                        <option value="sre_devops">SRE / DevOps Engineer</option>
-                        <option value="fullstack">Full-Stack Software Engineer</option>
-                    </select>
-                </div>
-            </div>
-        </div>
-
-        <!-- Action Buttons -->
-        <div class="flex flex-wrap gap-3 mb-6">
-            <button onclick="scoreResume()" id="btn-score"
-                class="bg-blue-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
-                Score Resume
-            </button>
-            <button onclick="tailorResume()" id="btn-tailor"
-                class="bg-emerald-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-emerald-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
-                Tailor Resume
-            </button>
-            <button onclick="generateCoverLetter()" id="btn-cover"
-                class="bg-purple-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
-                Generate Cover Letter
-            </button>
-            <button onclick="findContacts()" id="btn-contacts"
-                class="bg-orange-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-orange-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
-                Find LinkedIn Contacts
-            </button>
-        </div>
-
-        <!-- Results Section -->
-        <div id="results" class="space-y-6"></div>
-
-    </main>
-
-    <footer class="border-t border-gray-200 mt-12">
-        <div class="max-w-4xl mx-auto px-4 py-4 text-center text-xs text-gray-400">
-            Built with FastAPI + Claude AI
-        </div>
-    </footer>
-
-    <script src="app.js"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎯</text></svg>" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Job Hunt — AI Resume Tailor</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
 </html>
