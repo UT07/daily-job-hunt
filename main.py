@@ -414,8 +414,23 @@ def _save_seen_jobs(seen: dict, path: Path):
         json.dump(seen, f, indent=2)
 
 
-def _filter_new_jobs(jobs: List[Job], seen: dict, run_date: str) -> List[Job]:
-    """Filter out already-seen jobs. Updates seen dict with new entries."""
+def _filter_new_jobs(jobs: List[Job], seen: dict, run_date: str,
+                     max_age_days: int = 7) -> List[Job]:
+    """Filter out recently-seen jobs. Jobs older than max_age_days are re-evaluated.
+
+    This prevents the seen_jobs filter from permanently blocking jobs that
+    didn't match on first encounter but might match after profile changes.
+    """
+    from datetime import datetime, timedelta
+    cutoff = (datetime.strptime(run_date, "%Y-%m-%d") - timedelta(days=max_age_days)).isoformat()[:10]
+
+    # Prune entries older than max_age_days
+    expired = [k for k, v in seen.items() if v.get("first_seen", "") < cutoff]
+    for k in expired:
+        del seen[k]
+    if expired:
+        logger.info(f"Pruned {len(expired)} expired entries from seen_jobs (older than {max_age_days} days)")
+
     new_jobs = []
     for job in jobs:
         if job.job_id not in seen:
@@ -532,12 +547,17 @@ def _rank_jobs_locally(jobs: List[Job], config: dict) -> List[Job]:
                 pass
 
         # Experience level preference: junior/mid >> senior
+        # Only boost junior/graduate if combined with tech keywords
+        _tech_words = {"engineer", "developer", "devops", "sre", "software", "cloud",
+                       "infrastructure", "platform", "backend", "fullstack", "full-stack",
+                       "data", "python", "reliability"}
+        has_tech = bool(set(title_lower.split()) & _tech_words)
         if any(w in title_lower for w in ["junior", "graduate", "entry", "jr.", "jr "]):
-            score += 20
+            score += 20 if has_tech else -10  # Non-tech graduate roles get penalized
         elif "senior" in title_lower or "sr." in title_lower or "sr " in title_lower:
-            score -= 15  # Deprioritize but don't exclude
+            score -= 10  # Deprioritize but don't exclude
         elif "lead" in title_lower or "staff" in title_lower:
-            score -= 25
+            score -= 20
 
         # Has description bonus
         if len(desc_lower) > 100:
