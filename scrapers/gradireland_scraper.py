@@ -73,7 +73,7 @@ class GradIrelandScraper(BaseScraper):
             url = f"{self.BASE_URL}/graduate-jobs?{urllib.parse.urlencode(params)}"
 
             try:
-                resp = requests.get(url, headers=_HEADERS, timeout=15)
+                resp = requests.get(url, headers=_HEADERS, timeout=30)
                 if resp.status_code == 429:
                     logger.warning("[GradIreland] Rate limited — stopping pagination")
                     break

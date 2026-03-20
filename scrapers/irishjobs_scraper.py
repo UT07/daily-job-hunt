@@ -36,21 +36,35 @@ class IrishJobsScraper(BaseScraper):
     def __init__(self, max_pages: int = 2):
         self.max_pages = max_pages
 
+    _site_reachable: bool | None = None  # Class-level: skip all queries if site is down
+
     def search(self, query: str, location: str = "", days_back: int = 1, **kwargs) -> List[Job]:
+        # Fast bail: if site already known to be unreachable, skip immediately
+        if IrishJobsScraper._site_reachable is False:
+            return []
+
         # Try requests-based approach first (fast, no browser)
         try:
             jobs = self._search_requests(query, location, days_back)
             if jobs:
+                IrishJobsScraper._site_reachable = True
                 return self.deduplicate(jobs)
+        except requests.exceptions.Timeout:
+            logger.warning(f"[IrishJobs] Timeout — marking site unreachable for this run")
+            IrishJobsScraper._site_reachable = False
+            return []
         except Exception as e:
             logger.warning(f"[IrishJobs] Requests approach failed: {e}")
 
-        # Fallback to Playwright
+        # Fallback to Playwright (only if requests didn't timeout)
         try:
             jobs = run_async(self._search_browser(query, location, days_back))
+            if jobs:
+                IrishJobsScraper._site_reachable = True
             return self.deduplicate(jobs)
         except Exception as e:
             logger.error(f"[IrishJobs] Browser approach also failed: {e}")
+            IrishJobsScraper._site_reachable = False
             return []
 
     def _search_requests(self, query: str, location: str, days_back: int) -> List[Job]:
@@ -77,7 +91,7 @@ class IrishJobsScraper(BaseScraper):
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 "Accept": "text/html",
             },
-            timeout=15,
+            timeout=30,
         )
 
         # Check if we got the Akamai challenge page instead of real content

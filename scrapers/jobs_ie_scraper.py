@@ -42,12 +42,23 @@ class JobsIeScraper(BaseScraper):
     def __init__(self, max_pages: int = 2):
         self.max_pages = max_pages
 
+    _site_reachable: bool | None = None  # Class-level: skip all queries if site is down
+
     def search(self, query: str, location: str = "", days_back: int = 1, **kwargs) -> List[Job]:
         """Search Jobs.ie and return normalized Job objects."""
-        jobs: List[Job] = []
+        # Fast bail: if we already know the site is unreachable, skip immediately
+        if JobsIeScraper._site_reachable is False:
+            return []
 
+        jobs: List[Job] = []
         try:
             jobs = self._search_requests(query, location, days_back)
+            if jobs:
+                JobsIeScraper._site_reachable = True
+        except requests.exceptions.Timeout:
+            logger.warning(f"[Jobs.ie] Timeout for '{query}' — marking site unreachable")
+            JobsIeScraper._site_reachable = False
+            return []
         except Exception as e:
             logger.error(f"[Jobs.ie] Error searching '{query}' in '{location}': {e}")
             return []
@@ -72,7 +83,7 @@ class JobsIeScraper(BaseScraper):
             url = f"{self.BASE_URL}/jobs?{urllib.parse.urlencode(params)}"
 
             try:
-                resp = requests.get(url, headers=_HEADERS, timeout=15)
+                resp = requests.get(url, headers=_HEADERS, timeout=30)
                 if resp.status_code == 429:
                     logger.warning("[Jobs.ie] Rate limited — stopping pagination")
                     break
