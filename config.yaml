@@ -154,6 +154,12 @@ output:
   tracker_filename: "job_tracker.xlsx"
   retention_days: 30
 
+# --- Google Docs Template Engine (resume/cover letter generation) ---
+google_docs:
+  enabled: true
+  credentials_path: "google_credentials.json"
+  share_with: "254utkarsh@gmail.com"
+
 # --- Google Drive Upload (shareable links in email) ---
 google_drive:
   enabled: true

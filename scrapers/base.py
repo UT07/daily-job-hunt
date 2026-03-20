@@ -53,6 +53,10 @@ class Job:
     resume_drive_url: str = ""
     cover_letter_drive_url: str = ""
 
+    # Google Docs URLs (editable docs, not just Drive file links)
+    resume_doc_url: str = ""
+    cover_letter_doc_url: str = ""
+
     # LinkedIn contacts for networking
     linkedin_contacts: str = ""  # JSON string of contacts list
 

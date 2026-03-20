@@ -95,10 +95,11 @@ from scrapers import (
 from scrapers.base import Job, BaseScraper
 from ai_client import AIClient
 from matcher import match_jobs
-from tailorer import tailor_resume
+from tailorer import tailor_resume, tailor_resume_text, extract_base_sections
 from resume_scorer import score_and_improve
 from contact_finder import find_contacts_batch
 from cover_letter import generate_cover_letter
+import google_docs_client
 from latex_compiler import compile_tex_to_pdf
 from excel_tracker import create_or_update_tracker
 from s3_uploader import upload_artifacts, upload_tracker
@@ -725,6 +726,16 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
     # Initial ATS/HM/TR scores from matching are against the BASE resume.
     # After tailoring, we re-score the TAILORED resume and iteratively
     # improve until all 3 scores hit 85+ (up to 3 rounds).
+    #
+    # Two paths:
+    #   A) Google Docs — if the resume config has a google_doc_id, use
+    #      plain-text tailoring + Google Docs template cloning + PDF export.
+    #   B) LaTeX fallback — original flow for resumes without google_doc_id.
+    google_docs_cfg = config.get("google_docs", {})
+    gdocs_enabled = google_docs_cfg.get("enabled", False)
+    gdocs_creds = google_docs_cfg.get("credentials_path", "google_credentials.json")
+    gdocs_share = google_docs_cfg.get("share_with", "")
+
     logger.info("Tailoring resumes + scoring to 85+ (ATS, HM, TR)...")
     for job in matched_jobs:
         base_tex = resumes.get(job.matched_resume, "")
@@ -741,41 +752,105 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
         job.initial_tr_score = job.tech_recruiter_score
         job.initial_match_score = job.match_score
 
-        # First pass: tailor the resume using match data
-        tailor_resume(
-            job=job,
-            base_tex=base_tex,
-            ai_client=ai_client,
-            output_dir=resumes_dir,
-        )
+        # Check if this resume type has a Google Doc template
+        resume_cfg = config.get("resumes", {}).get(job.matched_resume, {})
+        google_doc_id = resume_cfg.get("google_doc_id", "")
 
-        # Second pass: re-score the tailored version and improve until 85+
-        if job.tailored_tex_path and Path(job.tailored_tex_path).exists():
-            tailored_tex = Path(job.tailored_tex_path).read_text(encoding="utf-8")
+        if gdocs_enabled and google_doc_id:
+            # ── Path A: Google Docs ──────────────────────────────────
+            logger.info(f"[GDOCS] Using Google Docs template {google_doc_id}")
 
-            improved_tex, scores = score_and_improve(
-                tailored_tex=tailored_tex,
+            # 1. Extract base sections from LaTeX as plain text
+            base_sections = extract_base_sections(base_tex, job.matched_resume)
+
+            # 2. Tailor sections using AI (plain text, not LaTeX)
+            tailored_sections = tailor_resume_text(
+                job=job,
+                base_sections=base_sections,
+                ai_client=ai_client,
+            )
+
+            # 3. Score and improve (text mode)
+            improved_sections, scores = score_and_improve(
+                tailored_tex="",  # unused in text mode
                 job=job,
                 ai_client=ai_client,
                 min_score=80,
                 max_rounds=1,
+                text_mode=True,
+                sections=tailored_sections,
             )
 
-            # Update with post-tailoring scores (these go into the tracker)
+            # Update with post-tailoring scores
             job.ats_score = scores.get("ats_score", 0)
             job.hiring_manager_score = scores.get("hiring_manager_score", 0)
             job.tech_recruiter_score = scores.get("tech_recruiter_score", 0)
             job.match_score = round((job.ats_score + job.hiring_manager_score + job.tech_recruiter_score) / 3, 1)
 
-            # Save the improved version
-            if improved_tex != tailored_tex:
-                Path(job.tailored_tex_path).write_text(improved_tex, encoding="utf-8")
+            # 4. Create Google Doc from template + export PDF
+            safe_title = "".join(c for c in job.title if c.isalnum() or c in " _-")[:30].strip()
+            safe_company = "".join(c for c in job.company if c.isalnum() or c in " _-")[:30].strip()
+            date_str = datetime.now().strftime("%Y-%m-%d")
+            pdf_filename = f"Utkarsh_Singh_{safe_title}_{safe_company}_{date_str}".replace(" ", "_")
+            pdf_path = str(resumes_dir / f"{pdf_filename}.pdf")
+            doc_title = f"Resume – {job.title} at {job.company} ({date_str})"
+
+            try:
+                result = google_docs_client.create_resume_doc(
+                    template_doc_id=google_doc_id,
+                    replacements=improved_sections,
+                    title=doc_title,
+                    output_pdf_path=pdf_path,
+                    share_with=gdocs_share,
+                    credentials_path=gdocs_creds,
+                )
+                job.tailored_pdf_path = result.get("pdf_path", "")
+                job.resume_doc_url = result.get("doc_url", "")
+                logger.info(f"[GDOCS] Resume created: {result.get('doc_id', '')} -> {Path(pdf_path).name}")
+            except Exception as e:
+                logger.error(f"[GDOCS] Failed to create resume doc for {job.company}: {e}")
+                # Fall through — job.tailored_pdf_path stays empty
+        else:
+            # ── Path B: LaTeX fallback ───────────────────────────────
+            # First pass: tailor the resume using match data
+            tailor_resume(
+                job=job,
+                base_tex=base_tex,
+                ai_client=ai_client,
+                output_dir=resumes_dir,
+            )
+
+            # Second pass: re-score the tailored version and improve until 85+
+            if job.tailored_tex_path and Path(job.tailored_tex_path).exists():
+                tailored_tex = Path(job.tailored_tex_path).read_text(encoding="utf-8")
+
+                improved_tex, scores = score_and_improve(
+                    tailored_tex=tailored_tex,
+                    job=job,
+                    ai_client=ai_client,
+                    min_score=80,
+                    max_rounds=1,
+                )
+
+                # Update with post-tailoring scores (these go into the tracker)
+                job.ats_score = scores.get("ats_score", 0)
+                job.hiring_manager_score = scores.get("hiring_manager_score", 0)
+                job.tech_recruiter_score = scores.get("tech_recruiter_score", 0)
+                job.match_score = round((job.ats_score + job.hiring_manager_score + job.tech_recruiter_score) / 3, 1)
+
+                # Save the improved version
+                if improved_tex != tailored_tex:
+                    Path(job.tailored_tex_path).write_text(improved_tex, encoding="utf-8")
 
     # --- Step 6: Find LinkedIn contacts ---
     logger.info("Finding LinkedIn contacts for networking...")
     find_contacts_batch(matched_jobs, ai_client)
 
     # --- Step 7: Generate cover letters ---
+    # TODO: Add Google Docs cover letter template support once a template
+    #       is created. For now, all cover letters use the LaTeX path.
+    #       When ready, use generate_cover_letter_doc() from cover_letter.py
+    #       with a cover_letter_template_doc_id from config.
     logger.info("Generating cover letters...")
     for job in matched_jobs:
         # Use the tailored (and scored/improved) resume for context
@@ -792,11 +867,15 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
         )
 
     # --- Step 8: Compile LaTeX → PDF ---
+    # Only compile .tex files for jobs that used the LaTeX path.
+    # Jobs that used Google Docs already have their PDFs from Step 5.
     logger.info("Compiling LaTeX to PDF...")
     for job in matched_jobs:
         if job.tailored_tex_path:
+            # LaTeX path — compile .tex to .pdf
             pdf = compile_tex_to_pdf(job.tailored_tex_path)
             job.tailored_pdf_path = pdf
+        # Google Docs resumes already have tailored_pdf_path set (no .tex file)
         if job.cover_letter_tex_path:
             pdf = compile_tex_to_pdf(job.cover_letter_tex_path)
             job.cover_letter_pdf_path = pdf
