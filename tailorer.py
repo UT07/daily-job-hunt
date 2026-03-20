@@ -6,9 +6,12 @@ emphasizing relevant skills, adjusting the summary, and reordering bullet points
 
 from __future__ import annotations
 import hashlib
+import json
 import logging
+import re
 from datetime import datetime
 from pathlib import Path
+from typing import Dict
 from scrapers.base import Job
 from ai_client import AIClient
 from latex_compiler import _sanitize_latex
@@ -131,3 +134,285 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
     except Exception as e:
         logger.error(f"Error tailoring for {job.company}: {e}")
         return ""
+
+
+# ---------------------------------------------------------------------------
+# Plain-text tailoring for Google Docs templates
+# ---------------------------------------------------------------------------
+
+TAILOR_TEXT_SYSTEM_PROMPT = """You are an expert resume writer who tailors technical resumes for specific job listings. You work with plain text resume sections (NOT LaTeX) intended for Google Docs placeholder replacement.
+
+RULES:
+1. NEVER fabricate experience, skills, or accomplishments. Only reword, reorder, and emphasize what already exists.
+2. Keep the exact same plain-text structure for each section — do NOT introduce LaTeX commands, markdown, or HTML.
+3. Make targeted, surgical edits. Do NOT rewrite entire sections from scratch.
+4. Focus changes on:
+   - SUMMARY: adjust emphasis and keyword alignment for this specific role (3–4 sentences)
+   - SKILLS: reorder skill lines so the most relevant categories appear first; adjust the item order within each line
+   - Experience bullet points (CLOVER_BULLETS, KRAKEN_BULLETS): reorder and lightly reword to match job terminology
+   - Project bullet points (PROJECT_1_BULLETS, PROJECT_2_BULLETS, PROJECT_3_BULLETS): emphasize the most relevant aspects
+   - TITLE_LINE: update the parenthetical tech list to lead with the most relevant skills for this role
+5. The resume must remain truthful.
+
+WRITING STYLE (CRITICAL):
+- Do NOT use em-dashes (---, --, or the — character) as clause connectors. Use periods to end sentences.
+- Do NOT use filler phrases: "directly transferable to", "aligned with", "outcomes relevant to", "leveraging", "utilizing", "showcasing", "demonstrating proficiency in".
+- Write short, direct sentences in active voice. Lead with the action verb.
+- Do NOT append company-specific qualifiers to bullet points (e.g., "practices aligned with Company's GitOps patterns"). The bullet should stand on its own.
+- Quantify impact with numbers and percentages where they already exist in the base content.
+- Match job posting keywords by naturally weaving them into existing bullets, not by adding new sentences about them.
+
+OUTPUT FORMAT (CRITICAL):
+- Return ONLY valid JSON. No explanations, no markdown fences, no extra keys.
+- The JSON object must contain exactly the same keys that were provided in the base sections.
+- Each bullet list value (CLOVER_BULLETS, KRAKEN_BULLETS, PROJECT_N_BULLETS) must be a string where each bullet is on its own line starting with "• ".
+- SKILLS must be a string where each skill category is on its own line in the format "Category Name: item1, item2, ...".
+- SUMMARY must be a plain text string of 3–4 sentences.
+- TITLE_LINE must be a plain text string like "Site Reliability Engineer (Python, Kubernetes, AWS, Observability)".
+
+Example JSON shape (keys will vary based on input):
+{
+  "TITLE_LINE": "...",
+  "SUMMARY": "...",
+  "SKILLS": "...",
+  "CLOVER_BULLETS": "• bullet one\\n• bullet two",
+  "KRAKEN_BULLETS": "• bullet one\\n• bullet two",
+  "PROJECT_1_BULLETS": "• bullet one\\n• bullet two",
+  "PROJECT_2_BULLETS": "• bullet one\\n• bullet two",
+  "PROJECT_3_BULLETS": "• bullet one\\n• bullet two"
+}"""
+
+
+def tailor_resume_text(
+    job: Job,
+    base_sections: Dict[str, str],
+    ai_client: AIClient,
+) -> Dict[str, str]:
+    """Tailor resume sections as plain text for Google Docs placeholder replacement.
+
+    Parameters
+    ----------
+    job:
+        Job object with title, company, description, location, job_type.
+    base_sections:
+        Dict with keys like "SUMMARY", "SKILLS", "CLOVER_BULLETS",
+        "KRAKEN_BULLETS", "PROJECT_1_BULLETS", etc. — the default content for
+        each section.
+    ai_client:
+        Configured AIClient instance.
+
+    Returns
+    -------
+    Dict with the same keys as ``base_sections`` but with content tailored for
+    the specific job.  Falls back to ``base_sections`` values for any key the
+    AI fails to return.
+    """
+    suggestions = ""
+    if hasattr(job, "_match_data") and job._match_data:
+        sugg_list = job._match_data.get("tailoring_suggestions", [])
+        key_matches = job._match_data.get("key_matches", [])
+        gaps = job._match_data.get("gaps", [])
+        suggestions = f"""
+TAILORING CONTEXT FROM MATCHING ANALYSIS:
+- Key skill matches: {', '.join(key_matches)}
+- Gaps to address (de-emphasize or contextualize): {', '.join(gaps)}
+- Specific suggestions: {'; '.join(sugg_list)}"""
+
+    sections_json = json.dumps(base_sections, indent=2, ensure_ascii=False)
+
+    user_prompt = f"""Tailor the following resume sections for this job listing and return ONLY a JSON object with the same keys.
+
+JOB LISTING:
+- Title: {job.title}
+- Company: {job.company}
+- Location: {job.location}
+- Type: {job.job_type or 'Full-time'}
+
+JOB DESCRIPTION:
+{job.description[:4000]}
+{suggestions}
+
+BASE RESUME SECTIONS (plain text, same keys required in your JSON response):
+{sections_json}
+
+Return ONLY valid JSON with the same keys. No markdown, no explanation."""
+
+    try:
+        sections_hash = hashlib.md5(sections_json.encode()).hexdigest()
+        raw_response = ai_client.complete(
+            prompt=user_prompt,
+            system=TAILOR_TEXT_SYSTEM_PROMPT,
+            temperature=0.3,
+            cache_extra=sections_hash,
+        )
+        raw_response = raw_response.strip()
+
+        # Strip markdown code fences if present
+        if raw_response.startswith("```"):
+            lines = raw_response.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            raw_response = "\n".join(lines).strip()
+
+        tailored: Dict[str, str] = json.loads(raw_response)
+
+        # Validate: ensure all expected keys are present; fall back where missing
+        result: Dict[str, str] = {}
+        for key, base_value in base_sections.items():
+            if key in tailored and isinstance(tailored[key], str) and tailored[key].strip():
+                result[key] = tailored[key]
+            else:
+                logger.warning(
+                    f"[TAILOR TEXT] Missing or empty key '{key}' for {job.company}, using base content"
+                )
+                result[key] = base_value
+
+        logger.info(f"[TAILOR TEXT] {job.title} @ {job.company} -> {len(result)} sections tailored")
+        return result
+
+    except json.JSONDecodeError as e:
+        logger.error(f"[TAILOR TEXT] JSON parse error for {job.company}: {e}. Using base sections.")
+        return dict(base_sections)
+    except Exception as e:
+        logger.error(f"[TAILOR TEXT] Error tailoring text for {job.company}: {e}")
+        return dict(base_sections)
+
+
+def extract_base_sections(tex_content: str, resume_type: str = "sre_devops") -> Dict[str, str]:
+    """Parse a LaTeX resume file and extract plain text content for each section.
+
+    This bridges existing LaTeX resume files into the plain-text Google Docs flow.
+    The returned dict uses the same placeholder keys expected by ``tailor_resume_text``.
+
+    Parameters
+    ----------
+    tex_content:
+        Raw LaTeX source of the resume.
+    resume_type:
+        Identifier for the resume variant (currently only "sre_devops" is supported).
+
+    Returns
+    -------
+    Dict with keys: TITLE_LINE, SUMMARY, SKILLS, CLOVER_BULLETS, KRAKEN_BULLETS,
+    PROJECT_1_BULLETS, PROJECT_2_BULLETS, PROJECT_3_BULLETS.
+    """
+
+    def _strip_latex(text: str) -> str:
+        """Remove common LaTeX commands and return readable plain text."""
+        # Unwrap \textbf{...}, \textit{...}, \emph{...}, \texttt{...}
+        text = re.sub(r"\\text(?:bf|it|tt|rm|sc|sf)\{([^}]*)\}", r"\1", text)
+        text = re.sub(r"\\emph\{([^}]*)\}", r"\1", text)
+        # Remove \href{url}{text} -> text
+        text = re.sub(r"\\href\{[^}]*\}\{([^}]*)\}", r"\1", text)
+        # Remove \textbar\ and \textbar
+        text = re.sub(r"\\textbar\\?", "|", text)
+        # Remove \hfill
+        text = re.sub(r"\\hfill\s*", " ", text)
+        # Remove \, (thin space)
+        text = re.sub(r"\\,", "", text)
+        # Strip remaining simple commands like \textless \textgreater
+        text = re.sub(r"\\textless", "<", text)
+        text = re.sub(r"\\textgreater", ">", text)
+        # Remove leftover LaTeX commands \foo or \foo{...}
+        text = re.sub(r"\\[a-zA-Z]+\*?\{[^}]*\}", "", text)
+        text = re.sub(r"\\[a-zA-Z]+\*?", "", text)
+        # Clean up braces
+        text = re.sub(r"[{}]", "", text)
+        # Normalise whitespace
+        text = re.sub(r"[ \t]+", " ", text)
+        text = text.strip()
+        return text
+
+    def _extract_itemize_bullets(block: str) -> str:
+        """Extract \\item lines from a LaTeX itemize block and return as bullet lines."""
+        items = re.findall(r"\\item\s+(.*?)(?=\\item|\\end\{itemize\}|$)", block, re.DOTALL)
+        bullets = []
+        for item in items:
+            cleaned = _strip_latex(item.replace("\n", " "))
+            # Collapse multiple spaces
+            cleaned = re.sub(r"\s+", " ", cleaned).strip()
+            if cleaned:
+                bullets.append(f"• {cleaned}")
+        return "\n".join(bullets)
+
+    sections: Dict[str, str] = {}
+
+    # --- TITLE_LINE ---
+    title_match = re.search(
+        r"\\normalsize\s+(.*?)\\\\",
+        tex_content,
+        re.DOTALL,
+    )
+    if title_match:
+        sections["TITLE_LINE"] = _strip_latex(title_match.group(1))
+    else:
+        sections["TITLE_LINE"] = "Site Reliability Engineer (Python, Kubernetes, AWS, Observability)"
+
+    # --- SUMMARY ---
+    summary_match = re.search(
+        r"section\*\{Summary\}(.*?)(?=\\section|\Z)",
+        tex_content,
+        re.DOTALL,
+    )
+    if summary_match:
+        sections["SUMMARY"] = _strip_latex(summary_match.group(1).replace("\n", " "))
+    else:
+        sections["SUMMARY"] = ""
+
+    # --- SKILLS ---
+    skills_match = re.search(
+        r"section\*\{Technical Skills\}.*?\\begin\{itemize\}(.*?)\\end\{itemize\}",
+        tex_content,
+        re.DOTALL,
+    )
+    if skills_match:
+        skill_items = re.findall(
+            r"\\item\s+(.*?)(?=\\item|\\end\{itemize\}|$)",
+            skills_match.group(1),
+            re.DOTALL,
+        )
+        skill_lines = []
+        for item in skill_items:
+            cleaned = _strip_latex(item.replace("\n", " "))
+            cleaned = re.sub(r"\s+", " ", cleaned).strip()
+            if cleaned:
+                skill_lines.append(cleaned)
+        sections["SKILLS"] = "\n".join(skill_lines)
+    else:
+        sections["SKILLS"] = ""
+
+    # --- CLOVER BULLETS ---
+    clover_match = re.search(
+        r"jobentry\{Clover IT Services\}.*?\\begin\{itemize\}(.*?)\\end\{itemize\}",
+        tex_content,
+        re.DOTALL,
+    )
+    if clover_match:
+        sections["CLOVER_BULLETS"] = _extract_itemize_bullets(clover_match.group(1))
+    else:
+        sections["CLOVER_BULLETS"] = ""
+
+    # --- KRAKEN BULLETS ---
+    kraken_match = re.search(
+        r"jobentry\{Seattle Kraken[^}]*\}.*?\\begin\{itemize\}(.*?)\\end\{itemize\}",
+        tex_content,
+        re.DOTALL,
+    )
+    if kraken_match:
+        sections["KRAKEN_BULLETS"] = _extract_itemize_bullets(kraken_match.group(1))
+    else:
+        sections["KRAKEN_BULLETS"] = ""
+
+    # --- PROJECT BULLETS ---
+    # Find all \projectentry* blocks followed by itemize environments
+    project_blocks = re.findall(
+        r"\\projectentry(?:url)?\{[^}]+\}.*?\\begin\{itemize\}(.*?)\\end\{itemize\}",
+        tex_content,
+        re.DOTALL,
+    )
+    for idx, block in enumerate(project_blocks[:3], start=1):
+        sections[f"PROJECT_{idx}_BULLETS"] = _extract_itemize_bullets(block)
+    # Ensure keys always exist even if fewer than 3 projects are found
+    for idx in range(1, 4):
+        sections.setdefault(f"PROJECT_{idx}_BULLETS", "")
+
+    return sections
