@@ -22,16 +22,10 @@ SHARE_EMAIL = "254utkarsh@gmail.com"
 
 
 def _get_services():
-    from google.oauth2.service_account import Credentials
     from googleapiclient.discovery import build
+    from google_docs_client import _get_credentials
 
-    creds = Credentials.from_service_account_file(
-        CREDENTIALS_PATH,
-        scopes=[
-            "https://www.googleapis.com/auth/documents",
-            "https://www.googleapis.com/auth/drive",
-        ],
-    )
+    creds = _get_credentials(CREDENTIALS_PATH)
     docs = build("docs", "v1", credentials=creds, cache_discovery=False)
     drive = build("drive", "v3", credentials=creds, cache_discovery=False)
     return docs, drive
@@ -421,17 +415,8 @@ def _build_format_requests(doc_content: dict, paragraphs: list[dict]) -> list[di
                 "dashStyle": "SOLID",
             }
 
-        # Tab stops for right-aligned dates (paragraphs containing \t)
-        if "\t" in our_para.get("text", ""):
-            # Add a right-aligned tab stop at the right margin
-            # Page width (Letter) = 612pt, margins = 0.7in = 50.4pt each
-            # Content width = 612 - 2*50.4 = 511.2pt
-            para_style["tabStops"] = [
-                {
-                    "offset": {"magnitude": 511, "unit": "PT"},
-                    "alignment": "END",
-                }
-            ]
+        # Tab stops for right-aligned dates: tabStops not supported
+        # in updateParagraphStyle API — dates stay inline with text
 
         requests.append({
             "updateParagraphStyle": {

@@ -14,15 +14,39 @@ logger = logging.getLogger(__name__)
 
 
 def _get_credentials(credentials_path: str = "google_credentials.json"):
-    """Load service account credentials. Handles Lambda env var fallback."""
-    from google.oauth2.service_account import Credentials
+    """Load credentials — supports OAuth token, service account, and Lambda env var.
 
-    # Lambda: credentials passed as env var, write to temp file
+    Priority:
+    1. oauth_token.json (user's personal Google account — has Drive storage)
+    2. Service account JSON (for automated pipelines)
+    3. GOOGLE_CREDENTIALS_JSON env var (Lambda)
+    """
+    import json
+
+    # 1. Try OAuth token first (user's personal account)
+    oauth_path = Path(credentials_path).parent / "oauth_token.json"
+    if oauth_path.exists():
+        from google.oauth2.credentials import Credentials as OAuthCredentials
+        with open(oauth_path) as f:
+            token = json.load(f)
+        creds = OAuthCredentials(
+            token=token.get("token"),
+            refresh_token=token.get("refresh_token"),
+            token_uri=token.get("token_uri"),
+            client_id=token.get("client_id"),
+            client_secret=token.get("client_secret"),
+            scopes=token.get("scopes"),
+        )
+        return creds
+
+    # 2. Lambda env var fallback
     if not Path(credentials_path).exists() and os.environ.get("GOOGLE_CREDENTIALS_JSON"):
         credentials_path = "/tmp/google_credentials.json"
         with open(credentials_path, "w") as f:
             f.write(os.environ["GOOGLE_CREDENTIALS_JSON"])
 
+    # 3. Service account JSON
+    from google.oauth2.service_account import Credentials
     return Credentials.from_service_account_file(
         credentials_path,
         scopes=[

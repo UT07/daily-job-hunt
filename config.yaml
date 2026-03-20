@@ -23,6 +23,7 @@ profile:
 resumes:
   sre_devops:
     tex_path: "resumes/sre_devops.tex"
+    google_doc_id: "1Gmjcsf9XDtC2LrNYJet9L28VCC3-hl2M7j3uf6-y-T0"
     label: "SRE / DevOps Engineer"
     target_roles:
       - "Site Reliability Engineer"
@@ -33,6 +34,7 @@ resumes:
       - "SRE"
   fullstack:
     tex_path: "resumes/fullstack.tex"
+    google_doc_id: "1H9qEhJP-7V0antle7q69LQbBaNlbUQlWA-rHX_1jp7k"
     label: "Full-Stack Software Engineer"
     target_roles:
       - "Software Engineer"
