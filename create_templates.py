@@ -90,9 +90,18 @@ EDUCATION_BLOCKS = [
 ]
 
 CERTIFICATIONS = [
-    "AWS Certified Solutions Architect — Professional (SAP-C02)  |  Issued Mar 2024",
-    "AWS Certified Developer — Associate (DVA-C01)  |  Issued Sep 2022",
-    "AWS Certified Cloud Practitioner (CLF-C01)  |  Issued Jun 2022",
+    {
+        "text": "AWS Certified Solutions Architect — Professional (SAP-C02)  |  Issued Mar 2024",
+        "url": "https://www.credly.com/badges/6e22a6c0-9922-49d5-b59f-34cc593c82c3/public_url",
+    },
+    {
+        "text": "AWS Certified Developer — Associate (DVA-C01)  |  Issued Sep 2022",
+        "url": "https://www.credly.com/badges/84671bf4-ce9f-4d8b-a0de-0ef606ad5646/public_url",
+    },
+    {
+        "text": "AWS Certified Cloud Practitioner (CLF-C01)  |  Issued Jun 2022",
+        "url": "https://www.credly.com/badges/e671b9de-e72a-48cb-82fc-33776c285174/public_url",
+    },
 ]
 
 
@@ -168,7 +177,13 @@ def build_paragraphs(variant: str) -> list[dict]:
     # ---- CERTIFICATIONS ----
     p("Certifications", heading=True, space_before=6, space_after=4)
     for cert in CERTIFICATIONS:
-        p(cert, bullet=True, size=11, space_after=2)
+        paras.append({
+            "text": cert["text"],
+            "url": cert["url"],
+            "bullet": True,
+            "size": 11,
+            "space_after": 2,
+        })
 
     return paras
 
@@ -233,19 +248,22 @@ def create_template(variant: str, docs, drive) -> tuple[str, str]:
     for text, para in reversed_segments:
         line = text + "\n"
 
-        if para.get("page_break"):
-            requests.append({
-                "insertPageBreak": {
-                    "location": {"index": 1}
-                }
-            })
-
+        # Insert text first (at index 1)
         requests.append({
             "insertText": {
                 "location": {"index": 1},
                 "text": line,
             }
         })
+
+        # Then insert page break at index 1 (pushes text forward,
+        # so in the final doc the break appears BEFORE this paragraph)
+        if para.get("page_break"):
+            requests.append({
+                "insertPageBreak": {
+                    "location": {"index": 1}
+                }
+            })
 
     # 3. Execute the insertions
     docs.documents().batchUpdate(
@@ -432,6 +450,23 @@ def _build_format_requests(doc_content: dict, paragraphs: list[dict]) -> list[di
                 "createParagraphBullets": {
                     "range": {"startIndex": start, "endIndex": end},
                     "bulletPreset": "BULLET_DISC_CIRCLE_SQUARE",
+                }
+            })
+
+        # Hyperlink (make entire text a link)
+        url = our_para.get("url", "")
+        if url:
+            # Link the text range (excluding trailing newline)
+            link_end = end - 1 if end > start + 1 else end
+            requests.append({
+                "updateTextStyle": {
+                    "range": {"startIndex": start, "endIndex": link_end},
+                    "textStyle": {
+                        "link": {"url": url},
+                        "foregroundColor": {"color": {"rgbColor": {"red": 0.02, "green": 0.35, "blue": 0.75}}},
+                        "underline": True,
+                    },
+                    "fields": "link,foregroundColor,underline",
                 }
             })
 
