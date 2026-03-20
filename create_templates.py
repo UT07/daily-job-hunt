@@ -38,7 +38,15 @@ def _get_services():
 # Shared header info
 NAME = "Utkarsh Singh"
 CONTACT_LINE = "Dublin, Ireland | +353 892515620 | 254utkarsh@gmail.com"
+CONTACT_LINKS = [
+    {"text": "254utkarsh@gmail.com", "url": "mailto:254utkarsh@gmail.com"},
+]
 LINKS_LINE = "github.com/UT07 | linkedin.com/in/utkarshsingh2001 | utworld.netlify.app"
+LINKS_LINKS = [
+    {"text": "github.com/UT07", "url": "https://github.com/UT07"},
+    {"text": "linkedin.com/in/utkarshsingh2001", "url": "https://www.linkedin.com/in/utkarshsingh2001/"},
+    {"text": "utworld.netlify.app", "url": "https://utworld.netlify.app"},
+]
 
 # Per-variant config
 VARIANTS = {
@@ -65,7 +73,7 @@ EDUCATION_BLOCKS = [
         "degree": "MSc Cloud Computing",
         "bullets": [
             "Coursework: Cloud Architectures, Cloud DevOpsSec, Scalable Cloud Programming, "
-            "Cloud Machine Learning, Data Governance/Compliance/Ethics, Research in Computing."
+            "Cloud Machine Learning, Data Governance/Compliance/Ethics, and Research in Computing."
         ],
     },
     {
@@ -74,7 +82,8 @@ EDUCATION_BLOCKS = [
         "dates": "Aug 2023 – May 2024",
         "degree": "BS Computer Science",
         "bullets": [
-            "Coursework: Software Dev Lifecycle, Full-Stack Development, Database Systems, Software Testing."
+            "Coursework: Software Development Lifecycle, Full-Stack Development, Database Systems, "
+            "Software Testing, Fog and Edge Computing, Senior Capstone Project."
         ],
     },
     {
@@ -83,7 +92,8 @@ EDUCATION_BLOCKS = [
         "dates": "Aug 2019 – May 2022",
         "degree": "BS Software Engineering (Coursework, Transferred)",
         "bullets": [
-            "Coursework: Algorithms & DS, Operating Systems, Computer Networks, Information Security.",
+            "Coursework: Algorithms & Data Structures, Operating Systems, Computer Networks, "
+            "Information Security, Object-Oriented Programming.",
             "Teaching Assistant: CSE 3318 Data Structures & Algorithms (50+ students).",
         ],
     },
@@ -131,8 +141,10 @@ def build_paragraphs(variant: str) -> list[dict]:
     # ---- HEADER ----
     p(NAME,          align="CENTER", bold=True,  size=16, space_after=2)
     p(v["title_line"], align="CENTER", bold=False, size=11, space_after=2)
-    p(CONTACT_LINE,  align="CENTER", bold=False, size=10, space_after=2)
-    p(LINKS_LINE,    align="CENTER", bold=False, size=10, space_after=6)
+    paras.append({"text": CONTACT_LINE, "align": "CENTER", "bold": False, "size": 10,
+                  "space_after": 2, "inline_links": CONTACT_LINKS})
+    paras.append({"text": LINKS_LINE, "align": "CENTER", "bold": False, "size": 10,
+                  "space_after": 6, "inline_links": LINKS_LINKS})
 
     # ---- SUMMARY ----
     p("Summary",       heading=True, space_before=6,  space_after=4)
@@ -453,7 +465,29 @@ def _build_format_requests(doc_content: dict, paragraphs: list[dict]) -> list[di
                 }
             })
 
-        # Hyperlink (make entire text a link)
+        # Inline links (multiple links within one paragraph)
+        inline_links = our_para.get("inline_links", [])
+        for link_info in inline_links:
+            link_text = link_info["text"]
+            link_url = link_info["url"]
+            # Find the text within the paragraph content
+            offset = text_in_para.find(link_text)
+            if offset >= 0:
+                link_start = start + offset
+                link_end_pos = link_start + len(link_text)
+                requests.append({
+                    "updateTextStyle": {
+                        "range": {"startIndex": link_start, "endIndex": link_end_pos},
+                        "textStyle": {
+                            "link": {"url": link_url},
+                            "foregroundColor": {"color": {"rgbColor": {"red": 0.02, "green": 0.35, "blue": 0.75}}},
+                            "underline": True,
+                        },
+                        "fields": "link,foregroundColor,underline",
+                    }
+                })
+
+        # Hyperlink (make entire text a link — for certifications etc.)
         url = our_para.get("url", "")
         if url:
             # Link the text range (excluding trailing newline)
