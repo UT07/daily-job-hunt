@@ -13,6 +13,12 @@ export default function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
+    // If Supabase isn't configured, skip auth (dev mode without Supabase)
+    if (!supabase) {
+      setLoading(false)
+      return
+    }
+
     // Check for existing session on mount
     supabase.auth.getSession().then(({ data: { session: currentSession } }) => {
       setSession(currentSession)
