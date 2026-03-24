@@ -24,5 +24,8 @@ boto3>=1.34.0
 google-api-python-client>=2.100.0
 google-auth>=2.25.0
 
+# Supabase (Postgres + Auth + RLS for multi-tenant SaaS)
+supabase>=2.0.0
+
 # Optional: Anthropic SDK (only needed if using Claude as paid fallback)
 # anthropic>=0.39.0
