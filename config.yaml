@@ -55,17 +55,27 @@ search:
     - "Platform Engineer"
     - "Cloud Engineer"
     - "Infrastructure Engineer"
+    - "SRE"
     # Full-Stack / Backend
     - "Software Engineer"
     - "Full Stack Developer"
     - "Full Stack Engineer"
     - "Backend Engineer"
     - "Python Developer"
+    - "Python Engineer"
+    - "Node.js Developer"
     # Graduate / Junior level
     - "Junior Software Engineer"
     - "Graduate Software Engineer"
     - "Graduate DevOps Engineer"
     - "Junior DevOps Engineer"
+    - "Entry Level Engineer"
+    - "Associate Software Engineer"
+    # Cloud specific
+    - "AWS Engineer"
+    - "Kubernetes Engineer"
+    - "Cloud Infrastructure Engineer"
+    - "Cloud Native Engineer"
 
   # Multi-geo search: Ireland (primary), India (remote only), US (remote + sponsorship)
   # LinkedIn scrapers are created per geo region.
@@ -102,10 +112,10 @@ search:
   days_back: 7
 
   # Maximum jobs to process per run (to manage API costs)
-  max_jobs_per_run: 15
+  max_jobs_per_run: 25
 
   # Minimum match score (0-100) to generate resume + cover letter
-  min_match_score: 60
+  min_match_score: 50
 
 # --- API Keys ---
 api_keys:

@@ -91,6 +91,11 @@ GEOGRAPHIC SCORING RULES:
 
 Be honest and strict. Don't inflate scores — this determines which jobs are worth applying to.
 
+SCORING GUIDANCE FOR JUNIOR/GRADUATE ROLES:
+- For roles marked as "Junior", "Graduate", "Entry Level", or "Associate": be MORE lenient with experience requirements. A strong portfolio and relevant coursework/projects can compensate for fewer years of experience.
+- For these roles, bias the Hiring Manager score upward if the candidate shows strong learning ability and relevant project work.
+- Do NOT penalize junior roles for listing technologies the candidate hasn't used — they often list aspirational skills.
+
 Return ONLY a valid JSON array (no markdown, no code fences). One object per job, in the same order as presented:
 [
     {{
@@ -122,6 +127,11 @@ Candidate context:
 {candidate_context_short}
 
 Be honest and strict.
+
+SCORING GUIDANCE FOR JUNIOR/GRADUATE ROLES:
+- For roles marked as "Junior", "Graduate", "Entry Level", or "Associate": be MORE lenient with experience requirements. A strong portfolio and relevant coursework/projects can compensate for fewer years of experience.
+- For these roles, bias the Hiring Manager score upward if the candidate shows strong learning ability and relevant project work.
+- Do NOT penalize junior roles for listing technologies the candidate hasn't used — they often list aspirational skills.
 
 Return ONLY valid JSON (no markdown, no code fences):
 {{

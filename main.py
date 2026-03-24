@@ -581,21 +581,22 @@ def _rank_jobs_locally(jobs: List[Job], config: dict) -> List[Job]:
 
 _REJECT_TITLE_PATTERNS = [
     "director", "vice president", "vp ", "vp,", "chief ",
-    "head of", "principal architect", "staff engineer",
+    "principal architect", "staff engineer",
     "distinguished", "fellow",
 ]
+# Removed: "head of" — too broad, catches relevant roles like "Head of Platform"
 
 _REJECT_DESC_PATTERNS = [
     "security clearance required", "ts/sci", "top secret",
-    "10+ years", "12+ years", "15+ years", "8+ years of experience",
-    "7+ years of experience",
+    "10+ years", "12+ years", "15+ years",
 ]
+# Removed: "7+ years" and "8+ years" — some of these roles accept strong juniors
 
 
 def _quick_reject(jobs: List[Job]) -> List[Job]:
     """Filter out jobs that are obviously not a match.
 
-    Removes: Senior Director+, security clearance, 8+ years required.
+    Removes: Senior Director+, security clearance, 10+ years required.
     Saves 30-50% of AI matching tokens.
     """
     filtered = []
