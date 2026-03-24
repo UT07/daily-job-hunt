@@ -27,5 +27,8 @@ google-auth>=2.25.0
 # Supabase (Postgres + Auth + RLS for multi-tenant SaaS)
 supabase>=2.0.0
 
+# JWT validation for Supabase auth tokens
+python-jose[cryptography]>=3.3.0
+
 # Optional: Anthropic SDK (only needed if using Claude as paid fallback)
 # anthropic>=0.39.0

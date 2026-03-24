@@ -1,11 +1,15 @@
 """FastAPI backend for the Job Hunt landing page.
 
 Exposes the pipeline's core AI modules as REST endpoints:
-- POST /api/score       — score a JD against base resumes
-- POST /api/tailor      — tailor resume + compile PDF, return Drive URL
+- POST /api/score        — score a JD against base resumes
+- POST /api/tailor       — tailor resume + compile PDF, return Drive URL
 - POST /api/cover-letter — generate cover letter PDF, return Drive URL
-- POST /api/contacts    — find LinkedIn contacts + intro messages
-- GET  /api/health      — health check
+- POST /api/contacts     — find LinkedIn contacts + intro messages
+- GET  /api/profile      — get authenticated user's profile
+- PUT  /api/profile      — update authenticated user's profile
+- GET  /api/health       — health check (public)
+
+All endpoints except /api/health require a valid Supabase JWT.
 """
 
 import logging
@@ -15,9 +19,12 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+
+from auth import AuthUser, get_current_user
+from db_client import SupabaseClient
 
 from ai_client import AIClient
 from contact_finder import find_contacts
@@ -47,6 +54,7 @@ app.add_middleware(
 _ai_client: Optional[AIClient] = None
 _config: dict = {}
 _resumes: dict[str, str] = {}  # {key: tex_content}
+_db: Optional[SupabaseClient] = None
 
 
 def _resolve_env(value: str) -> str:
@@ -83,10 +91,15 @@ def _load_resumes(config: dict) -> dict[str, str]:
 
 @app.on_event("startup")
 def startup():
-    global _ai_client, _config, _resumes
+    global _ai_client, _config, _resumes, _db
     _config = _load_config()
     _resumes = _load_resumes(_config)
     _ai_client = AIClient.from_config(_config)
+    try:
+        _db = SupabaseClient.from_env()
+    except RuntimeError:
+        logger.warning("Supabase not configured — profile endpoints will fail")
+        _db = None
     logger.info("API started — %d resumes loaded, AI client ready", len(_resumes))
 
 
@@ -153,6 +166,22 @@ class Contact(BaseModel):
 
 class ContactsResponse(BaseModel):
     contacts: list[Contact]
+
+
+class ProfileResponse(BaseModel):
+    id: str
+    email: str
+    full_name: Optional[str] = None
+    plan: str = "free"
+    created_at: Optional[str] = None
+
+
+class ProfileUpdateRequest(BaseModel):
+    full_name: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    github_url: Optional[str] = None
+    target_roles: Optional[list[str]] = None
+    target_locations: Optional[list[str]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +261,7 @@ def health():
 
 
 @app.post("/api/score", response_model=ScoreResponse)
-def score_job(req: ScoreRequest):
+def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
     if req.resume_type not in _resumes:
         raise HTTPException(400, f"Unknown resume type: {req.resume_type}. Available: {list(_resumes.keys())}")
 
@@ -263,7 +292,7 @@ def score_job(req: ScoreRequest):
 
 
 @app.post("/api/tailor", response_model=TailorResponse)
-def tailor_job(req: TailorRequest):
+def tailor_job(req: TailorRequest, user: AuthUser = Depends(get_current_user)):
     if req.resume_type not in _resumes:
         raise HTTPException(400, f"Unknown resume type: {req.resume_type}")
 
@@ -312,7 +341,7 @@ def tailor_job(req: TailorRequest):
 
 
 @app.post("/api/cover-letter", response_model=CoverLetterResponse)
-def cover_letter(req: CoverLetterRequest):
+def cover_letter(req: CoverLetterRequest, user: AuthUser = Depends(get_current_user)):
     if req.resume_type not in _resumes:
         raise HTTPException(400, f"Unknown resume type: {req.resume_type}")
 
@@ -340,7 +369,7 @@ def cover_letter(req: CoverLetterRequest):
 
 
 @app.post("/api/contacts", response_model=ContactsResponse)
-def contacts(req: ContactsRequest):
+def contacts(req: ContactsRequest, user: AuthUser = Depends(get_current_user)):
     job = _Job(req.job_title, req.company, req.job_description)
 
     try:
@@ -351,6 +380,47 @@ def contacts(req: ContactsRequest):
 
     return ContactsResponse(
         contacts=[Contact(**c) for c in result] if result else [],
+    )
+
+
+@app.get("/api/profile", response_model=ProfileResponse)
+def get_profile(user: AuthUser = Depends(get_current_user)):
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+
+    row = _db.get_user(user.id)
+    if row is None:
+        # Auto-create user on first profile fetch (just-in-time provisioning)
+        row = _db.create_user({"id": user.id, "email": user.email})
+
+    return ProfileResponse(
+        id=row["id"],
+        email=row["email"],
+        full_name=row.get("full_name"),
+        plan=row.get("plan", "free"),
+        created_at=row.get("created_at"),
+    )
+
+
+@app.put("/api/profile", response_model=ProfileResponse)
+def update_profile(
+    req: ProfileUpdateRequest, user: AuthUser = Depends(get_current_user)
+):
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+
+    # Only send non-None fields to the database
+    update_data = req.model_dump(exclude_none=True)
+    if not update_data:
+        raise HTTPException(400, "No fields to update")
+
+    row = _db.update_user(user.id, update_data)
+    return ProfileResponse(
+        id=row["id"],
+        email=row["email"],
+        full_name=row.get("full_name"),
+        plan=row.get("plan", "free"),
+        created_at=row.get("created_at"),
     )
 
 
