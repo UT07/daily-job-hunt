@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
 import AuthProvider from './auth/AuthProvider';
 import { useAuth } from './auth/useAuth';
 import LoginPage from './pages/LoginPage';
+import Dashboard from './pages/Dashboard';
 import { apiCall } from './api';
 import ScoreCard from './components/ScoreCard';
 import TailorCard from './components/TailorCard';
@@ -207,63 +208,13 @@ function AppContent() {
   );
 }
 
-function DashboardPlaceholder() {
-  const { user, loading, signOut } = useAuth();
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-gray-500 text-sm">Loading...</div>
-      </div>
-    );
-  }
-
-  if (!user) {
-    return <LoginPage />;
-  }
-
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="text-2xl">🎯</span>
-            <h1 className="text-xl font-bold text-gray-900">Job Hunt</h1>
-          </div>
-          <div className="flex items-center gap-4">
-            <Link
-              to="/"
-              className="text-sm text-gray-600 hover:text-gray-900 font-medium transition"
-            >
-              Tailor
-            </Link>
-            <span className="text-sm text-gray-500 hidden sm:block">{user.email}</span>
-            <button
-              onClick={signOut}
-              className="text-sm text-gray-500 hover:text-gray-700 font-medium transition"
-            >
-              Sign out
-            </button>
-          </div>
-        </div>
-      </header>
-      <main className="max-w-4xl mx-auto px-4 py-8">
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center">
-          <h2 className="text-lg font-semibold text-gray-900 mb-2">Dashboard</h2>
-          <p className="text-sm text-gray-500">Coming soon — your job application tracker will live here.</p>
-        </div>
-      </main>
-    </div>
-  );
-}
-
 export default function App() {
   return (
     <BrowserRouter>
       <AuthProvider>
         <Routes>
           <Route path="/" element={<AppContent />} />
-          <Route path="/dashboard" element={<DashboardPlaceholder />} />
+          <Route path="/dashboard" element={<Dashboard />} />
         </Routes>
       </AuthProvider>
     </BrowserRouter>

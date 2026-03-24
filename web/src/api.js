@@ -52,6 +52,20 @@ export async function apiPut(endpoint, body) {
   return res.json();
 }
 
+export async function apiPatch(endpoint, body) {
+  const headers = await authHeaders()
+  const res = await fetch(`${API_BASE}${endpoint}`, {
+    method: 'PATCH',
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
 export async function apiUpload(endpoint, file) {
   const { data: { session } } = await supabase.auth.getSession()
   const headers = {}
