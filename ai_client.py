@@ -1,11 +1,20 @@
 """
 Multi-provider AI client with rate limiting, caching, and automatic failover.
 
+Supports two modes:
+  1. **Failover chain** (`complete()`) — tries providers in order, fast and cheap.
+  2. **Consensus council** (`council_complete()`) — sends the same prompt to N
+     distinct models, has M other models critique/score the outputs, and returns
+     the highest-rated response.  Produces measurably better quality at the cost
+     of more API calls.
+
 Supported providers (all have free tiers):
-  1. Groq (Llama 3.3 70B)     — 30 RPM, 14,400 RPD (primary, fastest)
-  2. DeepSeek (DeepSeek V3)    — 60 RPM, ~500K tokens/day (strong structured output)
-  3. OpenRouter (free models)  — Qwen 2.5 72B, Llama 3.3, etc. (aggregator failover)
-  4. Anthropic Claude          — paid, used as premium fallback only
+  1. Groq (Llama 3.3 70B + others) — 30 RPM, 14,400 RPD (fastest)
+  2. DeepSeek (DeepSeek V3)         — 60 RPM, ~500K tokens/day (structured output)
+  3. OpenRouter (free models)       — aggregator with many free models
+  4. NVIDIA NIM                     — free credits, DeepSeek/Kimi/Qwen/Mistral
+  5. Qwen (DashScope)               — free tier, strong quality
+  6. Anthropic Claude               — paid, premium fallback only
 
 The client tries providers in order and fails over automatically.
 Responses are cached in SQLite to avoid burning quota on repeated requests.
@@ -16,10 +25,13 @@ import hashlib
 import json
 import logging
 import os
+import random
+import re
 import sqlite3
 import time
 import threading
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 
@@ -603,6 +615,467 @@ class AIClient:
 
         raise ProviderError(f"All providers exhausted. Last error: {last_error}")
 
+    # ── Council Methods ──────────────────────────────────────────────────
+
+    def _select_providers(self, n: int, exclude: set = None) -> List[AIProvider]:
+        """Pick N distinct providers/models from the pool, preferring alive ones.
+
+        Selection strategy:
+        - Filters out dead providers and any in the *exclude* set.
+        - Deduplicates by **underlying model family** so the council gets
+          genuinely different viewpoints (e.g. won't pick the same Llama 3.3
+          from both Groq and NVIDIA).
+        - Prefers providers that still have rate-limit headroom.
+        - Shuffles within each tier to avoid always picking the same subset.
+
+        Args:
+            n: Number of providers to select.
+            exclude: Set of ``(provider.name, provider.model)`` tuples to skip
+                (e.g. generators when picking critics).
+
+        Returns:
+            Up to *n* :class:`AIProvider` instances (may be fewer if the pool
+            is too small).
+        """
+        exclude = exclude or set()
+
+        alive = [
+            p for p in self.providers
+            if (p.name, p.model) not in self._dead_providers
+            and (p.name, p.model) not in exclude
+        ]
+
+        if not alive:
+            logger.warning("[Council] No alive providers outside exclusion set — falling back to full pool")
+            alive = [p for p in self.providers if (p.name, p.model) not in exclude]
+
+        # Deduplicate by normalised model family so the council gets diverse models.
+        def _model_family(model: str) -> str:
+            """Collapse provider-prefixed model names to a canonical family."""
+            m = model.lower().split("/")[-1]         # strip org prefix
+            m = m.replace(":free", "")                # strip OpenRouter `:free` tag
+            # Collapse version variants: "deepseek-v3.2" and "deepseek-chat" are the same family
+            for prefix in ("deepseek", "llama-3.3", "llama-3.1", "llama-4", "qwen3",
+                           "qwen-plus", "qwen-turbo", "qwen-max", "kimi-k2",
+                           "mistral-small", "nemotron", "hermes", "gemma", "glm", "step"):
+                if m.startswith(prefix):
+                    return prefix
+            return m
+
+        seen_families: set = set()
+        unique: List[AIProvider] = []
+        # Shuffle so we don't always pick the first provider in a family
+        shuffled = list(alive)
+        random.shuffle(shuffled)
+
+        # Sort so providers with more minute-tokens come first (more headroom)
+        def _headroom(p: AIProvider) -> float:
+            info = p.rate_limiter.tokens_remaining
+            minute_val = info.get("minute", 0)
+            return float(minute_val) if isinstance(minute_val, (int, float)) else 0.0
+        shuffled.sort(key=_headroom, reverse=True)
+
+        for p in shuffled:
+            fam = _model_family(p.model)
+            if fam not in seen_families:
+                seen_families.add(fam)
+                unique.append(p)
+                if len(unique) >= n:
+                    break
+
+        return unique
+
+    def council_generate(
+        self,
+        prompt: str,
+        system: str = "",
+        n_generators: int = 3,
+        temperature: float = 0.3,
+        skip_cache: bool = False,
+        cache_extra: str = "",
+    ) -> List[Dict[str, Any]]:
+        """Send the same prompt to N distinct models and collect their responses.
+
+        Returns a list of dicts, each containing ``response``, ``provider``,
+        and ``model`` keys.  If fewer than *n_generators* succeed the list may
+        be shorter (even length 1 is acceptable).
+        """
+        generators = self._select_providers(n_generators)
+        if not generators:
+            raise ProviderError("[Council] No providers available for generation")
+
+        logger.info(f"[Council] Generating with {len(generators)} models: "
+                    f"{', '.join(f'{p.name}:{p.model}' for p in generators)}")
+
+        results: List[Dict[str, Any]] = []
+        for provider in generators:
+            try:
+                resp = provider.complete_with_retry(prompt, system=system, temperature=temperature)
+                results.append({
+                    "response": resp,
+                    "provider": provider.name,
+                    "model": provider.model,
+                })
+                self._stats["provider_calls"][provider.name] = (
+                    self._stats["provider_calls"].get(provider.name, 0) + 1
+                )
+                logger.info(f"[Council] {provider.name}:{provider.model} generated "
+                            f"{len(resp)} chars")
+            except Exception as e:
+                logger.warning(f"[Council] {provider.name}:{provider.model} failed: {e}")
+                # Mark permanently dead providers
+                import requests as _req
+                if isinstance(e, _req.HTTPError):
+                    status = e.response.status_code if hasattr(e, "response") and e.response else 0
+                    if status in self._DEAD_CODES:
+                        self._dead_providers.add((provider.name, provider.model))
+                        logger.warning(f"[Council] Marked {provider.name}:{provider.model} dead ({status})")
+                continue
+
+        if not results:
+            raise ProviderError("[Council] All generators failed — no candidates produced")
+
+        return results
+
+    def council_critique(
+        self,
+        candidates: List[Dict[str, Any]],
+        task_description: str,
+        n_critics: int = 2,
+        temperature: float = 0.2,
+    ) -> Dict[str, Any]:
+        """Have M critic models score the candidate responses and pick the best.
+
+        Critics are chosen from providers that were NOT used for generation so
+        that no model evaluates its own output.
+
+        Returns a dict with ``best_response``, ``best_provider``, ``best_model``,
+        ``best_score``, and ``critiques`` keys.
+        """
+        # Build exclusion set — generators should not critique their own work
+        generator_keys = {(c["provider"], c["model"]) for c in candidates}
+        critics = self._select_providers(n_critics, exclude=generator_keys)
+
+        if not critics:
+            logger.warning("[Council] No distinct critics available — using generators as fallback")
+            critics = self._select_providers(n_critics)
+
+        # Build the critique prompt
+        candidate_blocks = []
+        for i, cand in enumerate(candidates, 1):
+            truncated = cand["response"][:3000]
+            candidate_blocks.append(f"Candidate {i} ({cand['provider']}:{cand['model']}):\n{truncated}")
+
+        critique_prompt = (
+            f"You are evaluating {len(candidates)} candidate outputs for this task:\n"
+            f"{task_description}\n\n"
+            "Rate each candidate 0-100 on: accuracy, completeness, quality, and "
+            "adherence to instructions. Average the four dimensions into a single "
+            "score per candidate.\n\n"
+            + "\n\n".join(candidate_blocks)
+            + "\n\nReturn ONLY a JSON array of integer scores in candidate order, "
+            "e.g. [85, 72, 91]. No other text."
+        )
+
+        logger.info(f"[Council] Critiquing {len(candidates)} candidates with "
+                    f"{len(critics)} critics: "
+                    f"{', '.join(f'{c.name}:{c.model}' for c in critics)}")
+
+        all_critiques: List[Dict[str, Any]] = []
+        # Accumulate scores: index -> list of scores from each critic
+        score_accumulator: Dict[int, List[float]] = {i: [] for i in range(len(candidates))}
+
+        for critic in critics:
+            try:
+                raw = critic.complete_with_retry(
+                    critique_prompt,
+                    system="You are an impartial AI output evaluator. Return only valid JSON.",
+                    temperature=temperature,
+                )
+                self._stats["provider_calls"][critic.name] = (
+                    self._stats["provider_calls"].get(critic.name, 0) + 1
+                )
+
+                # Parse scores from response — look for a JSON array
+                scores = self._parse_scores(raw, len(candidates))
+                if scores:
+                    all_critiques.append({
+                        "critic_provider": critic.name,
+                        "critic_model": critic.model,
+                        "scores": scores,
+                    })
+                    for idx, s in enumerate(scores):
+                        score_accumulator[idx].append(float(s))
+                    logger.info(f"[Council] Critic {critic.name}:{critic.model} scores: {scores}")
+                else:
+                    logger.warning(f"[Council] Could not parse scores from {critic.name}:{critic.model}: {raw[:200]}")
+
+            except Exception as e:
+                logger.warning(f"[Council] Critic {critic.name}:{critic.model} failed: {e}")
+                continue
+
+        # Compute average scores and pick the winner
+        avg_scores: List[float] = []
+        for idx in range(len(candidates)):
+            values = score_accumulator[idx]
+            avg_scores.append(sum(values) / len(values) if values else 0.0)
+
+        if not any(avg_scores):
+            # No critics returned usable scores — fall back to first candidate
+            logger.warning("[Council] No usable critique scores — defaulting to first candidate")
+            best_idx = 0
+            best_score = 0.0
+        else:
+            best_idx = max(range(len(avg_scores)), key=lambda i: avg_scores[i])
+            best_score = round(avg_scores[best_idx], 1)
+
+        winner = candidates[best_idx]
+        logger.info(f"[Council] Winner: {winner['provider']}:{winner['model']} "
+                    f"(score {best_score}, avg scores: {[round(s, 1) for s in avg_scores]})")
+
+        return {
+            "best_response": winner["response"],
+            "best_provider": winner["provider"],
+            "best_model": winner["model"],
+            "best_score": best_score,
+            "critiques": all_critiques,
+        }
+
+    @staticmethod
+    def _parse_scores(raw: str, expected_count: int) -> Optional[List[int]]:
+        """Extract a JSON array of integer scores from a critic's response.
+
+        Tries several strategies: direct JSON parse, regex extraction of
+        bracket-delimited arrays, and fallback number extraction.
+        """
+        # Strategy 1: direct JSON parse
+        try:
+            parsed = json.loads(raw.strip())
+            if isinstance(parsed, list) and len(parsed) == expected_count:
+                return [int(round(float(s))) for s in parsed]
+        except (json.JSONDecodeError, ValueError, TypeError):
+            pass
+
+        # Strategy 2: find the first JSON array in the text
+        match = re.search(r'\[[\d\s,\.]+\]', raw)
+        if match:
+            try:
+                parsed = json.loads(match.group())
+                if isinstance(parsed, list) and len(parsed) == expected_count:
+                    return [int(round(float(s))) for s in parsed]
+            except (json.JSONDecodeError, ValueError, TypeError):
+                pass
+
+        # Strategy 3: extract all numbers and hope for the best
+        numbers = re.findall(r'\b(\d{1,3})\b', raw)
+        # Filter to plausible scores (0-100)
+        plausible = [int(n) for n in numbers if 0 <= int(n) <= 100]
+        if len(plausible) >= expected_count:
+            return plausible[:expected_count]
+
+        return None
+
+    def council_complete(
+        self,
+        prompt: str,
+        system: str = "",
+        n_generators: int = 3,
+        n_critics: int = 2,
+        task_description: str = "",
+        temperature: float = 0.3,
+        skip_cache: bool = False,
+        cache_extra: str = "",
+    ) -> str:
+        """Generate with multiple models, critique, and return the best response.
+
+        This is the main entry point for high-quality generation. Combines
+        :meth:`council_generate` and :meth:`council_critique` into a single call.
+
+        Falls back gracefully:
+        - If only 1 generator succeeds, skips critique and returns it directly.
+        - Caches the final winning response (not intermediate candidates).
+        """
+        # Check cache first
+        council_cache_extra = f"council:{n_generators}x{n_critics}|{cache_extra}"
+        if not skip_cache and self.cache:
+            cached = self.cache.get(prompt, system, cache_extra=council_cache_extra)
+            if cached:
+                self._stats["cache_hits"] += 1
+                logger.debug("[Council] Cache hit — returning cached council result")
+                return cached
+
+        self._stats["cache_misses"] += 1
+
+        # Generate candidates
+        candidates = self.council_generate(
+            prompt, system=system, n_generators=n_generators,
+            temperature=temperature, skip_cache=True, cache_extra=cache_extra,
+        )
+
+        # If only 1 candidate, skip critique
+        if len(candidates) == 1:
+            logger.info("[Council] Only 1 candidate — skipping critique round")
+            best = candidates[0]["response"]
+            if self.cache and not skip_cache:
+                self.cache.put(prompt, best, provider=candidates[0]["provider"],
+                               model=candidates[0]["model"], system=system,
+                               cache_extra=council_cache_extra)
+            self._log_quality({
+                "task": task_description or "council_complete",
+                "generators": [{"provider": c["provider"], "model": c["model"]} for c in candidates],
+                "critiques": [],
+                "winner": {"provider": candidates[0]["provider"],
+                           "model": candidates[0]["model"], "score": None},
+            })
+            return best
+
+        # Critique and select
+        desc = task_description or "Produce a high-quality response to the given prompt."
+        result = self.council_critique(candidates, desc, n_critics=n_critics, temperature=0.2)
+
+        best = result["best_response"]
+
+        # Cache the winning response
+        if self.cache and not skip_cache:
+            self.cache.put(prompt, best, provider=result["best_provider"],
+                           model=result["best_model"], system=system,
+                           cache_extra=council_cache_extra)
+
+        # Log quality data
+        self._log_quality({
+            "task": task_description or "council_complete",
+            "generators": [{"provider": c["provider"], "model": c["model"]} for c in candidates],
+            "critiques": result["critiques"],
+            "winner": {"provider": result["best_provider"],
+                       "model": result["best_model"],
+                       "score": result["best_score"]},
+        })
+
+        return best
+
+    def consensus_score(
+        self,
+        prompt: str,
+        system: str = "",
+        n_scorers: int = 3,
+        temperature: float = 0.2,
+    ) -> Dict[str, Any]:
+        """Send a scoring prompt to N models and average their numeric outputs.
+
+        Designed for job matching — each scorer returns JSON with ``ats_score``,
+        ``hiring_manager_score``, and ``tech_recruiter_score`` fields.  We average
+        across scorers for a more robust evaluation.
+
+        Returns a dict with averaged scores and the individual per-scorer breakdown.
+        """
+        scorers = self._select_providers(n_scorers)
+        if not scorers:
+            raise ProviderError("[Council] No providers available for scoring")
+
+        logger.info(f"[Council] Scoring with {len(scorers)} models: "
+                    f"{', '.join(f'{s.name}:{s.model}' for s in scorers)}")
+
+        individual_scores: List[Dict[str, Any]] = []
+
+        for scorer in scorers:
+            try:
+                raw = scorer.complete_with_retry(prompt, system=system, temperature=temperature)
+                self._stats["provider_calls"][scorer.name] = (
+                    self._stats["provider_calls"].get(scorer.name, 0) + 1
+                )
+
+                parsed = self._extract_scores_json(raw)
+                if parsed:
+                    individual_scores.append({
+                        "provider": scorer.name,
+                        "model": scorer.model,
+                        "ats": parsed.get("ats_score", parsed.get("ats", 0)),
+                        "hm": parsed.get("hiring_manager_score", parsed.get("hm", 0)),
+                        "tr": parsed.get("tech_recruiter_score", parsed.get("tr", 0)),
+                    })
+                    logger.info(f"[Council] Scorer {scorer.name}:{scorer.model} → "
+                                f"ATS={individual_scores[-1]['ats']}, "
+                                f"HM={individual_scores[-1]['hm']}, "
+                                f"TR={individual_scores[-1]['tr']}")
+                else:
+                    logger.warning(f"[Council] Could not parse scores from {scorer.name}:{scorer.model}")
+
+            except Exception as e:
+                logger.warning(f"[Council] Scorer {scorer.name}:{scorer.model} failed: {e}")
+                continue
+
+        if not individual_scores:
+            raise ProviderError("[Council] All scorers failed — no scores produced")
+
+        # Average across scorers
+        n = len(individual_scores)
+        avg_ats = round(sum(s["ats"] for s in individual_scores) / n)
+        avg_hm = round(sum(s["hm"] for s in individual_scores) / n)
+        avg_tr = round(sum(s["tr"] for s in individual_scores) / n)
+
+        return {
+            "ats_score": avg_ats,
+            "hiring_manager_score": avg_hm,
+            "tech_recruiter_score": avg_tr,
+            "individual_scores": individual_scores,
+        }
+
+    @staticmethod
+    def _extract_scores_json(raw: str) -> Optional[Dict[str, Any]]:
+        """Extract a JSON object containing score fields from a model response.
+
+        Handles markdown code fences, extra whitespace, and partial JSON.
+        """
+        # Strip markdown code fences
+        cleaned = re.sub(r'```(?:json)?\s*', '', raw)
+        cleaned = cleaned.strip().rstrip('`')
+
+        # Try direct parse
+        try:
+            parsed = json.loads(cleaned)
+            if isinstance(parsed, dict):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+        # Find first JSON object in text
+        match = re.search(r'\{[^{}]*\}', cleaned, re.DOTALL)
+        if match:
+            try:
+                parsed = json.loads(match.group())
+                if isinstance(parsed, dict):
+                    return parsed
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        # Try nested JSON objects (the response might have nested braces)
+        match = re.search(r'\{.*\}', cleaned, re.DOTALL)
+        if match:
+            try:
+                parsed = json.loads(match.group())
+                if isinstance(parsed, dict):
+                    return parsed
+            except (json.JSONDecodeError, ValueError):
+                pass
+
+        return None
+
+    def _log_quality(self, entry: Dict[str, Any]) -> None:
+        """Append a quality log entry to ``output/ai_quality_log.jsonl``.
+
+        Each line is a self-contained JSON object recording which models
+        generated, which critiqued, and who won.  Useful for analysing
+        provider quality over time.
+        """
+        log_path = Path("output/ai_quality_log.jsonl")
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            entry["timestamp"] = datetime.now(timezone.utc).isoformat()
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, default=str) + "\n")
+        except Exception as e:
+            logger.warning(f"[Council] Failed to write quality log: {e}")
+
     @property
     def stats(self) -> dict:
         return {**self._stats, "cache": self.cache.stats if self.cache else None,
@@ -614,7 +1087,8 @@ class AIClient:
         """Build client from config.yaml settings.
 
         Initializes providers based on available API keys.
-        Priority order: Gemini → Groq → OpenRouter → Anthropic
+        Priority order: Qwen → Groq → NVIDIA NIM → OpenRouter → DeepSeek
+        (Gemini intentionally excluded — user reserves it for other purposes.)
         """
         providers = []
         ai_cfg = config.get("ai", {})
