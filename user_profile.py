@@ -166,10 +166,34 @@ class UserProfile:
         Replaces spaces with underscores and strips any character that is not
         alphanumeric or an underscore.  Used as the prefix for generated
         resume and cover letter filenames, e.g. "Utkarsh_Singh".
+
+        Falls back to the email prefix (before @) if name is empty.
         """
-        slug = self.name.replace(" ", "_")
-        slug = re.sub(r"[^\w]", "", slug)
-        return slug or "User"
+        if self.name:
+            slug = self.name.replace(" ", "_")
+            slug = re.sub(r"[^\w]", "", slug)
+            if slug:
+                return slug
+        # Fallback: derive from email prefix
+        if self.email:
+            return self.email.split("@")[0].replace(".", "_")
+        return "User"
+
+    def to_dict(self) -> dict:
+        """Serialize to a plain dict suitable for DB storage or JSON responses."""
+        return {
+            "id": self.id,
+            "email": self.email,
+            "name": self.name,
+            "phone": self.phone,
+            "location": self.location,
+            "visa_status": self.visa_status,
+            "github": self.github,
+            "linkedin": self.linkedin,
+            "website": self.website,
+            "work_authorizations": self.work_authorizations,
+            "candidate_context": self.candidate_context,
+        }
 
 
 # ── Module-private helpers ────────────────────────────────────────────────────
