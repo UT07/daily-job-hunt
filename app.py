@@ -14,6 +14,9 @@ Exposes the pipeline's core AI modules as REST endpoints:
 - PATCH /api/dashboard/jobs/{job_id} — update a job's application status
 - GET  /api/dashboard/stats — aggregate job metrics
 - GET  /api/dashboard/runs  — pipeline run history
+- POST /api/resumes/upload — upload a PDF resume, extract text, parse sections
+- GET  /api/resumes        — list all resumes for the authenticated user
+- DELETE /api/resumes/{id} — delete a resume
 - GET  /api/templates      — list available resume templates (public)
 - GET  /api/health         — health check (public)
 
@@ -28,12 +31,13 @@ from pathlib import Path
 from typing import Optional
 
 import yaml
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from auth import AuthUser, get_current_user
+from audit_middleware import AuditMiddleware, set_db as set_audit_db
 from db_client import SupabaseClient
 
 from ai_client import AIClient
@@ -59,6 +63,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Audit trail middleware — DB reference is set in startup() via set_audit_db()
+app.add_middleware(AuditMiddleware)
 
 # Global state (initialized on startup)
 _ai_client: Optional[AIClient] = None
@@ -110,6 +117,8 @@ def startup():
     except RuntimeError:
         logger.warning("Supabase not configured — profile endpoints will fail")
         _db = None
+    # Wire up audit middleware with the DB client (no-ops gracefully if _db is None)
+    set_audit_db(_db)
     logger.info("API started — %d resumes loaded, AI client ready", len(_resumes))
 
 
@@ -522,6 +531,64 @@ def get_dashboard_runs(user: AuthUser = Depends(get_current_user)):
         return {"runs": [], "message": "Database not configured"}
 
     return {"runs": _db.get_runs(user.id)}
+
+
+# ---------------------------------------------------------------------------
+# Resume CRUD endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/resumes/upload")
+async def upload_resume(
+    file: UploadFile = File(...),
+    resume_key: str = "default",
+    label: str = "",
+    user: AuthUser = Depends(get_current_user),
+):
+    """Upload a PDF resume, extract text, parse sections, store in DB."""
+    if not _db:
+        raise HTTPException(503, "Database not configured")
+
+    contents = await file.read()
+    if len(contents) > 10 * 1024 * 1024:  # 10MB limit
+        raise HTTPException(400, "File too large (max 10MB)")
+
+    from resume_parser import extract_text_from_pdf, parse_resume_sections
+
+    text = extract_text_from_pdf(contents)
+    if not text:
+        raise HTTPException(400, "Could not extract text from PDF")
+
+    sections = parse_resume_sections(text, ai_client=_ai_client)
+
+    import json
+
+    resume_data = {
+        "resume_key": resume_key,
+        "label": label or file.filename,
+        "tex_content": text,  # Store raw text for now
+    }
+
+    result = _db.upsert_resume(user.id, resume_data)
+    return {"resume_id": result.get("id"), "sections": sections}
+
+
+@app.get("/api/resumes")
+def list_resumes(user: AuthUser = Depends(get_current_user)):
+    """List all resumes for the authenticated user."""
+    if not _db:
+        raise HTTPException(503, "Database not configured")
+    resumes = _db.get_resumes(user.id)
+    return {"resumes": resumes}
+
+
+@app.delete("/api/resumes/{resume_id}")
+def delete_resume(resume_id: str, user: AuthUser = Depends(get_current_user)):
+    """Delete a resume."""
+    if not _db:
+        raise HTTPException(503, "Database not configured")
+    _db.delete_resume(resume_id)
+    return {"status": "deleted"}
 
 
 # ---------------------------------------------------------------------------

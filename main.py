@@ -16,6 +16,7 @@ Usage:
   python main.py --config my.yaml   # Custom config
   python main.py --dry-run          # Scrape + match only, no generation
   python main.py --scrape-only      # Just scrape and show results
+  python main.py --user-id UUID     # Run for a specific Supabase user
 """
 
 from __future__ import annotations
@@ -105,6 +106,7 @@ from excel_tracker import create_or_update_tracker
 from s3_uploader import upload_artifacts, upload_tracker
 from drive_uploader import upload_artifacts as drive_upload_artifacts, upload_tracker as drive_upload_tracker
 from email_notifier import send_summary_email
+from pipeline_context import PipelineContext
 
 
 def load_config(config_path: str = "config.yaml") -> dict:
@@ -621,22 +623,42 @@ def _quick_reject(jobs: List[Job]) -> List[Job]:
     return filtered
 
 
-def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False):
-    """Execute the full pipeline."""
-    run_date = datetime.now().strftime("%Y-%m-%d")
+def run_pipeline(context: PipelineContext, dry_run: bool = False, scrape_only: bool = False):
+    """Execute the full pipeline.
+
+    Parameters
+    ----------
+    context:
+        PipelineContext wrapping user profile, resumes, search config,
+        AI client, and config dict. Created via ``PipelineContext.from_config()``
+        for single-user mode or ``PipelineContext.from_db()`` for multi-tenant.
+    dry_run:
+        If True, scrape + match only — no resume generation.
+    scrape_only:
+        If True, just scrape and dump results.
+    """
+    config = context.config
+    run_date = context.run_date or datetime.now().strftime("%Y-%m-%d")
     run_time = datetime.now().strftime("%H:%M:%S")
     print(f"\n{'='*60}")
     print(f"  JOB AUTOMATION PIPELINE — {run_date} {run_time}")
     print(f"{'='*60}\n")
 
-    # Create daily output directory
-    base_dir = Path(config["output"]["base_dir"])
-    daily_dir = base_dir / run_date
-    daily_dir.mkdir(parents=True, exist_ok=True)
-    resumes_dir = daily_dir / "resumes"
-    resumes_dir.mkdir(exist_ok=True)
-    coverletters_dir = daily_dir / "cover_letters"
-    coverletters_dir.mkdir(exist_ok=True)
+    # Record run start in DB (multi-tenant mode)
+    run_record = None
+    if context.db:
+        try:
+            from datetime import date as _date
+            run_record = context.db.start_run(context.user.id, _date.fromisoformat(run_date))
+            logger.info(f"[DB] Pipeline run {run_record['run_id']} started for user {context.user.id}")
+        except Exception as e:
+            logger.warning(f"[DB] Failed to record run start: {e}")
+
+    # Create daily output directory using context properties
+    base_dir = context.output_dir
+    daily_dir = context.daily_dir
+    resumes_dir = context.resumes_dir
+    coverletters_dir = context.coverletters_dir
 
     # --- Step 1: Initialize scrapers ---
     logger.info("Initializing scrapers...")
@@ -647,8 +669,21 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
     logger.info(f"Active scrapers: {[s.name for s in scrapers]}")
 
     # --- Step 2: Scrape jobs ---
+    # Merge user-specific search config (from DB) over config.yaml defaults
+    # so multi-tenant users can override queries, locations, and days_back.
+    scrape_config = dict(config)
+    if context.search_config:
+        merged_search = dict(config.get("search", {}))
+        if "queries" in context.search_config:
+            merged_search["queries"] = context.search_config["queries"]
+        if "locations" in context.search_config:
+            merged_search["locations"] = context.search_config["locations"]
+        if "days_back" in context.search_config:
+            merged_search["days_back"] = context.search_config["days_back"]
+        scrape_config["search"] = merged_search
+
     logger.info("Scraping jobs...")
-    raw_jobs = scrape_all_jobs(scrapers, config)
+    raw_jobs = scrape_all_jobs(scrapers, scrape_config)
     logger.info(f"Total raw results: {len(raw_jobs)}")
 
     # --- Step 3: Deduplicate (fuzzy matching) ---
@@ -681,19 +716,15 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
 
     # --- Step 4: Load resumes and match ---
     logger.info("Loading resumes and initializing AI client...")
-    resumes = load_resumes(config)
+    resumes = context.resumes
     if not resumes:
-        logger.critical("No resumes loaded. Check paths in config.yaml")
+        logger.critical("No resumes loaded. Check paths in config.yaml or user resume settings")
         sys.exit(1)
 
-    try:
-        ai_client = AIClient.from_config(config)
-    except Exception as e:
-        logger.critical(str(e))
-        sys.exit(1)
+    ai_client = context.ai_client
 
-    max_jobs = config["search"].get("max_jobs_per_run", 20)
-    min_score = config["search"].get("min_match_score", 60)
+    max_jobs = context.search_config.get("max_jobs_per_run", config["search"].get("max_jobs_per_run", 20))
+    min_score = context.search_config.get("min_match_score", config["search"].get("min_match_score", 60))
 
     # Rank by local relevance BEFORE cutoff (best jobs first)
     ranked_jobs = _rank_jobs_locally(filtered_jobs, config)
@@ -705,6 +736,7 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
         resumes=resumes,
         ai_client=ai_client,
         min_score=min_score,
+        user_profile=context.user,
     )
     logger.info(f"Matched jobs (avg >= {min_score}): {len(matched_jobs)}")
 
@@ -774,6 +806,7 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
                 job=job,
                 base_sections=base_sections,
                 ai_client=ai_client,
+                user_profile=context.user,
             )
 
             # 3. Score and improve (text mode)
@@ -797,7 +830,8 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
             safe_title = "".join(c for c in job.title if c.isalnum() or c in " _-")[:30].strip()
             safe_company = "".join(c for c in job.company if c.isalnum() or c in " _-")[:30].strip()
             date_str = datetime.now().strftime("%Y-%m-%d")
-            pdf_filename = f"Utkarsh_Singh_{safe_title}_{safe_company}_{date_str}".replace(" ", "_")
+            name_prefix = context.user.safe_filename_prefix()
+            pdf_filename = f"{name_prefix}_{safe_title}_{safe_company}_{date_str}".replace(" ", "_")
             pdf_path = str(resumes_dir / f"{pdf_filename}.pdf")
             doc_title = f"Resume – {job.title} at {job.company} ({date_str})"
 
@@ -824,6 +858,7 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
                 base_tex=base_tex,
                 ai_client=ai_client,
                 output_dir=resumes_dir,
+                user_profile=context.user,
             )
 
             # Second pass: re-score the tailored version and improve until 85+
@@ -870,6 +905,7 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
             resume_tex=resume_for_cl,
             ai_client=ai_client,
             output_dir=coverletters_dir,
+            user_profile=context.user,
         )
 
     # --- Step 8: Compile LaTeX → PDF ---
@@ -1059,6 +1095,21 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
     except Exception as e:
         logger.warning("Self-improvement analysis failed: %s", e)
 
+    # --- Record run completion in DB (multi-tenant mode) ---
+    if context.db and run_record:
+        try:
+            context.db.complete_run(run_record["run_id"], {
+                "raw_jobs": len(raw_jobs),
+                "unique_jobs": len(unique_jobs),
+                "matched_jobs": len(matched_jobs),
+                "resumes_generated": resumes_generated,
+                "cover_letters_generated": cls_generated,
+                "jobs_above_85": all_85_count,
+            })
+            logger.info(f"[DB] Pipeline run {run_record['run_id']} completed")
+        except Exception as e:
+            logger.warning(f"[DB] Failed to record run completion: {e}")
+
     # --- Step 10: Email notification ---
     gmail_addr = os.environ.get("GMAIL_ADDRESS", "")
     gmail_pass = os.environ.get("GMAIL_APP_PASSWORD", "")
@@ -1087,10 +1138,20 @@ def main():
     parser.add_argument("--config", default="config.yaml", help="Path to config file")
     parser.add_argument("--dry-run", action="store_true", help="Scrape + match only, no generation")
     parser.add_argument("--scrape-only", action="store_true", help="Just scrape and show results")
+    parser.add_argument("--user-id", help="Run pipeline for a specific user (requires Supabase)")
     args = parser.parse_args()
 
     config = load_config(args.config)
-    run_pipeline(config, dry_run=args.dry_run, scrape_only=args.scrape_only)
+
+    if args.user_id:
+        from db_client import SupabaseClient
+        db = SupabaseClient.from_env()
+        context = PipelineContext.from_db(args.user_id, db, config)
+        logger.info(f"Running pipeline for user {args.user_id} ({context.user.name})")
+    else:
+        context = PipelineContext.from_config(config)
+
+    run_pipeline(context, dry_run=args.dry_run, scrape_only=args.scrape_only)
 
 
 if __name__ == "__main__":

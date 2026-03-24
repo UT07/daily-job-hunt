@@ -7,9 +7,14 @@ The script inserts all content and applies formatting via the Google Docs API,
 then shares the docs with 254utkarsh@gmail.com.
 """
 from __future__ import annotations
+import re
 import sys
 import os
 from pathlib import Path
+from typing import Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from user_profile import UserProfile
 
 # ---------------------------------------------------------------------------
 # Credentials / service bootstrap
@@ -35,7 +40,8 @@ def _get_services():
 # Template content definitions
 # ---------------------------------------------------------------------------
 
-# Shared header info
+# ── Default (hardcoded) header info — used when no UserProfile is provided ──
+
 NAME = "Utkarsh Singh"
 CONTACT_LINE = "Dublin, Ireland | +353 892515620 | 254utkarsh@gmail.com"
 CONTACT_LINKS = [
@@ -47,6 +53,48 @@ LINKS_LINKS = [
     {"text": "linkedin.com/in/utkarshsingh2001", "url": "https://www.linkedin.com/in/utkarshsingh2001/"},
     {"text": "utworld.netlify.app", "url": "https://utworld.netlify.app"},
 ]
+
+
+def _header_from_profile(user: "UserProfile") -> dict:
+    """Derive template header values from a UserProfile.
+
+    Returns a dict with keys: name, contact_line, contact_links, links_line,
+    links_links, share_email  — matching the module-level defaults.
+    """
+    # Contact line: "Location | Phone | email"
+    contact_parts = []
+    if user.location:
+        contact_parts.append(user.location)
+    if user.phone:
+        contact_parts.append(user.phone)
+    if user.email:
+        contact_parts.append(user.email)
+    contact_line = " | ".join(contact_parts)
+
+    contact_links = []
+    if user.email:
+        contact_links.append({"text": user.email, "url": f"mailto:{user.email}"})
+
+    # Links line: "github.com/X | linkedin.com/in/Y | website"
+    link_items = []
+    link_links = []
+    for url_attr in ("github", "linkedin", "website"):
+        url = getattr(user, url_attr, "")
+        if url:
+            display = re.sub(r"https?://(www\.)?", "", url).rstrip("/")
+            link_items.append(display)
+            link_links.append({"text": display, "url": url})
+
+    links_line = " | ".join(link_items)
+
+    return {
+        "name": user.name or NAME,
+        "contact_line": contact_line or CONTACT_LINE,
+        "contact_links": contact_links or CONTACT_LINKS,
+        "links_line": links_line or LINKS_LINE,
+        "links_links": link_links or LINKS_LINKS,
+        "share_email": user.email or SHARE_EMAIL,
+    }
 
 # Per-variant config
 VARIANTS = {
@@ -137,20 +185,44 @@ CERTIFICATIONS = [
 #   bold, size, space_after, page_break – same as regular paragraphs
 
 
-def build_paragraphs(variant: str) -> list[dict]:
+def build_paragraphs(
+    variant: str,
+    user_profile: Optional["UserProfile"] = None,
+) -> list[dict]:
+    """Build the flat list of paragraph dicts for a template variant.
+
+    Parameters
+    ----------
+    user_profile:
+        Optional UserProfile. When provided, the header (name, contact,
+        links) and share email are derived from the profile instead of
+        the module-level defaults.
+    """
     v = VARIANTS[variant]
     paras = []
+
+    # Resolve header values
+    if user_profile is not None:
+        hdr = _header_from_profile(user_profile)
+    else:
+        hdr = {
+            "name": NAME,
+            "contact_line": CONTACT_LINE,
+            "contact_links": CONTACT_LINKS,
+            "links_line": LINKS_LINE,
+            "links_links": LINKS_LINKS,
+        }
 
     def p(text, **kw):
         paras.append({"text": text, **kw})
 
     # ---- HEADER ----
-    p(NAME,          align="CENTER", bold=True,  size=16, space_after=2)
+    p(hdr["name"],   align="CENTER", bold=True,  size=16, space_after=2)
     p(v["title_line"], align="CENTER", bold=False, size=11, space_after=2)
-    paras.append({"text": CONTACT_LINE, "align": "CENTER", "bold": False, "size": 10,
-                  "space_after": 2, "inline_links": CONTACT_LINKS})
-    paras.append({"text": LINKS_LINE, "align": "CENTER", "bold": False, "size": 10,
-                  "space_after": 6, "inline_links": LINKS_LINKS})
+    paras.append({"text": hdr["contact_line"], "align": "CENTER", "bold": False, "size": 10,
+                  "space_after": 2, "inline_links": hdr["contact_links"]})
+    paras.append({"text": hdr["links_line"], "align": "CENTER", "bold": False, "size": 10,
+                  "space_after": 6, "inline_links": hdr["links_links"]})
 
     # ---- SUMMARY ----
     p("Summary",       heading=True, space_before=6,  space_after=4)
@@ -235,10 +307,23 @@ FONT = "Calibri"
 MARGIN_IN = 0.7 * 72  # 0.7 inches in points
 
 
-def create_template(variant: str, docs, drive) -> tuple[str, str]:
-    """Create one template doc. Returns (doc_id, url)."""
+def create_template(
+    variant: str,
+    docs,
+    drive,
+    user_profile: Optional["UserProfile"] = None,
+) -> tuple[str, str]:
+    """Create one template doc. Returns (doc_id, url).
+
+    Parameters
+    ----------
+    user_profile:
+        Optional UserProfile. When provided, header info and share email are
+        derived from the profile. Pass ``None`` for the default single-user
+        behavior.
+    """
     v = VARIANTS[variant]
-    paragraphs = build_paragraphs(variant)
+    paragraphs = build_paragraphs(variant, user_profile=user_profile)
 
     # 1. Create blank document
     doc = docs.documents().create(body={"title": v["title"]}).execute()
@@ -328,15 +413,19 @@ def create_template(variant: str, docs, drive) -> tuple[str, str]:
         print(f"  Replaced {len(table_row_paras)} placeholders with tables")
 
     # 8. Share with user email
+    share_email = (
+        user_profile.email if user_profile is not None and user_profile.email
+        else SHARE_EMAIL
+    )
     drive.permissions().create(
         fileId=doc_id,
-        body={"type": "user", "role": "writer", "emailAddress": SHARE_EMAIL},
+        body={"type": "user", "role": "writer", "emailAddress": share_email},
         sendNotificationEmail=False,
     ).execute()
 
     file_info = drive.files().get(fileId=doc_id, fields="webViewLink").execute()
     url = file_info.get("webViewLink", f"https://docs.google.com/document/d/{doc_id}/edit")
-    print(f"  Shared with {SHARE_EMAIL}")
+    print(f"  Shared with {share_email}")
     return doc_id, url
 
 
