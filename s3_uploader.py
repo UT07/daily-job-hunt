@@ -3,9 +3,13 @@
 Uploads compiled PDF artifacts (resumes + cover letters) to S3 and returns
 presigned URLs with 30-day expiry for secure, temporary sharing.
 
-S3 structure:
+S3 structure (single-user / default):
     job-hunt/{date}/resumes/{filename}.pdf
     job-hunt/{date}/cover-letters/{filename}.pdf
+
+S3 structure (multi-tenant, when user_id is provided):
+    users/{user_id}/{date}/resumes/{filename}.pdf
+    users/{user_id}/{date}/cover-letters/{filename}.pdf
 
 Required env vars:
     AWS_ACCESS_KEY_ID
@@ -41,6 +45,18 @@ def _get_s3_client():
     )
 
 
+def _s3_prefix(run_date: str, user_id: Optional[str] = None) -> str:
+    """Return the S3 key prefix, optionally namespaced by user_id.
+
+    When ``user_id`` is provided the path becomes ``users/{user_id}/{date}``
+    for multi-tenant isolation. Otherwise the legacy ``job-hunt/{date}`` path
+    is used for backward compatibility.
+    """
+    if user_id:
+        return f"users/{user_id}/{run_date}"
+    return f"job-hunt/{run_date}"
+
+
 def upload_file(local_path: str, s3_key: str, bucket: str) -> Optional[str]:
     """Upload a single file to S3 and return a presigned URL.
 
@@ -69,30 +85,38 @@ def upload_file(local_path: str, s3_key: str, bucket: str) -> Optional[str]:
 def upload_artifacts(
     matched_jobs: List[Job],
     run_date: str,
+    user_id: Optional[str] = None,
 ) -> Dict[str, Dict[str, str]]:
     """Upload all PDF artifacts for matched jobs to S3.
 
     S3 structure organized by date and resume type for easy browsing:
-        job-hunt/{date}/{resume_type}/resumes/{filename}.pdf
-        job-hunt/{date}/{resume_type}/cover-letters/{filename}.pdf
+        {prefix}/{resume_type}/resumes/{filename}.pdf
+        {prefix}/{resume_type}/cover-letters/{filename}.pdf
 
-    Example:
+    When ``user_id`` is provided, prefix = ``users/{user_id}/{date}``.
+    Otherwise prefix = ``job-hunt/{date}`` (legacy single-user path).
+
+    Example (multi-tenant):
+        users/abc-123/2026-03-19/sre_devops/resumes/Utkarsh_Singh_SRE_RedHat_2026-03-19.pdf
+
+    Example (legacy):
         job-hunt/2026-03-19/sre_devops/resumes/Utkarsh_Singh_SRE_RedHat_2026-03-19.pdf
-        job-hunt/2026-03-19/fullstack/cover-letters/Utkarsh_Singh_FullStack_Keyrock_2026-03-19.pdf
 
     Args:
         matched_jobs: List of Job objects with tailored_pdf_path / cover_letter_pdf_path set.
         run_date: Date string (YYYY-MM-DD) for S3 path organization.
+        user_id: Optional user ID for multi-tenant path namespacing.
 
     Returns:
         Dict mapping job_id -> {"resume_url": str, "cover_letter_url": str}.
-        URLs are presigned with 30-day expiry.
+        URLs are presigned with 7-day expiry.
     """
     bucket = os.environ.get("S3_BUCKET_NAME", "")
     if not bucket:
         logger.warning("[S3] S3_BUCKET_NAME not set, skipping upload")
         return {}
 
+    prefix = _s3_prefix(run_date, user_id)
     results: Dict[str, Dict[str, str]] = {}
 
     for job in matched_jobs:
@@ -102,7 +126,7 @@ def upload_artifacts(
         # Upload resume PDF
         if job.tailored_pdf_path and Path(job.tailored_pdf_path).exists():
             filename = Path(job.tailored_pdf_path).name
-            s3_key = f"job-hunt/{run_date}/{resume_type}/resumes/{filename}"
+            s3_key = f"{prefix}/{resume_type}/resumes/{filename}"
             url = upload_file(job.tailored_pdf_path, s3_key, bucket)
             if url:
                 job_urls["resume_url"] = url
@@ -110,7 +134,7 @@ def upload_artifacts(
         # Upload cover letter PDF
         if job.cover_letter_pdf_path and Path(job.cover_letter_pdf_path).exists():
             filename = Path(job.cover_letter_pdf_path).name
-            s3_key = f"job-hunt/{run_date}/{resume_type}/cover-letters/{filename}"
+            s3_key = f"{prefix}/{resume_type}/cover-letters/{filename}"
             url = upload_file(job.cover_letter_pdf_path, s3_key, bucket)
             if url:
                 job_urls["cover_letter_url"] = url
@@ -125,27 +149,39 @@ def upload_artifacts(
     return results
 
 
-def upload_tracker(tracker_path: str, run_date: str) -> Optional[str]:
+def upload_tracker(
+    tracker_path: str,
+    run_date: str,
+    user_id: Optional[str] = None,
+) -> Optional[str]:
     """Upload the Excel tracker to S3.
 
     Keeps both a dated version and a 'latest' version for easy access.
+    When ``user_id`` is provided, paths are namespaced under ``users/{user_id}/``.
     Returns the presigned URL for the latest version.
     """
     bucket = os.environ.get("S3_BUCKET_NAME", "")
     if not bucket or not Path(tracker_path).exists():
         return None
 
+    prefix = _s3_prefix(run_date, user_id)
+    # For the 'latest' key, use the user-namespaced root if applicable
+    if user_id:
+        latest_prefix = f"users/{user_id}"
+    else:
+        latest_prefix = "job-hunt"
+
     client = _get_s3_client()
     try:
         # Upload dated version
-        dated_key = f"job-hunt/{run_date}/job_tracker_{run_date}.xlsx"
+        dated_key = f"{prefix}/job_tracker_{run_date}.xlsx"
         client.upload_file(
             tracker_path, bucket, dated_key,
             ExtraArgs={"ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
         )
 
         # Upload as 'latest' (always overwritten)
-        latest_key = "job-hunt/job_tracker_latest.xlsx"
+        latest_key = f"{latest_prefix}/job_tracker_latest.xlsx"
         client.upload_file(
             tracker_path, bucket, latest_key,
             ExtraArgs={"ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
