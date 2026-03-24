@@ -22,8 +22,11 @@ from email.mime.base import MIMEBase
 from email import encoders
 from datetime import date
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, TYPE_CHECKING
 from scrapers.base import Job
+
+if TYPE_CHECKING:
+    from user_profile import UserProfile
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +41,7 @@ def send_summary_email(
     tracker_path: str = None,
     tracker_url: str = None,
     drive_tracker_url: str = None,
+    user_profile: Optional["UserProfile"] = None,
 ) -> bool:
     """Send a daily summary email with matched jobs, assets, and Excel tracker.
 
@@ -47,14 +51,19 @@ def send_summary_email(
         unique_count: Unique jobs after dedup
         gmail_address: Gmail address to send from
         gmail_app_password: Gmail App Password (not regular password)
-        recipient: Email to send to (defaults to gmail_address)
+        recipient: Email to send to (defaults to user_profile.email or gmail_address)
         tracker_path: Local path to Excel tracker file (attached to email)
         tracker_url: S3 presigned URL for the tracker (included in email body)
         drive_tracker_url: Google Drive URL for the tracker (permanent link)
+        user_profile: Optional UserProfile. When provided and ``recipient`` is not
+            explicitly set, the email is sent to ``user_profile.email``.
 
     Returns:
         True if email sent successfully
     """
+    # Resolve recipient: explicit > user_profile.email > gmail_address
+    if not recipient and user_profile is not None and user_profile.email:
+        recipient = user_profile.email
     recipient = recipient or gmail_address
     today = date.today().isoformat()
 

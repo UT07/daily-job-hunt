@@ -11,10 +11,14 @@ import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional, TYPE_CHECKING
 from scrapers.base import Job
 from ai_client import AIClient
 from latex_compiler import _sanitize_latex
+from quality_logger import log_quality
+
+if TYPE_CHECKING:
+    from user_profile import UserProfile
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +54,16 @@ def tailor_resume(
     base_tex: str,
     ai_client: AIClient,
     output_dir: Path,
+    user_profile: Optional["UserProfile"] = None,
 ) -> str:
     """Tailor a LaTeX resume for a specific job listing.
+
+    Parameters
+    ----------
+    user_profile:
+        Optional UserProfile. When provided, the generated filename uses
+        ``user_profile.safe_filename_prefix()`` instead of the hardcoded
+        ``"Utkarsh_Singh"`` prefix.
 
     Returns the path to the tailored .tex file.
     """
@@ -125,12 +137,14 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
         safe_title = "".join(c for c in job.title if c.isalnum() or c in " _-")[:30].strip()
         safe_company = "".join(c for c in job.company if c.isalnum() or c in " _-")[:30].strip()
         date_str = datetime.now().strftime("%Y-%m-%d")
-        filename = f"Utkarsh_Singh_{safe_title}_{safe_company}_{date_str}".replace(" ", "_")
+        name_prefix = user_profile.safe_filename_prefix() if user_profile else "Utkarsh_Singh"
+        filename = f"{name_prefix}_{safe_title}_{safe_company}_{date_str}".replace(" ", "_")
         tex_path = output_dir / f"{filename}.tex"
         tex_path.write_text(tailored_tex, encoding="utf-8")
 
         job.tailored_tex_path = str(tex_path)
         logger.info(f"[TAILORED] {job.title} @ {job.company} -> {tex_path.name} by {info['provider']}:{info['model']}")
+        log_quality(task="tailor_resume", provider=info["provider"], model=info["model"], job_id=job.job_id, company=job.company, job_title=job.title)
         return str(tex_path)
 
     except Exception as e:
@@ -189,6 +203,7 @@ def tailor_resume_text(
     job: Job,
     base_sections: Dict[str, str],
     ai_client: AIClient,
+    user_profile: Optional["UserProfile"] = None,
 ) -> Dict[str, str]:
     """Tailor resume sections as plain text for Google Docs placeholder replacement.
 
@@ -202,6 +217,9 @@ def tailor_resume_text(
         each section.
     ai_client:
         Configured AIClient instance.
+    user_profile:
+        Optional UserProfile. Currently reserved for future prompt injection;
+        accepted here for API consistency with ``tailor_resume()``.
 
     Returns
     -------
@@ -271,6 +289,7 @@ Return ONLY valid JSON with the same keys. No markdown, no explanation."""
                 result[key] = base_value
 
         logger.info(f"[TAILOR TEXT] {job.title} @ {job.company} -> {len(result)} sections tailored by {info['provider']}:{info['model']}")
+        log_quality(task="tailor_text", provider=info["provider"], model=info["model"], job_id=job.job_id, company=job.company, job_title=job.title)
         return result
 
     except json.JSONDecodeError as e:

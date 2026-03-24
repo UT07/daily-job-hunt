@@ -13,14 +13,52 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import List, Dict
+from typing import List, Dict, Optional, TYPE_CHECKING
 from scrapers.base import Job
 from ai_client import AIClient
+from quality_logger import log_quality
+
+if TYPE_CHECKING:
+    from user_profile import UserProfile
 
 logger = logging.getLogger(__name__)
 
 
-MATCH_SYSTEM_PROMPT = """You are an expert job-candidate evaluator. Score how well a candidate's resume matches MULTIPLE job listings from THREE distinct perspectives.
+# ── Default (hardcoded) candidate context — used when no UserProfile is provided ──
+
+_DEFAULT_CANDIDATE_CONTEXT = """\
+- Fresh MSc Cloud Computing graduate with 2+ years of industry experience
+- Indian citizen residing in Dublin, Ireland
+- Work authorization:
+  * Ireland: Stamp 1G — eligible for full-time employment
+  * India: Indian citizen — eligible for full-time employment (remote only, based in Ireland)
+  * US: Requires visa sponsorship (H-1B/L-1) — only apply if company sponsors
+- Targeting both fresh-grad/entry-level AND mid-level roles
+- Has two resume variants: sre_devops (SRE/DevOps/Platform) and fullstack (Full-Stack/Backend)"""
+
+_DEFAULT_CANDIDATE_CONTEXT_SHORT = """\
+- Fresh MSc Cloud Computing graduate with 2+ years of industry experience
+- Indian citizen residing in Dublin, Ireland
+- Ireland: Stamp 1G (full-time eligible). India: remote only. US: needs sponsorship.
+- Two resume variants: sre_devops and fullstack
+- India roles must be remote and pay ≥₹10 LPA. US roles must sponsor visas."""
+
+_DEFAULT_CANDIDATE_INFO = """\
+- Location: Dublin, Ireland
+- Visa: Stamp 1G (eligible for full-time work in Ireland)
+- Citizenship: Indian (would need sponsorship for roles outside Ireland)
+- Target: Fresh grad roles (where experience gives an edge) and mid-level roles"""
+
+_DEFAULT_CANDIDATE_INFO_SHORT = """\
+- Location: Dublin, Ireland
+- Visa: Stamp 1G (eligible for full-time work in Ireland)
+- Citizenship: Indian (would need sponsorship for roles outside Ireland)
+- Target: Fresh grad roles and mid-level roles"""
+
+
+def _build_match_system_prompt(candidate_context: str) -> str:
+    """Build the batch-matching system prompt with the given candidate context."""
+    return f"""You are an expert job-candidate evaluator. Score how well a candidate's resume matches MULTIPLE job listings from THREE distinct perspectives.
 
 SCORING PERSPECTIVES (each 0-100):
 
@@ -43,14 +81,7 @@ SCORING PERSPECTIVES (each 0-100):
    - Red flags: Gaps, mismatches, overqualified/underqualified signals?
 
 IMPORTANT candidate context:
-- Fresh MSc Cloud Computing graduate with 2+ years of industry experience
-- Indian citizen residing in Dublin, Ireland
-- Work authorization:
-  * Ireland: Stamp 1G — eligible for full-time employment
-  * India: Indian citizen — eligible for full-time employment (remote only, based in Ireland)
-  * US: Requires visa sponsorship (H-1B/L-1) — only apply if company sponsors
-- Targeting both fresh-grad/entry-level AND mid-level roles
-- Has two resume variants: sre_devops (SRE/DevOps/Platform) and fullstack (Full-Stack/Backend)
+{candidate_context}
 
 GEOGRAPHIC SCORING RULES:
 - Ireland-based roles: No visa penalty. Score normally.
@@ -62,7 +93,7 @@ Be honest and strict. Don't inflate scores — this determines which jobs are wo
 
 Return ONLY a valid JSON array (no markdown, no code fences). One object per job, in the same order as presented:
 [
-    {
+    {{
         "job_index": 0,
         "ats_score": <0-100>,
         "hiring_manager_score": <0-100>,
@@ -72,12 +103,14 @@ Return ONLY a valid JSON array (no markdown, no code fences). One object per job
         "key_matches": ["<skill1>", ...],
         "gaps": ["<gap1>", ...],
         "tailoring_suggestions": ["<suggestion1>", ...]
-    },
+    }},
     ...
 ]"""
 
-# Fallback for single-job matching (used when batch fails)
-SINGLE_MATCH_SYSTEM_PROMPT = """You are an expert job-candidate evaluator. Score how well a candidate's resume matches a job listing from THREE distinct perspectives.
+
+def _build_single_match_system_prompt(candidate_context_short: str) -> str:
+    """Build the single-job matching system prompt with the given candidate context."""
+    return f"""You are an expert job-candidate evaluator. Score how well a candidate's resume matches a job listing from THREE distinct perspectives.
 
 SCORING PERSPECTIVES (each 0-100):
 
@@ -86,16 +119,12 @@ SCORING PERSPECTIVES (each 0-100):
 3. **Technical Recruiter Score** — required/preferred skills coverage, experience level, red flags
 
 Candidate context:
-- Fresh MSc Cloud Computing graduate with 2+ years of industry experience
-- Indian citizen residing in Dublin, Ireland
-- Ireland: Stamp 1G (full-time eligible). India: remote only. US: needs sponsorship.
-- Two resume variants: sre_devops and fullstack
-- India roles must be remote and pay ≥₹10 LPA. US roles must sponsor visas.
+{candidate_context_short}
 
 Be honest and strict.
 
 Return ONLY valid JSON (no markdown, no code fences):
-{
+{{
     "ats_score": <0-100>,
     "hiring_manager_score": <0-100>,
     "tech_recruiter_score": <0-100>,
@@ -104,7 +133,12 @@ Return ONLY valid JSON (no markdown, no code fences):
     "key_matches": ["<skill1>", ...],
     "gaps": ["<gap1>", ...],
     "tailoring_suggestions": ["<suggestion1>", ...]
-}"""
+}}"""
+
+
+# Pre-built prompts for backward compatibility (used when no UserProfile is provided)
+MATCH_SYSTEM_PROMPT = _build_match_system_prompt(_DEFAULT_CANDIDATE_CONTEXT)
+SINGLE_MATCH_SYSTEM_PROMPT = _build_single_match_system_prompt(_DEFAULT_CANDIDATE_CONTEXT_SHORT)
 
 
 def extract_json(text: str):
@@ -201,9 +235,15 @@ def _match_batch(
     ai_client: AIClient,
     min_score: int,
     batch_num: int,
+    system_prompt: str = "",
+    single_system_prompt: str = "",
+    candidate_info: str = "",
 ) -> List[Job]:
     """Score a batch of jobs in a single AI call."""
     matched = []
+    system_prompt = system_prompt or MATCH_SYSTEM_PROMPT
+    single_system_prompt = single_system_prompt or SINGLE_MATCH_SYSTEM_PROMPT
+    candidate_info = candidate_info or _DEFAULT_CANDIDATE_INFO
 
     jobs_text = "\n\n".join(
         _format_job_for_prompt(job, i) for i, job in enumerate(batch)
@@ -217,17 +257,14 @@ CANDIDATE RESUMES:
 {resume_context}
 
 CANDIDATE INFO:
-- Location: Dublin, Ireland
-- Visa: Stamp 1G (eligible for full-time work in Ireland)
-- Citizenship: Indian (would need sponsorship for roles outside Ireland)
-- Target: Fresh grad roles (where experience gives an edge) and mid-level roles
+{candidate_info}
 
 Return a JSON array with {len(batch)} objects, one per job in order."""
 
     try:
         info = ai_client.complete_with_info(
             prompt=user_prompt,
-            system=MATCH_SYSTEM_PROMPT,
+            system=system_prompt,
             temperature=0.3,
         )
         result_text = info["response"]
@@ -246,6 +283,7 @@ Return a JSON array with {len(batch)} objects, one per job in order."""
                 # Record which model did the matching
                 job.match_provider = info["provider"]
                 job.match_model = info["model"]
+                log_quality(task="match", provider=info["provider"], model=info["model"], job_id=job.job_id, company=job.company, job_title=job.title, scores={"ats_score": job.ats_score, "hiring_manager_score": job.hiring_manager_score, "tech_recruiter_score": job.tech_recruiter_score})
             else:
                 logger.warning(f"Batch {batch_num}: no result for job {i} ({job.title})")
 
@@ -253,26 +291,43 @@ Return a JSON array with {len(batch)} objects, one per job in order."""
         logger.warning(f"Batch {batch_num} JSON parse failed: {e}")
         logger.info("Falling back to single-job matching for this batch...")
         for job in batch:
-            result = _match_single(job, resume_context, ai_client)
+            result = _match_single(job, resume_context, ai_client,
+                                   system_prompt=single_system_prompt,
+                                   candidate_info=candidate_info)
             if result and _apply_scores(job, result, min_score):
                 matched.append(job)
+            if job.match_provider:
+                log_quality(task="match", provider=job.match_provider, model=job.match_model, job_id=job.job_id, company=job.company, job_title=job.title, scores={"ats_score": job.ats_score, "hiring_manager_score": job.hiring_manager_score, "tech_recruiter_score": job.tech_recruiter_score})
 
     except Exception as e:
         logger.error(f"Batch {batch_num} failed: {e}")
         # Fallback to single matching
         for job in batch:
             try:
-                result = _match_single(job, resume_context, ai_client)
+                result = _match_single(job, resume_context, ai_client,
+                                       system_prompt=single_system_prompt,
+                                       candidate_info=candidate_info)
                 if result and _apply_scores(job, result, min_score):
                     matched.append(job)
+                if job.match_provider:
+                    log_quality(task="match", provider=job.match_provider, model=job.match_model, job_id=job.job_id, company=job.company, job_title=job.title, scores={"ats_score": job.ats_score, "hiring_manager_score": job.hiring_manager_score, "tech_recruiter_score": job.tech_recruiter_score})
             except Exception as inner_e:
                 logger.error(f"Single match failed for {job.title}: {inner_e}")
 
     return matched
 
 
-def _match_single(job: Job, resume_context: str, ai_client: AIClient) -> dict | None:
+def _match_single(
+    job: Job,
+    resume_context: str,
+    ai_client: AIClient,
+    system_prompt: str = "",
+    candidate_info: str = "",
+) -> dict | None:
     """Score a single job (fallback when batch fails)."""
+    system_prompt = system_prompt or SINGLE_MATCH_SYSTEM_PROMPT
+    candidate_info = candidate_info or _DEFAULT_CANDIDATE_INFO_SHORT
+
     desc = job.description[:4000] if job.description else "(No description available)"
     user_prompt = f"""Evaluate this job match from all 3 perspectives:
 
@@ -291,15 +346,12 @@ CANDIDATE RESUMES:
 {resume_context}
 
 CANDIDATE INFO:
-- Location: Dublin, Ireland
-- Visa: Stamp 1G (eligible for full-time work in Ireland)
-- Citizenship: Indian (would need sponsorship for roles outside Ireland)
-- Target: Fresh grad roles and mid-level roles"""
+{candidate_info}"""
 
     try:
         info = ai_client.complete_with_info(
             prompt=user_prompt,
-            system=SINGLE_MATCH_SYSTEM_PROMPT,
+            system=system_prompt,
             temperature=0.3,
         )
         result = extract_json(info["response"])
@@ -318,14 +370,33 @@ def match_jobs(
     ai_client: AIClient,
     min_score: int = 60,
     batch_size: int = 5,
+    user_profile: Optional["UserProfile"] = None,
 ) -> List[Job]:
     """Score and filter jobs using 3-perspective evaluation.
 
     Jobs are processed in batches of `batch_size` to reduce API calls.
     A job passes if the AVERAGE of (ATS, HM, TR) meets min_score.
     Returns matched jobs sorted by average score descending.
+
+    Parameters
+    ----------
+    user_profile:
+        Optional UserProfile instance. When provided, the candidate context
+        in AI prompts is derived from the profile instead of using hardcoded
+        defaults. Pass ``None`` to preserve the original single-user behavior.
     """
     matched_jobs = []
+
+    # Build prompts — use user profile when available, else fall back to hardcoded defaults
+    if user_profile is not None:
+        candidate_ctx = user_profile.to_candidate_context()
+        system_prompt = _build_match_system_prompt(candidate_ctx)
+        single_system_prompt = _build_single_match_system_prompt(candidate_ctx)
+        candidate_info = candidate_ctx  # reuse for inline CANDIDATE INFO block
+    else:
+        system_prompt = MATCH_SYSTEM_PROMPT
+        single_system_prompt = SINGLE_MATCH_SYSTEM_PROMPT
+        candidate_info = _DEFAULT_CANDIDATE_INFO
 
     # Combine resumes into context
     resume_context = ""
@@ -340,7 +411,12 @@ def match_jobs(
         batch = jobs[start:end]
 
         logger.info(f"[Batch {batch_num + 1}/{total_batches}] Matching {len(batch)} jobs...")
-        batch_matches = _match_batch(batch, resume_context, ai_client, min_score, batch_num + 1)
+        batch_matches = _match_batch(
+            batch, resume_context, ai_client, min_score, batch_num + 1,
+            system_prompt=system_prompt,
+            single_system_prompt=single_system_prompt,
+            candidate_info=candidate_info,
+        )
         matched_jobs.extend(batch_matches)
 
     matched_jobs.sort(key=lambda j: j.match_score, reverse=True)
