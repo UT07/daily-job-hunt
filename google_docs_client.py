@@ -7,8 +7,9 @@ in Google Docs so the user can make changes before applying.
 from __future__ import annotations
 import logging
 import os
+import re
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,113 @@ def share_doc(doc_id: str, email: str,
     return link
 
 
+def format_resume_doc(doc_id: str,
+                      credentials_path: str = "google_credentials.json"):
+    """Apply formatting to a resume doc after placeholder replacement.
+
+    Fixes formatting lost by replaceAllText:
+    - Bold skill category names (e.g., "Cloud & Infrastructure:")
+    - Bold project titles (e.g., "Cloud-Native Monitoring Platform")
+    - Make URLs clickable with styled hyperlinks
+    """
+    docs, _ = _get_services(credentials_path)
+
+    # Re-read the document to get current content and character indices
+    doc = docs.documents().get(documentId=doc_id).execute()
+    body = doc.get("body", {}).get("content", [])
+
+    requests: List[dict] = []
+
+    for element in body:
+        if "paragraph" not in element:
+            continue
+        para = element["paragraph"]
+
+        # Reconstruct full paragraph text and its start index
+        text = ""
+        for elem in para.get("elements", []):
+            if "textRun" in elem:
+                text += elem["textRun"].get("content", "")
+
+        start_index = element.get("startIndex", 0)
+
+        # 1. Bold skill category names — lines like "Category Name: item1, item2"
+        #    Pattern: starts with capitalized word(s), may include &/-, followed by ":"
+        skill_match = re.match(r'^([A-Z][A-Za-z &/\-]+):\s', text)
+        if skill_match:
+            cat_text = skill_match.group(1) + ":"
+            requests.append({
+                "updateTextStyle": {
+                    "range": {
+                        "startIndex": start_index,
+                        "endIndex": start_index + len(cat_text),
+                    },
+                    "textStyle": {"bold": True},
+                    "fields": "bold",
+                }
+            })
+
+        # 2. Bold project titles — lines containing a parenthesised URL,
+        #    e.g., "Cloud-Native Monitoring Platform (github.com/...)"
+        project_match = re.match(r'^(.+?)\s*\((?:https?://)?[a-z0-9]', text)
+        if project_match and not skill_match:
+            title_text = project_match.group(1)
+            # Only bold if the title portion is reasonably short (< 80 chars)
+            # to avoid false positives on long prose lines
+            if len(title_text) < 80:
+                requests.append({
+                    "updateTextStyle": {
+                        "range": {
+                            "startIndex": start_index,
+                            "endIndex": start_index + len(title_text),
+                        },
+                        "textStyle": {"bold": True},
+                        "fields": "bold",
+                    }
+                })
+
+        # 3. Make URLs clickable
+        for url_match in re.finditer(r'https?://[^\s\)\]>]+', text):
+            url = url_match.group()
+            url_start = start_index + url_match.start()
+            url_end = start_index + url_match.end()
+            requests.append({
+                "updateTextStyle": {
+                    "range": {
+                        "startIndex": url_start,
+                        "endIndex": url_end,
+                    },
+                    "textStyle": {
+                        "link": {"url": url},
+                        "foregroundColor": {
+                            "color": {
+                                "rgbColor": {
+                                    "red": 0.02,
+                                    "green": 0.35,
+                                    "blue": 0.75,
+                                }
+                            }
+                        },
+                        "underline": True,
+                    },
+                    "fields": "link,foregroundColor,underline",
+                }
+            })
+
+    if requests:
+        # Batch update in chunks of 100 to stay within API limits
+        chunk_size = 100
+        for i in range(0, len(requests), chunk_size):
+            chunk = requests[i:i + chunk_size]
+            docs.documents().batchUpdate(
+                documentId=doc_id,
+                body={"requests": chunk},
+            ).execute()
+        logger.info(f"[GDOCS] Applied {len(requests)} formatting fixes to {doc_id}")
+    else:
+        logger.info(f"[GDOCS] No formatting fixes needed for {doc_id}")
+
+
 def create_resume_doc(
     template_doc_id: str,
     replacements: Dict[str, str],
@@ -147,6 +255,7 @@ def create_resume_doc(
     """
     doc_id = clone_template(template_doc_id, title, credentials_path)
     replace_placeholders(doc_id, replacements, credentials_path)
+    format_resume_doc(doc_id, credentials_path)
     pdf_path = export_pdf(doc_id, output_pdf_path, credentials_path)
 
     doc_url = ""
