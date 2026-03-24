@@ -30,6 +30,18 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+# Load .env file if present (for local development)
+_env_path = Path(__file__).parent / ".env"
+if _env_path.exists():
+    with open(_env_path) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _key, _, _val = _line.partition("=")
+                _val = _val.strip().strip("'\"")
+                if _key.strip() and _val:
+                    os.environ.setdefault(_key.strip(), _val)
+
 import yaml
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -111,7 +123,11 @@ def startup():
     global _ai_client, _config, _resumes, _db
     _config = _load_config()
     _resumes = _load_resumes(_config)
-    _ai_client = AIClient.from_config(_config)
+    try:
+        _ai_client = AIClient.from_config(_config)
+    except Exception as e:
+        logger.warning("AI client init failed (endpoints needing AI will fail): %s", e)
+        _ai_client = None
     try:
         _db = SupabaseClient.from_env()
     except RuntimeError:
