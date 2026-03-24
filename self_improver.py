@@ -273,6 +273,78 @@ def _analyze_keyword_gaps(matched_jobs: list, report: dict):
         report["findings"].append(f"Most requested skills across matched JDs: {kw_list}")
 
 
+def analyze_model_quality(report: dict):
+    """Analyze AI model quality from the quality log and generate model rankings.
+
+    Reads output/ai_quality_log.jsonl, computes per-model stats, and:
+    1. Adds model rankings to the report
+    2. Generates output/preferred_models.json for ai_client.py to read
+    """
+    from quality_logger import get_model_stats
+
+    stats = get_model_stats()
+    if not stats:
+        report["findings"].append("No AI quality data found — run the pipeline first to generate quality metrics.")
+        return
+
+    # Rank by average score (descending)
+    ranked = sorted(stats.items(), key=lambda x: x[1]["avg_score"], reverse=True)
+
+    report["stats"]["model_rankings"] = [
+        {
+            "model": key,
+            "avg_score": s["avg_score"],
+            "count": s["count"],
+            "errors": s["errors"],
+            "tasks": s["tasks"],
+        }
+        for key, s in ranked
+    ]
+
+    # Generate findings
+    if ranked:
+        best = ranked[0]
+        worst = ranked[-1]
+        report["findings"].append(
+            f"Best performing model: {best[0]} (avg score {best[1]['avg_score']}, {best[1]['count']} artifacts)"
+        )
+        if worst[1]["avg_score"] < 60 and worst[1]["count"] >= 3:
+            report["findings"].append(
+                f"Underperforming model: {worst[0]} (avg score {worst[1]['avg_score']}) — consider removing from council"
+            )
+
+    # Models with high error rates
+    for key, s in stats.items():
+        if s["count"] > 0 and s["errors"] / s["count"] > 0.3:
+            report["findings"].append(
+                f"Model {key} has {s['errors']}/{s['count']} errors ({s['errors']/s['count']:.0%}) — unreliable"
+            )
+
+    # Generate preferred_models.json
+    # This file ranks model identifiers by quality so ai_client.py can reorder its provider chain
+    preferred = {
+        "generated_at": datetime.now().isoformat(),
+        "rankings": [
+            {"provider_model": key, "avg_score": s["avg_score"], "sample_count": s["count"]}
+            for key, s in ranked
+            if s["count"] >= 2  # Need at least 2 samples to rank
+        ],
+        "blacklist": [
+            key for key, s in stats.items()
+            if s["count"] >= 3 and (s["avg_score"] < 40 or s["errors"] / max(s["count"], 1) > 0.5)
+        ],
+    }
+
+    preferred_path = Path("output/preferred_models.json")
+    preferred_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(preferred_path, "w") as f:
+        json.dump(preferred, f, indent=2)
+
+    logger.info(f"[SELF-IMPROVE] Model rankings saved to {preferred_path}")
+    if preferred["blacklist"]:
+        logger.warning(f"[SELF-IMPROVE] Blacklisted models: {preferred['blacklist']}")
+
+
 def generate_improvement_suggestions(report: dict, ai_client=None) -> list[str]:
     """Use AI to generate specific improvement suggestions based on the analysis report.
 
@@ -353,6 +425,7 @@ def run_self_improvement(output_dir: str = "output", config_path: str = "config.
     logger.info("Starting self-improvement analysis...")
 
     report = analyze_run_results(output_dir)
+    analyze_model_quality(report)
 
     if not report["findings"]:
         report["findings"].append("No issues detected. Pipeline is healthy.")
