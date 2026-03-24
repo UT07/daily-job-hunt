@@ -142,6 +142,21 @@ class ResponseCache:
             return row[0]
         return None
 
+    def get_with_info(self, prompt: str, system: str = "", cache_extra: str = "") -> Optional[dict]:
+        """Like get() but returns provider/model info alongside the response.
+
+        Returns: {"response": str, "provider": str, "model": str} or None.
+        """
+        key = self._make_key(prompt, system, cache_extra)
+        cutoff = time.time() - self.ttl_seconds
+        row = self._conn.execute(
+            "SELECT response, provider, model FROM cache WHERE key = ? AND created_at > ?",
+            (key, cutoff),
+        ).fetchone()
+        if row:
+            return {"response": row[0], "provider": row[1] or "", "model": row[2] or ""}
+        return None
+
     def put(self, prompt: str, response: str, provider: str = "", model: str = "", system: str = "", cache_extra: str = ""):
         key = self._make_key(prompt, system, cache_extra)
         self._conn.execute(
@@ -599,6 +614,70 @@ class AIClient:
                 continue
             except _req.HTTPError as e:
                 # Detect permanent failures (402 payment required, 404 model not found, etc.)
+                status = e.response.status_code if hasattr(e, 'response') and e.response else 0
+                if status in self._DEAD_CODES:
+                    key = (provider.name, provider.model)
+                    self._dead_providers.add(key)
+                    logger.warning(f"[AI] {provider.name}:{provider.model} permanently failed ({status}) — removed from council")
+                else:
+                    logger.warning(f"[AI] {provider.name} error: {e} — trying next provider...")
+                last_error = e
+                continue
+            except Exception as e:
+                logger.warning(f"[AI] {provider.name} error: {e} — trying next provider...")
+                last_error = e
+                continue
+
+        raise ProviderError(f"All providers exhausted. Last error: {last_error}")
+
+    def complete_with_info(self, prompt: str, system: str = "", temperature: float = None,
+                           skip_cache: bool = False, cache_extra: str = "") -> dict:
+        """Like complete() but returns provider/model info alongside the response.
+
+        Returns: {"response": str, "provider": str, "model": str}
+        """
+
+        # Check cache first (with provider/model info)
+        if not skip_cache and self.cache:
+            cached = self.cache.get_with_info(prompt, system, cache_extra=cache_extra)
+            if cached:
+                self._stats["cache_hits"] += 1
+                return cached
+
+        self._stats["cache_misses"] += 1
+        last_error = None
+        import requests as _req
+
+        alive_providers = [
+            p for p in self.providers
+            if (p.name, p.model) not in self._dead_providers
+        ]
+        if not alive_providers:
+            logger.warning("[AI] All providers marked dead — resetting health status")
+            self._dead_providers.clear()
+            alive_providers = self.providers
+
+        for i, provider in enumerate(alive_providers):
+            try:
+                if i > 0:
+                    self._stats["failovers"] += 1
+                    logger.info(f"[AI] Failing over to {provider.name} ({provider.model})")
+
+                response = provider.complete_with_retry(prompt, system=system, temperature=temperature)
+
+                # Cache the response
+                if self.cache and not skip_cache:
+                    self.cache.put(prompt, response, provider=provider.name,
+                                   model=provider.model, system=system, cache_extra=cache_extra)
+
+                self._stats["provider_calls"][provider.name] = self._stats["provider_calls"].get(provider.name, 0) + 1
+                return {"response": response, "provider": provider.name, "model": provider.model}
+
+            except RateLimitError as e:
+                logger.warning(f"[AI] {e} — trying next provider...")
+                last_error = e
+                continue
+            except _req.HTTPError as e:
                 status = e.response.status_code if hasattr(e, 'response') and e.response else 0
                 if status in self._DEAD_CODES:
                     key = (provider.name, provider.model)

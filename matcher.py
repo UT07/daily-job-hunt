@@ -225,11 +225,12 @@ CANDIDATE INFO:
 Return a JSON array with {len(batch)} objects, one per job in order."""
 
     try:
-        result_text = ai_client.complete(
+        info = ai_client.complete_with_info(
             prompt=user_prompt,
             system=MATCH_SYSTEM_PROMPT,
             temperature=0.3,
         )
+        result_text = info["response"]
 
         results = extract_json(result_text)
 
@@ -242,6 +243,9 @@ Return a JSON array with {len(batch)} objects, one per job in order."""
                 result = results[i]
                 if _apply_scores(job, result, min_score):
                     matched.append(job)
+                # Record which model did the matching
+                job.match_provider = info["provider"]
+                job.match_model = info["model"]
             else:
                 logger.warning(f"Batch {batch_num}: no result for job {i} ({job.title})")
 
@@ -293,12 +297,16 @@ CANDIDATE INFO:
 - Target: Fresh grad roles and mid-level roles"""
 
     try:
-        result_text = ai_client.complete(
+        info = ai_client.complete_with_info(
             prompt=user_prompt,
             system=SINGLE_MATCH_SYSTEM_PROMPT,
             temperature=0.3,
         )
-        return extract_json(result_text)
+        result = extract_json(info["response"])
+        # Record which model did the matching
+        job.match_provider = info["provider"]
+        job.match_model = info["model"]
+        return result
     except Exception as e:
         logger.error(f"Failed to match {job.title}: {e}")
         return None

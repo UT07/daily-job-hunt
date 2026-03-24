@@ -57,6 +57,14 @@ class Job:
     resume_doc_url: str = ""
     cover_letter_doc_url: str = ""
 
+    # AI provenance — which model generated each artifact
+    match_provider: str = ""
+    match_model: str = ""
+    tailoring_provider: str = ""
+    tailoring_model: str = ""
+    cover_letter_provider: str = ""
+    cover_letter_model: str = ""
+
     # LinkedIn contacts for networking
     linkedin_contacts: str = ""  # JSON string of contacts list
 

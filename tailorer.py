@@ -89,13 +89,15 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
         # base resume always produces a fresh tailoring result, even if the rest
         # of the prompt text happens to be identical.
         resume_hash = hashlib.md5(base_tex.encode()).hexdigest()
-        tailored_tex = ai_client.complete(
+        info = ai_client.complete_with_info(
             prompt=user_prompt,
             system=TAILOR_SYSTEM_PROMPT,
             temperature=0.3,
             cache_extra=resume_hash,
         )
-        tailored_tex = tailored_tex.strip()
+        tailored_tex = info["response"].strip()
+        job.tailoring_provider = info["provider"]
+        job.tailoring_model = info["model"]
 
         # Strip markdown code fences if present
         if tailored_tex.startswith("```"):
@@ -128,7 +130,7 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
         tex_path.write_text(tailored_tex, encoding="utf-8")
 
         job.tailored_tex_path = str(tex_path)
-        logger.info(f"[TAILORED] {job.title} @ {job.company} -> {tex_path.name}")
+        logger.info(f"[TAILORED] {job.title} @ {job.company} -> {tex_path.name} by {info['provider']}:{info['model']}")
         return str(tex_path)
 
     except Exception as e:
@@ -239,13 +241,15 @@ Return ONLY valid JSON with the same keys. No markdown, no explanation."""
 
     try:
         sections_hash = hashlib.md5(sections_json.encode()).hexdigest()
-        raw_response = ai_client.complete(
+        info = ai_client.complete_with_info(
             prompt=user_prompt,
             system=TAILOR_TEXT_SYSTEM_PROMPT,
             temperature=0.3,
             cache_extra=sections_hash,
         )
-        raw_response = raw_response.strip()
+        raw_response = info["response"].strip()
+        job.tailoring_provider = info["provider"]
+        job.tailoring_model = info["model"]
 
         # Strip markdown code fences if present
         if raw_response.startswith("```"):
@@ -266,7 +270,7 @@ Return ONLY valid JSON with the same keys. No markdown, no explanation."""
                 )
                 result[key] = base_value
 
-        logger.info(f"[TAILOR TEXT] {job.title} @ {job.company} -> {len(result)} sections tailored")
+        logger.info(f"[TAILOR TEXT] {job.title} @ {job.company} -> {len(result)} sections tailored by {info['provider']}:{info['model']}")
         return result
 
     except json.JSONDecodeError as e:

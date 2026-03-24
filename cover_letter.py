@@ -108,13 +108,15 @@ Do NOT include the header, date, salutation, or closing — I'll add those from 
 Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
 
     try:
-        body_text = ai_client.complete(
+        info = ai_client.complete_with_info(
             prompt=user_prompt,
             system=COVER_LETTER_SYSTEM_PROMPT,
             temperature=0.7,
             skip_cache=True,  # Cover letters should be unique each time
         )
-        body_text = body_text.strip()
+        body_text = info["response"].strip()
+        job.cover_letter_provider = info["provider"]
+        job.cover_letter_model = info["model"]
 
         # Escape LaTeX special characters in the body
         body_text = body_text.replace("&", r"\&")
@@ -140,7 +142,7 @@ Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
         tex_path.write_text(full_tex, encoding="utf-8")
 
         job.cover_letter_tex_path = str(tex_path)
-        logger.info(f"[COVER LETTER] {job.title} @ {job.company} -> {tex_path.name}")
+        logger.info(f"[COVER LETTER] {job.title} @ {job.company} -> {tex_path.name} by {info['provider']}:{info['model']}")
         return str(tex_path)
 
     except Exception as e:
@@ -192,13 +194,15 @@ Do NOT include the header, date, salutation, or closing — I'll add those from 
 Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
 
     try:
-        body_text = ai_client.complete(
+        info = ai_client.complete_with_info(
             prompt=user_prompt,
             system=COVER_LETTER_SYSTEM_PROMPT,
             temperature=0.7,
             skip_cache=True,  # Cover letters should be unique each time
         )
-        body_text = body_text.strip()
+        body_text = info["response"].strip()
+        job.cover_letter_provider = info["provider"]
+        job.cover_letter_model = info["model"]
 
         # Build output PDF path
         safe_title = "".join(c for c in job.title if c.isalnum() or c in " _-")[:30].strip()
@@ -225,7 +229,7 @@ Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
             credentials_path=credentials_path,
         )
 
-        logger.info(f"[COVER LETTER DOC] {job.title} @ {job.company} -> {result['doc_id']}")
+        logger.info(f"[COVER LETTER DOC] {job.title} @ {job.company} -> {result['doc_id']} by {info['provider']}:{info['model']}")
         return result
 
     except Exception as e:
