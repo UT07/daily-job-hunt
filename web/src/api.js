@@ -86,6 +86,32 @@ export async function apiUpload(endpoint, file) {
   return res.json();
 }
 
+export async function apiDelete(endpoint) {
+  const headers = await authHeaders()
+  const res = await fetch(`${API_BASE}${endpoint}`, {
+    method: 'DELETE',
+    headers,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+export async function apiGetBlob(endpoint) {
+  const headers = await authHeaders()
+  const res = await fetch(`${API_BASE}${endpoint}`, {
+    method: 'GET',
+    headers,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || `HTTP ${res.status}`);
+  }
+  return res.blob();
+}
+
 export async function healthCheck() {
   const res = await fetch(`${API_BASE}/api/health`);
   return res.json();

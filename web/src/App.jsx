@@ -4,12 +4,15 @@ import AuthProvider from './auth/AuthProvider';
 import { useAuth } from './auth/useAuth';
 import LoginPage from './pages/LoginPage';
 import Dashboard from './pages/Dashboard';
+import Privacy from './pages/Privacy';
+import DataExport from './pages/DataExport';
 import { apiCall } from './api';
 import ScoreCard from './components/ScoreCard';
 import TailorCard from './components/TailorCard';
 import CoverLetterCard from './components/CoverLetterCard';
 import ContactsCard from './components/ContactsCard';
 import ErrorBanner from './components/ErrorBanner';
+import ConsentBanner from './components/ConsentBanner';
 
 function ActionButton({ onClick, loading, color, children }) {
   const colors = {
@@ -200,10 +203,15 @@ function AppContent() {
 
       {/* Footer */}
       <footer className="border-t border-gray-200 mt-12">
-        <div className="max-w-4xl mx-auto px-4 py-4 text-center text-xs text-gray-400">
-          Built by Utkarsh Singh — FastAPI + React + Tailwind
+        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-center gap-4 text-xs text-gray-400">
+          <span>Built by Utkarsh Singh — FastAPI + React + Tailwind</span>
+          <span className="text-gray-300">|</span>
+          <Link to="/privacy" className="hover:text-gray-600 transition">Privacy</Link>
+          <Link to="/data-export" className="hover:text-gray-600 transition">Export Data</Link>
         </div>
       </footer>
+
+      <ConsentBanner />
     </div>
   );
 }
@@ -215,6 +223,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<AppContent />} />
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/privacy" element={<Privacy />} />
+          <Route path="/data-export" element={<DataExport />} />
         </Routes>
       </AuthProvider>
     </BrowserRouter>
