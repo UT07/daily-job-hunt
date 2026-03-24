@@ -129,6 +129,12 @@ CERTIFICATIONS = [
 #   page_break  – True → insert a page break before this paragraph
 #   space_before– pt spacing before paragraph
 #   space_after – pt spacing after paragraph
+#
+# For right-aligned date headers, use table_row instead of text:
+#   table_row   – True → rendered as a 1×2 borderless table
+#   left        – left cell text (left-aligned)
+#   right       – right cell text (right-aligned)
+#   bold, size, space_after, page_break – same as regular paragraphs
 
 
 def build_paragraphs(variant: str) -> list[dict]:
@@ -158,14 +164,22 @@ def build_paragraphs(variant: str) -> list[dict]:
     p("Experience", heading=True, space_before=6, space_after=4)
 
     # Clover
-    p(f"Clover IT Services — New York, NY (Remote)\tJun 2022 – Jul 2024",
-      bold=True, size=11, space_after=1)
+    paras.append({
+        "table_row": True,
+        "left": "Clover IT Services — New York, NY (Remote)",
+        "right": "Jun 2022 – Jul 2024",
+        "bold": True, "size": 11, "space_after": 1,
+    })
     p(v["clover_role"], italic=True, size=11, space_after=2)
     p("{{CLOVER_BULLETS}}", size=11, space_after=6)
 
     # PAGE BREAK before Kraken
-    p("Seattle Kraken (NHL) — Seattle, WA\tJun 2021 – May 2022",
-      bold=True, size=11, page_break=True, space_after=1)
+    paras.append({
+        "table_row": True,
+        "left": "Seattle Kraken (NHL) — Seattle, WA",
+        "right": "Jun 2021 – May 2022",
+        "bold": True, "size": 11, "page_break": True, "space_after": 1,
+    })
     p(v["kraken_role"], italic=True, size=11, space_after=2)
     p("{{KRAKEN_BULLETS}}", size=11, space_after=6)
 
@@ -180,8 +194,12 @@ def build_paragraphs(variant: str) -> list[dict]:
     p("Education", heading=True, space_before=6, space_after=4)
 
     for edu in EDUCATION_BLOCKS:
-        p(f"{edu['school']}, {edu['location']}\t{edu['dates']}",
-          bold=True, size=11, space_after=1)
+        paras.append({
+            "table_row": True,
+            "left": f"{edu['school']}, {edu['location']}",
+            "right": edu["dates"],
+            "bold": True, "size": 11, "space_after": 1,
+        })
         p(edu["degree"], bold=True, italic=True, size=11, space_after=2)
         for b in edu["bullets"]:
             p(b, bullet=True, size=11, space_after=2)
@@ -227,49 +245,35 @@ def create_template(variant: str, docs, drive) -> tuple[str, str]:
     doc_id = doc["documentId"]
     print(f"  Created doc: {doc_id}")
 
-    # 2. Build all the text as a single string, tracking char ranges
-    #    Strategy: insert text top-to-bottom, tracking current index.
-    #    After each insertion we apply formatting to that range.
-
+    # 2. Insert text paragraphs (reverse-order strategy).
+    #    For table_row paragraphs, insert a recognisable placeholder so we
+    #    can locate them later and replace with real 1x2 tables.
     requests = []
 
-    # We'll build the document via a series of insertText + format requests.
-    # Because each insertText shifts the index, we process in REVERSE order.
-    # Build the full sequence first, then reverse for insertion.
-
-    # Step A: compute the text blocks with their eventual index ranges
-    # New doc starts with one empty paragraph at index 0 (char '\n' at index 0).
-    # We insert AFTER index 0 so we keep inserting at index 1 each time
-    # (earlier text gets pushed forward).
-    # We'll insert in REVERSE order.
-
-    # Build list of segments: each is the text for one paragraph
+    # Assign each table_row a sequential placeholder tag
+    table_row_index = 0
+    table_row_paras = []  # (placeholder_tag, para_dict)
     segments = []
     for para in paragraphs:
-        text = para.get("text", "")
-        # Replace tab with spaces for right-alignment simulation via tab stop
-        # (We'll use a tab character and set a right-aligned tab stop)
-        segments.append((text, para))
-
-    # Reversed: last paragraph inserted first at index 1, earlier ones push it forward
-    # After reversing, we insert each at index 1.
-    # Final order in doc will be: first paragraph ... last paragraph
+        if para.get("table_row"):
+            tag = f"__TABLE_{table_row_index}__"
+            table_row_paras.append((tag, para))
+            table_row_index += 1
+            segments.append((tag, para))
+        else:
+            text = para.get("text", "")
+            segments.append((text, para))
 
     reversed_segments = list(reversed(segments))
 
     for text, para in reversed_segments:
         line = text + "\n"
-
-        # Insert text first (at index 1)
         requests.append({
             "insertText": {
                 "location": {"index": 1},
                 "text": line,
             }
         })
-
-        # Then insert page break at index 1 (pushes text forward,
-        # so in the final doc the break appears BEFORE this paragraph)
         if para.get("page_break"):
             requests.append({
                 "insertPageBreak": {
@@ -284,10 +288,10 @@ def create_template(variant: str, docs, drive) -> tuple[str, str]:
     ).execute()
     print(f"  Inserted text blocks")
 
-    # 4. Now apply formatting. Re-read the doc to get actual indices.
+    # 4. Re-read the doc to get actual indices.
     doc_content = docs.documents().get(documentId=doc_id).execute()
 
-    # 5. Set document margins via DocumentStyle
+    # 5. Set document margins
     margin_requests = [{
         "updateDocumentStyle": {
             "documentStyle": {
@@ -304,12 +308,10 @@ def create_template(variant: str, docs, drive) -> tuple[str, str]:
         body={"requests": margin_requests},
     ).execute()
 
-    # 6. Apply paragraph-level and text-level formatting
-    #    Walk the document paragraphs in order and match to our para list
+    # 6. Apply paragraph-level and text-level formatting (skips table_row placeholders)
     fmt_requests = _build_format_requests(doc_content, paragraphs)
 
     if fmt_requests:
-        # Split into chunks of 100 to avoid request size limits
         chunk_size = 100
         for i in range(0, len(fmt_requests), chunk_size):
             chunk = fmt_requests[i:i + chunk_size]
@@ -319,7 +321,13 @@ def create_template(variant: str, docs, drive) -> tuple[str, str]:
             ).execute()
         print(f"  Applied {len(fmt_requests)} formatting requests")
 
-    # 7. Share with user email
+    # 7. Replace placeholder paragraphs with borderless 1x2 tables.
+    #    Process in REVERSE document order so earlier indices stay valid.
+    if table_row_paras:
+        _replace_placeholders_with_tables(docs, doc_id, table_row_paras)
+        print(f"  Replaced {len(table_row_paras)} placeholders with tables")
+
+    # 8. Share with user email
     drive.permissions().create(
         fileId=doc_id,
         body={"type": "user", "role": "writer", "emailAddress": SHARE_EMAIL},
@@ -330,6 +338,299 @@ def create_template(variant: str, docs, drive) -> tuple[str, str]:
     url = file_info.get("webViewLink", f"https://docs.google.com/document/d/{doc_id}/edit")
     print(f"  Shared with {SHARE_EMAIL}")
     return doc_id, url
+
+
+# ---------------------------------------------------------------------------
+# Table insertion helpers
+# ---------------------------------------------------------------------------
+
+def _find_placeholder_paragraph(doc_content: dict, tag: str) -> dict | None:
+    """Find the paragraph element containing the placeholder tag text.
+
+    Returns the body content element (with startIndex/endIndex) or None.
+    """
+    for elem in doc_content.get("body", {}).get("content", []):
+        if "paragraph" not in elem:
+            continue
+        para = elem["paragraph"]
+        for run in para.get("elements", []):
+            if "textRun" in run:
+                if tag in run["textRun"].get("content", ""):
+                    return elem
+    return None
+
+
+def _find_table_at(doc_content: dict, start_index: int) -> dict | None:
+    """Find the table element whose startIndex matches the given index."""
+    for elem in doc_content.get("body", {}).get("content", []):
+        if "table" in elem and elem.get("startIndex") == start_index:
+            return elem
+    return None
+
+
+_INVISIBLE_BORDER = {
+    "width": {"magnitude": 0, "unit": "PT"},
+    "dashStyle": "SOLID",
+    "color": {"color": {"rgbColor": {"red": 1, "green": 1, "blue": 1}}},
+}
+
+
+def _replace_placeholders_with_tables(docs, doc_id: str,
+                                       table_row_paras: list[tuple[str, dict]]):
+    """Replace placeholder paragraphs with formatted 1x2 borderless tables.
+
+    Each placeholder is processed individually (requires re-reading the doc
+    after each structural change).  We process in reverse document order so
+    that earlier indices remain stable.
+    """
+    # First, locate all placeholders and record their startIndex so we can
+    # sort in reverse order.
+    doc_content = docs.documents().get(documentId=doc_id).execute()
+
+    placeholder_positions = []  # (start_index, tag, para_dict)
+    for tag, para in table_row_paras:
+        elem = _find_placeholder_paragraph(doc_content, tag)
+        if elem:
+            placeholder_positions.append((elem["startIndex"], tag, para))
+
+    # Sort by start_index descending so we process from bottom to top
+    placeholder_positions.sort(key=lambda x: x[0], reverse=True)
+
+    for _, tag, para in placeholder_positions:
+        # Re-read doc each time (indices shift after each table insertion)
+        doc_content = docs.documents().get(documentId=doc_id).execute()
+        elem = _find_placeholder_paragraph(doc_content, tag)
+        if not elem:
+            print(f"    Warning: placeholder {tag} not found, skipping")
+            continue
+
+        para_start = elem["startIndex"]
+        para_end = elem["endIndex"]
+
+        # Step 1: Delete the placeholder paragraph content.
+        # We delete from para_start to para_end (includes trailing newline).
+        # But we must keep at least one paragraph in the doc, and we can't
+        # delete the very last newline.  Deleting the range [start, end-1]
+        # removes the text but leaves the empty paragraph; then the table
+        # insertion at that index will replace it.
+        delete_requests = [{
+            "deleteContentRange": {
+                "range": {"startIndex": para_start, "endIndex": para_end},
+            }
+        }]
+        docs.documents().batchUpdate(
+            documentId=doc_id,
+            body={"requests": delete_requests},
+        ).execute()
+
+        # Step 2: Insert a 1-row, 2-column table at the former paragraph position.
+        insert_requests = [{
+            "insertTable": {
+                "rows": 1,
+                "columns": 2,
+                "location": {"index": para_start},
+            }
+        }]
+        docs.documents().batchUpdate(
+            documentId=doc_id,
+            body={"requests": insert_requests},
+        ).execute()
+
+        # Step 3: Re-read doc to discover cell indices inside the new table.
+        doc_content = docs.documents().get(documentId=doc_id).execute()
+        table_elem = _find_table_at(doc_content, para_start)
+        if not table_elem:
+            print(f"    Warning: table not found at index {para_start} for {tag}")
+            continue
+
+        _fill_and_format_table(docs, doc_id, table_elem, para)
+
+
+def _fill_and_format_table(docs, doc_id: str, table_elem: dict, para: dict):
+    """Insert text into cells, apply formatting, and hide borders."""
+    table = table_elem["table"]
+    table_start = table_elem["startIndex"]
+    table_end = table_elem["endIndex"]
+
+    left_text = para["left"]
+    right_text = para["right"]
+    bold = para.get("bold", False)
+    size_pt = para.get("size", 11)
+    space_after = para.get("space_after", 0)
+
+    # Navigate table structure: table -> tableRows[0] -> tableCells[0,1]
+    row = table["tableRows"][0]
+    cell_left = row["tableCells"][0]
+    cell_right = row["tableCells"][1]
+
+    # Each cell contains at least one paragraph with a trailing \n.
+    # The paragraph's first element startIndex is where we insert text.
+    left_para = cell_left["content"][0]["paragraph"]
+    right_para = cell_right["content"][0]["paragraph"]
+
+    # Insert at the start of each cell's paragraph (before the existing \n)
+    left_insert_idx = left_para["elements"][0]["startIndex"]
+    right_insert_idx = right_para["elements"][0]["startIndex"]
+
+    requests = []
+
+    # Insert text into cells (right cell first so left indices stay valid,
+    # since right cell comes later in the document)
+    requests.append({
+        "insertText": {
+            "location": {"index": right_insert_idx},
+            "text": right_text,
+        }
+    })
+    requests.append({
+        "insertText": {
+            "location": {"index": left_insert_idx},
+            "text": left_text,
+        }
+    })
+
+    docs.documents().batchUpdate(
+        documentId=doc_id,
+        body={"requests": requests},
+    ).execute()
+
+    # Re-read to get updated indices after text insertion
+    doc_content = docs.documents().get(documentId=doc_id).execute()
+    table_elem = _find_table_at(doc_content, table_start)
+    if not table_elem:
+        return
+
+    table = table_elem["table"]
+    row = table["tableRows"][0]
+    cell_left = row["tableCells"][0]
+    cell_right = row["tableCells"][1]
+    left_para = cell_left["content"][0]["paragraph"]
+    right_para = cell_right["content"][0]["paragraph"]
+
+    # Compute ranges for text styling (exclude trailing \n)
+    left_start = left_para["elements"][0]["startIndex"]
+    left_end = left_start + len(left_text)
+    right_start = right_para["elements"][0]["startIndex"]
+    right_end = right_start + len(right_text)
+
+    fmt_requests = []
+
+    # Text style: bold, font, size for left cell
+    fmt_requests.append({
+        "updateTextStyle": {
+            "range": {"startIndex": left_start, "endIndex": left_end},
+            "textStyle": {
+                "weightedFontFamily": {"fontFamily": FONT},
+                "fontSize": {"magnitude": size_pt, "unit": "PT"},
+                "bold": bold,
+            },
+            "fields": "weightedFontFamily,fontSize,bold",
+        }
+    })
+    # Text style for right cell
+    fmt_requests.append({
+        "updateTextStyle": {
+            "range": {"startIndex": right_start, "endIndex": right_end},
+            "textStyle": {
+                "weightedFontFamily": {"fontFamily": FONT},
+                "fontSize": {"magnitude": size_pt, "unit": "PT"},
+                "bold": bold,
+            },
+            "fields": "weightedFontFamily,fontSize,bold",
+        }
+    })
+
+    # Paragraph style: left cell left-aligned, right cell right-aligned
+    left_para_start = cell_left["content"][0]["startIndex"]
+    left_para_end = cell_left["content"][0]["endIndex"]
+    right_para_start = cell_right["content"][0]["startIndex"]
+    right_para_end = cell_right["content"][0]["endIndex"]
+
+    fmt_requests.append({
+        "updateParagraphStyle": {
+            "range": {"startIndex": left_para_start, "endIndex": left_para_end},
+            "paragraphStyle": {
+                "alignment": "START",
+                "spaceAbove": {"magnitude": 0, "unit": "PT"},
+                "spaceBelow": {"magnitude": space_after, "unit": "PT"},
+                "lineSpacing": 100,
+            },
+            "fields": "alignment,spaceAbove,spaceBelow,lineSpacing",
+        }
+    })
+    fmt_requests.append({
+        "updateParagraphStyle": {
+            "range": {"startIndex": right_para_start, "endIndex": right_para_end},
+            "paragraphStyle": {
+                "alignment": "END",
+                "spaceAbove": {"magnitude": 0, "unit": "PT"},
+                "spaceBelow": {"magnitude": space_after, "unit": "PT"},
+                "lineSpacing": 100,
+            },
+            "fields": "alignment,spaceAbove,spaceBelow,lineSpacing",
+        }
+    })
+
+    # Remove all table borders (make them invisible/white)
+    fmt_requests.append({
+        "updateTableCellStyle": {
+            "tableRange": {
+                "tableCellLocation": {
+                    "tableStartLocation": {"index": table_start},
+                    "rowIndex": 0,
+                    "columnIndex": 0,
+                },
+                "rowSpan": 1,
+                "columnSpan": 2,
+            },
+            "tableCellStyle": {
+                "borderTop": _INVISIBLE_BORDER,
+                "borderBottom": _INVISIBLE_BORDER,
+                "borderLeft": _INVISIBLE_BORDER,
+                "borderRight": _INVISIBLE_BORDER,
+                "paddingTop": {"magnitude": 0, "unit": "PT"},
+                "paddingBottom": {"magnitude": 0, "unit": "PT"},
+                "paddingLeft": {"magnitude": 0, "unit": "PT"},
+                "paddingRight": {"magnitude": 0, "unit": "PT"},
+            },
+            "fields": "borderTop,borderBottom,borderLeft,borderRight,paddingTop,paddingBottom,paddingLeft,paddingRight",
+        }
+    })
+
+    # Set column widths: left cell gets ~75% of page width, right cell ~25%
+    # Page width = 8.5in = 612pt, minus margins (0.7in * 2 = 100.8pt) = 511.2pt
+    page_content_width = 612 - (2 * MARGIN_IN)
+    left_col_width = page_content_width * 0.75
+    right_col_width = page_content_width * 0.25
+
+    fmt_requests.append({
+        "updateTableColumnProperties": {
+            "tableStartLocation": {"index": table_start},
+            "columnIndices": [0],
+            "tableColumnProperties": {
+                "widthType": "FIXED_WIDTH",
+                "width": {"magnitude": left_col_width, "unit": "PT"},
+            },
+            "fields": "widthType,width",
+        }
+    })
+    fmt_requests.append({
+        "updateTableColumnProperties": {
+            "tableStartLocation": {"index": table_start},
+            "columnIndices": [1],
+            "tableColumnProperties": {
+                "widthType": "FIXED_WIDTH",
+                "width": {"magnitude": right_col_width, "unit": "PT"},
+            },
+            "fields": "widthType,width",
+        }
+    })
+
+    if fmt_requests:
+        docs.documents().batchUpdate(
+            documentId=doc_id,
+            body={"requests": fmt_requests},
+        ).execute()
 
 
 def _build_format_requests(doc_content: dict, paragraphs: list[dict]) -> list[dict]:
@@ -394,6 +695,10 @@ def _build_format_requests(doc_content: dict, paragraphs: list[dict]) -> list[di
 
     # Now emit formatting requests for each matched pair
     for our_para, doc_elem in matched_pairs:
+        # Skip table_row placeholders — they'll be replaced with real tables
+        if our_para.get("table_row"):
+            continue
+
         start = doc_elem["startIndex"]
         end = doc_elem["endIndex"]
         # end includes the trailing \n; text style applies up to end-1
@@ -444,9 +749,6 @@ def _build_format_requests(doc_content: dict, paragraphs: list[dict]) -> list[di
                 "padding": {"magnitude": 1, "unit": "PT"},
                 "dashStyle": "SOLID",
             }
-
-        # Tab stops for right-aligned dates: tabStops not supported
-        # in updateParagraphStyle API — dates stay inline with text
 
         requests.append({
             "updateParagraphStyle": {
