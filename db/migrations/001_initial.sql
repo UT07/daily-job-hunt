@@ -56,6 +56,8 @@ CREATE POLICY users_insert ON users
     FOR INSERT WITH CHECK (id = auth.uid());
 CREATE POLICY users_update ON users
     FOR UPDATE USING (id = auth.uid());
+CREATE POLICY users_delete ON users
+    FOR DELETE USING (id = auth.uid());
 
 
 -- ============================================================
@@ -207,3 +209,5 @@ CREATE POLICY runs_insert ON runs
     FOR INSERT WITH CHECK (user_id = auth.uid());
 CREATE POLICY runs_update ON runs
     FOR UPDATE USING (user_id = auth.uid());
+CREATE POLICY runs_delete ON runs
+    FOR DELETE USING (user_id = auth.uid());

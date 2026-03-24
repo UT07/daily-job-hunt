@@ -253,11 +253,10 @@ class SupabaseClient:
 
         stats can include: raw_jobs, unique_jobs, matched_jobs, resumes_generated.
         """
-        stats["status"] = "completed"
-        stats["completed_at"] = datetime.utcnow().isoformat()
+        update_data = {**stats, "status": "completed", "completed_at": datetime.utcnow().isoformat()}
         result = (
             self.client.table("runs")
-            .update(stats)
+            .update(update_data)
             .eq("run_id", run_id)
             .execute()
         )

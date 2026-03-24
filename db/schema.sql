@@ -57,6 +57,9 @@ CREATE POLICY users_insert ON users
 CREATE POLICY users_update ON users
     FOR UPDATE USING (id = auth.uid());
 
+CREATE POLICY users_delete ON users
+    FOR DELETE USING (id = auth.uid());
+
 
 -- ============================================================
 --  user_resumes: replaces config.yaml resumes section
@@ -218,3 +221,6 @@ CREATE POLICY runs_insert ON runs
 
 CREATE POLICY runs_update ON runs
     FOR UPDATE USING (user_id = auth.uid());
+
+CREATE POLICY runs_delete ON runs
+    FOR DELETE USING (user_id = auth.uid());
