@@ -232,10 +232,16 @@ BROWSER_QUERIES = [
 
 def _scrape_single(scraper: BaseScraper, query: str, location: str, days_back: int) -> List[Job]:
     """Run one scraper query (used for parallel execution)."""
+    import time
+    start = time.time()
     try:
         jobs = scraper.search(query, location, days_back=days_back)
+        elapsed = time.time() - start
+        # Attach timing to jobs for later per-scraper latency aggregation
+        for j in jobs:
+            j._scrape_time = elapsed
         if jobs:
-            logger.info(f"[{scraper.name}] '{query}' in '{location}' -> {len(jobs)} jobs")
+            logger.info(f"[{scraper.name}] '{query}' in '{location}' -> {len(jobs)} jobs ({elapsed:.1f}s)")
         return jobs
     except Exception as e:
         logger.error(f"[{scraper.name}] ERROR for '{query}': {e}")
@@ -961,13 +967,57 @@ def run_pipeline(config: dict, dry_run: bool = False, scrape_only: bool = False)
     print(f"  AI provider calls:   {ai_stats['provider_calls']}")
     print(f"{'='*60}\n")
 
-    # Build scraper stats from raw jobs for self-improvement analysis
+    # Build detailed per-scraper stats for diagnostics and self-improvement
     scraper_stats = {}
+
+    # Phase 1: Count raw jobs returned per source + collect latency
     for job in raw_jobs:
         src = getattr(job, "source", "unknown")
         if src not in scraper_stats:
-            scraper_stats[src] = {"count": 0, "errors": 0}
-        scraper_stats[src]["count"] += 1
+            scraper_stats[src] = {
+                "jobs_returned": 0,
+                "jobs_after_dedup": 0,
+                "jobs_matched": 0,
+                "match_rate": 0,
+                "errors": 0,
+                "avg_match_score": 0,
+                "latency_seconds": 0,
+                "_scores": [],
+                "_latencies": [],
+            }
+        scraper_stats[src]["jobs_returned"] += 1
+        scrape_time = getattr(job, "_scrape_time", None)
+        if scrape_time is not None:
+            scraper_stats[src]["_latencies"].append(scrape_time)
+
+    # Phase 2: Count jobs that survived dedup per source
+    for job in unique_jobs:
+        src = getattr(job, "source", "unknown")
+        if src in scraper_stats:
+            scraper_stats[src]["jobs_after_dedup"] += 1
+
+    # Phase 3: Count matched jobs per source + collect match scores
+    for job in matched_jobs:
+        src = getattr(job, "source", "unknown")
+        if src in scraper_stats:
+            scraper_stats[src]["jobs_matched"] += 1
+            scraper_stats[src]["_scores"].append(job.match_score)
+
+    # Compute derived metrics and clean up temporary fields
+    for src, stats in scraper_stats.items():
+        returned = stats["jobs_returned"]
+        matched = stats["jobs_matched"]
+        stats["match_rate"] = round(matched / returned, 3) if returned > 0 else 0
+
+        scores = stats.pop("_scores")
+        stats["avg_match_score"] = round(sum(scores) / len(scores), 1) if scores else 0
+
+        latencies = stats.pop("_latencies")
+        stats["latency_seconds"] = round(max(latencies), 1) if latencies else 0
+
+    # Backward compat: keep "count" alias for anything reading old format
+    for src, stats in scraper_stats.items():
+        stats["count"] = stats["jobs_returned"]
 
     # Save run metadata (enriched for self-improvement analysis)
     meta = {

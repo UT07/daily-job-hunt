@@ -22,6 +22,61 @@ import yaml
 logger = logging.getLogger(__name__)
 
 
+def analyze_scraper_effectiveness(scraper_stats: dict) -> list[dict]:
+    """Rank scrapers by their job-to-match conversion rate.
+
+    Returns list of dicts sorted by match_rate descending:
+    [{"source": "adzuna", "jobs_returned": 45, "jobs_matched": 5,
+      "match_rate": 0.132, "verdict": "effective"}, ...]
+
+    Verdicts:
+    - match_rate > 10%: "highly effective"
+    - match_rate 5-10%: "effective"
+    - match_rate 1-5%: "low yield"
+    - match_rate < 1% or 0 matches: "noise — consider disabling"
+    - 0 jobs returned: "broken — investigate"
+    """
+    ranking = []
+    for source, stats in scraper_stats.items():
+        jobs_returned = stats.get("jobs_returned", stats.get("count", 0))
+        jobs_after_dedup = stats.get("jobs_after_dedup", 0)
+        jobs_matched = stats.get("jobs_matched", 0)
+        match_rate = stats.get("match_rate", 0)
+        avg_score = stats.get("avg_match_score", 0)
+        latency = stats.get("latency_seconds", 0)
+
+        # Recompute match_rate if not present (backward compat with old metadata)
+        if match_rate == 0 and jobs_returned > 0 and jobs_matched > 0:
+            match_rate = round(jobs_matched / jobs_returned, 3)
+
+        # Determine verdict
+        if jobs_returned == 0:
+            verdict = "broken — investigate"
+        elif match_rate > 0.10:
+            verdict = "highly effective"
+        elif match_rate >= 0.05:
+            verdict = "effective"
+        elif match_rate >= 0.01:
+            verdict = "low yield"
+        else:
+            verdict = "noise — consider disabling"
+
+        ranking.append({
+            "source": source,
+            "jobs_returned": jobs_returned,
+            "jobs_after_dedup": jobs_after_dedup,
+            "jobs_matched": jobs_matched,
+            "match_rate": match_rate,
+            "avg_match_score": avg_score,
+            "latency_seconds": latency,
+            "verdict": verdict,
+        })
+
+    # Sort by match_rate descending (broken scrapers last)
+    ranking.sort(key=lambda x: x["match_rate"], reverse=True)
+    return ranking
+
+
 def analyze_run_results(output_dir: str = "output") -> dict:
     """Analyze the most recent pipeline run results.
 
@@ -121,8 +176,10 @@ def analyze_run_results(output_dir: str = "output") -> dict:
 
     # --- 3. Analyze scraper performance ---
     scraper_stats = metadata.get("scraper_stats", {})
+
+    # Legacy checks: error rates and zero-job scrapers
     for scraper, stats in scraper_stats.items():
-        count = stats.get("count", 0)
+        count = stats.get("jobs_returned", stats.get("count", 0))
         errors = stats.get("errors", 0)
         if count == 0 and errors > 0:
             report["findings"].append(f"Scraper '{scraper}' returned 0 jobs with {errors} errors.")
@@ -134,6 +191,46 @@ def analyze_run_results(output_dir: str = "output") -> dict:
         elif count > 0 and errors / max(count, 1) > 0.5:
             report["findings"].append(
                 f"Scraper '{scraper}' has high error rate ({errors} errors / {count} jobs)."
+            )
+
+    # Enhanced diagnostics: per-scraper match rate and latency analysis
+    ranking = analyze_scraper_effectiveness(scraper_stats)
+    report["stats"]["scraper_ranking"] = ranking
+
+    for entry in ranking:
+        source = entry["source"]
+        verdict = entry["verdict"]
+        match_rate = entry["match_rate"]
+        latency = entry.get("latency_seconds", 0)
+
+        if verdict == "broken — investigate":
+            report["findings"].append(
+                f"Scraper '{source}' returned 0 jobs — may be broken or site is down."
+            )
+            report["actions"].append({
+                "type": "scraper_fix",
+                "description": f"Investigate scraper '{source}': returned 0 jobs",
+                "scraper": source,
+            })
+        elif verdict == "noise — consider disabling":
+            report["findings"].append(
+                f"Scraper '{source}' is mostly noise: {entry['jobs_returned']} jobs returned, "
+                f"{entry['jobs_matched']} matched ({match_rate:.1%} match rate)."
+            )
+            report["actions"].append({
+                "type": "scraper_low_yield",
+                "description": f"Consider disabling scraper '{source}' (match rate {match_rate:.1%})",
+                "scraper": source,
+            })
+        elif verdict == "low yield":
+            report["findings"].append(
+                f"Scraper '{source}' has low yield: {match_rate:.1%} match rate "
+                f"({entry['jobs_matched']}/{entry['jobs_returned']} jobs)."
+            )
+
+        if latency > 60:
+            report["findings"].append(
+                f"Scraper '{source}' is slow: {latency:.0f}s latency."
             )
 
     # --- 4. Keyword gap analysis ---
@@ -210,6 +307,12 @@ def generate_improvement_suggestions(report: dict, ai_client=None) -> list[str]:
             suggestions.append(
                 f"ACTION: Scraper '{scraper}' is failing. Check if the website changed "
                 "its HTML structure, or disable it in config.yaml."
+            )
+        elif action["type"] == "scraper_low_yield":
+            scraper = action.get("scraper", "unknown")
+            suggestions.append(
+                f"ACTION: Scraper '{scraper}' produces mostly irrelevant jobs. "
+                "Consider disabling it or adjusting its search queries to improve signal-to-noise ratio."
             )
 
     if not suggestions:
