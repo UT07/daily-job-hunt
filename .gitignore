@@ -28,5 +28,8 @@ google_credentials.json
 node_modules/
 web/dist/
 
+# Worktrees
+.worktrees/
+
 # macOS
 .DS_Store
