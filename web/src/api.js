@@ -1,9 +1,21 @@
+import { supabase } from './lib/supabase'
+
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
+async function authHeaders() {
+  const { data: { session } } = await supabase.auth.getSession()
+  const headers = { 'Content-Type': 'application/json' }
+  if (session?.access_token) {
+    headers['Authorization'] = `Bearer ${session.access_token}`
+  }
+  return headers
+}
+
 export async function apiCall(endpoint, body) {
+  const headers = await authHeaders()
   const res = await fetch(`${API_BASE}${endpoint}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(body),
   });
   if (!res.ok) {

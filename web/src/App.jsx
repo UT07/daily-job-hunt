@@ -1,4 +1,8 @@
 import { useState } from 'react';
+import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
+import AuthProvider from './auth/AuthProvider';
+import { useAuth } from './auth/useAuth';
+import LoginPage from './pages/LoginPage';
 import { apiCall } from './api';
 import ScoreCard from './components/ScoreCard';
 import TailorCard from './components/TailorCard';
@@ -29,13 +33,26 @@ function ActionButton({ onClick, loading, color, children }) {
   );
 }
 
-export default function App() {
+function AppContent() {
+  const { user, loading, signOut } = useAuth();
   const [jd, setJd] = useState('');
   const [jobTitle, setJobTitle] = useState('Software Engineer');
   const [company, setCompany] = useState('');
   const [resumeType, setResumeType] = useState('sre_devops');
   const [results, setResults] = useState([]);
-  const [loading, setLoading] = useState({});
+  const [actionLoading, setActionLoading] = useState({});
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-gray-500 text-sm">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LoginPage />;
+  }
 
   function getPayload() {
     if (jd.trim().length < 20) {
@@ -57,14 +74,14 @@ export default function App() {
   async function run(key, endpoint, cardType) {
     const payload = getPayload();
     if (!payload) return;
-    setLoading((prev) => ({ ...prev, [key]: true }));
+    setActionLoading((prev) => ({ ...prev, [key]: true }));
     try {
       const data = await apiCall(endpoint, payload);
       addResult({ type: cardType, data, company: payload.company });
     } catch (e) {
       addResult({ type: 'error', message: `${cardType} failed: ${e.message}` });
     } finally {
-      setLoading((prev) => ({ ...prev, [key]: false }));
+      setActionLoading((prev) => ({ ...prev, [key]: false }));
     }
   }
 
@@ -77,7 +94,21 @@ export default function App() {
             <span className="text-2xl">🎯</span>
             <h1 className="text-xl font-bold text-gray-900">Job Hunt</h1>
           </div>
-          <span className="text-sm text-gray-500 hidden sm:block">AI-powered resume tailoring</span>
+          <div className="flex items-center gap-4">
+            <Link
+              to="/dashboard"
+              className="text-sm text-gray-600 hover:text-gray-900 font-medium transition"
+            >
+              Dashboard
+            </Link>
+            <span className="text-sm text-gray-500 hidden sm:block">{user.email}</span>
+            <button
+              onClick={signOut}
+              className="text-sm text-gray-500 hover:text-gray-700 font-medium transition"
+            >
+              Sign out
+            </button>
+          </div>
         </div>
       </header>
 
@@ -131,16 +162,16 @@ export default function App() {
 
         {/* Action Buttons */}
         <div className="flex flex-wrap gap-3 mb-8">
-          <ActionButton color="blue" loading={loading.score} onClick={() => run('score', '/api/score', 'score')}>
+          <ActionButton color="blue" loading={actionLoading.score} onClick={() => run('score', '/api/score', 'score')}>
             Score Resume
           </ActionButton>
-          <ActionButton color="emerald" loading={loading.tailor} onClick={() => run('tailor', '/api/tailor', 'tailor')}>
+          <ActionButton color="emerald" loading={actionLoading.tailor} onClick={() => run('tailor', '/api/tailor', 'tailor')}>
             Tailor Resume
           </ActionButton>
-          <ActionButton color="purple" loading={loading.cover} onClick={() => run('cover', '/api/cover-letter', 'cover')}>
+          <ActionButton color="purple" loading={actionLoading.cover} onClick={() => run('cover', '/api/cover-letter', 'cover')}>
             Generate Cover Letter
           </ActionButton>
-          <ActionButton color="orange" loading={loading.contacts} onClick={() => run('contacts', '/api/contacts', 'contacts')}>
+          <ActionButton color="orange" loading={actionLoading.contacts} onClick={() => run('contacts', '/api/contacts', 'contacts')}>
             Find LinkedIn Contacts
           </ActionButton>
         </div>
@@ -173,5 +204,68 @@ export default function App() {
         </div>
       </footer>
     </div>
+  );
+}
+
+function DashboardPlaceholder() {
+  const { user, loading, signOut } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-gray-500 text-sm">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <LoginPage />;
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
+        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">🎯</span>
+            <h1 className="text-xl font-bold text-gray-900">Job Hunt</h1>
+          </div>
+          <div className="flex items-center gap-4">
+            <Link
+              to="/"
+              className="text-sm text-gray-600 hover:text-gray-900 font-medium transition"
+            >
+              Tailor
+            </Link>
+            <span className="text-sm text-gray-500 hidden sm:block">{user.email}</span>
+            <button
+              onClick={signOut}
+              className="text-sm text-gray-500 hover:text-gray-700 font-medium transition"
+            >
+              Sign out
+            </button>
+          </div>
+        </div>
+      </header>
+      <main className="max-w-4xl mx-auto px-4 py-8">
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center">
+          <h2 className="text-lg font-semibold text-gray-900 mb-2">Dashboard</h2>
+          <p className="text-sm text-gray-500">Coming soon — your job application tracker will live here.</p>
+        </div>
+      </main>
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AuthProvider>
+        <Routes>
+          <Route path="/" element={<AppContent />} />
+          <Route path="/dashboard" element={<DashboardPlaceholder />} />
+        </Routes>
+      </AuthProvider>
+    </BrowserRouter>
   );
 }
