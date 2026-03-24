@@ -1,17 +1,26 @@
 """FastAPI backend for the Job Hunt landing page.
 
 Exposes the pipeline's core AI modules as REST endpoints:
-- POST /api/score        — score a JD against base resumes
-- POST /api/tailor       — tailor resume + compile PDF, return Drive URL
-- POST /api/cover-letter — generate cover letter PDF, return Drive URL
-- POST /api/contacts     — find LinkedIn contacts + intro messages
-- GET  /api/profile      — get authenticated user's profile
-- PUT  /api/profile      — update authenticated user's profile
-- GET  /api/health       — health check (public)
+- POST /api/score          — score a JD against base resumes
+- POST /api/tailor         — tailor resume + compile PDF, return Drive URL
+- POST /api/cover-letter   — generate cover letter PDF, return Drive URL
+- POST /api/contacts       — find LinkedIn contacts + intro messages
+- GET  /api/profile        — get authenticated user's profile
+- PUT  /api/profile        — update authenticated user's profile
+- POST /api/gdpr/consent   — record GDPR consent timestamp
+- GET  /api/gdpr/export    — export all user data as ZIP (Article 15)
+- DELETE /api/gdpr/delete  — request account deletion (soft-delete)
+- GET  /api/dashboard/jobs  — paginated, filterable job list
+- PATCH /api/dashboard/jobs/{job_id} — update a job's application status
+- GET  /api/dashboard/stats — aggregate job metrics
+- GET  /api/dashboard/runs  — pipeline run history
+- GET  /api/templates      — list available resume templates (public)
+- GET  /api/health         — health check (public)
 
-All endpoints except /api/health require a valid Supabase JWT.
+All endpoints except /api/health and /api/templates require a valid Supabase JWT.
 """
 
+import io
 import logging
 import os
 import tempfile
@@ -21,6 +30,7 @@ from typing import Optional
 import yaml
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from auth import AuthUser, get_current_user
@@ -260,6 +270,12 @@ def health():
     }
 
 
+@app.get("/api/templates")
+def get_templates():
+    from template_engine import list_templates
+    return {"templates": list_templates()}
+
+
 @app.post("/api/score", response_model=ScoreResponse)
 def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
     if req.resume_type not in _resumes:
@@ -422,6 +438,136 @@ def update_profile(
         plan=row.get("plan", "free"),
         created_at=row.get("created_at"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Dashboard endpoints
+# ---------------------------------------------------------------------------
+
+_VALID_STATUSES = {"New", "Applied", "Interview", "Offer", "Rejected", "Withdrawn"}
+
+
+@app.get("/api/dashboard/jobs")
+def get_dashboard_jobs(
+    user: AuthUser = Depends(get_current_user),
+    page: int = 1,
+    per_page: int = 25,
+    status: Optional[str] = None,
+    min_score: Optional[float] = None,
+    source: Optional[str] = None,
+    company: Optional[str] = None,
+):
+    """Paginated, filterable job list."""
+    if _db is None:
+        return {
+            "jobs": [],
+            "page": page,
+            "per_page": per_page,
+            "message": "Database not configured",
+        }
+
+    filters = {}
+    if status:
+        filters["status"] = status
+    if min_score is not None:
+        filters["min_score"] = min_score
+    if source:
+        filters["source"] = source
+    if company:
+        filters["company"] = company
+
+    jobs = _db.get_jobs(user.id, filters=filters, page=page, per_page=per_page)
+    return {"jobs": jobs, "page": page, "per_page": per_page}
+
+
+@app.patch("/api/dashboard/jobs/{job_id}")
+def update_job_status(
+    job_id: str,
+    body: dict,
+    user: AuthUser = Depends(get_current_user),
+):
+    """Update a job's application status."""
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+
+    status = body.get("application_status")
+    if not status:
+        raise HTTPException(400, "application_status required")
+    if status not in _VALID_STATUSES:
+        raise HTTPException(400, f"Invalid status. Must be one of: {sorted(_VALID_STATUSES)}")
+
+    result = _db.update_job_status(user.id, job_id, status)
+    return result
+
+
+@app.get("/api/dashboard/stats")
+def get_dashboard_stats(user: AuthUser = Depends(get_current_user)):
+    """Aggregate metrics for the dashboard KPI cards."""
+    if _db is None:
+        return {
+            "total_jobs": 0,
+            "matched_jobs": 0,
+            "avg_match_score": 0,
+            "jobs_by_status": {},
+            "message": "Database not configured",
+        }
+
+    return _db.get_job_stats(user.id)
+
+
+@app.get("/api/dashboard/runs")
+def get_dashboard_runs(user: AuthUser = Depends(get_current_user)):
+    """Pipeline run history."""
+    if _db is None:
+        return {"runs": [], "message": "Database not configured"}
+
+    return {"runs": _db.get_runs(user.id)}
+
+
+# ---------------------------------------------------------------------------
+# GDPR endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/gdpr/consent")
+def gdpr_consent(user: AuthUser = Depends(get_current_user)):
+    """Record GDPR consent timestamp."""
+    if not _db:
+        raise HTTPException(503, "Database not configured")
+    from gdpr import record_consent
+
+    result = record_consent(_db, user.id)
+    return {"status": "consent_recorded", "gdpr_consent_at": result.get("gdpr_consent_at")}
+
+
+@app.get("/api/gdpr/export")
+def gdpr_export(user: AuthUser = Depends(get_current_user)):
+    """Export all user data as a ZIP file (GDPR Article 15)."""
+    if not _db:
+        raise HTTPException(503, "Database not configured")
+    from gdpr import export_user_data
+
+    zip_bytes = export_user_data(_db, user.id)
+    return StreamingResponse(
+        io.BytesIO(zip_bytes),
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename=my_data_{user.id[:8]}.zip"},
+    )
+
+
+@app.delete("/api/gdpr/delete")
+def gdpr_delete(user: AuthUser = Depends(get_current_user)):
+    """Request account deletion (soft-delete, hard-delete after 30 days)."""
+    if not _db:
+        raise HTTPException(503, "Database not configured")
+    from gdpr import request_deletion
+
+    result = request_deletion(_db, user.id)
+    return {
+        "status": "deletion_requested",
+        "message": "Your account will be permanently deleted in 30 days. Contact support to cancel.",
+        "gdpr_deletion_requested_at": result.get("gdpr_deletion_requested_at"),
+    }
 
 
 # ---------------------------------------------------------------------------
