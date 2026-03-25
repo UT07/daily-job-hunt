@@ -45,15 +45,29 @@ function ContactsCell({ contacts }) {
         {expanded ? 'Hide' : `${parsed.length} contacts`}
       </button>
       {expanded && (
-        <div className="mt-1 space-y-1">
+        <div className="mt-1 space-y-1.5">
           {parsed.map((c, i) => (
-            <div key={i} className="bg-gray-50 rounded p-1.5">
-              <div className="font-medium text-gray-700">{c.role}</div>
-              {c.search_url && c.search_url !== 'Find on LinkedIn' && (
-                <a href={c.search_url} target="_blank" rel="noopener noreferrer"
-                   className="text-blue-500 hover:underline">LinkedIn</a>
+            <div key={i} className="bg-gray-50 rounded p-2 border border-gray-100">
+              <div className="font-medium text-gray-800">
+                {c.name && <span>{c.name} — </span>}
+                {c.role}
+              </div>
+              {c.why && <div className="text-gray-500 text-[10px] mt-0.5">{c.why}</div>}
+              <div className="flex gap-2 mt-1">
+                {c.search_url && c.search_url !== 'Find on LinkedIn' && (
+                  <a href={c.search_url} target="_blank" rel="noopener noreferrer"
+                     className="text-blue-500 hover:underline">LinkedIn Search</a>
+                )}
+                {c.google_url && (
+                  <a href={c.google_url} target="_blank" rel="noopener noreferrer"
+                     className="text-emerald-500 hover:underline">Google</a>
+                )}
+              </div>
+              {c.message && (
+                <div className="text-gray-500 mt-1 bg-white rounded px-1.5 py-1 border border-gray-100 line-clamp-2">
+                  {c.message}
+                </div>
               )}
-              {c.message && <div className="text-gray-500 mt-0.5 line-clamp-2">{c.message}</div>}
             </div>
           ))}
         </div>

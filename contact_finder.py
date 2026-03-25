@@ -19,29 +19,38 @@ from matcher import extract_json
 logger = logging.getLogger(__name__)
 
 
-CONTACT_SYSTEM_PROMPT = """You are a job search networking strategist. Given a job listing, identify the types of people the candidate should connect with on LinkedIn to improve their chances.
+CONTACT_SYSTEM_PROMPT = """You are a job search networking strategist. Given a job listing, identify SPECIFIC people the candidate should connect with on LinkedIn.
 
-For each contact type, provide:
-1. A descriptive role (e.g., "Engineering Manager", "Senior DevOps Engineer")
-2. Why connecting with them helps
-3. A suggested LinkedIn connection message (1-2 sentences, professional but warm)
+Your goal is to find the most likely REAL people at the company — not generic role titles. Use your knowledge of the company's org structure, public team pages, engineering blog authors, and conference speakers to suggest actual names when possible.
+
+For each contact, provide:
+1. A specific name if you can reasonably guess one (e.g., "John Smith" or "VP of Engineering" if name unknown)
+2. Their exact title at the company
+3. Why connecting with them helps
+4. A personalized LinkedIn connection message (reference something specific — a blog post, talk, or the team's work)
+5. A Google search query to find their LinkedIn profile (e.g., "site:linkedin.com/in John Smith CompanyName")
 
 Return ONLY valid JSON (no markdown, no code fences):
 {
     "contacts": [
         {
-            "role": "<role title to search for>",
+            "name": "<full name if known, or 'Unknown' if guessing>",
+            "title": "<their specific job title at the company>",
+            "role_type": "<hiring_manager|peer|recruiter|leader>",
             "why": "<1 sentence on why this connection helps>",
-            "message": "<suggested LinkedIn connection note>"
+            "message": "<personalized LinkedIn connection note — reference something specific>",
+            "google_search": "<site:linkedin.com/in query to find this person>"
         }
     ]
 }
 
 Provide exactly 3-4 contacts, prioritized by impact:
-1. The likely hiring manager (most important)
-2. A team member who'd be a peer
-3. A recruiter at the company
-4. (Optional) Someone in a senior/leadership role"""
+1. The likely hiring manager (most important — try to name them)
+2. A team member who'd be a peer (someone in a similar role at the company)
+3. A recruiter at the company (try to find the actual talent acquisition person)
+4. (Optional) A senior/leadership figure whose work you can reference
+
+IMPORTANT: Be specific. "Engineering Manager at Mars Capital" is better than just "Engineering Manager". If you know the company well enough to guess a name, include it — the candidate will verify before reaching out."""
 
 
 def find_contacts(
@@ -73,22 +82,45 @@ The candidate is applying for this role and wants to network with the right peop
         data = extract_json(result_text)
 
         for contact in data.get("contacts", []):
-            role = contact.get("role", "")
-            # Build LinkedIn search URL
-            search_query = f"{role} {job.company}"
-            search_url = (
+            name = contact.get("name", "")
+            title = contact.get("title", "") or contact.get("role", "")
+            role_type = contact.get("role_type", "peer")
+            google_query = contact.get("google_search", "")
+
+            # Build targeted LinkedIn search URL with company filter
+            if name and name != "Unknown":
+                search_keywords = f"{name} {job.company}"
+            else:
+                search_keywords = f"{title} {job.company}"
+
+            linkedin_search_url = (
                 "https://www.linkedin.com/search/results/people/?"
                 + urllib.parse.urlencode({
-                    "keywords": search_query,
+                    "keywords": search_keywords,
                     "origin": "GLOBAL_SEARCH_HEADER",
                 })
             )
 
+            # Google search fallback for finding specific profiles
+            if not google_query:
+                if name and name != "Unknown":
+                    google_query = f"site:linkedin.com/in {name} {job.company}"
+                else:
+                    google_query = f"site:linkedin.com/in {title} {job.company}"
+
+            google_search_url = (
+                "https://www.google.com/search?"
+                + urllib.parse.urlencode({"q": google_query})
+            )
+
             contacts.append({
-                "role": role,
+                "name": name if name != "Unknown" else "",
+                "role": title,
+                "role_type": role_type,
                 "why": contact.get("why", ""),
                 "message": contact.get("message", ""),
-                "search_url": search_url,
+                "search_url": linkedin_search_url,
+                "google_url": google_search_url,
             })
 
         logger.info(f"[CONTACTS] {job.company}: found {len(contacts)} contact suggestions")
@@ -102,15 +134,15 @@ The candidate is applying for this role and wants to network with the right peop
 
 
 def _fallback_contacts(job: Job) -> list[dict]:
-    """Generate basic LinkedIn search URLs without AI."""
+    """Generate targeted LinkedIn search URLs without AI."""
     roles = [
-        ("Engineering Manager", "Likely the hiring manager"),
-        ("Technical Recruiter", "Can fast-track your application"),
-        ("Senior Engineer", "Potential peer on the team"),
+        ("Engineering Manager", "hiring_manager", "Likely the hiring manager"),
+        ("Technical Recruiter", "recruiter", "Can fast-track your application"),
+        ("Senior Engineer", "peer", "Potential peer on the team"),
     ]
 
     contacts = []
-    for role, why in roles:
+    for role, role_type, why in roles:
         search_query = f"{role} {job.company}"
         search_url = (
             "https://www.linkedin.com/search/results/people/?"
@@ -119,11 +151,18 @@ def _fallback_contacts(job: Job) -> list[dict]:
                 "origin": "GLOBAL_SEARCH_HEADER",
             })
         )
+        google_url = (
+            "https://www.google.com/search?"
+            + urllib.parse.urlencode({"q": f"site:linkedin.com/in {role} {job.company}"})
+        )
         contacts.append({
+            "name": "",
             "role": role,
+            "role_type": role_type,
             "why": why,
             "message": f"Hi! I came across the {job.title} role at {job.company} and would love to connect.",
             "search_url": search_url,
+            "google_url": google_url,
         })
 
     return contacts
