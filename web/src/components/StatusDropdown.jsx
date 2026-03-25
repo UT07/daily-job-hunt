@@ -3,13 +3,13 @@ import { apiPatch } from '../api';
 
 const STATUSES = ['New', 'Applied', 'Interview', 'Offer', 'Rejected', 'Withdrawn'];
 
-const STATUS_COLORS = {
-  New: 'bg-gray-100 text-gray-700 border-gray-300',
-  Applied: 'bg-blue-100 text-blue-700 border-blue-300',
-  Interview: 'bg-purple-100 text-purple-700 border-purple-300',
-  Offer: 'bg-emerald-100 text-emerald-700 border-emerald-300',
-  Rejected: 'bg-red-100 text-red-700 border-red-300',
-  Withdrawn: 'bg-amber-100 text-amber-700 border-amber-300',
+const STATUS_STYLES = {
+  New: 'text-slate-400 bg-slate-700 border-slate-600',
+  Applied: 'text-blue-400 bg-slate-700 border-blue-500/30',
+  Interview: 'text-purple-400 bg-slate-700 border-purple-500/30',
+  Offer: 'text-emerald-400 bg-slate-700 border-emerald-500/30',
+  Rejected: 'text-red-400 bg-slate-700 border-red-500/30',
+  Withdrawn: 'text-amber-400 bg-slate-700 border-amber-500/30',
 };
 
 export default function StatusDropdown({ jobId, currentStatus, onStatusChange }) {
@@ -32,16 +32,16 @@ export default function StatusDropdown({ jobId, currentStatus, onStatusChange })
     }
   }
 
-  const colorClass = STATUS_COLORS[currentStatus] || STATUS_COLORS.New;
+  const style = STATUS_STYLES[currentStatus] || STATUS_STYLES.New;
 
   return (
     <select
       value={currentStatus}
       onChange={handleChange}
       disabled={updating}
-      className={`${colorClass} text-xs font-medium rounded-md px-2 py-1 border
+      className={`${style} text-xs font-medium rounded-md px-2 py-1 border
         cursor-pointer focus:ring-2 focus:ring-blue-500 focus:outline-none
-        disabled:opacity-50 disabled:cursor-not-allowed appearance-none`}
+        disabled:opacity-50 disabled:cursor-not-allowed appearance-none transition-colors`}
     >
       {STATUSES.map((s) => (
         <option key={s} value={s}>
