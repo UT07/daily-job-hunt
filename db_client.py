@@ -112,10 +112,9 @@ class SupabaseClient:
             self.client.table("user_search_configs")
             .select("*")
             .eq("user_id", user_id)
-            .maybe_single()
             .execute()
         )
-        return result.data
+        return result.data[0] if result.data else None
 
     def upsert_search_config(
         self, user_id: str, data: Dict[str, Any]
