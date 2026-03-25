@@ -4,6 +4,8 @@ import AuthProvider from './auth/AuthProvider';
 import { useAuth } from './auth/useAuth';
 import LoginPage from './pages/LoginPage';
 import Dashboard from './pages/Dashboard';
+import Onboarding from './pages/Onboarding';
+import Settings from './pages/Settings';
 import Privacy from './pages/Privacy';
 import DataExport from './pages/DataExport';
 import { apiCall } from './api';
@@ -118,6 +120,7 @@ function AppContent() {
           <nav className="hidden sm:flex items-center gap-1">
             <NavLink to="/dashboard">Dashboard</NavLink>
             <NavLink to="/">Tailor</NavLink>
+            <NavLink to="/settings">Settings</NavLink>
           </nav>
           <div className="flex items-center gap-4">
             <span className="text-sm text-slate-400 hidden sm:block">{user.email}</span>
@@ -241,6 +244,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<AppContent />} />
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/onboarding" element={<Onboarding />} />
+          <Route path="/settings" element={<Settings />} />
           <Route path="/privacy" element={<Privacy />} />
           <Route path="/data-export" element={<DataExport />} />
         </Routes>
