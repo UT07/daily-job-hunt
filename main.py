@@ -92,6 +92,7 @@ from scrapers import (
     AdzunaScraper, IrishJobsScraper, LinkedInScraper,
     WorkAtAStartupScraper, HackerNewsScraper,
     JobsIeScraper, GradIrelandScraper,
+    JobSurfaceScraper,
 )
 from scrapers.base import Job, BaseScraper
 from ai_client import AIClient
@@ -200,6 +201,11 @@ def init_scrapers(config: dict) -> List[BaseScraper]:
         scrapers.append(HackerNewsScraper())
         logger.info("HN Who's Hiring scraper enabled")
 
+    # --- Remote DevOps/Cloud (browser-based) ---
+    if "jobsurface" in enabled:
+        scrapers.append(JobSurfaceScraper())
+        logger.info("JobSurface scraper enabled")
+
     return scrapers
 
 
@@ -219,7 +225,7 @@ def load_resumes(config: dict) -> Dict[str, str]:
     return resumes
 
 
-BROWSER_SCRAPERS = {"linkedin", "irishjobs"}
+BROWSER_SCRAPERS = {"linkedin", "irishjobs", "jobsurface"}
 
 # Consolidated queries for browser scrapers — broad enough to catch everything,
 # few enough to not take 30 minutes. Each of these covers multiple specific titles.

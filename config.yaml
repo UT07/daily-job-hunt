@@ -143,6 +143,8 @@ scrapers:
     # Startup-focused (API/HTML — lightweight):
     - "yc_wats"      # YC Work at a Startup (US startups, some remote)
     - "hn_hiring"    # Hacker News "Who is Hiring?" threads
+    # Remote DevOps/Cloud (browser-based):
+    - "jobsurface"   # JobSurface.com — remote DevOps/Cloud jobs from career pages
 
   # Parallel scraping workers
   max_workers: 8
