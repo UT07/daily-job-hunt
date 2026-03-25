@@ -38,27 +38,32 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col justify-center">
-      <div className="max-w-md w-full mx-auto px-4">
+    <div className="min-h-screen bg-slate-900 flex flex-col justify-center relative overflow-hidden">
+      {/* Radial gradient glow behind card */}
+      <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+        <div className="w-[600px] h-[600px] bg-blue-500/10 rounded-full blur-3xl" />
+      </div>
+
+      <div className="max-w-md w-full mx-auto px-4 relative z-10">
         {/* Logo / Title */}
         <div className="text-center mb-8">
-          <span className="text-4xl">🎯</span>
-          <h1 className="text-2xl font-bold text-gray-900 mt-2">Job Hunt</h1>
-          <p className="text-sm text-gray-500 mt-1">AI-powered resume tailoring</p>
+          <span className="text-5xl">🎯</span>
+          <h1 className="text-3xl font-bold text-white mt-3">Job Hunt</h1>
+          <p className="text-sm text-slate-400 mt-1">AI-Powered Resume Tailoring</p>
         </div>
 
         {/* Card */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-8">
-          <h2 className="text-lg font-semibold text-gray-900 mb-6 text-center">
+        <div className="bg-slate-800 rounded-xl shadow-2xl border border-slate-700 p-8">
+          <h2 className="text-lg font-semibold text-white mb-6 text-center">
             {isSignUp ? 'Create an account' : 'Sign in to your account'}
           </h2>
 
           {/* Google OAuth */}
           <button
             onClick={handleGoogle}
-            className="w-full flex items-center justify-center gap-3 bg-white border border-gray-300
-              rounded-lg px-4 py-2.5 text-sm font-medium text-gray-700
-              hover:bg-gray-50 transition focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2"
+            className="w-full flex items-center justify-center gap-3 bg-white border border-slate-300
+              rounded-lg px-4 py-2.5 text-sm font-medium text-slate-800
+              hover:bg-slate-50 transition focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-slate-800"
           >
             <svg className="w-5 h-5" viewBox="0 0 24 24">
               <path
@@ -84,23 +89,23 @@ export default function LoginPage() {
           {/* Divider */}
           <div className="relative my-6">
             <div className="absolute inset-0 flex items-center">
-              <div className="w-full border-t border-gray-200" />
+              <div className="w-full border-t border-slate-700" />
             </div>
             <div className="relative flex justify-center text-xs">
-              <span className="bg-white px-3 text-gray-400 uppercase">or</span>
+              <span className="bg-slate-800 px-3 text-slate-500 uppercase">or</span>
             </div>
           </div>
 
           {/* Sign-up success message */}
           {signUpSuccess && (
-            <div className="mb-4 p-3 bg-green-50 border border-green-200 rounded-lg text-sm text-green-700">
+            <div className="mb-4 p-3 bg-emerald-900/30 border border-emerald-800 rounded-lg text-sm text-emerald-300">
               Account created. Check your email to confirm, then sign in.
             </div>
           )}
 
           {/* Error */}
           {error && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+            <div className="mb-4 p-3 bg-red-900/30 border border-red-800 rounded-lg text-sm text-red-300">
               {error}
             </div>
           )}
@@ -108,37 +113,38 @@ export default function LoginPage() {
           {/* Email / Password form */}
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+              <label className="block text-sm font-medium text-slate-300 mb-1">Email</label>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm
+                className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white
                   focus:ring-2 focus:ring-blue-500 focus:border-blue-500
-                  placeholder:text-gray-400"
+                  placeholder:text-slate-400"
                 placeholder="you@example.com"
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+              <label className="block text-sm font-medium text-slate-300 mb-1">Password</label>
               <input
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 minLength={6}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm
+                className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white
                   focus:ring-2 focus:ring-blue-500 focus:border-blue-500
-                  placeholder:text-gray-400"
+                  placeholder:text-slate-400"
                 placeholder="At least 6 characters"
               />
             </div>
             <button
               type="submit"
               disabled={loading}
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white rounded-lg px-4 py-2.5 text-sm
+              className="w-full bg-blue-600 hover:bg-blue-500 text-white rounded-lg px-4 py-2.5 text-sm
                 font-medium transition focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
+                focus:ring-offset-slate-800 shadow-lg shadow-blue-500/25
                 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {loading ? 'Please wait...' : isSignUp ? 'Create account' : 'Sign in'}
@@ -146,7 +152,7 @@ export default function LoginPage() {
           </form>
 
           {/* Toggle sign-in / sign-up */}
-          <p className="mt-6 text-center text-sm text-gray-500">
+          <p className="mt-6 text-center text-sm text-slate-400">
             {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}
             <button
               onClick={() => {
@@ -154,7 +160,7 @@ export default function LoginPage() {
                 setError(null)
                 setSignUpSuccess(false)
               }}
-              className="text-blue-600 hover:text-blue-700 font-medium"
+              className="text-blue-400 hover:text-blue-300 font-medium transition"
             >
               {isSignUp ? 'Sign in' : 'Sign up'}
             </button>

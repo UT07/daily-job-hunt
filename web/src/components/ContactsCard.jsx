@@ -11,26 +11,26 @@ function ContactItem({ contact }) {
   };
 
   return (
-    <div className="border border-gray-100 rounded-lg p-4">
+    <div className="border border-slate-600 rounded-lg p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-medium text-gray-900">{contact.role}</p>
-          <p className="text-xs text-gray-500 mt-0.5">{contact.why}</p>
+          <p className="text-sm font-medium text-white">{contact.role}</p>
+          <p className="text-xs text-slate-400 mt-0.5">{contact.why}</p>
         </div>
         <a
           href={contact.search_url}
           target="_blank"
           rel="noopener noreferrer"
-          className="shrink-0 text-xs text-blue-600 hover:text-blue-800 underline"
+          className="shrink-0 text-xs text-blue-400 hover:text-blue-300 underline transition"
         >
           Search LinkedIn
         </a>
       </div>
-      <div className="mt-3 bg-gray-50 rounded-lg p-3 text-sm text-gray-700 relative">
+      <div className="mt-3 bg-slate-700/50 rounded-lg p-3 text-sm text-slate-300 relative">
         <p className="pr-16">{contact.message}</p>
         <button
           onClick={copy}
-          className="absolute top-2 right-2 text-xs px-2 py-1 rounded bg-white border border-gray-200 text-blue-600 hover:bg-blue-50 transition"
+          className="absolute top-2 right-2 text-xs px-2 py-1 rounded bg-slate-600 border border-slate-500 text-blue-400 hover:bg-slate-500 transition"
         >
           {copied ? 'Copied!' : 'Copy'}
         </button>
@@ -42,18 +42,18 @@ function ContactItem({ contact }) {
 export default function ContactsCard({ data, company }) {
   if (!data.contacts?.length) {
     return (
-      <div className="animate-fade-in bg-white rounded-xl shadow-sm border border-orange-200 p-6">
-        <h3 className="text-xs font-semibold text-orange-600 uppercase tracking-wider mb-2">
+      <div className="animate-fade-in bg-slate-800 rounded-lg border border-slate-700 p-6">
+        <h3 className="text-xs font-semibold text-orange-400 uppercase tracking-wider mb-2">
           LinkedIn Contacts — {company}
         </h3>
-        <p className="text-sm text-gray-500">No contacts found.</p>
+        <p className="text-sm text-slate-400">No contacts found.</p>
       </div>
     );
   }
 
   return (
-    <div className="animate-fade-in bg-white rounded-xl shadow-sm border border-orange-200 p-6">
-      <h3 className="text-xs font-semibold text-orange-600 uppercase tracking-wider mb-4">
+    <div className="animate-fade-in bg-slate-800 rounded-lg border border-slate-700 p-6">
+      <h3 className="text-xs font-semibold text-orange-400 uppercase tracking-wider mb-4">
         LinkedIn Contacts — {company}
       </h3>
       <div className="space-y-3">
