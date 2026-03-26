@@ -79,34 +79,34 @@ Full-stack software engineer with \textbf{3+ years} of experience building, ship
 \end{itemize}
 %==================== PROJECTS ====================
 \section*{Featured Projects}
-\projectentryurl{Purrrfect Keys -- AI Piano Learning App}{Jan 2026 -- Present}{https://expo.dev/accounts/ut254/projects/purrrfect-keys/builds/229bd252-c684-4af5-b39f-4f3623455a7e}{expo.dev/accounts/ut254/projects/purrrfect-keys}{React Native, TypeScript, Expo SDK 52, Firebase (Auth/Firestore/Functions), Zustand, ONNX, Gemini AI, Jest, Maestro}
+\projectentryurl{Purrrfect Keys -- AI Piano Learning App}{Jan 2026 -- Present}{https://expo.dev/accounts/ut254/projects/purrrfect-keys/builds/229bd252-c684-4af5-b39f-4f3623455a7e}{expo.dev/accounts/ut254/projects/purrrfect-keys}{React Native, TypeScript, Firebase, Gemini AI, ONNX, Jest, Maestro}
 \begin{itemize}
-  \item Architected a \textbf{full-stack cross-platform piano learning app} from scratch: React Native + TypeScript front-end with 15 Zustand stores, Firebase backend (Auth, Firestore, 9 Cloud Functions), Gemini AI for lesson generation, ONNX-based pitch detection (\textbf{<10ms} latency), and 12-type cross-device sync with offline-first architecture.
-  \item Shipped across \textbf{14 phases} with production-grade quality: \textbf{3,043 tests} across 149 suites, Maestro E2E, CI/CD via GitHub Actions + EAS Build, PostHog analytics, competitive league system with MMR ranking, and cat avatar progression gamification.
+  \item Shipped a cross-platform piano learning app through \textbf{14 development phases} with real-time pitch detection under \textbf{10ms}, AI-generated lessons via Gemini, competitive league with MMR ranking, and offline-first sync across 12 data types. \textbf{3,043 tests} passing across 149 suites.
+  \item Sole developer: designed the full architecture (React Native + Firebase + 9 Cloud Functions), built CI/CD with EAS Build, integrated PostHog analytics, and implemented gamification that drives daily active usage through cat avatar progression and streak rewards.
 \end{itemize}
 \vspace{0.10em}
-\projectentryurl{WhatsTheCraic -- Live Event Discovery Platform}{Apr 2025 -- Jul 2025}{https://github.com/UT07/whatsthecraic}{whatsthecraic.run.place}{Node.js/Express, React, FastAPI, MySQL, DynamoDB, Docker, AWS, Spotify OAuth, Ticketmaster API}
+\projectentryurl{WhatsTheCraic -- Live Event Discovery Platform}{Apr 2025 -- Jul 2025}{https://github.com/UT07/whatsthecraic}{whatsthecraic.run.place}{Node.js, React, FastAPI, MySQL, DynamoDB, Docker, AWS, Spotify OAuth}
 \begin{itemize}
-  \item Architected and deployed a \textbf{6-microservice event platform}: aggregator, events, DJ directory, venue directory, auth (email + Spotify OAuth), and React front-end; ingested from Ticketmaster and Eventbrite APIs with dedup, canonical event model, and personalized ranking using Spotify listening data.
-  \item Deployed on AWS with Docker Compose, Caddy auto-TLS, Route\,53 across 4 subdomains; shipped health/metrics endpoints, ICS calendar export, and improved event discovery conversion by \textbf{18\%} via A/B-tested personalized ranking.
+  \item Launched a live event platform that improved event discovery conversion by \textbf{18\%} through A/B-tested personalized ranking powered by Spotify listening data. Ingested events from Ticketmaster and Eventbrite with deduplication into a canonical data model.
+  \item Designed and deployed \textbf{6 microservices} (aggregator, events, DJ, venue, auth, frontend) on AWS with Docker Compose, auto-TLS, and health/metrics instrumentation across 4 subdomains. Added ICS calendar export and Spotify OAuth for preference-based recommendations.
 \end{itemize}
 \vspace{0.10em}
-\projectentryurl{Genomic Benchmarking Platform -- MSc Thesis}{Sep 2025 -- Dec 2025}{https://github.com/UT07/Performance-Optimization-and-Cost-Analysis-of-qpAdm-Genomic-Modeling}{github.com/UT07/qpAdm-Genomic-Benchmarking}{Terraform, Docker, Snakemake, EC2 Auto Scaling, S3, CloudWatch, Python, Bash}
+\projectentryurl{Genomic Benchmarking Platform -- MSc Thesis}{Sep 2025 -- Dec 2025}{https://github.com/UT07/Performance-Optimization-and-Cost-Analysis-of-qpAdm-Genomic-Modeling}{github.com/UT07/qpAdm-Genomic-Benchmarking}{Terraform, Docker, Snakemake, EC2 Auto Scaling, S3, CloudWatch}
 \begin{itemize}
-  \item Engineered a fully automated cloud benchmarking pipeline: Terraform-provisioned Auto Scaling Groups launched \textbf{10,700+} ephemeral workers, executed containerised workloads, emitted CloudWatch metrics, and self-terminated with \textbf{zero manual intervention}.
-  \item Optimized for cost and performance: identified optimal instance at \textbf{\$0.006/run}, achieved \textbf{66\%} cost reduction via Spot Instances, and eliminated \textbf{99\%} preprocessing overhead through data precomputation.
+  \item Ran \textbf{10,700+ parallel genomic workloads} on AWS with zero manual intervention. Terraform provisioned Auto Scaling Groups that launched workers, executed containerised jobs, emitted CloudWatch metrics, and self-terminated automatically.
+  \item Cut compute costs by \textbf{66\%} using Spot Instances and eliminated \textbf{99\%} of preprocessing overhead through data precomputation. Found the optimal instance configuration at \textbf{\$0.006 per run}.
 \end{itemize}
 \vspace{0.10em}
-\projectentryurl{Daily Job Hunt -- AI-Powered Job Automation SaaS}{Mar 2026 -- Present}{https://github.com/UT07/daily-job-hunt}{github.com/UT07/daily-job-hunt}{Python, FastAPI, React, Supabase (Postgres/Auth/RLS), LaTeX, 24 LLMs, AWS Lambda, S3, Playwright}
+\projectentryurl{Daily Job Hunt -- AI-Powered Job Automation SaaS}{Mar 2026 -- Present}{https://github.com/UT07/daily-job-hunt}{github.com/UT07/daily-job-hunt}{Python, FastAPI, React, Supabase, LaTeX, AWS Lambda, Playwright}
 \begin{itemize}
-  \item Built a \textbf{multi-tenant SaaS} scraping 8 job boards via Playwright stealth, AI-matching with a \textbf{consensus council of 24 LLMs} (3-perspective scoring), generating tailored LaTeX resumes and cover letters, and uploading to S3/Google Drive with email summaries.
-  \item Full stack: React dashboard (dark theme, real-time filters), Supabase Auth + Row Level Security, FastAPI on Lambda via Mangum, GDPR compliance (data export/deletion), per-model quality tracking, and a self-improvement loop that ranks and deprioritizes underperforming AI models.
+  \item Automated the entire job search pipeline: scrapes \textbf{8 job boards} daily, scores candidates from 3 perspectives (ATS, Hiring Manager, Tech Recruiter) using a \textbf{consensus council of 24 LLMs}, generates tailored resumes and cover letters, and emails results with S3-hosted PDFs.
+  \item Built as a multi-tenant SaaS: React dashboard with Supabase Auth and Row Level Security, GDPR-compliant data export/deletion, and a self-improvement loop that tracks per-model quality and deprioritizes underperforming AI models over time.
 \end{itemize}
 \vspace{0.10em}
-\projectentryurl{UTWorld -- Dual-Mode Portfolio with CMS}{2024 -- Present}{https://utworld.netlify.app}{utworld.netlify.app}{React 19, FastAPI, SQLAlchemy, Neon PostgreSQL, AWS Lambda/S3/CloudFront, Admin Panel, JWT Auth}
+\projectentryurl{UTWorld -- Dual-Mode Portfolio with CMS}{2024 -- Present}{https://utworld.netlify.app}{utworld.netlify.app}{React 19, FastAPI, SQLAlchemy, Neon PostgreSQL, AWS Lambda, S3, CloudFront}
 \begin{itemize}
-  \item Built a \textbf{full-stack portfolio platform} with dual persona modes (Professional + DJ), API-backed CMS with admin panel, S3 asset pipeline with CloudFront CDN, and static JSON fallback for resilience. Features project reordering, file uploads with 413 guardrails, and lazy-loaded media with session caching.
-  \item Deployed across 3 services: React 19 frontend on Netlify, React 18 admin panel, and FastAPI on AWS Lambda via SAM; CI/CD with GitHub Actions, Pytest API suite, and Playwright E2E tests.
+  \item Built a portfolio platform serving two distinct audiences (Professional and DJ) from a single codebase with mode switching, API-backed CMS, and an admin panel for managing projects, media, gigs, and resume uploads. S3 assets served via CloudFront CDN with static JSON fallback for resilience.
+  \item Deployed as \textbf{3 independent services}: React 19 public site on Netlify, React 18 admin panel, and FastAPI REST API on AWS Lambda via SAM with CI/CD through GitHub Actions. Includes Pytest API tests and Playwright E2E coverage.
 \end{itemize}
 %==================== EDUCATION ====================
 \section*{Education}

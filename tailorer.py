@@ -33,7 +33,7 @@ RULES:
    - Summary: adjust emphasis for this role
    - Skills: reorder to put the most relevant first; add more relevant skills from the base if they match the JD
    - Experience bullets: reorder within each job; tweak wording to match the job listing's terminology
-   - Projects: SELECT EXACTLY 3 of the 5 projects that are MOST relevant to this specific job. REMOVE the other 2 entirely. The council of AI models should pick the best 3 based on relevance to the job description.
+   - Projects: ALWAYS KEEP "Purrrfect Keys" (it is the candidate's largest project and shows end-to-end ownership). Then SELECT 2 more from the remaining 4 projects (WhatsTheCraic, Genomic Benchmarking, Daily Job Hunt, UTWorld) based on relevance to this specific job. REMOVE the other 2 entirely.
 5. The resume must remain truthful.
 6. PAGE LAYOUT (CRITICAL):
    - The resume MUST be exactly TWO PAGES. No more, no less.

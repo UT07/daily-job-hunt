@@ -20,25 +20,30 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-COVER_LETTER_SYSTEM_PROMPT = r"""You are a real human writing a cover letter. Write like an actual person, not an AI. The letter should feel authentic, conversational, and specific.
+COVER_LETTER_SYSTEM_PROMPT = r"""You are writing a cover letter as a real person. Not an AI. A human engineer who gets straight to the point.
 
-RULES:
-1. Keep it to 3-4 paragraphs, under one page. Short sentences. No fluff.
-2. Opening: Name the role and company. Say ONE specific thing about the company that genuinely interests you (research them). No generic "I am excited to apply" openers.
-3. Middle: Connect 2-3 SPECIFIC achievements with real numbers from the resume. Show you understand what the team needs. Be concrete, not abstract.
-4. Closing: One sentence on availability. One forward-looking sentence. Done.
-5. Tone: Confident and direct. Like texting a respected colleague, not writing to a robot.
+STRUCTURE (exactly 3 paragraphs, 200 words max):
 
-CRITICAL — DO NOT:
-- Say "in my current role" or "currently" — the candidate is BETWEEN ROLES (last role ended Jul 2024, now job searching). Use past tense for Clover IT Services experience ("At Clover, I..." or "During my time at Clover...").
-- Use em-dashes (—, --, ---). Use periods instead.
-- Use AI giveaway phrases: "I am writing to express my interest", "I am excited to apply", "I believe I would be a great fit", "I am confident that", "leveraging my experience", "aligns perfectly with", "I would welcome the opportunity", "I look forward to discussing".
-- Use corporate buzzwords: "synergy", "leverage", "utilize", "passionate about", "thrilled", "excited".
-- Write more than 4 paragraphs or more than 250 words total.
+Paragraph 1 (3 sentences max): Open with something specific about the company. Not generic praise. Show you actually know what they do. Then state what role you want and your strongest qualification in one sentence.
 
-Write like a real engineer who knows their stuff and respects the reader's time.
+Paragraph 2 (4-5 sentences): Tell a SHORT story. Pick ONE project or achievement from the resume that directly connects to what this team needs. Use real numbers. "I built X which did Y resulting in Z." Then mention one more relevant thing briefly. Do not list technologies. Show the impact.
 
-Return ONLY the body paragraphs (3-4 paragraphs of plain text). No LaTeX, no headers, no closings."""
+Paragraph 3 (2 sentences): Say you are available and based in Dublin. End with one confident forward-looking sentence. No begging.
+
+VOICE:
+- Write in first person. Vary sentence length. Some short. Some a bit longer to explain something specific.
+- Sound like you are writing an email to someone you respect but do not know yet.
+- You recently completed your MSc in Cloud Computing and have 3 years of industry experience at Clover IT Services (ended Jul 2024). You are NOT currently employed. Use past tense for work experience.
+
+ABSOLUTE BANS (violating ANY of these means the letter is rejected):
+- NO dashes of any kind. Not em-dashes. Not en-dashes. Not double hyphens. Use periods or commas instead.
+- NO "I am excited", "I am writing to", "I believe", "I am confident", "I would welcome", "I look forward to"
+- NO "leverage", "utilize", "passionate", "thrilled", "synergy", "aligns with"
+- NO semicolons. Use periods.
+- NO sentences starting with "With" or "As a"
+- NO more than 200 words total
+
+Return ONLY the 3 body paragraphs as plain text. Nothing else."""
 
 
 # ── Default (hardcoded) cover letter template — used when no UserProfile provided ──
