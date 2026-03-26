@@ -160,8 +160,8 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
         tex_path.write_text(tailored_tex, encoding="utf-8")
 
         job.tailored_tex_path = str(tex_path)
-        logger.info(f"[TAILORED] {job.title} @ {job.company} -> {tex_path.name} by {info['provider']}:{info['model']}")
-        log_quality(task="tailor_resume", provider=info["provider"], model=info["model"], job_id=job.job_id, company=job.company, job_title=job.title)
+        logger.info(f"[TAILORED] {job.title} @ {job.company} -> {tex_path.name} by {job.tailoring_provider}:{job.tailoring_model}")
+        log_quality(task="tailor_resume", provider=job.tailoring_provider, model=job.tailoring_model, job_id=job.job_id, company=job.company, job_title=job.title)
         return str(tex_path)
 
     except Exception as e:
@@ -322,8 +322,8 @@ Return ONLY valid JSON with the same keys. No markdown, no explanation."""
                 )
                 result[key] = base_value
 
-        logger.info(f"[TAILOR TEXT] {job.title} @ {job.company} -> {len(result)} sections tailored by {info['provider']}:{info['model']}")
-        log_quality(task="tailor_text", provider=info["provider"], model=info["model"], job_id=job.job_id, company=job.company, job_title=job.title)
+        logger.info(f"[TAILOR TEXT] {job.title} @ {job.company} -> {len(result)} sections tailored by {job.tailoring_provider}:{job.tailoring_model}")
+        log_quality(task="tailor_text", provider=job.tailoring_provider, model=job.tailoring_model, job_id=job.job_id, company=job.company, job_title=job.title)
         return result
 
     except json.JSONDecodeError as e:
