@@ -168,7 +168,7 @@ output:
 
 # --- Google Docs Template Engine (resume/cover letter generation) ---
 google_docs:
-  enabled: true
+  enabled: false  # Disabled — LaTeX engine produces better PDFs. Re-enable after fixing table templates.
   credentials_path: "google_credentials.json"
   share_with: "254utkarsh@gmail.com"
 

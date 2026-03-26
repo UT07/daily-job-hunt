@@ -101,15 +101,32 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
         # base resume always produces a fresh tailoring result, even if the rest
         # of the prompt text happens to be identical.
         resume_hash = hashlib.md5(base_tex.encode()).hexdigest()
-        info = ai_client.complete_with_info(
-            prompt=user_prompt,
-            system=TAILOR_SYSTEM_PROMPT,
-            temperature=0.3,
-            cache_extra=resume_hash,
-        )
-        tailored_tex = info["response"].strip()
-        job.tailoring_provider = info["provider"]
-        job.tailoring_model = info["model"]
+
+        # Use council if available (3 models generate, 2 critique, best wins)
+        use_council = hasattr(ai_client, 'council_complete') and len(getattr(ai_client, 'providers', [])) >= 3
+        if use_council:
+            logger.info(f"[TAILOR] Using council for {job.company}")
+            tailored_tex = ai_client.council_complete(
+                prompt=user_prompt,
+                system=TAILOR_SYSTEM_PROMPT,
+                n_generators=3,
+                n_critics=2,
+                task_description=f"Tailor LaTeX resume for {job.title} at {job.company}",
+                temperature=0.3,
+                cache_extra=resume_hash,
+            )
+            job.tailoring_provider = "council"
+            job.tailoring_model = "consensus"
+        else:
+            info = ai_client.complete_with_info(
+                prompt=user_prompt,
+                system=TAILOR_SYSTEM_PROMPT,
+                temperature=0.3,
+                cache_extra=resume_hash,
+            )
+            tailored_tex = info["response"].strip()
+            job.tailoring_provider = info["provider"]
+            job.tailoring_model = info["model"]
 
         # Strip markdown code fences if present
         if tailored_tex.startswith("```"):
@@ -259,15 +276,32 @@ Return ONLY valid JSON with the same keys. No markdown, no explanation."""
 
     try:
         sections_hash = hashlib.md5(sections_json.encode()).hexdigest()
-        info = ai_client.complete_with_info(
-            prompt=user_prompt,
-            system=TAILOR_TEXT_SYSTEM_PROMPT,
-            temperature=0.3,
-            cache_extra=sections_hash,
-        )
-        raw_response = info["response"].strip()
-        job.tailoring_provider = info["provider"]
-        job.tailoring_model = info["model"]
+
+        # Use council if available
+        use_council = hasattr(ai_client, 'council_complete') and len(getattr(ai_client, 'providers', [])) >= 3
+        if use_council:
+            logger.info(f"[TAILOR TEXT] Using council for {job.company}")
+            raw_response = ai_client.council_complete(
+                prompt=user_prompt,
+                system=TAILOR_TEXT_SYSTEM_PROMPT,
+                n_generators=3,
+                n_critics=2,
+                task_description=f"Tailor resume sections (JSON) for {job.title} at {job.company}",
+                temperature=0.3,
+                cache_extra=sections_hash,
+            )
+            job.tailoring_provider = "council"
+            job.tailoring_model = "consensus"
+        else:
+            info = ai_client.complete_with_info(
+                prompt=user_prompt,
+                system=TAILOR_TEXT_SYSTEM_PROMPT,
+                temperature=0.3,
+                cache_extra=sections_hash,
+            )
+            raw_response = info["response"].strip()
+            job.tailoring_provider = info["provider"]
+            job.tailoring_model = info["model"]
 
         # Strip markdown code fences if present
         if raw_response.startswith("```"):

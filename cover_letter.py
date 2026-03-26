@@ -246,15 +246,31 @@ Do NOT include the header, date, salutation, or closing — I'll add those from 
 Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
 
     try:
-        info = ai_client.complete_with_info(
-            prompt=user_prompt,
-            system=COVER_LETTER_SYSTEM_PROMPT,
-            temperature=0.7,
-            skip_cache=True,  # Cover letters should be unique each time
-        )
-        body_text = info["response"].strip()
-        job.cover_letter_provider = info["provider"]
-        job.cover_letter_model = info["model"]
+        # Use council if available (3 models generate, 2 critique, best wins)
+        use_council = hasattr(ai_client, 'council_complete') and len(getattr(ai_client, 'providers', [])) >= 3
+        if use_council:
+            logger.info(f"[COVER LETTER] Using council for {job.company}")
+            body_text = ai_client.council_complete(
+                prompt=user_prompt,
+                system=COVER_LETTER_SYSTEM_PROMPT,
+                n_generators=3,
+                n_critics=2,
+                task_description=f"Write cover letter body for {job.title} at {job.company}",
+                temperature=0.7,
+                skip_cache=True,
+            )
+            job.cover_letter_provider = "council"
+            job.cover_letter_model = "consensus"
+        else:
+            info = ai_client.complete_with_info(
+                prompt=user_prompt,
+                system=COVER_LETTER_SYSTEM_PROMPT,
+                temperature=0.7,
+                skip_cache=True,
+            )
+            body_text = info["response"].strip()
+            job.cover_letter_provider = info["provider"]
+            job.cover_letter_model = info["model"]
 
         # Escape LaTeX special characters in the body
         body_text = body_text.replace("&", r"\&")
