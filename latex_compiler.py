@@ -215,7 +215,6 @@ def _compile_with_pdflatex(tex_path: Path, out_dir: Path) -> str:
             [
                 "pdflatex",
                 "-interaction=nonstopmode",
-                "-halt-on-error",
                 f"-output-directory={abs_out}",
                 abs_tex,
             ],
