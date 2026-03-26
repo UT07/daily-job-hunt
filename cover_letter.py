@@ -296,8 +296,8 @@ Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
         tex_path.write_text(full_tex, encoding="utf-8")
 
         job.cover_letter_tex_path = str(tex_path)
-        logger.info(f"[COVER LETTER] {job.title} @ {job.company} -> {tex_path.name} by {info['provider']}:{info['model']}")
-        log_quality(task="cover_letter", provider=info["provider"], model=info["model"], job_id=job.job_id, company=job.company, job_title=job.title)
+        logger.info(f"[COVER LETTER] {job.title} @ {job.company} -> {tex_path.name} by {job.cover_letter_provider}:{job.cover_letter_model}")
+        log_quality(task="cover_letter", provider=job.cover_letter_provider, model=job.cover_letter_model, job_id=job.job_id, company=job.company, job_title=job.title)
         return str(tex_path)
 
     except Exception as e:
@@ -395,8 +395,8 @@ Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
             credentials_path=credentials_path,
         )
 
-        logger.info(f"[COVER LETTER DOC] {job.title} @ {job.company} -> {result['doc_id']} by {info['provider']}:{info['model']}")
-        log_quality(task="cover_letter", provider=info["provider"], model=info["model"], job_id=job.job_id, company=job.company, job_title=job.title)
+        logger.info(f"[COVER LETTER DOC] {job.title} @ {job.company} -> {result['doc_id']} by {job.cover_letter_provider}:{job.cover_letter_model}")
+        log_quality(task="cover_letter", provider=job.cover_letter_provider, model=job.cover_letter_model, job_id=job.job_id, company=job.company, job_title=job.title)
         return result
 
     except Exception as e:

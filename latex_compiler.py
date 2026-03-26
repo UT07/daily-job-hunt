@@ -52,11 +52,39 @@ def _sanitize_latex(tex: str) -> str:
 
 
 def _escape_non_table(text: str) -> str:
-    """Escape &, #, % in text that is NOT inside a table environment."""
-    # Process line-by-line so we can detect %-comments correctly.
+    """Escape &, #, % in text that is NOT inside a table environment.
+
+    Preserves #1, #2 etc. inside \\newcommand definitions (which can span
+    multiple lines enclosed in braces).
+    """
+    # Split into command-definition blocks (where # is a parameter) and regular text.
+    # Strategy: track brace depth after \newcommand to find the definition body.
+    lines = text.split("\n")
     out_lines: list[str] = []
-    for line in text.split("\n"):
-        out_lines.append(_escape_line(line))
+    in_command_def = False
+    brace_depth = 0
+
+    for line in lines:
+        stripped = line.strip()
+        # Detect start of command definition
+        if re.match(r"\s*\\(newcommand|renewcommand|def|DeclareMathOperator)", stripped):
+            in_command_def = True
+            brace_depth = 0
+
+        if in_command_def:
+            # Count braces to know when the definition ends
+            for ch in line:
+                if ch == '{':
+                    brace_depth += 1
+                elif ch == '}':
+                    brace_depth -= 1
+            # Don't escape # inside command definitions
+            out_lines.append(line)
+            if brace_depth <= 0:
+                in_command_def = False
+        else:
+            out_lines.append(_escape_line(line))
+
     return "\n".join(out_lines)
 
 

@@ -1,17 +1,17 @@
-"""LinkedIn contact finder for job applications.
+"""LinkedIn contact finder — finds REAL profile URLs via Google search.
 
-For each matched job, generates LinkedIn search URLs to find relevant
-people to connect with (hiring managers, recruiters, team leads).
-
-NOTE: This does NOT scrape LinkedIn profiles (that violates ToS).
-Instead, it constructs targeted search URLs that you can open in
-your browser to find and connect with the right people.
+For each matched job, searches Google for actual LinkedIn profiles of
+hiring managers, recruiters, and team members at the target company.
+Returns real linkedin.com/in/ URLs, not generic search pages.
 """
 
 from __future__ import annotations
 import json
 import logging
+import re
+import time
 import urllib.parse
+from typing import List, Dict
 from scrapers.base import Job
 from ai_client import AIClient
 from matcher import extract_json
@@ -19,47 +19,122 @@ from matcher import extract_json
 logger = logging.getLogger(__name__)
 
 
-CONTACT_SYSTEM_PROMPT = """You are a job search networking strategist. Given a job listing, identify SPECIFIC people the candidate should connect with on LinkedIn.
+def _search_linkedin_profiles(role: str, company: str, max_results: int = 1) -> List[Dict[str, str]]:
+    """Search LinkedIn People Search for profiles matching role + company.
 
-Your goal is to find the most likely REAL people at the company — not generic role titles. Use your knowledge of the company's org structure, public team pages, engineering blog authors, and conference speakers to suggest actual names when possible.
+    Uses Playwright stealth browser (same as LinkedIn job scraper).
+    Returns list of {"name": "John Smith", "url": "https://linkedin.com/in/...", "title": "..."}
+    """
+    profiles = []
 
-For each contact, provide:
-1. A specific name if you can reasonably guess one (e.g., "John Smith" or "VP of Engineering" if name unknown)
-2. Their exact title at the company
-3. Why connecting with them helps
-4. A personalized LinkedIn connection message (reference something specific — a blog post, talk, or the team's work)
-5. A Google search query to find their LinkedIn profile (e.g., "site:linkedin.com/in John Smith CompanyName")
+    try:
+        from scrapers.browser import get_browser_context
+
+        search_query = f"{role} {company}"
+        search_url = (
+            "https://www.linkedin.com/search/results/people/?"
+            + urllib.parse.urlencode({
+                "keywords": search_query,
+                "origin": "GLOBAL_SEARCH_HEADER",
+            })
+        )
+
+        with get_browser_context(headless=True) as (browser, context):
+            page = context.new_page()
+            try:
+                page.goto(search_url, timeout=15000, wait_until="domcontentloaded")
+                time.sleep(3)  # Wait for results to render
+
+                # Extract profile cards from LinkedIn search results
+                # Each result has: name, headline, profile URL
+                result_cards = page.query_selector_all('div.entity-result__item, li.reusable-search__result-container')
+
+                if not result_cards:
+                    # Try broader selectors
+                    result_cards = page.query_selector_all('a[href*="/in/"]')
+
+                for card in result_cards[:max_results]:
+                    try:
+                        # Try to get structured data
+                        name_el = card.query_selector('span[aria-hidden="true"], .entity-result__title-text')
+                        name = name_el.inner_text().strip().split('\n')[0] if name_el else ""
+
+                        link_el = card.query_selector('a[href*="/in/"]') if card.tag_name != 'a' else card
+                        href = link_el.get_attribute('href') if link_el else ""
+
+                        headline_el = card.query_selector('.entity-result__primary-subtitle, .entity-result__summary')
+                        title = headline_el.inner_text().strip().split('\n')[0] if headline_el else role
+
+                        if href and '/in/' in href:
+                            # Clean up URL
+                            profile_url = href.split('?')[0]
+                            if not profile_url.startswith('http'):
+                                profile_url = 'https://www.linkedin.com' + profile_url
+
+                            # Extract name from URL if not found in DOM
+                            if not name:
+                                slug = profile_url.split('/in/')[-1].rstrip('/')
+                                slug = re.sub(r'-[a-f0-9]{5,}$', '', slug)
+                                name = slug.replace('-', ' ').title()
+
+                            profiles.append({
+                                "name": name,
+                                "url": profile_url,
+                                "title": title,
+                            })
+                    except Exception:
+                        continue
+
+                page.close()
+
+            except Exception as e:
+                logger.debug(f"[CONTACTS] LinkedIn search page failed: {e}")
+                page.close()
+
+        time.sleep(2)  # Rate limit between searches
+
+    except ImportError:
+        logger.warning("[CONTACTS] Playwright not available — can't search LinkedIn profiles")
+    except Exception as e:
+        logger.warning(f"[CONTACTS] LinkedIn profile search failed for '{role}' at '{company}': {e}")
+
+    return profiles
+
+
+CONTACT_SYSTEM_PROMPT = """You are a job search networking strategist. Given a job listing, identify the types of people the candidate should connect with on LinkedIn.
+
+For each contact type, provide:
+1. A specific job title to search for (e.g., "Engineering Manager", "Head of SRE", "Technical Recruiter")
+2. Why connecting with them helps
+3. A personalized LinkedIn connection message (1-2 sentences, mention the specific role)
 
 Return ONLY valid JSON (no markdown, no code fences):
 {
     "contacts": [
         {
-            "name": "<full name if known, or 'Unknown' if guessing>",
-            "title": "<their specific job title at the company>",
+            "search_title": "<specific job title to search for on LinkedIn>",
             "role_type": "<hiring_manager|peer|recruiter|leader>",
             "why": "<1 sentence on why this connection helps>",
-            "message": "<personalized LinkedIn connection note — reference something specific>",
-            "google_search": "<site:linkedin.com/in query to find this person>"
+            "message": "<suggested LinkedIn connection note — mention the specific role>"
         }
     ]
 }
 
-Provide exactly 3-4 contacts, prioritized by impact:
-1. The likely hiring manager (most important — try to name them)
-2. A team member who'd be a peer (someone in a similar role at the company)
-3. A recruiter at the company (try to find the actual talent acquisition person)
-4. (Optional) A senior/leadership figure whose work you can reference
-
-IMPORTANT: Be specific. "Engineering Manager at Mars Capital" is better than just "Engineering Manager". If you know the company well enough to guess a name, include it — the candidate will verify before reaching out."""
+Provide exactly 3 contacts, prioritized by impact:
+1. The likely hiring manager (most important)
+2. A team member who'd be a peer
+3. A recruiter at the company"""
 
 
 def find_contacts(
     job: Job,
     ai_client: AIClient,
 ) -> list[dict]:
-    """Generate LinkedIn search URLs and connection suggestions for a job.
+    """Find LinkedIn contacts with REAL profile URLs via Google search.
 
-    Returns list of contact dicts with role, why, message, and search_url.
+    1. AI suggests which roles to search for
+    2. Google search finds actual LinkedIn profiles for each role
+    3. Returns contacts with real profile URLs
     """
     prompt = f"""Find the best LinkedIn contacts for this job application:
 
@@ -72,99 +147,69 @@ The candidate is applying for this role and wants to network with the right peop
 
     contacts = []
 
+    # Step 1: AI suggests which roles to search for
+    search_roles = []
     try:
         result_text = ai_client.complete(
             prompt=prompt,
             system=CONTACT_SYSTEM_PROMPT,
             temperature=0.4,
         )
-
         data = extract_json(result_text)
 
         for contact in data.get("contacts", []):
-            name = contact.get("name", "")
-            title = contact.get("title", "") or contact.get("role", "")
-            role_type = contact.get("role_type", "peer")
-            google_query = contact.get("google_search", "")
-
-            # Build targeted LinkedIn search URL with company filter
-            if name and name != "Unknown":
-                search_keywords = f"{name} {job.company}"
-            else:
-                search_keywords = f"{title} {job.company}"
-
-            linkedin_search_url = (
-                "https://www.linkedin.com/search/results/people/?"
-                + urllib.parse.urlencode({
-                    "keywords": search_keywords,
-                    "origin": "GLOBAL_SEARCH_HEADER",
-                })
-            )
-
-            # Google search fallback for finding specific profiles
-            if not google_query:
-                if name and name != "Unknown":
-                    google_query = f"site:linkedin.com/in {name} {job.company}"
-                else:
-                    google_query = f"site:linkedin.com/in {title} {job.company}"
-
-            google_search_url = (
-                "https://www.google.com/search?"
-                + urllib.parse.urlencode({"q": google_query})
-            )
-
-            contacts.append({
-                "name": name if name != "Unknown" else "",
-                "role": title,
-                "role_type": role_type,
+            search_roles.append({
+                "search_title": contact.get("search_title", contact.get("role", "")),
+                "role_type": contact.get("role_type", "peer"),
                 "why": contact.get("why", ""),
                 "message": contact.get("message", ""),
-                "search_url": linkedin_search_url,
-                "google_url": google_search_url,
+            })
+    except Exception as e:
+        logger.warning(f"[CONTACTS] AI role suggestion failed for {job.company}: {e}")
+        # Fallback roles
+        search_roles = [
+            {"search_title": "Engineering Manager", "role_type": "hiring_manager",
+             "why": "Likely the hiring manager", "message": f"Hi! I applied for the {job.title} role at {job.company}."},
+            {"search_title": "Technical Recruiter", "role_type": "recruiter",
+             "why": "Can fast-track your application", "message": f"Hi! I'm interested in the {job.title} role at {job.company}."},
+            {"search_title": "Senior Engineer", "role_type": "peer",
+             "why": "Potential peer on the team", "message": f"Hi! I applied for the {job.title} role at {job.company}."},
+        ]
+
+    # Step 2: Google search for REAL LinkedIn profiles for each role
+    for role_info in search_roles:
+        search_title = role_info["search_title"]
+        profiles = _google_search_linkedin_profiles(search_title, job.company, max_results=1)
+
+        if profiles:
+            p = profiles[0]
+            contacts.append({
+                "name": p["name"],
+                "role": p.get("title") or search_title,
+                "role_type": role_info["role_type"],
+                "why": role_info["why"],
+                "message": role_info["message"],
+                "profile_url": p["url"],  # REAL LinkedIn profile URL
+                "search_url": "",  # Not needed — we have the real URL
+                "google_url": "",
+            })
+        else:
+            # Fallback: provide the Google search URL so user can find manually
+            google_query = f'site:linkedin.com/in "{search_title}" "{job.company}"'
+            google_url = "https://www.google.com/search?" + urllib.parse.urlencode({"q": google_query})
+            contacts.append({
+                "name": "",
+                "role": search_title,
+                "role_type": role_info["role_type"],
+                "why": role_info["why"],
+                "message": role_info["message"],
+                "profile_url": "",
+                "search_url": "",
+                "google_url": google_url,
             })
 
-        logger.info(f"[CONTACTS] {job.company}: found {len(contacts)} contact suggestions")
-
-    except (json.JSONDecodeError, Exception) as e:
-        logger.error(f"[CONTACTS] Error finding contacts for {job.company}: {e}")
-        # Fallback: generate basic search URLs without AI
-        contacts = _fallback_contacts(job)
-
-    return contacts
-
-
-def _fallback_contacts(job: Job) -> list[dict]:
-    """Generate targeted LinkedIn search URLs without AI."""
-    roles = [
-        ("Engineering Manager", "hiring_manager", "Likely the hiring manager"),
-        ("Technical Recruiter", "recruiter", "Can fast-track your application"),
-        ("Senior Engineer", "peer", "Potential peer on the team"),
-    ]
-
-    contacts = []
-    for role, role_type, why in roles:
-        search_query = f"{role} {job.company}"
-        search_url = (
-            "https://www.linkedin.com/search/results/people/?"
-            + urllib.parse.urlencode({
-                "keywords": search_query,
-                "origin": "GLOBAL_SEARCH_HEADER",
-            })
-        )
-        google_url = (
-            "https://www.google.com/search?"
-            + urllib.parse.urlencode({"q": f"site:linkedin.com/in {role} {job.company}"})
-        )
-        contacts.append({
-            "name": "",
-            "role": role,
-            "role_type": role_type,
-            "why": why,
-            "message": f"Hi! I came across the {job.title} role at {job.company} and would love to connect.",
-            "search_url": search_url,
-            "google_url": google_url,
-        })
-
+    logger.info(f"[CONTACTS] {job.company}: {len(contacts)} contacts "
+                f"({sum(1 for c in contacts if c.get('profile_url'))} with real profile URLs)")
     return contacts
 
 
