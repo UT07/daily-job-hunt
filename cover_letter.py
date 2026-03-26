@@ -284,16 +284,6 @@ Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
             job.cover_letter_model = info["model"]
 
         # Escape LaTeX special characters in the body
-        # Strip dashes that AI keeps inserting despite being told not to
-        body_text = body_text.replace(" — ", ". ")   # em-dash
-        body_text = body_text.replace("—", ". ")
-        body_text = body_text.replace(" -- ", ". ")  # double hyphen
-        body_text = body_text.replace("--", ". ")
-        body_text = body_text.replace(" - ", ", ")   # single dash as clause connector
-        # Fix double periods from dash replacement
-        body_text = body_text.replace(". .", ".")
-        body_text = body_text.replace("..", ".")
-
         # Escape LaTeX special characters in the body
         body_text = body_text.replace("&", r"\&")
         body_text = body_text.replace("%", r"\%")
