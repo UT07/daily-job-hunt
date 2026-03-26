@@ -207,30 +207,42 @@ def _compile_with_tectonic(tex_path: Path, out_dir: Path) -> str:
 
 
 def _compile_with_pdflatex(tex_path: Path, out_dir: Path) -> str:
-    """Compile with pdflatex — traditional fallback."""
+    """Compile with pdflatex — traditional fallback.
+
+    Runs pdflatex from the directory containing the .tex file to avoid
+    issues with spaces in paths when using -output-directory.
+    """
     try:
-        abs_tex = str(tex_path.resolve())
-        abs_out = str(out_dir.resolve())
+        # Run from the tex file's directory with just the filename
+        # This avoids path-with-spaces issues in -output-directory
+        tex_dir = tex_path.parent.resolve()
+        tex_name = tex_path.name
         result = subprocess.run(
             [
                 "pdflatex",
                 "-interaction=nonstopmode",
-                f"-output-directory={abs_out}",
-                abs_tex,
+                tex_name,
             ],
             capture_output=True,
             text=True,
             timeout=60,
-            cwd=str(tex_path.parent.resolve()),
+            cwd=str(tex_dir),
         )
 
         pdf_name = tex_path.stem + ".pdf"
-        pdf_path = out_dir / pdf_name
+        # PDF is generated in the same dir as the tex file (cwd)
+        pdf_path = tex_dir / pdf_name
 
         if pdf_path.exists():
+            # Move to out_dir if different from tex_dir
+            if out_dir.resolve() != tex_dir:
+                final_path = out_dir / pdf_name
+                import shutil as _shutil
+                _shutil.move(str(pdf_path), str(final_path))
+                pdf_path = final_path
             # Clean up auxiliary files
             for ext in [".aux", ".log", ".out", ".toc", ".nav", ".snm"]:
-                aux = out_dir / (tex_path.stem + ext)
+                aux = tex_dir / (tex_path.stem + ext)
                 if aux.exists():
                     aux.unlink()
             logger.info(f"[PDF] Compiled (pdflatex) → {pdf_path.name}")
