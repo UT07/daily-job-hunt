@@ -253,8 +253,8 @@ Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
             body_text = ai_client.council_complete(
                 prompt=user_prompt,
                 system=COVER_LETTER_SYSTEM_PROMPT,
-                n_generators=3,
-                n_critics=2,
+                n_generators=2,
+                n_critics=1,
                 task_description=f"Write cover letter body for {job.title} at {job.company}",
                 temperature=0.7,
                 skip_cache=True,

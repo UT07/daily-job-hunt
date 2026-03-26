@@ -109,8 +109,8 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
             tailored_tex = ai_client.council_complete(
                 prompt=user_prompt,
                 system=TAILOR_SYSTEM_PROMPT,
-                n_generators=3,
-                n_critics=2,
+                n_generators=2,
+                n_critics=1,
                 task_description=f"Tailor LaTeX resume for {job.title} at {job.company}",
                 temperature=0.3,
                 cache_extra=resume_hash,
@@ -284,8 +284,8 @@ Return ONLY valid JSON with the same keys. No markdown, no explanation."""
             raw_response = ai_client.council_complete(
                 prompt=user_prompt,
                 system=TAILOR_TEXT_SYSTEM_PROMPT,
-                n_generators=3,
-                n_critics=2,
+                n_generators=2,
+                n_critics=1,
                 task_description=f"Tailor resume sections (JSON) for {job.title} at {job.company}",
                 temperature=0.3,
                 cache_extra=sections_hash,

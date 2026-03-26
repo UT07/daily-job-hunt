@@ -718,10 +718,15 @@ class AIClient:
         """
         exclude = exclude or set()
 
+        # Filter out dead providers AND small-context models that can't handle resumes
+        _SMALL_MODELS = {"llama-3.1-8b-instant", "llama-4-scout-17b-16e-instruct",
+                         "mistral-small-3.1-24b-instruct", "mistralai/mistral-small-3.1-24b-instruct-2503",
+                         "mistralai/mistral-small-3.1-24b-instruct:free"}
         alive = [
             p for p in self.providers
             if (p.name, p.model) not in self._dead_providers
             and (p.name, p.model) not in exclude
+            and p.model not in _SMALL_MODELS
         ]
 
         if not alive:
@@ -787,29 +792,43 @@ class AIClient:
                     f"{', '.join(f'{p.name}:{p.model}' for p in generators)}")
 
         results: List[Dict[str, Any]] = []
-        for provider in generators:
-            try:
-                resp = provider.complete_with_retry(prompt, system=system, temperature=temperature)
-                results.append({
-                    "response": resp,
-                    "provider": provider.name,
-                    "model": provider.model,
-                })
-                self._stats["provider_calls"][provider.name] = (
-                    self._stats["provider_calls"].get(provider.name, 0) + 1
-                )
-                logger.info(f"[Council] {provider.name}:{provider.model} generated "
-                            f"{len(resp)} chars")
-            except Exception as e:
-                logger.warning(f"[Council] {provider.name}:{provider.model} failed: {e}")
-                # Mark permanently dead providers
-                import requests as _req
-                if isinstance(e, _req.HTTPError):
-                    status = e.response.status_code if hasattr(e, "response") and e.response else 0
-                    if status in self._DEAD_CODES:
+        import requests as _req
+        import concurrent.futures
+
+        def _generate_one(provider):
+            """Generate from one provider with a hard timeout."""
+            resp = provider.complete_with_retry(prompt, system=system, temperature=temperature)
+            return {"response": resp, "provider": provider.name, "model": provider.model}
+
+        # Run generators concurrently with a 60-second hard timeout per provider
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(generators)) as executor:
+            future_to_provider = {
+                executor.submit(_generate_one, p): p for p in generators
+            }
+            for future in concurrent.futures.as_completed(future_to_provider, timeout=90):
+                provider = future_to_provider[future]
+                try:
+                    result = future.result(timeout=60)
+                    results.append(result)
+                    self._stats["provider_calls"][provider.name] = (
+                        self._stats["provider_calls"].get(provider.name, 0) + 1
+                    )
+                    logger.info(f"[Council] {provider.name}:{provider.model} generated "
+                                f"{len(result['response'])} chars")
+                except concurrent.futures.TimeoutError:
+                    logger.warning(f"[Council] {provider.name}:{provider.model} timed out (60s)")
+                except Exception as e:
+                    logger.warning(f"[Council] {provider.name}:{provider.model} failed: {e}")
+                    # Mark permanently dead providers (402, 403, etc.)
+                    if isinstance(e, _req.HTTPError):
+                        status = e.response.status_code if hasattr(e, "response") and e.response else 0
+                        if status in self._DEAD_CODES:
+                            self._dead_providers.add((provider.name, provider.model))
+                            logger.warning(f"[Council] Marked {provider.name}:{provider.model} dead ({status})")
+                    elif "Payment Required" in str(e) or "402" in str(e):
                         self._dead_providers.add((provider.name, provider.model))
-                        logger.warning(f"[Council] Marked {provider.name}:{provider.model} dead ({status})")
-                continue
+                        logger.warning(f"[Council] Marked {provider.name}:{provider.model} dead (payment)")
+                    continue
 
         if not results:
             raise ProviderError("[Council] All generators failed — no candidates produced")
@@ -1245,11 +1264,11 @@ class AIClient:
                 providers.append(OpenRouterProvider(api_key=or_key, model=model))
             logger.info(f"[AI] OpenRouter council: {len(or_models)} free models")
 
-        # 5. DeepSeek direct API — last resort (may have expired credits)
-        ds_key = get_key("deepseek", "DEEPSEEK_API_KEY")
-        if ds_key:
-            providers.append(DeepSeekProvider(api_key=ds_key, model="deepseek-chat"))
-            logger.info("[AI] DeepSeek direct: deepseek-chat (if credits remain)")
+        # 5. DeepSeek direct API — DISABLED (credits exhausted, 402 errors)
+        # ds_key = get_key("deepseek", "DEEPSEEK_API_KEY")
+        # if ds_key:
+        #     providers.append(DeepSeekProvider(api_key=ds_key, model="deepseek-chat"))
+        #     logger.info("[AI] DeepSeek direct: deepseek-chat")
 
         if not providers:
             raise ProviderError(
