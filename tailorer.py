@@ -153,6 +153,21 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
         if "\\end{document}" not in tailored_tex:
             tailored_tex += "\n\\end{document}"
 
+        # Fix common AI LaTeX typos before sanitization
+        _TYPO_FIXES = {
+            "\\emphergencystretch": "\\emergencystretch",
+            "\\emergecystretch": "\\emergencystretch",
+            "\\emergenystretch": "\\emergencystretch",
+            "\\setlength{\\emergencystrech}": "\\setlength{\\emergencystretch}",
+            "\\usepackge": "\\usepackage",
+            "\\documenclass": "\\documentclass",
+            "\\begindocument": "\\begin{document}",
+        }
+        for typo, fix in _TYPO_FIXES.items():
+            if typo in tailored_tex:
+                tailored_tex = tailored_tex.replace(typo, fix)
+                logger.info(f"[TYPO FIX] Fixed '{typo}' -> '{fix}'")
+
         # Sanitize LaTeX before saving (escape bare &, #, % from AI output)
         tailored_tex = _sanitize_latex(tailored_tex)
 
