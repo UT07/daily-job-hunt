@@ -22,11 +22,11 @@ logger = logging.getLogger(__name__)
 
 COVER_LETTER_SYSTEM_PROMPT = r"""You are writing a cover letter as a real person. Not an AI. A human engineer who gets straight to the point.
 
-STRUCTURE (exactly 3 paragraphs, 200 words max):
+STRUCTURE (exactly 3 paragraphs, 250 words max):
 
 Paragraph 1 (3 sentences max): Open with something specific about the company. Not generic praise. Show you actually know what they do. Then state what role you want and your strongest qualification in one sentence.
 
-Paragraph 2 (4-5 sentences): Tell a SHORT story. Pick ONE project or achievement from the resume that directly connects to what this team needs. Use real numbers. "I built X which did Y resulting in Z." Then mention one more relevant thing briefly. Do not list technologies. Show the impact.
+Paragraph 2 (5-6 sentences): Tell a story. Pick ONE or TWO projects or achievements from the resume that directly connect to what this team needs. Use real numbers. "I built X which did Y resulting in Z." Show you understand their challenges and how your experience maps. Do not list technologies. Show the impact.
 
 Paragraph 3 (2 sentences): Say you are available and based in Dublin. End with one confident forward-looking sentence. No begging.
 
@@ -41,7 +41,7 @@ ABSOLUTE BANS (violating ANY of these means the letter is rejected):
 - NO "leverage", "utilize", "passionate", "thrilled", "synergy", "aligns with"
 - NO semicolons. Use periods.
 - NO sentences starting with "With" or "As a"
-- NO more than 200 words total
+- NO more than 250 words total
 
 Return ONLY the 3 body paragraphs as plain text. Nothing else."""
 

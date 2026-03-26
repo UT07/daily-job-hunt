@@ -37,10 +37,11 @@ RULES:
 5. The resume must remain truthful.
 6. PAGE LAYOUT (CRITICAL):
    - The resume MUST be exactly TWO PAGES. No more, no less.
-   - Page 1: Header, Summary, Technical Skills, and Clover IT Services experience (all 8 bullets).
-   - Page 2: Seattle Kraken (4 bullets), 3 selected Projects, Education, Certifications.
-   - If content overflows to page 3, CUT bullet points (start by trimming Clover from 8 to 6 bullets).
-   - Projects MUST start on page 2. If they appear on page 1, add more skill categories or expand existing skills.
+   - Page 1: Header, Summary, Technical Skills, Clover IT Services (7 bullets), and Seattle Kraken (3 bullets).
+   - Page 2: 3 selected Projects (Purrrfect Keys always + 2 others), Education, Certifications.
+   - If content overflows to page 3, CUT bullet points (trim Clover to 6, Kraken to 2).
+   - Projects MUST start on page 2. Do NOT let any project appear on page 1. The page break happens naturally after Seattle Kraken.
+   - Do NOT add extra bullets to any section. Keep Clover at 7, Kraken at 3.
 7. Prominently place technologies the candidate has used that the job mentions.
 
 WRITING STYLE (CRITICAL):
