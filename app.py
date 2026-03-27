@@ -212,9 +212,18 @@ class ProfileResponse(BaseModel):
 
 
 class ProfileUpdateRequest(BaseModel):
-    full_name: Optional[str] = None
-    linkedin_url: Optional[str] = None
-    github_url: Optional[str] = None
+    name: Optional[str] = None
+    full_name: Optional[str] = None  # alias
+    phone: Optional[str] = None
+    location: Optional[str] = None
+    visa_status: Optional[str] = None
+    github: Optional[str] = None
+    github_url: Optional[str] = None  # alias
+    linkedin: Optional[str] = None
+    linkedin_url: Optional[str] = None  # alias
+    website: Optional[str] = None
+    work_authorizations: Optional[dict] = None
+    candidate_context: Optional[str] = None
     target_roles: Optional[list[str]] = None
     target_locations: Optional[list[str]] = None
 
@@ -450,8 +459,18 @@ def update_profile(
     if _db is None:
         raise HTTPException(503, "Database not configured")
 
-    # Only send non-None fields to the database
-    update_data = req.model_dump(exclude_none=True)
+    # Normalize field names (frontend may use aliases)
+    raw = req.model_dump(exclude_none=True)
+    update_data = {}
+    for k, v in raw.items():
+        if k == "full_name":
+            update_data["name"] = v
+        elif k == "linkedin_url":
+            update_data["linkedin"] = v
+        elif k == "github_url":
+            update_data["github"] = v
+        else:
+            update_data[k] = v
     if not update_data:
         raise HTTPException(400, "No fields to update")
 
@@ -463,6 +482,24 @@ def update_profile(
         plan=row.get("plan", "free"),
         created_at=row.get("created_at"),
     )
+
+
+@app.put("/api/search-config")
+def update_search_config(body: dict, user: AuthUser = Depends(get_current_user)):
+    """Update user's search configuration (queries, locations, etc.)."""
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+    result = _db.upsert_search_config(user.id, body)
+    return result
+
+
+@app.get("/api/search-config")
+def get_search_config(user: AuthUser = Depends(get_current_user)):
+    """Get user's search configuration."""
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+    config = _db.get_search_config(user.id)
+    return config or {}
 
 
 # ---------------------------------------------------------------------------
