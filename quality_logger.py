@@ -76,6 +76,8 @@ def get_model_stats() -> dict:
     entries = read_quality_log()
     stats = {}
     for e in entries:
+        if 'provider' not in e or 'model' not in e:
+            continue  # Skip malformed entries
         key = f"{e['provider']}:{e['model']}"
         if key not in stats:
             stats[key] = {"count": 0, "total_score": 0, "scored_count": 0, "tasks": {}, "errors": 0}
