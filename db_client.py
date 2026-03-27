@@ -199,24 +199,23 @@ class SupabaseClient:
     def get_job_stats(self, user_id: str) -> Dict[str, Any]:
         """Get aggregate job stats for a user.
 
+        Uses minimal SELECT (only 2 columns) for speed.
         Returns dict with total_jobs, matched_jobs, avg_match_score,
         and jobs_by_status counts.
         """
-        # Total jobs
         all_jobs = (
             self.client.table("jobs")
             .select("match_score, application_status")
             .eq("user_id", user_id)
             .execute()
         )
-        rows = all_jobs.data
+        rows = all_jobs.data or []
 
         total = len(rows)
-        matched = sum(1 for r in rows if (r.get("match_score") or 0) > 0)
         scores = [r["match_score"] for r in rows if (r.get("match_score") or 0) > 0]
+        matched = len(scores)
         avg_score = round(sum(scores) / len(scores), 1) if scores else 0
 
-        # Count by status
         status_counts: Dict[str, int] = {}
         for r in rows:
             s = r.get("application_status", "New")

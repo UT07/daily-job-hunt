@@ -30,16 +30,19 @@ export default function Dashboard() {
   const [minScore, setMinScore] = useState(0);
   const [companySearch, setCompanySearch] = useState('');
 
+  // Track filter version to avoid redundant fetches
+  const [filterVersion, setFilterVersion] = useState(0);
+
   const fetchJobs = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams();
-      params.set('page', page);
-      params.set('per_page', perPage);
+      params.set('page', String(page));
+      params.set('per_page', String(perPage));
       if (statusFilter !== 'All') params.set('status', statusFilter);
       if (sourceFilter !== 'All') params.set('source', sourceFilter);
-      if (minScore > 0) params.set('min_score', minScore);
+      if (minScore > 0) params.set('min_score', String(minScore));
       if (companySearch.trim()) params.set('company', companySearch.trim());
 
       const data = await apiGet(`/api/dashboard/jobs?${params.toString()}`);
@@ -49,7 +52,8 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, [page, perPage, statusFilter, sourceFilter, minScore, companySearch]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterVersion, page]);
 
   const fetchStats = useCallback(async () => {
     try {
@@ -60,6 +64,7 @@ export default function Dashboard() {
     }
   }, []);
 
+  // Fetch only on mount and explicit filter apply (not on every keystroke)
   useEffect(() => {
     if (user) {
       fetchJobs();
@@ -78,6 +83,7 @@ export default function Dashboard() {
 
   function handleFilterApply() {
     setPage(1);
+    setFilterVersion((v) => v + 1);
   }
 
   // Compute page numbers for pagination
