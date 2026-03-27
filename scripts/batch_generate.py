@@ -90,6 +90,10 @@ for i, job_row in enumerate(all_jobs):
     if not title or not company or company == 'Unknown':
         continue
 
+    # Skip jobs that already have S3 resume URLs (already generated)
+    if job_row.get('resume_s3_url') and '--retry' not in sys.argv:
+        continue
+
     log.info(f"\n[{i+1}/{len(all_jobs)}] {title} @ {company}")
 
     resume_type = job_row.get('matched_resume', 'fullstack')
