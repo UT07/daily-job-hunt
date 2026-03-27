@@ -1,35 +1,81 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
 .venv/
+venv/
 *.egg-info/
+dist/
+build/
+*.whl
 
-# Output (except tracker and seen_jobs which we commit)
+# Output artifacts (generated per run — not source code)
 output/*/resumes/
 output/*/cover_letters/
 output/*/run_metadata.json
+output/.ai_cache.db
+output/.ai_cache.db-journal
+output/.ai_cache*.db
+output/ai_quality_log.jsonl
+output/improvement_report.json
+output/preferred_models.json
+output/pipeline.log
+output/test_stripe*/
+output/final_stripe*/
+output/final_redhat*/
 
-# LaTeX artifacts
+# LaTeX build artifacts
 *.aux
 *.log
 *.out
 *.toc
 *.nav
 *.snm
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+texput.*
 
-# Environment
+# Environment and secrets
 .env
 *.env
+!.env.example
+samconfig.toml
 
-# Google credentials
+# Google / AWS credentials
 google_credentials.json
+oauth_token.json
+*credentials*.json
+*secret*.json
+job-automation-*.json
 
 # Node
 node_modules/
 web/dist/
+web/.env
 
 # Worktrees
 .worktrees/
 
+# Generated files
+template_ids.txt
+*.xlsx
+~$*.xlsx
+
 # macOS
 .DS_Store
+.AppleDouble
+.LSOverride
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test outputs
+tests/__pycache__/
+.pytest_cache/
+htmlcov/
+.coverage

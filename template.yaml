@@ -11,15 +11,32 @@ Parameters:
   GroqApiKey:
     Type: String
     NoEcho: true
-  DeepSeekApiKey:
-    Type: String
-    NoEcho: true
   OpenRouterApiKey:
     Type: String
     NoEcho: true
+  QwenApiKey:
+    Type: String
+    NoEcho: true
+    Default: ""
+  NvidiaApiKey:
+    Type: String
+    NoEcho: true
+    Default: ""
   GoogleCredentialsJson:
     Type: String
     NoEcho: true
+  SupabaseUrl:
+    Type: String
+  SupabaseServiceKey:
+    Type: String
+    NoEcho: true
+  SupabaseJwtSecret:
+    Type: String
+    NoEcho: true
+  SerperApiKey:
+    Type: String
+    NoEcho: true
+    Default: ""
 
 Resources:
 
@@ -32,9 +49,14 @@ Resources:
       Environment:
         Variables:
           GROQ_API_KEY: !Ref GroqApiKey
-          DEEPSEEK_API_KEY: !Ref DeepSeekApiKey
           OPENROUTER_API_KEY: !Ref OpenRouterApiKey
+          QWEN_API_KEY: !Ref QwenApiKey
+          NVIDIA_API_KEY: !Ref NvidiaApiKey
           GOOGLE_CREDENTIALS_JSON: !Ref GoogleCredentialsJson
+          SUPABASE_URL: !Ref SupabaseUrl
+          SUPABASE_SERVICE_KEY: !Ref SupabaseServiceKey
+          SUPABASE_JWT_SECRET: !Ref SupabaseJwtSecret
+          SERPER_API_KEY: !Ref SerperApiKey
       Events:
         ApiGateway:
           Type: HttpApi
