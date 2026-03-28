@@ -1,4 +1,4 @@
-# Daily Job Hunt
+# Daily NaukriBaba
 
 AI-powered job automation SaaS. Scrapes 8 job boards, matches using a consensus council of 24 LLMs, generates tailored LaTeX resumes and cover letters, finds real LinkedIn contacts, and tracks everything in a dashboard.
 
@@ -36,7 +36,7 @@ python main.py
 
 ```bash
 sam build && sam deploy
-gh workflow enable "Daily Job Hunt"
+gh workflow enable "Daily NaukriBaba"
 ```
 
 ## Database

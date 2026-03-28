@@ -582,7 +582,7 @@ export default function Onboarding() {
       <header className="bg-white border-b border-gray-200">
         <div className="max-w-2xl mx-auto px-4 py-4 flex items-center gap-3">
           <span className="text-2xl">🎯</span>
-          <h1 className="text-xl font-bold text-gray-900">Welcome to Job Hunt</h1>
+          <h1 className="text-xl font-bold text-gray-900">Welcome to NaukriBaba</h1>
         </div>
       </header>
 

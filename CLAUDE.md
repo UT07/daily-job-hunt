@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**Daily Job Hunt** is an automated job search pipeline + self-service web app.
+**NaukriBaba** is an automated job search pipeline + self-service web app.
 It scrapes 7 job boards, matches jobs using 3-perspective AI scoring, generates
 tailored LaTeX resumes and cover letters, uploads PDFs to Google Drive, and
 sends email summaries. A React landing page lets users paste any JD and get

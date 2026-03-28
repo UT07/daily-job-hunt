@@ -153,7 +153,7 @@ export default function Privacy() {
             </p>
             <ul className="list-none space-y-1 ml-2">
               <li><strong>Email:</strong> privacy@jobhunt.dev</li>
-              <li><strong>Data Controller:</strong> Job Hunt (operated by Utkarsh Singh)</li>
+              <li><strong>Data Controller:</strong> NaukriBaba (operated by Utkarsh Singh)</li>
               <li><strong>Location:</strong> Dublin, Ireland</li>
             </ul>
             <p>

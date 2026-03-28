@@ -124,7 +124,7 @@ export default function Dashboard() {
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
               <span className="text-white text-sm font-bold font-mono">JH</span>
             </div>
-            <h1 className="text-lg font-semibold text-white">Job Hunt</h1>
+            <h1 className="text-lg font-semibold text-white">NaukriBaba</h1>
             <span className="text-xs text-slate-500 font-medium tracking-wider uppercase ml-1">Command Center</span>
           </div>
           <div className="flex items-center gap-5">
