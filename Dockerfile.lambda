@@ -1,9 +1,9 @@
 FROM public.ecr.aws/lambda/python:3.12
 
-# Install tectonic for LaTeX → PDF compilation
-RUN dnf install -y wget && \
-    wget -qO /usr/local/bin/tectonic https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.15.0/tectonic-0.15.0-x86_64-unknown-linux-gnu.tar.gz && \
-    cd /tmp && wget -qO tectonic.tar.gz https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.15.0/tectonic-0.15.0-x86_64-unknown-linux-gnu.tar.gz && \
+# Install tectonic for LaTeX compilation
+RUN dnf install -y wget tar gzip && \
+    cd /tmp && \
+    wget -qO tectonic.tar.gz https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.15.0/tectonic-0.15.0-x86_64-unknown-linux-gnu.tar.gz && \
     tar xzf tectonic.tar.gz -C /usr/local/bin/ && \
     chmod +x /usr/local/bin/tectonic && \
     rm -f /tmp/tectonic.tar.gz && \
@@ -17,6 +17,8 @@ RUN pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/requirements-web.txt
 COPY *.py ${LAMBDA_TASK_ROOT}/
 COPY scrapers/ ${LAMBDA_TASK_ROOT}/scrapers/
 COPY resumes/ ${LAMBDA_TASK_ROOT}/resumes/
+COPY templates/ ${LAMBDA_TASK_ROOT}/templates/
 COPY config.yaml ${LAMBDA_TASK_ROOT}/
+COPY db/ ${LAMBDA_TASK_ROOT}/db/
 
 CMD ["app.handler"]
