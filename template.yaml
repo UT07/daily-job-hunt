@@ -78,11 +78,12 @@ Resources:
         AllowOrigins:
           - "*"
         AllowMethods:
+          - "*"
           - GET
           - POST
           - OPTIONS
         AllowHeaders:
-          - Content-Type
+          - "*"
 
   # --- S3 Bucket for Frontend ---
   FrontendBucket:
