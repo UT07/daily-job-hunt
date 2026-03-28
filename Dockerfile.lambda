@@ -1,6 +1,5 @@
 FROM public.ecr.aws/lambda/python:3.12
 
-# Install tectonic (x86_64 only - no ARM builds available)
 RUN dnf install -y wget tar gzip && \
     cd /tmp && \
     wget -qO tectonic.tar.gz https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.15.0/tectonic-0.15.0-x86_64-unknown-linux-gnu.tar.gz && \
@@ -18,6 +17,9 @@ COPY resumes/ ${LAMBDA_TASK_ROOT}/resumes/
 COPY templates/ ${LAMBDA_TASK_ROOT}/templates/
 COPY config.yaml ${LAMBDA_TASK_ROOT}/
 COPY db/ ${LAMBDA_TASK_ROOT}/db/
+
+# Fix permissions — Lambda needs read access to all files
+RUN chmod -R 755 ${LAMBDA_TASK_ROOT}/
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
