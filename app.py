@@ -696,6 +696,6 @@ def gdpr_delete(user: AuthUser = Depends(get_current_user)):
 
 try:
     from mangum import Mangum
-    handler = Mangum(app)
+    handler = Mangum(app, api_gateway_base_path="/prod")
 except ImportError:
     handler = None
