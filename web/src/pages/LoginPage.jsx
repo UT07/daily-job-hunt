@@ -2,20 +2,25 @@ import { useState } from 'react'
 import { useAuth } from '../auth/useAuth'
 
 export default function LoginPage() {
-  const { signIn, signUp, signInWithGoogle } = useAuth()
+  const { signIn, signUp, signInWithGoogle, resetPassword } = useAuth()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [isSignUp, setIsSignUp] = useState(false)
+  const [isForgot, setIsForgot] = useState(false)
   const [error, setError] = useState(null)
   const [loading, setLoading] = useState(false)
   const [signUpSuccess, setSignUpSuccess] = useState(false)
+  const [resetSuccess, setResetSuccess] = useState(false)
 
   async function handleSubmit(e) {
     e.preventDefault()
     setError(null)
     setLoading(true)
     try {
-      if (isSignUp) {
+      if (isForgot) {
+        await resetPassword(email)
+        setResetSuccess(true)
+      } else if (isSignUp) {
         await signUp(email, password)
         setSignUpSuccess(true)
       } else {
@@ -55,7 +60,7 @@ export default function LoginPage() {
         {/* Card */}
         <div className="bg-slate-800 rounded-xl shadow-2xl border border-slate-700 p-8">
           <h2 className="text-lg font-semibold text-white mb-6 text-center">
-            {isSignUp ? 'Create an account' : 'Sign in to your account'}
+            {isForgot ? 'Reset your password' : isSignUp ? 'Create an account' : 'Sign in to your account'}
           </h2>
 
           {/* Google OAuth */}
@@ -96,6 +101,13 @@ export default function LoginPage() {
             </div>
           </div>
 
+          {/* Reset password success */}
+          {resetSuccess && (
+            <div className="mb-4 p-3 bg-emerald-900/30 border border-emerald-800 rounded-lg text-sm text-emerald-300">
+              Password reset link sent. Check your email.
+            </div>
+          )}
+
           {/* Sign-up success message */}
           {signUpSuccess && (
             <div className="mb-4 p-3 bg-emerald-900/30 border border-emerald-800 rounded-lg text-sm text-emerald-300">
@@ -125,20 +137,33 @@ export default function LoginPage() {
                 placeholder="you@example.com"
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">Password</label>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                minLength={6}
-                className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white
-                  focus:ring-2 focus:ring-blue-500 focus:border-blue-500
-                  placeholder:text-slate-400"
-                placeholder="At least 6 characters"
-              />
-            </div>
+            {!isForgot && (
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1">Password</label>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  minLength={6}
+                  className="w-full bg-slate-700 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white
+                    focus:ring-2 focus:ring-blue-500 focus:border-blue-500
+                    placeholder:text-slate-400"
+                  placeholder="At least 6 characters"
+                />
+              </div>
+            )}
+            {!isForgot && !isSignUp && (
+              <div className="flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => { setIsForgot(true); setError(null); setResetSuccess(false) }}
+                  className="text-sm text-blue-400 hover:text-blue-300 transition"
+                >
+                  Forgot password?
+                </button>
+              </div>
+            )}
             <button
               type="submit"
               disabled={loading}
@@ -147,23 +172,34 @@ export default function LoginPage() {
                 focus:ring-offset-slate-800 shadow-lg shadow-blue-500/25
                 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              {loading ? 'Please wait...' : isSignUp ? 'Create account' : 'Sign in'}
+              {loading ? 'Please wait...' : isForgot ? 'Send reset link' : isSignUp ? 'Create account' : 'Sign in'}
             </button>
           </form>
 
           {/* Toggle sign-in / sign-up */}
           <p className="mt-6 text-center text-sm text-slate-400">
-            {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}
-            <button
-              onClick={() => {
-                setIsSignUp(!isSignUp)
-                setError(null)
-                setSignUpSuccess(false)
-              }}
-              className="text-blue-400 hover:text-blue-300 font-medium transition"
-            >
-              {isSignUp ? 'Sign in' : 'Sign up'}
-            </button>
+            {isForgot ? (
+              <button
+                onClick={() => { setIsForgot(false); setError(null); setResetSuccess(false) }}
+                className="text-blue-400 hover:text-blue-300 font-medium transition"
+              >
+                Back to sign in
+              </button>
+            ) : (
+              <>
+                {isSignUp ? 'Already have an account?' : "Don't have an account?"}{' '}
+                <button
+                  onClick={() => {
+                    setIsSignUp(!isSignUp)
+                    setError(null)
+                    setSignUpSuccess(false)
+                  }}
+                  className="text-blue-400 hover:text-blue-300 font-medium transition"
+                >
+                  {isSignUp ? 'Sign in' : 'Sign up'}
+                </button>
+              </>
+            )}
           </p>
         </div>
       </div>

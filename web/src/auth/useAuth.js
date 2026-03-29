@@ -28,11 +28,19 @@ export function useAuth() {
     if (error) throw error
   }
 
+  async function resetPassword(email) {
+    if (noSupabase) throw new Error('Supabase not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.')
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    })
+    if (error) throw error
+  }
+
   async function signOut() {
     if (noSupabase) return
     const { error } = await supabase.auth.signOut()
     if (error) throw error
   }
 
-  return { user, session, loading, signIn, signUp, signOut, signInWithGoogle, noSupabase }
+  return { user, session, loading, signIn, signUp, signOut, signInWithGoogle, resetPassword, noSupabase }
 }
