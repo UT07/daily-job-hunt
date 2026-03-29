@@ -270,21 +270,27 @@ def _search_linkedin_profile(
 
     Returns list of {name, url, title}.
     """
-    query = f'site:linkedin.com/in "{title}" "{company}"'
+    # Try progressively looser queries until we find results
+    queries = [
+        f'site:linkedin.com/in "{title}" "{company}"',           # exact match
+        f'site:linkedin.com/in {title} "{company}"',             # exact company, flexible title
+        f'site:linkedin.com/in {title} {company}',               # fully flexible
+    ]
     if location:
-        query += f" {location}"
+        queries = [q + f" {location}" for q in queries]
 
-    # Strategy 1: Apify Google Search actor
-    profiles = _apify_google_search(query, num_results=num)
-    if profiles:
-        logger.debug(f"[CONTACTS] Found via Apify Google Search")
-        return profiles
+    for query in queries:
+        # Strategy 1: Apify Google Search actor
+        profiles = _apify_google_search(query, num_results=num)
+        if profiles:
+            logger.debug(f"[CONTACTS] Found via Apify Google Search: {query}")
+            return profiles
 
-    # Strategy 2: Serper.dev fallback
-    profiles = _serper_search(query, num=num)
-    if profiles:
-        logger.debug(f"[CONTACTS] Found via Serper fallback")
-        return profiles
+        # Strategy 2: Serper.dev fallback
+        profiles = _serper_search(query, num=num)
+        if profiles:
+            logger.debug(f"[CONTACTS] Found via Serper fallback: {query}")
+            return profiles
 
     # No results from any source
     return []
@@ -374,8 +380,8 @@ The candidate is applying for this role and wants to network at {job.company}.""
             })
             logger.info(f"[CONTACTS] Found {p['name']} ({title}) at {job.company}")
         else:
-            # Fallback: provide Google search URL for manual lookup
-            query = f'site:linkedin.com/in "{title}" "{job.company}"'
+            # Fallback: provide Google search URL for manual lookup (flexible query)
+            query = f'site:linkedin.com/in {title} {job.company}'
             if location:
                 query += f" {location}"
             google_url = "https://www.google.com/search?" + urllib.parse.urlencode({"q": query})

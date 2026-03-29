@@ -10,21 +10,33 @@ function ContactItem({ contact }) {
     });
   };
 
+  const linkUrl = contact.profile_url || contact.google_url || contact.search_url;
+  const linkLabel = contact.profile_url ? 'View Profile' : 'Search LinkedIn';
+
   return (
     <div className="border border-slate-600 rounded-lg p-4">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-medium text-white">{contact.role}</p>
+          {contact.name && (
+            <p className="text-sm font-semibold text-white">{contact.name}</p>
+          )}
+          <p className={`text-sm ${contact.name ? 'text-slate-300' : 'font-medium text-white'}`}>{contact.role}</p>
           <p className="text-xs text-slate-400 mt-0.5">{contact.why}</p>
         </div>
-        <a
-          href={contact.search_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="shrink-0 text-xs text-blue-400 hover:text-blue-300 underline transition"
-        >
-          Search LinkedIn
-        </a>
+        {linkUrl && (
+          <a
+            href={linkUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={`shrink-0 text-xs px-2 py-1 rounded transition ${
+              contact.profile_url
+                ? 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 font-medium'
+                : 'text-blue-400 hover:text-blue-300 underline'
+            }`}
+          >
+            {linkLabel}
+          </a>
+        )}
       </div>
       <div className="mt-3 bg-slate-700/50 rounded-lg p-3 text-sm text-slate-300 relative">
         <p className="pr-16">{contact.message}</p>
