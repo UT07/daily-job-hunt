@@ -3,6 +3,12 @@
 #  Edit this file to customize your job search automation
 # ============================================================
 
+# --- Supabase (optional — pipeline works fine without it) ---
+# Set a default user ID for writing to Supabase in single-user mode.
+# Can also be set via DEFAULT_USER_ID environment variable.
+# If neither is set, a deterministic ID is derived from the profile email.
+default_user_id: ""
+
 # --- Your Profile ---
 profile:
   name: "Utkarsh Singh"
@@ -126,6 +132,9 @@ api_keys:
   anthropic: "${ANTHROPIC_API_KEY}"
   qwen: "${QWEN_API_KEY}"
   nvidia: "${NVIDIA_API_KEY}"
+
+  # LinkedIn contact finder (Apify actors)
+  apify: "${APIFY_API_KEY}"
 
   # Job scraper APIs
   adzuna_app_id: "${ADZUNA_APP_ID}"

@@ -37,6 +37,10 @@ Parameters:
     Type: String
     NoEcho: true
     Default: ""
+  ApifyApiKey:
+    Type: String
+    NoEcho: true
+    Default: ""
 
 Resources:
 
@@ -57,6 +61,7 @@ Resources:
           SUPABASE_SERVICE_KEY: !Ref SupabaseServiceKey
           SUPABASE_JWT_SECRET: !Ref SupabaseJwtSecret
           SERPER_API_KEY: !Ref SerperApiKey
+          APIFY_API_KEY: !Ref ApifyApiKey
       Events:
         ApiGateway:
           Type: HttpApi
