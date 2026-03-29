@@ -16,7 +16,6 @@ COPY scrapers/ ${LAMBDA_TASK_ROOT}/scrapers/
 COPY resumes/ ${LAMBDA_TASK_ROOT}/resumes/
 COPY templates/ ${LAMBDA_TASK_ROOT}/templates/
 COPY config.yaml ${LAMBDA_TASK_ROOT}/
-COPY db/ ${LAMBDA_TASK_ROOT}/db/
 
 # Fix permissions — Lambda needs read access to all files
 RUN chmod -R 755 ${LAMBDA_TASK_ROOT}/

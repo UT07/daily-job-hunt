@@ -24,9 +24,12 @@ All endpoints except /api/health and /api/templates require a valid Supabase JWT
 """
 
 import io
+import json
 import logging
 import os
 import tempfile
+import threading
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -84,6 +87,9 @@ _ai_client: Optional[AIClient] = None
 _config: dict = {}
 _resumes: dict[str, str] = {}  # {key: tex_content}
 _db: Optional[SupabaseClient] = None
+
+# In-memory task store for async operations (lives in Lambda /tmp on warm instances)
+_tasks: dict[str, dict] = {}  # {task_id: {"status": "pending"|"running"|"done"|"error", "result": ..., "error": ...}}
 
 
 def _resolve_env(value: str) -> str:
@@ -341,96 +347,117 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
     )
 
 
-@app.post("/api/tailor", response_model=TailorResponse)
-def tailor_job(req: TailorRequest, user: AuthUser = Depends(get_current_user)):
-    if req.resume_type not in _resumes:
-        raise HTTPException(400, f"Unknown resume type: {req.resume_type}")
+# ---------------------------------------------------------------------------
+# Async task helpers — lets long-running endpoints return 202 + task_id
+# so API Gateway's 29s timeout doesn't kill them.
+# ---------------------------------------------------------------------------
 
-    job = _Job(req.job_title, req.company, req.job_description)
-    base_tex = _resumes[req.resume_type]
-
-    with tempfile.TemporaryDirectory() as tmpdir:
+def _run_in_background(task_id: str, fn, *args, **kwargs):
+    """Execute fn in a background thread, storing result in _tasks."""
+    _tasks[task_id] = {"status": "running"}
+    def _worker():
         try:
-            tex_path = tailor_resume(job, base_tex, _ai_client, Path(tmpdir))
+            result = fn(*args, **kwargs)
+            _tasks[task_id] = {"status": "done", "result": result}
         except Exception as e:
-            logger.error("Tailoring failed: %s", e)
-            raise HTTPException(500, f"Resume tailoring failed: {e}")
+            logger.error("Background task %s failed: %s", task_id, e)
+            _tasks[task_id] = {"status": "error", "error": str(e)}
+    threading.Thread(target=_worker, daemon=True).start()
 
-        # Score and improve
+
+@app.get("/api/tasks/{task_id}")
+def get_task(task_id: str, user: AuthUser = Depends(get_current_user)):
+    """Poll for the result of an async task."""
+    task = _tasks.get(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found")
+    return task
+
+
+# ---------------------------------------------------------------------------
+# Synchronous worker functions (called from background threads)
+# ---------------------------------------------------------------------------
+
+def _do_tailor(job, base_tex, resume_type, company, job_title):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tex_path = tailor_resume(job, base_tex, _ai_client, Path(tmpdir))
         tailored_tex = Path(tex_path).read_text()
         try:
             final_tex, scores = score_and_improve(tailored_tex, job, _ai_client)
-        except Exception as e:
-            logger.error("Scoring/improvement failed: %s", e)
+        except Exception:
             scores = {"ats_score": 0, "hiring_manager_score": 0, "tech_recruiter_score": 0}
             final_tex = tailored_tex
 
-        # Write final tex and compile
         final_tex_path = Path(tmpdir) / "final_resume.tex"
         final_tex_path.write_text(final_tex)
         pdf_path = compile_tex_to_pdf(str(final_tex_path), tmpdir)
-
         if not pdf_path:
-            raise HTTPException(500, "LaTeX compilation failed")
+            raise RuntimeError("LaTeX compilation failed")
 
-        # Upload to Drive
-        safe_name = f"{req.company}_{req.job_title}_resume.pdf".replace(" ", "_")
+        safe_name = f"{company}_{job_title}_resume.pdf".replace(" ", "_")
         drive_url = _upload_pdf_to_drive(pdf_path, safe_name)
 
         ats = scores.get("ats_score", 0)
         hm = scores.get("hiring_manager_score", 0)
         tr = scores.get("tech_recruiter_score", 0)
-        return TailorResponse(
-            ats_score=ats,
-            hiring_manager_score=hm,
-            tech_recruiter_score=tr,
-            avg_score=round((ats + hm + tr) / 3),
-            pdf_url=pdf_path if not drive_url else "",
-            drive_url=drive_url,
-        )
+        return {
+            "ats_score": ats, "hiring_manager_score": hm,
+            "tech_recruiter_score": tr, "avg_score": round((ats + hm + tr) / 3),
+            "pdf_url": pdf_path if not drive_url else "", "drive_url": drive_url or "",
+        }
 
 
-@app.post("/api/cover-letter", response_model=CoverLetterResponse)
+def _do_cover_letter(job, resume_tex, company, job_title):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tex_path = generate_cover_letter(job, resume_tex, _ai_client, Path(tmpdir))
+        pdf_path = compile_tex_to_pdf(tex_path, tmpdir)
+        if not pdf_path:
+            raise RuntimeError("LaTeX compilation failed")
+
+        safe_name = f"{company}_{job_title}_cover_letter.pdf".replace(" ", "_")
+        drive_url = _upload_pdf_to_drive(pdf_path, safe_name)
+        return {"pdf_url": pdf_path if not drive_url else "", "drive_url": drive_url or ""}
+
+
+def _do_contacts(job):
+    result = find_contacts(job, _ai_client)
+    return {"contacts": result or []}
+
+
+# ---------------------------------------------------------------------------
+# POST endpoints — return 202 Accepted with task_id for long-running ops
+# ---------------------------------------------------------------------------
+
+@app.post("/api/tailor", status_code=202)
+def tailor_job(req: TailorRequest, user: AuthUser = Depends(get_current_user)):
+    if req.resume_type not in _resumes:
+        raise HTTPException(400, f"Unknown resume type: {req.resume_type}")
+
+    task_id = str(uuid.uuid4())
+    job = _Job(req.job_title, req.company, req.job_description)
+    _run_in_background(task_id, _do_tailor, job, _resumes[req.resume_type],
+                       req.resume_type, req.company, req.job_title)
+    return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
+
+
+@app.post("/api/cover-letter", status_code=202)
 def cover_letter(req: CoverLetterRequest, user: AuthUser = Depends(get_current_user)):
     if req.resume_type not in _resumes:
         raise HTTPException(400, f"Unknown resume type: {req.resume_type}")
 
+    task_id = str(uuid.uuid4())
     job = _Job(req.job_title, req.company, req.job_description)
-    resume_tex = _resumes[req.resume_type]
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        try:
-            tex_path = generate_cover_letter(job, resume_tex, _ai_client, Path(tmpdir))
-        except Exception as e:
-            logger.error("Cover letter generation failed: %s", e)
-            raise HTTPException(500, f"Cover letter generation failed: {e}")
-
-        pdf_path = compile_tex_to_pdf(tex_path, tmpdir)
-        if not pdf_path:
-            raise HTTPException(500, "LaTeX compilation failed")
-
-        safe_name = f"{req.company}_{req.job_title}_cover_letter.pdf".replace(" ", "_")
-        drive_url = _upload_pdf_to_drive(pdf_path, safe_name)
-
-        return CoverLetterResponse(
-            pdf_url=pdf_path if not drive_url else "",
-            drive_url=drive_url,
-        )
+    _run_in_background(task_id, _do_cover_letter, job, _resumes[req.resume_type],
+                       req.company, req.job_title)
+    return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
 
 
-@app.post("/api/contacts", response_model=ContactsResponse)
+@app.post("/api/contacts", status_code=202)
 def contacts(req: ContactsRequest, user: AuthUser = Depends(get_current_user)):
+    task_id = str(uuid.uuid4())
     job = _Job(req.job_title, req.company, req.job_description)
-
-    try:
-        result = find_contacts(job, _ai_client)
-    except Exception as e:
-        logger.error("Contact finding failed: %s", e)
-        raise HTTPException(500, f"Contact finding failed: {e}")
-
-    return ContactsResponse(
-        contacts=[Contact(**c) for c in result] if result else [],
-    )
+    _run_in_background(task_id, _do_contacts, job)
+    return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
 
 
 @app.get("/api/profile", response_model=ProfileResponse)
@@ -446,7 +473,7 @@ def get_profile(user: AuthUser = Depends(get_current_user)):
     return ProfileResponse(
         id=row["id"],
         email=row["email"],
-        full_name=row.get("full_name"),
+        full_name=row.get("name"),
         plan=row.get("plan", "free"),
         created_at=row.get("created_at"),
     )
@@ -463,12 +490,14 @@ def update_profile(
     raw = req.model_dump(exclude_none=True)
     update_data = {}
     for k, v in raw.items():
-        if k == "full_name":
+        if k in ("full_name", "name"):
             update_data["name"] = v
         elif k == "linkedin_url":
             update_data["linkedin"] = v
         elif k == "github_url":
             update_data["github"] = v
+        elif k in ("target_roles", "target_locations"):
+            continue  # Not in DB schema yet
         else:
             update_data[k] = v
     if not update_data:
@@ -478,7 +507,7 @@ def update_profile(
     return ProfileResponse(
         id=row["id"],
         email=row["email"],
-        full_name=row.get("full_name"),
+        full_name=row.get("name"),
         plan=row.get("plan", "free"),
         created_at=row.get("created_at"),
     )
@@ -489,7 +518,26 @@ def update_search_config(body: dict, user: AuthUser = Depends(get_current_user))
     """Update user's search configuration (queries, locations, etc.)."""
     if _db is None:
         raise HTTPException(503, "Database not configured")
-    result = _db.upsert_search_config(user.id, body)
+
+    # Map frontend field names to DB column names and filter unknown keys
+    _FIELD_MAP = {
+        "queries": "queries", "keywords": "queries",
+        "locations": "locations",
+        "geo_regions": "geo_regions",
+        "experience_levels": "experience_levels",
+        "days_back": "days_back",
+        "max_jobs_per_run": "max_jobs_per_run",
+        "min_match_score": "min_match_score", "min_score": "min_match_score",
+    }
+    clean = {}
+    for k, v in body.items():
+        db_col = _FIELD_MAP.get(k)
+        if db_col:
+            clean[db_col] = v
+    if not clean:
+        raise HTTPException(400, f"No valid fields. Accepted: {list(_FIELD_MAP.keys())}")
+
+    result = _db.upsert_search_config(user.id, clean)
     return result
 
 

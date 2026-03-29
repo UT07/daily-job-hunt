@@ -22,7 +22,27 @@ export async function apiCall(endpoint, body) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || `HTTP ${res.status}`);
   }
-  return res.json();
+  const data = await res.json();
+
+  // If backend returned a task_id (async pattern), poll until done
+  if (data.task_id && data.poll_url) {
+    return pollTask(data.poll_url);
+  }
+  return data;
+}
+
+async function pollTask(pollUrl, intervalMs = 2000, maxWaitMs = 240000) {
+  const headers = await authHeaders();
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, intervalMs));
+    const res = await fetch(`${API_BASE}${pollUrl}`, { method: 'GET', headers });
+    if (!res.ok) throw new Error(`Poll failed: HTTP ${res.status}`);
+    const task = await res.json();
+    if (task.status === 'done') return task.result;
+    if (task.status === 'error') throw new Error(task.error || 'Task failed');
+  }
+  throw new Error('Task timed out — please try again');
 }
 
 export async function apiGet(endpoint) {

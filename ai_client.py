@@ -109,6 +109,9 @@ class ResponseCache:
     """SQLite-backed LLM response cache. Avoids re-processing identical prompts."""
 
     def __init__(self, db_path: str = "output/.ai_cache.db", ttl_hours: int = 72):
+        # Lambda only allows writes to /tmp
+        if os.environ.get("AWS_LAMBDA_FUNCTION_NAME") and not db_path.startswith("/tmp"):
+            db_path = f"/tmp/{Path(db_path).name}"
         self.db_path = db_path
         self.ttl_seconds = ttl_hours * 3600
         Path(db_path).parent.mkdir(parents=True, exist_ok=True)
@@ -1165,7 +1168,7 @@ class AIClient:
         generated, which critiqued, and who won.  Useful for analysing
         provider quality over time.
         """
-        log_path = Path("output/ai_quality_log.jsonl")
+        log_path = Path("/tmp/ai_quality_log.jsonl") if os.environ.get("AWS_LAMBDA_FUNCTION_NAME") else Path("output/ai_quality_log.jsonl")
         try:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             entry["timestamp"] = datetime.now(timezone.utc).isoformat()
