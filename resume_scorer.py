@@ -17,8 +17,48 @@ from typing import Dict
 from scrapers.base import Job
 from ai_client import AIClient
 from matcher import extract_json
+from tailorer import _strip_code_fences
 
 logger = logging.getLogger(__name__)
+
+
+def _validate_scores(scores: dict, company: str = "") -> dict:
+    """Validate and clamp score values from AI response.
+
+    Ensures:
+    - All expected keys are present (falls back to 0 / empty string)
+    - Score values are integers in range [0, 100]
+    - Improvements is a list of strings
+    - Warns on fabrication detection
+    """
+    validated = {}
+
+    for key in ("ats_score", "hiring_manager_score", "tech_recruiter_score"):
+        raw = scores.get(key, 0)
+        try:
+            val = int(round(float(raw)))
+        except (TypeError, ValueError):
+            logger.warning(f"[SCORER] Non-numeric {key}={raw!r} for {company}, defaulting to 0")
+            val = 0
+        validated[key] = max(0, min(100, val))
+
+    for key in ("ats_feedback", "hm_feedback", "tr_feedback"):
+        validated[key] = str(scores.get(key, ""))
+
+    raw_improvements = scores.get("improvements", [])
+    if isinstance(raw_improvements, list):
+        validated["improvements"] = [str(s) for s in raw_improvements if s]
+    else:
+        validated["improvements"] = []
+
+    # Check for fabrication flag
+    if scores.get("fabrication_detected"):
+        logger.warning(f"[SCORER] Fabrication detected in resume for {company}")
+        validated["fabrication_detected"] = True
+    else:
+        validated["fabrication_detected"] = False
+
+    return validated
 
 
 SCORER_SYSTEM_PROMPT = r"""You are an expert at evaluating resumes from three distinct perspectives. You must score a TAILORED resume against a specific job listing.
@@ -30,18 +70,21 @@ Score from exactly these 3 viewpoints (0-100 each):
    - Formatting: Is the resume well-structured and readable (no tables/images that break ATS)?
    - Section structure: Are standard sections present (Experience, Education, Skills)?
    - Job title alignment: Does the resume's implied role match the listing?
+   - Penalty: If the resume introduces skills, projects, or metrics NOT present in the base resume, deduct 15 points for fabrication.
 
 2. **Hiring Manager Score** — The person who'd manage this hire:
    - Relevant impact: Do the bullet points show measurable results relevant to THIS role?
    - Experience narrative: Does the career story make sense for this position?
    - Culture/team fit signals: Does the candidate seem like they'd thrive here?
    - Growth potential: For junior roles, does the candidate show learning ability?
+   - Penalty: If bullet points contain AI-sounding filler ("leveraging", "spearheaded", "showcasing"), deduct 10 points.
 
 3. **Technical Recruiter Score** — First-pass technical screening:
    - Required skills coverage: What % of "must have" skills are demonstrated?
    - Preferred skills coverage: What % of "nice to have" skills are present?
    - Experience level match: Does YoE and project complexity match the listing?
    - Red flags: Gaps, mismatches, overqualified/underqualified signals?
+   - Penalty: If the resume lists technologies the candidate clearly has no experience with (not backed by any project or job), deduct 10 points.
 
 CRITICAL RULES:
 - Be honest and strict. Don't inflate scores.
@@ -49,16 +92,25 @@ CRITICAL RULES:
 - If a score is below 85, provide SPECIFIC, ACTIONABLE improvement suggestions
 - Improvements must NEVER fabricate experience — only reword, reorder, emphasize existing content
 - The candidate is a real person. Only suggest changes based on what's already in the resume.
+- Each improvement suggestion must reference a specific section and bullet point to change.
+
+CALIBRATION (to prevent score inflation):
+- 95-100: Perfect match, candidate exceeds all requirements
+- 85-94: Strong match, candidate meets most requirements with minor gaps
+- 70-84: Moderate match, notable gaps in 1-2 areas
+- 50-69: Weak match, significant gaps
+- Below 50: Poor match, fundamental misalignment
 
 Return ONLY valid JSON (no markdown, no code fences):
 {
-    "ats_score": <0-100>,
+    "ats_score": <integer 0-100>,
     "ats_feedback": "<specific issues or 'Pass'>",
-    "hiring_manager_score": <0-100>,
+    "hiring_manager_score": <integer 0-100>,
     "hm_feedback": "<specific issues or 'Pass'>",
-    "tech_recruiter_score": <0-100>,
+    "tech_recruiter_score": <integer 0-100>,
     "tr_feedback": "<specific issues or 'Pass'>",
-    "improvements": ["<specific edit suggestion 1>", "<specific edit 2>", ...]
+    "improvements": ["<specific edit suggestion 1>", "<specific edit 2>", ...],
+    "fabrication_detected": <true or false>
 }"""
 
 
@@ -72,14 +124,17 @@ RULES:
 3. If the input is a JSON dict of plain text sections: return an improved JSON dict with the same keys and plain text values. Return ONLY valid JSON, no markdown fences.
 4. Make surgical, targeted edits — don't rewrite everything.
 5. Focus on the specific feedback provided.
-6. Keep the resume to ONE PAGE worth of content.
+6. Keep the same page count as the input resume (do NOT add or remove pages).
 7. Use the job listing's terminology where the candidate genuinely has the skill.
+8. Do NOT add new bullet points. Only modify existing ones. Keep the same number of bullets per section.
+9. Do NOT add skills the candidate does not already list. You may reorder skills within existing categories.
 
 WRITING STYLE RULES (enforce strictly):
 - No em-dashes (—) used as connectors between clauses
-- No AI filler phrases (e.g. "passionate about", "leveraged", "spearheaded", "results-driven", "dynamic", "synergy")
+- No AI filler phrases (e.g. "passionate about", "leveraged", "spearheaded", "results-driven", "dynamic", "synergy", "showcasing", "demonstrating proficiency in", "aligned with")
 - Active voice, short punchy sentences
-- Never fabricate experience, metrics, or skills not present in the original"""
+- Never fabricate experience, metrics, or skills not present in the original
+- Do NOT append company-specific qualifiers (e.g., "aligned with Company's approach"). Bullets must stand on their own."""
 
 
 IMPROVE_LATEX_SUFFIX = r"""
@@ -123,7 +178,8 @@ Evaluate from all 3 perspectives (ATS, Hiring Manager, Technical Recruiter)."""
             temperature=0.2,
         )
 
-        return extract_json(result_text)
+        scores = extract_json(result_text)
+        return _validate_scores(scores, job.company)
 
     except (json.JSONDecodeError, Exception) as e:
         logger.error(f"[SCORER] Error scoring resume for {job.company}: {e}")
@@ -176,7 +232,8 @@ Evaluate from all 3 perspectives (ATS, Hiring Manager, Technical Recruiter)."""
             temperature=0.2,
         )
 
-        return extract_json(result_text)
+        scores = extract_json(result_text)
+        return _validate_scores(scores, job.company)
 
     except (json.JSONDecodeError, Exception) as e:
         logger.error(f"[SCORER] Error scoring resume text for {job.company}: {e}")
@@ -232,22 +289,28 @@ Return the COMPLETE improved LaTeX source. Start with \\documentclass and end wi
             temperature=0.3,
             skip_cache=True,
         )
-        improved = improved.strip()
-
-        if improved.startswith("```"):
-            lines = improved.split("\n")
-            lines = [l for l in lines if not l.strip().startswith("```")]
-            improved = "\n".join(lines)
+        improved = _strip_code_fences(improved.strip())
 
         if not improved.startswith("\\documentclass"):
             start = improved.find("\\documentclass")
             if start >= 0:
                 improved = improved[start:]
             else:
+                logger.warning(f"[SCORER] Improved resume for {job.company} has no \\documentclass, keeping original")
                 return tailored_tex  # fallback to original
 
         if "\\end{document}" not in improved:
             improved += "\n\\end{document}"
+
+        # Quick sanity check: the improved resume should not be dramatically
+        # shorter or longer than the original (suggests AI truncated or bloated it)
+        len_ratio = len(improved) / max(len(tailored_tex), 1)
+        if len_ratio < 0.5:
+            logger.warning(f"[SCORER] Improved resume for {job.company} is {len_ratio:.0%} of original size, keeping original")
+            return tailored_tex
+        if len_ratio > 2.0:
+            logger.warning(f"[SCORER] Improved resume for {job.company} is {len_ratio:.0%} of original size, keeping original")
+            return tailored_tex
 
         return improved
 
@@ -364,6 +427,12 @@ def _score_and_improve_latex(
         hm = scores.get("hiring_manager_score", 0)
         tr = scores.get("tech_recruiter_score", 0)
 
+        # If fabrication was detected, stop improving — the current version
+        # already has issues and further iteration will likely make it worse
+        if scores.get("fabrication_detected"):
+            logger.warning(f"Round {round_num}: fabrication detected, stopping improvement loop")
+            return current_tex, scores
+
         if ats >= min_score and hm >= min_score and tr >= min_score:
             logger.info(f"Round {round_num}: ATS={ats}, HM={hm}, TR={tr} — all pass")
             return current_tex, scores
@@ -397,6 +466,10 @@ def _score_and_improve_text(
         ats = scores.get("ats_score", 0)
         hm = scores.get("hiring_manager_score", 0)
         tr = scores.get("tech_recruiter_score", 0)
+
+        if scores.get("fabrication_detected"):
+            logger.warning(f"[TEXT] Round {round_num}: fabrication detected, stopping improvement loop")
+            return current_sections, scores
 
         if ats >= min_score and hm >= min_score and tr >= min_score:
             logger.info(f"[TEXT] Round {round_num}: ATS={ats}, HM={hm}, TR={tr} — all pass")

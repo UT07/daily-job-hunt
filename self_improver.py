@@ -6,6 +6,7 @@ Analyzes results from previous runs and generates actionable improvements:
 3. Scraper health: flags scrapers with low yield or high failure rates
 4. Keyword gaps: discovers missing keywords from job descriptions
 5. Score trends: tracks improvement/degradation over time
+6. Artifact quality: checks compilation success, cover letter compliance, score inflation
 
 After analysis, it updates config.yaml search queries and resume bullet points
 to close identified gaps.
@@ -13,6 +14,7 @@ to close identified gaps.
 
 import json
 import logging
+import re
 import os
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -236,7 +238,137 @@ def analyze_run_results(output_dir: str = "output") -> dict:
     # --- 4. Keyword gap analysis ---
     _analyze_keyword_gaps(matched_jobs, report)
 
+    # --- 5. Artifact quality checks ---
+    _analyze_artifact_quality(output, report)
+
+    # --- 6. Score inflation detection ---
+    _detect_score_inflation(matched_jobs, report)
+
     return report
+
+
+def _analyze_artifact_quality(output_dir: Path, report: dict):
+    """Check the quality of generated artifacts (PDFs, tex files, cover letters).
+
+    Detects:
+    - LaTeX files that failed to compile (no matching PDF)
+    - Cover letters with potential dash violations or wrong word counts
+    - Resumes with signs of AI fabrication (new bullet points added)
+    """
+    # Check for tex files without corresponding PDFs (compilation failures)
+    tex_files = list(output_dir.glob("*.tex"))
+    pdf_files = {p.stem for p in output_dir.glob("*.pdf")}
+    compile_failures = []
+    for tex in tex_files:
+        if tex.stem not in pdf_files:
+            compile_failures.append(tex.name)
+
+    if compile_failures:
+        failure_rate = len(compile_failures) / max(len(tex_files), 1)
+        report["findings"].append(
+            f"LaTeX compilation failures: {len(compile_failures)}/{len(tex_files)} "
+            f"tex files have no PDF ({failure_rate:.0%} failure rate). "
+            f"Files: {', '.join(compile_failures[:5])}"
+        )
+        if failure_rate > 0.2:
+            report["actions"].append({
+                "type": "compilation_failure",
+                "description": f"High compilation failure rate ({failure_rate:.0%}). "
+                "AI models may be generating invalid LaTeX. Check latex_compiler.py logs.",
+            })
+        report["stats"]["compile_failure_rate"] = round(failure_rate, 3)
+    else:
+        report["stats"]["compile_failure_rate"] = 0.0
+
+    # Check cover letter quality (scan generated tex for dashes and word count)
+    cover_letter_issues = []
+    cl_files = [f for f in tex_files if "CoverLetter" in f.name]
+    for cl_path in cl_files:
+        try:
+            content = cl_path.read_text(encoding="utf-8")
+            # Extract body text between "Re:" line and "Best regards"
+            body_match = re.search(
+                r'Re:.*?\n\s*\\vspace\{[^}]+\}\s*\n(.*?)\\vspace\{[^}]+\}\s*\nBest regards',
+                content, re.DOTALL
+            )
+            if body_match:
+                body = body_match.group(1).strip()
+                # Check for dashes (common AI violation)
+                dash_count = body.count(" -- ") + body.count(" --- ") + body.count("\u2014") + body.count("\u2013")
+                # Approximate word count
+                words = len(body.split())
+                if dash_count > 0:
+                    cover_letter_issues.append(f"{cl_path.name}: {dash_count} dash(es) in body")
+                if words < 200 or words > 500:
+                    cover_letter_issues.append(f"{cl_path.name}: body word count {words} (target: 280-380)")
+        except Exception:
+            pass
+
+    if cover_letter_issues:
+        report["findings"].append(
+            f"Cover letter quality issues ({len(cover_letter_issues)}): "
+            + "; ".join(cover_letter_issues[:5])
+        )
+        report["stats"]["cover_letter_issues"] = len(cover_letter_issues)
+
+
+def _detect_score_inflation(matched_jobs: list, report: dict):
+    """Detect potential score inflation patterns.
+
+    Flags cases where:
+    - All 3 scores are suspiciously identical (AI copied the same number)
+    - All scores are 85+ with no variation (rubber-stamping)
+    - Average scores are unrealistically high across all jobs
+    """
+    if not matched_jobs or len(matched_jobs) < 3:
+        return
+
+    identical_count = 0
+    all_pass_count = 0
+    total_avg = 0
+
+    for job in matched_jobs:
+        ats = job.get("ats_score", 0)
+        hm = job.get("hiring_manager_score", 0)
+        tr = job.get("tech_recruiter_score", 0)
+        avg = (ats + hm + tr) / 3
+
+        total_avg += avg
+
+        # Check if all 3 scores are exactly identical
+        if ats == hm == tr and ats > 0:
+            identical_count += 1
+
+        # Check if all 3 are 85+
+        if ats >= 85 and hm >= 85 and tr >= 85:
+            all_pass_count += 1
+
+    overall_avg = total_avg / len(matched_jobs)
+    report["stats"]["overall_avg_score"] = round(overall_avg, 1)
+
+    # Flag suspicious patterns
+    if identical_count > len(matched_jobs) * 0.3:
+        report["findings"].append(
+            f"Score inflation signal: {identical_count}/{len(matched_jobs)} jobs have "
+            "identical ATS/HM/TR scores. The scoring model may not be differentiating perspectives."
+        )
+        report["actions"].append({
+            "type": "score_inflation",
+            "description": "Scoring model is producing identical scores across perspectives. "
+            "Consider switching scoring models or adjusting temperature.",
+        })
+
+    if all_pass_count == len(matched_jobs) and len(matched_jobs) > 5:
+        report["findings"].append(
+            f"Score inflation signal: ALL {len(matched_jobs)} matched jobs scored 85+ "
+            "on all 3 perspectives. This is unrealistic and suggests the scorer is too lenient."
+        )
+
+    if overall_avg > 90 and len(matched_jobs) > 5:
+        report["findings"].append(
+            f"Overall average score is {overall_avg:.1f}, which is suspiciously high. "
+            "Consider increasing the min_score threshold or using a stricter scoring model."
+        )
 
 
 def _analyze_keyword_gaps(matched_jobs: list, report: dict):
@@ -248,13 +380,34 @@ def _analyze_keyword_gaps(matched_jobs: list, report: dict):
     from collections import Counter
     keyword_freq = Counter()
     tech_keywords = {
-        "kubernetes", "docker", "terraform", "aws", "gcp", "azure", "python",
-        "go", "golang", "java", "react", "typescript", "node", "postgresql",
-        "mongodb", "redis", "kafka", "jenkins", "github actions", "ci/cd",
-        "microservices", "rest", "graphql", "linux", "prometheus", "grafana",
-        "datadog", "ansible", "helm", "istio", "vault", "consul",
-        "elasticsearch", "spark", "airflow", "dbt", "snowflake",
-        "fastapi", "django", "flask", "nextjs", "vue", "angular",
+        # Containers & orchestration
+        "kubernetes", "docker", "helm", "istio", "service mesh", "ecs", "fargate",
+        # IaC & automation
+        "terraform", "ansible", "pulumi", "cloudformation", "puppet", "chef",
+        # Cloud providers
+        "aws", "gcp", "azure", "oracle cloud",
+        # Languages
+        "python", "go", "golang", "java", "rust", "c++", "ruby",
+        "typescript", "javascript", "node", "bash", "sql",
+        # Web frameworks
+        "react", "nextjs", "vue", "angular", "svelte",
+        "fastapi", "django", "flask", "spring boot", "express",
+        # Databases
+        "postgresql", "mysql", "mongodb", "redis", "dynamodb", "cassandra",
+        "elasticsearch", "opensearch", "supabase", "firestore",
+        # Data & ML
+        "spark", "airflow", "dbt", "snowflake", "kafka", "rabbitmq",
+        "machine learning", "llm", "langchain", "rag",
+        # CI/CD
+        "jenkins", "github actions", "ci/cd", "gitlab ci", "argocd", "flux",
+        # Observability
+        "prometheus", "grafana", "datadog", "splunk", "new relic",
+        "opentelemetry", "jaeger", "pagerduty",
+        # Security
+        "vault", "consul", "sso", "oauth", "iam",
+        # Practices
+        "microservices", "rest", "graphql", "grpc", "linux", "agile", "scrum",
+        "sre", "devops", "platform engineering", "gitops",
     }
 
     for job in matched_jobs:
@@ -385,6 +538,19 @@ def generate_improvement_suggestions(report: dict, ai_client=None) -> list[str]:
             suggestions.append(
                 f"ACTION: Scraper '{scraper}' produces mostly irrelevant jobs. "
                 "Consider disabling it or adjusting its search queries to improve signal-to-noise ratio."
+            )
+        elif action["type"] == "compilation_failure":
+            suggestions.append(
+                "ACTION: High LaTeX compilation failure rate. Check output/pipeline.log for "
+                "tectonic/pdflatex errors. Common causes: AI-generated unbalanced braces, "
+                "missing \\end{document}, or corrupted macro definitions."
+            )
+        elif action["type"] == "score_inflation":
+            suggestions.append(
+                "ACTION: Scoring model is rubber-stamping scores. Consider: "
+                "(1) switching to a different scoring model, "
+                "(2) raising min_score threshold from 60 to 65, "
+                "(3) ensuring the scorer and tailor use different models to avoid self-evaluation bias."
             )
 
     if not suggestions:

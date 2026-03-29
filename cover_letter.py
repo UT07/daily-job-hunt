@@ -38,11 +38,18 @@ VOICE:
 ABSOLUTE BANS (violating ANY of these means the letter is rejected):
 - NO dashes of any kind. Not em-dashes. Not en-dashes. Not double hyphens. Use periods or commas instead.
 - NO "I am excited", "I am writing to", "I believe", "I am confident", "I would welcome", "I look forward to"
-- NO "leverage", "utilize", "passionate", "thrilled", "synergy", "aligns with"
+- NO "leverage", "utilize", "passionate", "thrilled", "synergy", "aligns with", "keen to", "eager to"
 - NO semicolons. Use periods.
 - NO sentences starting with "With" or "As a"
 - NO fewer than 280 words and NO more than 380 words
 - NO dashes AT ALL. Replace every dash with a period or comma. This includes hyphens used as clause connectors.
+- NO LaTeX commands or special characters (\, {, }, $, ^, ~). Write in plain English only.
+- NO mentioning technologies the candidate has never used. Only reference skills from the resume.
+
+SELF-CHECK before returning:
+1. Count your words. If under 280 or over 380, revise.
+2. Scan for any dash character (-, --, ---). If found, replace with a period or comma.
+3. Scan for banned phrases. If found, rewrite the sentence.
 
 Return ONLY the 3 body paragraphs as plain text. Nothing else."""
 
@@ -283,11 +290,11 @@ Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
             job.cover_letter_provider = info["provider"]
             job.cover_letter_model = info["model"]
 
-        # Escape LaTeX special characters in the body
-        # Escape LaTeX special characters in the body
+        # Escape LaTeX special characters in the body text
         body_text = body_text.replace("&", r"\&")
         body_text = body_text.replace("%", r"\%")
         body_text = body_text.replace("#", r"\#")
+        body_text = body_text.replace("_", r"\_")
 
         # Build the full LaTeX document
         company_escaped = job.company.replace("&", r"\&").replace("%", r"\%")

@@ -107,10 +107,14 @@ def _escape_line(line: str) -> str:
     if not re.match(r"\s*\\(newcommand|renewcommand|def|DeclareMathOperator)", code):
         # Escape bare # that are not already escaped
         code = re.sub(r"(?<!\\)#", r"\\#", code)
+        # Fix any double-escapes (\\# -> \#)
+        code = code.replace("\\\\#", "\\#")
 
     # ---- Escape & in the code part ----
-    # Escape bare & that are not already escaped
+    # Escape bare & that are not already escaped (avoid double-escaping \\&)
     code = re.sub(r"(?<!\\)&", r"\\&", code)
+    # Fix any double-escapes that crept in (\\& -> \&)
+    code = code.replace("\\\\&", "\\&")
 
     # ---- Escape bare % in the code part ----
     # A bare % in the code portion (not preceded by \) that is NOT the
@@ -149,6 +153,31 @@ def _split_comment(line: str) -> tuple[str, str | None]:
     return line, None
 
 
+def _check_brace_balance(tex: str, filename: str = "") -> bool:
+    """Check that braces are balanced in LaTeX source.
+
+    Logs a warning and returns False if unbalanced. Ignores escaped braces (\\{ \\}).
+    """
+    depth = 0
+    for i, ch in enumerate(tex):
+        if ch == '\\' and i + 1 < len(tex):
+            continue  # skip next char (escaped)
+        if i > 0 and tex[i - 1] == '\\':
+            continue  # this char is escaped
+        if ch == '{':
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+        if depth < 0:
+            line_num = tex[:i].count('\n') + 1
+            logger.warning(f"[BRACE CHECK] Extra '}}' at line {line_num} in {filename}")
+            return False
+    if depth != 0:
+        logger.warning(f"[BRACE CHECK] {depth} unclosed '{{' in {filename}")
+        return False
+    return True
+
+
 def compile_tex_to_pdf(tex_path: str, output_dir: str = None) -> str:
     """Compile a .tex file to PDF.
 
@@ -172,6 +201,9 @@ def compile_tex_to_pdf(tex_path: str, output_dir: str = None) -> str:
         if sanitized != raw_tex:
             tex_path.write_text(sanitized, encoding="utf-8")
             logger.info(f"[SANITIZE] Escaped problematic chars in {tex_path.name}")
+        # Check brace balance — warn but don't block compilation (tectonic will
+        # give the real error). This helps with debugging.
+        _check_brace_balance(sanitized, tex_path.name)
     except Exception as e:
         logger.warning(f"LaTeX sanitization skipped for {tex_path.name}: {e}")
 
