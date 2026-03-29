@@ -55,6 +55,61 @@ WRITING STYLE (CRITICAL):
 Return ONLY the complete, modified LaTeX source code. No explanations, no markdown fences, just pure LaTeX starting with \documentclass."""
 
 
+def _strip_code_fences(text: str) -> str:
+    """Remove markdown code fences from AI output, handling ```latex, ```tex, etc."""
+    text = text.strip()
+    if "```" in text:
+        lines = text.split("\n")
+        cleaned = []
+        for line in lines:
+            stripped = line.strip()
+            # Skip lines that are just code fences (possibly with language tag)
+            if re.match(r'^```\s*\w*\s*$', stripped):
+                continue
+            cleaned.append(line)
+        text = "\n".join(cleaned).strip()
+    return text
+
+
+def _validate_latex_structure(tailored_tex: str, base_tex: str, company: str) -> str:
+    """Validate that the AI-generated LaTeX preserves critical structural elements.
+
+    Checks for:
+    - Required sections (Experience, Skills, Education)
+    - Custom macro definitions (\\jobentry, \\projectentry, etc.)
+    - \\begin{document} and \\end{document}
+    - Balanced braces (approximate check)
+
+    Falls back to base_tex if critical structure is missing.
+    """
+    required_sections = ["Experience", "Technical Skills", "Education"]
+    missing = [s for s in required_sections if f"\\section*{{{s}}}" not in tailored_tex]
+    if missing:
+        logger.warning(f"[TAILOR] {company}: tailored resume missing sections: {missing}. Using base.")
+        return base_tex
+
+    # Check that custom macros weren't destroyed
+    if "\\newcommand{\\jobentry}" in base_tex and "\\jobentry" not in tailored_tex:
+        logger.warning(f"[TAILOR] {company}: \\jobentry macro lost in tailoring. Using base.")
+        return base_tex
+
+    if "\\begin{document}" not in tailored_tex:
+        logger.warning(f"[TAILOR] {company}: \\begin{{document}} missing. Using base.")
+        return base_tex
+
+    # Approximate brace balance check
+    open_braces = tailored_tex.count("{") - tailored_tex.count("\\{")
+    close_braces = tailored_tex.count("}") - tailored_tex.count("\\}")
+    if abs(open_braces - close_braces) > 5:
+        logger.warning(
+            f"[TAILOR] {company}: severe brace imbalance "
+            f"(open={open_braces}, close={close_braces}). Using base."
+        )
+        return base_tex
+
+    return tailored_tex
+
+
 def tailor_resume(
     job: Job,
     base_tex: str,
@@ -134,11 +189,8 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
             job.tailoring_provider = info["provider"]
             job.tailoring_model = info["model"]
 
-        # Strip markdown code fences if present
-        if tailored_tex.startswith("```"):
-            lines = tailored_tex.split("\n")
-            lines = [l for l in lines if not l.strip().startswith("```")]
-            tailored_tex = "\n".join(lines)
+        # Strip markdown code fences if present (handles ```latex, ```tex, etc.)
+        tailored_tex = _strip_code_fences(tailored_tex)
 
         # Sanity check: must start with \documentclass
         if not tailored_tex.startswith("\\documentclass"):
@@ -152,6 +204,9 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
         # Ensure it ends with \end{document}
         if "\\end{document}" not in tailored_tex:
             tailored_tex += "\n\\end{document}"
+
+        # Validate structural integrity: check that key LaTeX structures survived
+        tailored_tex = _validate_latex_structure(tailored_tex, base_tex, job.company)
 
         # Fix common AI LaTeX typos before sanitization
         _TYPO_FIXES = {
