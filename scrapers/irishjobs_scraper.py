@@ -49,7 +49,7 @@ class IrishJobsScraper(BaseScraper):
             if jobs:
                 IrishJobsScraper._site_reachable = True
                 return self.deduplicate(jobs)
-        except requests.exceptions.Timeout:
+        except http_requests.exceptions.Timeout:
             logger.warning(f"[IrishJobs] Timeout — marking site unreachable for this run")
             IrishJobsScraper._site_reachable = False
             return []

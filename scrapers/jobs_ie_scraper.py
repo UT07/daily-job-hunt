@@ -38,6 +38,8 @@ class JobsIeScraper(BaseScraper):
 
     name = "jobs_ie"
     BASE_URL = "https://www.jobs.ie"
+    _MAX_RETRIES = 2  # Don't retry endlessly on an unresponsive site
+    _TIMEOUT = 15     # Seconds — reduced from 30 to fail fast
 
     def __init__(self, max_pages: int = 2):
         self.max_pages = max_pages
@@ -56,7 +58,7 @@ class JobsIeScraper(BaseScraper):
             if jobs:
                 JobsIeScraper._site_reachable = True
         except requests.exceptions.Timeout:
-            logger.warning(f"[Jobs.ie] Timeout for '{query}' — marking site unreachable")
+            logger.warning(f"[Jobs.ie] Timeout for '{query}' — marking site unreachable for this run")
             JobsIeScraper._site_reachable = False
             return []
         except Exception as e:
@@ -83,7 +85,9 @@ class JobsIeScraper(BaseScraper):
             url = f"{self.BASE_URL}/jobs?{urllib.parse.urlencode(params)}"
 
             try:
-                resp = requests.get(url, headers=_HEADERS, timeout=30)
+                resp = requests.get(
+                    url, headers=_HEADERS, timeout=self._TIMEOUT,
+                )
                 if resp.status_code == 429:
                     logger.warning("[Jobs.ie] Rate limited — stopping pagination")
                     break
@@ -103,6 +107,10 @@ class JobsIeScraper(BaseScraper):
                     break  # No more results
                 jobs.extend(page_jobs)
 
+            except requests.exceptions.Timeout:
+                # Fast fail: first timeout on any page means site is down
+                logger.warning(f"[Jobs.ie] Timeout on page {page} — skipping remaining pages")
+                raise  # Propagate to search() which marks site unreachable
             except requests.RequestException as e:
                 logger.error(f"[Jobs.ie] Request failed (page {page}): {e}")
                 break

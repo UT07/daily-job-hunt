@@ -66,12 +66,26 @@ class LinkedInScraper(BaseScraper):
 
     name = "linkedin"
 
+    # Class-level auth wall circuit breaker — shared across all instances/queries
+    _consecutive_auth_walls: int = 0
+    _AUTH_WALL_THRESHOLD: int = 3
+    _auth_wall_logged: bool = False  # Log the skip-all message only once
+
     def __init__(self, max_pages: int = 2, geo_id: str = "104738515"):
         self.max_pages = max_pages
         # 104738515 = Ireland, 101165590 = UK, 103644278 = US
         self.geo_id = geo_id
 
     def search(self, query: str, location: str = "", days_back: int = 1, **kwargs) -> List[Job]:
+        # Circuit breaker: if auth wall hit too many times, skip entirely
+        if LinkedInScraper._consecutive_auth_walls >= LinkedInScraper._AUTH_WALL_THRESHOLD:
+            if not LinkedInScraper._auth_wall_logged:
+                logger.warning(
+                    f"[LinkedIn] Auth wall hit {LinkedInScraper._consecutive_auth_walls} "
+                    f"consecutive times — skipping all remaining LinkedIn requests this run"
+                )
+                LinkedInScraper._auth_wall_logged = True
+            return []
         return run_async(self._search_async(query, location, days_back))
 
     async def _search_async(self, query: str, location: str, days_back: int) -> List[Job]:
@@ -140,10 +154,17 @@ class LinkedInScraper(BaseScraper):
                         # Check if we hit the auth wall
                         content = await page.content()
                         if "authwall" in content.lower() or "sign in" in content.lower():
-                            logger.warning("[LinkedIn] Hit auth wall — LinkedIn is blocking this session")
+                            LinkedInScraper._consecutive_auth_walls += 1
+                            logger.warning(
+                                f"[LinkedIn] Auth wall hit ({LinkedInScraper._consecutive_auth_walls}/"
+                                f"{LinkedInScraper._AUTH_WALL_THRESHOLD}) — stopping this query"
+                            )
                             break
                         logger.info(f"[LinkedIn] No cards found on page {page_num + 1}")
                         break
+
+                    # Got real results — reset the consecutive auth wall counter
+                    LinkedInScraper._consecutive_auth_walls = 0
 
                     for card in cards:
                         try:
@@ -174,7 +195,12 @@ class LinkedInScraper(BaseScraper):
                     try:
                         desc = await self._fetch_description(browser, desc_page, job.apply_url)
                         if desc == "__AUTH_WALL__":
-                            logger.warning(f"[LinkedIn] Auth wall hit — stopping description fetch ({fetched} fetched)")
+                            LinkedInScraper._consecutive_auth_walls += 1
+                            logger.warning(
+                                f"[LinkedIn] Auth wall during description fetch "
+                                f"({LinkedInScraper._consecutive_auth_walls}/{LinkedInScraper._AUTH_WALL_THRESHOLD}) "
+                                f"— stopping ({fetched} descriptions fetched)"
+                            )
                             break
                         if desc:
                             job.description = desc

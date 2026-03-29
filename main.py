@@ -176,6 +176,30 @@ def _resolve_user_id(config: dict) -> str:
     return _hl.md5(email.encode()).hexdigest()
 
 
+def _ensure_user_exists(db, user_id: str, config: dict) -> None:
+    """Ensure the user_id exists in the Supabase 'users' table.
+
+    The pipeline derives user_id as an MD5 hash of the email, but this
+    UUID won't exist in the users table unless we create it first.
+    Without this, all job upserts fail with a FK violation on user_id.
+    """
+    try:
+        existing = db.get_user(user_id)
+        if existing:
+            return  # User already exists — nothing to do
+
+        # Resolve email: config profile > GMAIL_ADDRESS env var > fallback
+        email = (
+            config.get("profile", {}).get("email", "")
+            or os.environ.get("GMAIL_ADDRESS", "")
+            or "pipeline@localhost"
+        )
+        db.create_user({"id": user_id, "email": email})
+        logger.info(f"[DB] Created user row for pipeline (id={user_id}, email={email})")
+    except Exception as e:
+        logger.warning(f"[DB] Failed to ensure user exists: {e}")
+
+
 def load_config(config_path: str = "config.yaml") -> dict:
     """Load and validate configuration."""
     path = Path(config_path)
@@ -1265,6 +1289,8 @@ def main():
                 context.db = db
                 # Resolve a user_id for writes (env var > config > email hash)
                 user_id = _resolve_user_id(config)
+                # Ensure the user row exists in Supabase (prevents FK violations)
+                _ensure_user_exists(db, user_id, config)
                 # Patch the user profile id to match what we'll write to Supabase
                 context.user.id = user_id
                 logger.info(f"[DB] Supabase enabled for single-user mode (user_id={user_id})")
