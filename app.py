@@ -126,7 +126,7 @@ def startup():
     try:
         _ai_client = AIClient.from_config(_config)
     except Exception as e:
-        logger.warning("AI client init failed (endpoints needing AI will fail): %s", e)
+        import traceback; logger.error("AI client init failed: %s\n%s", e, traceback.format_exc())
         _ai_client = None
     try:
         _db = SupabaseClient.from_env()
