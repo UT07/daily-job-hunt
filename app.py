@@ -199,10 +199,14 @@ class ContactsRequest(BaseModel):
 
 
 class Contact(BaseModel):
+    name: str = ""
     role: str
+    role_type: str = ""
     why: str
     message: str
+    profile_url: str = ""
     search_url: str
+    google_url: str = ""
 
 
 class ContactsResponse(BaseModel):

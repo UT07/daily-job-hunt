@@ -297,8 +297,8 @@ Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
         body_text = body_text.replace("_", r"\_")
 
         # Build the full LaTeX document
-        company_escaped = job.company.replace("&", r"\&").replace("%", r"\%")
-        title_escaped = job.title.replace("&", r"\&").replace("%", r"\%")
+        company_escaped = _escape_latex(job.company)
+        title_escaped = _escape_latex(job.title)
 
         full_tex = cl_template.format(
             company_name=company_escaped,

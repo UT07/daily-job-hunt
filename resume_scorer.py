@@ -188,6 +188,7 @@ Evaluate from all 3 perspectives (ATS, Hiring Manager, Technical Recruiter)."""
             "hiring_manager_score": 0, "hm_feedback": "Error",
             "tech_recruiter_score": 0, "tr_feedback": "Error",
             "improvements": [],
+            "fabrication_detected": False,
         }
 
 
@@ -242,6 +243,7 @@ Evaluate from all 3 perspectives (ATS, Hiring Manager, Technical Recruiter)."""
             "hiring_manager_score": 0, "hm_feedback": "Error",
             "tech_recruiter_score": 0, "tr_feedback": "Error",
             "improvements": [],
+            "fabrication_detected": False,
         }
 
 

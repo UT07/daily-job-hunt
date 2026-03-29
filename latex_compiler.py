@@ -159,11 +159,12 @@ def _check_brace_balance(tex: str, filename: str = "") -> bool:
     Logs a warning and returns False if unbalanced. Ignores escaped braces (\\{ \\}).
     """
     depth = 0
-    for i, ch in enumerate(tex):
-        if ch == '\\' and i + 1 < len(tex):
-            continue  # skip next char (escaped)
-        if i > 0 and tex[i - 1] == '\\':
-            continue  # this char is escaped
+    i = 0
+    while i < len(tex):
+        ch = tex[i]
+        if ch == '\\':
+            i += 2  # skip the escaped character
+            continue
         if ch == '{':
             depth += 1
         elif ch == '}':
@@ -172,6 +173,7 @@ def _check_brace_balance(tex: str, filename: str = "") -> bool:
             line_num = tex[:i].count('\n') + 1
             logger.warning(f"[BRACE CHECK] Extra '}}' at line {line_num} in {filename}")
             return False
+        i += 1
     if depth != 0:
         logger.warning(f"[BRACE CHECK] {depth} unclosed '{{' in {filename}")
         return False
