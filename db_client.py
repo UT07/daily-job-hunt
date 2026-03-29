@@ -53,22 +53,34 @@ class SupabaseClient:
             .maybe_single()
             .execute()
         )
+        # maybe_single().execute() returns None when no row matches
+        if result is None:
+            return None
         return result.data
 
     def create_user(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Create a new user. data must include 'id' and 'email' at minimum."""
-        result = self.client.table("users").insert(data).execute()
-        logger.info(f"[DB] Created user {data.get('email')}")
+        """Create a new user. data must include 'id' and 'email' at minimum.
+
+        Uses upsert on 'id' so re-provisioning the same auth user is idempotent.
+        """
+        result = (
+            self.client.table("users")
+            .upsert(data, on_conflict="id")
+            .execute()
+        )
+        logger.info(f"[DB] Upserted user {data.get('email')}")
         return result.data[0]
 
-    def update_user(self, user_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Update user fields. Returns the updated row."""
+    def update_user(self, user_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Update user fields. Returns the updated row, or None if user not found."""
         result = (
             self.client.table("users")
             .update(data)
             .eq("id", user_id)
             .execute()
         )
+        if not result.data:
+            return None
         logger.info(f"[DB] Updated user {user_id}")
         return result.data[0]
 

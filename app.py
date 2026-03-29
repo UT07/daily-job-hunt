@@ -486,6 +486,11 @@ def update_profile(
     if _db is None:
         raise HTTPException(503, "Database not configured")
 
+    # Ensure user row exists (JIT provisioning for first-time users)
+    existing = _db.get_user(user.id)
+    if existing is None:
+        _db.create_user({"id": user.id, "email": user.email})
+
     # Normalize field names (frontend may use aliases)
     raw = req.model_dump(exclude_none=True)
     update_data = {}
@@ -519,12 +524,17 @@ def update_search_config(body: dict, user: AuthUser = Depends(get_current_user))
     if _db is None:
         raise HTTPException(503, "Database not configured")
 
+    # Ensure user row exists (FK constraint on user_search_configs)
+    existing = _db.get_user(user.id)
+    if existing is None:
+        _db.create_user({"id": user.id, "email": user.email})
+
     # Map frontend field names to DB column names and filter unknown keys
     _FIELD_MAP = {
-        "queries": "queries", "keywords": "queries",
+        "queries": "queries", "keywords": "queries", "job_titles": "queries",
         "locations": "locations",
         "geo_regions": "geo_regions",
-        "experience_levels": "experience_levels",
+        "experience_levels": "experience_levels", "experience_level": "experience_levels",
         "days_back": "days_back",
         "max_jobs_per_run": "max_jobs_per_run",
         "min_match_score": "min_match_score", "min_score": "min_match_score",
