@@ -18,6 +18,7 @@ Exposes the pipeline's core AI modules as REST endpoints:
 - GET  /api/resumes        — list all resumes for the authenticated user
 - DELETE /api/resumes/{id} — delete a resume
 - GET  /api/templates      — list available resume templates (public)
+- GET  /api/quality-stats  — AI model quality statistics (authenticated)
 - GET  /api/health         — health check (public)
 
 All endpoints except /api/health and /api/templates require a valid Supabase JWT.
@@ -304,6 +305,15 @@ def _upload_pdf_to_drive(pdf_path: str, filename: str) -> str:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+@app.get("/api/quality-stats")
+def get_quality_stats(user: AuthUser = Depends(get_current_user)):
+    """Get AI model quality statistics."""
+    from quality_logger import get_model_stats, read_quality_log
+    stats = get_model_stats()
+    recent = read_quality_log(limit=50)
+    return {"model_stats": stats, "recent_logs": recent}
+
 
 @app.get("/api/health")
 def health():

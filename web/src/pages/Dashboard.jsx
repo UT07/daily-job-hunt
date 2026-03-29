@@ -5,6 +5,7 @@ import { apiGet } from '../api';
 import LoginPage from './LoginPage';
 import StatsBar from '../components/StatsBar';
 import JobTable from '../components/JobTable';
+import AIQualityStats from '../components/AIQualityStats';
 
 const SOURCES = ['All', 'adzuna', 'linkedin', 'irishjobs', 'jobs_ie', 'gradireland', 'yc', 'hn', 'web'];
 const STATUS_OPTIONS = ['All', 'New', 'Applied', 'Interview', 'Offer', 'Rejected', 'Withdrawn'];
@@ -273,6 +274,11 @@ export default function Dashboard() {
           </div>
         )}
       </main>
+
+      {/* AI Quality Stats */}
+      <div className="max-w-[1600px] mx-auto px-6 pb-6">
+        <AIQualityStats />
+      </div>
 
       {/* Footer */}
       <footer className="border-t border-slate-800 mt-12">

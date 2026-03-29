@@ -18,6 +18,7 @@ from scrapers.base import Job
 from ai_client import AIClient
 from matcher import extract_json
 from tailorer import _strip_code_fences
+from quality_logger import log_quality
 
 logger = logging.getLogger(__name__)
 
@@ -172,14 +173,31 @@ TAILORED RESUME (LaTeX):
 Evaluate from all 3 perspectives (ATS, Hiring Manager, Technical Recruiter)."""
 
     try:
-        result_text = ai_client.complete(
+        info = ai_client.complete_with_info(
             prompt=prompt,
             system=SCORER_SYSTEM_PROMPT,
             temperature=0.2,
         )
+        result_text = info["response"]
 
         scores = extract_json(result_text)
-        return _validate_scores(scores, job.company)
+        validated = _validate_scores(scores, job.company)
+
+        log_quality(
+            task="score_resume",
+            provider=info["provider"],
+            model=info["model"],
+            job_id=job.job_id,
+            company=job.company,
+            job_title=job.title,
+            scores={
+                "ats_score": validated["ats_score"],
+                "hiring_manager_score": validated["hiring_manager_score"],
+                "tech_recruiter_score": validated["tech_recruiter_score"],
+            },
+        )
+
+        return validated
 
     except (json.JSONDecodeError, Exception) as e:
         logger.error(f"[SCORER] Error scoring resume for {job.company}: {e}")
@@ -227,14 +245,31 @@ TAILORED RESUME (plain text):
 Evaluate from all 3 perspectives (ATS, Hiring Manager, Technical Recruiter)."""
 
     try:
-        result_text = ai_client.complete(
+        info = ai_client.complete_with_info(
             prompt=prompt,
             system=SCORER_SYSTEM_PROMPT,
             temperature=0.2,
         )
+        result_text = info["response"]
 
         scores = extract_json(result_text)
-        return _validate_scores(scores, job.company)
+        validated = _validate_scores(scores, job.company)
+
+        log_quality(
+            task="score_resume",
+            provider=info["provider"],
+            model=info["model"],
+            job_id=job.job_id,
+            company=job.company,
+            job_title=job.title,
+            scores={
+                "ats_score": validated["ats_score"],
+                "hiring_manager_score": validated["hiring_manager_score"],
+                "tech_recruiter_score": validated["tech_recruiter_score"],
+            },
+        )
+
+        return validated
 
     except (json.JSONDecodeError, Exception) as e:
         logger.error(f"[SCORER] Error scoring resume text for {job.company}: {e}")
@@ -285,13 +320,22 @@ Return the COMPLETE improved LaTeX source. Start with \\documentclass and end wi
     system = IMPROVE_SYSTEM_PROMPT + IMPROVE_LATEX_SUFFIX
 
     try:
-        improved = ai_client.complete(
+        info = ai_client.complete_with_info(
             prompt=prompt,
             system=system,
             temperature=0.3,
             skip_cache=True,
         )
-        improved = _strip_code_fences(improved.strip())
+        improved = _strip_code_fences(info["response"].strip())
+
+        log_quality(
+            task="improve_resume",
+            provider=info["provider"],
+            model=info["model"],
+            job_id=job.job_id,
+            company=job.company,
+            job_title=job.title,
+        )
 
         if not improved.startswith("\\documentclass"):
             start = improved.find("\\documentclass")
@@ -361,13 +405,22 @@ Return ONLY a valid JSON object with the same keys and improved plain text value
     system = IMPROVE_SYSTEM_PROMPT + IMPROVE_TEXT_SUFFIX
 
     try:
-        improved_text = ai_client.complete(
+        info = ai_client.complete_with_info(
             prompt=prompt,
             system=system,
             temperature=0.3,
             skip_cache=True,
         )
-        improved_text = improved_text.strip()
+        improved_text = info["response"].strip()
+
+        log_quality(
+            task="improve_resume",
+            provider=info["provider"],
+            model=info["model"],
+            job_id=job.job_id,
+            company=job.company,
+            job_title=job.title,
+        )
 
         # Strip markdown fences if present
         if improved_text.startswith("```"):

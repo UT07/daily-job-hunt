@@ -23,6 +23,7 @@ from typing import List, Dict
 from scrapers.base import Job
 from ai_client import AIClient
 from matcher import extract_json
+from quality_logger import log_quality
 
 logger = logging.getLogger(__name__)
 
@@ -404,8 +405,18 @@ The candidate is applying for this role and wants to network at {job.company}.""
 def _get_search_roles(job: Job, ai_client: AIClient, prompt: str) -> list[dict]:
     """Use AI to suggest which roles to search for, with sensible defaults as fallback."""
     try:
-        result_text = ai_client.complete(prompt=prompt, system=CONTACT_SYSTEM_PROMPT, temperature=0.4)
+        info = ai_client.complete_with_info(prompt=prompt, system=CONTACT_SYSTEM_PROMPT, temperature=0.4)
+        result_text = info["response"]
         data = extract_json(result_text)
+
+        log_quality(
+            task="find_contacts",
+            provider=info["provider"],
+            model=info["model"],
+            job_id=job.job_id,
+            company=job.company,
+            job_title=job.title,
+        )
         roles = []
         for c in data.get("contacts", []):
             message = c.get("message", "")
