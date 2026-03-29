@@ -110,6 +110,72 @@ from email_notifier import send_summary_email
 from pipeline_context import PipelineContext
 
 
+def _job_to_supabase_row(job: Job) -> dict:
+    """Convert a Job dataclass to a dict matching the Supabase 'jobs' table schema.
+
+    Only includes columns that exist in the DB schema.  Skips local-only
+    fields like tex paths and S3/Drive URLs that aren't in the DB.
+    """
+    return {
+        "job_id": job.job_id,
+        "title": job.title,
+        "company": job.company,
+        "location": job.location,
+        "description": (job.description or "")[:10000],  # cap for DB storage
+        "apply_url": job.apply_url or "",
+        "source": job.source or "",
+        "match_score": job.match_score,
+        "ats_score": job.ats_score,
+        "hiring_manager_score": job.hiring_manager_score,
+        "tech_recruiter_score": job.tech_recruiter_score,
+        "matched_resume": job.matched_resume or "",
+        "application_status": job.application_status or "New",
+        "linkedin_contacts": job.linkedin_contacts or "",
+    }
+
+
+def _try_init_supabase():
+    """Try to initialize a SupabaseClient from environment variables.
+
+    Returns None (with a log message) if env vars are missing or the
+    supabase package is unavailable.  This keeps the pipeline working
+    without Supabase configured.
+    """
+    url = os.environ.get("SUPABASE_URL", "")
+    key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+    if not url or not key:
+        logger.info("[DB] Supabase env vars not set — running in local-only mode")
+        return None
+    try:
+        from db_client import SupabaseClient
+        return SupabaseClient(url, key)
+    except Exception as e:
+        logger.warning(f"[DB] Failed to initialize Supabase client: {e}")
+        return None
+
+
+def _resolve_user_id(config: dict) -> str:
+    """Get the user_id for Supabase operations.
+
+    Priority: DEFAULT_USER_ID env var > config.yaml default_user_id >
+    deterministic UUID from profile email.
+    """
+    # 1. Environment variable
+    uid = os.environ.get("DEFAULT_USER_ID", "")
+    if uid:
+        return uid
+
+    # 2. config.yaml setting
+    uid = config.get("default_user_id", "")
+    if uid:
+        return uid
+
+    # 3. Derive from profile email (matches UserProfile.from_config behaviour)
+    import hashlib as _hl
+    email = config.get("profile", {}).get("email", "pipeline@localhost")
+    return _hl.md5(email.encode()).hexdigest()
+
+
 def load_config(config_path: str = "config.yaml") -> dict:
     """Load and validate configuration."""
     path = Path(config_path)
@@ -754,6 +820,19 @@ def run_pipeline(context: PipelineContext, dry_run: bool = False, scrape_only: b
             seen_jobs[job.job_id]["matched"] = True
     _save_seen_jobs(seen_jobs, seen_path)
 
+    # --- Step 4b: Upsert matched jobs to Supabase ---
+    if context.db and matched_jobs:
+        logger.info(f"[DB] Upserting {len(matched_jobs)} matched jobs to Supabase...")
+        upserted = 0
+        for job in matched_jobs:
+            try:
+                row = _job_to_supabase_row(job)
+                context.db.upsert_job(context.user.id, row)
+                upserted += 1
+            except Exception as e:
+                logger.warning(f"[DB] Failed to upsert job {job.job_id} ({job.title}): {e}")
+        logger.info(f"[DB] Upserted {upserted}/{len(matched_jobs)} jobs to Supabase")
+
     if dry_run:
         logger.info(f"[DRY-RUN MODE] Would process {len(matched_jobs)} jobs:")
         for j in matched_jobs:
@@ -961,6 +1040,25 @@ def run_pipeline(context: PipelineContext, dry_run: bool = False, scrape_only: b
     else:
         logger.info("Google Drive upload skipped (not configured or credentials missing)")
 
+    # --- Step 8d: Final Supabase upsert (with enriched data) ---
+    # Re-upsert jobs now that they have post-tailoring scores, Drive URLs,
+    # contacts, and PDF paths.  This overwrites the initial Step 4b insert.
+    if context.db and matched_jobs:
+        logger.info(f"[DB] Final upsert of {len(matched_jobs)} enriched jobs to Supabase...")
+        for job in matched_jobs:
+            try:
+                row = _job_to_supabase_row(job)
+                # Include artifact URLs that are now populated
+                if job.resume_doc_url:
+                    row["resume_doc_url"] = job.resume_doc_url
+                if job.resume_s3_url:
+                    row["resume_s3_url"] = job.resume_s3_url
+                if job.cover_letter_s3_url:
+                    row["cover_letter_s3_url"] = job.cover_letter_s3_url
+                context.db.upsert_job(context.user.id, row)
+            except Exception as e:
+                logger.warning(f"[DB] Failed to upsert enriched job {job.job_id}: {e}")
+
     # --- Step 9: Update master Excel tracker ---
     logger.info("Updating master Excel tracker...")
     tracker_path = base_dir / config["output"]["tracker_filename"]
@@ -1157,6 +1255,19 @@ def main():
         logger.info(f"Running pipeline for user {args.user_id} ({context.user.name})")
     else:
         context = PipelineContext.from_config(config)
+
+        # In single-user mode, optionally attach a Supabase client so
+        # matched jobs and run stats are persisted to the cloud DB.
+        # Gracefully skipped if SUPABASE_URL / SUPABASE_SERVICE_KEY are not set.
+        if context.db is None:
+            db = _try_init_supabase()
+            if db:
+                context.db = db
+                # Resolve a user_id for writes (env var > config > email hash)
+                user_id = _resolve_user_id(config)
+                # Patch the user profile id to match what we'll write to Supabase
+                context.user.id = user_id
+                logger.info(f"[DB] Supabase enabled for single-user mode (user_id={user_id})")
 
     run_pipeline(context, dry_run=args.dry_run, scrape_only=args.scrape_only)
 
