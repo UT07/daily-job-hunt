@@ -17,6 +17,9 @@ playwright-stealth>=1.0.6
 # Async support
 nest-asyncio>=1.5.8
 
+# Apify client (LinkedIn contact finder via Google Search actor)
+apify-client>=1.6.0
+
 # S3 upload for artifacts
 boto3>=1.34.0
 
