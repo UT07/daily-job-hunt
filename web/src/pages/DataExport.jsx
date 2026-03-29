@@ -61,8 +61,8 @@ export default function DataExport() {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-gray-500 text-sm">Loading...</div>
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="text-slate-400 text-sm">Loading...</div>
       </div>
     )
   }
@@ -72,31 +72,31 @@ export default function DataExport() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-slate-900">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
+      <header className="bg-slate-800 border-b border-slate-700 sticky top-0 z-10">
         <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <span className="text-2xl">🎯</span>
-            <h1 className="text-xl font-bold text-gray-900">Data & Privacy</h1>
+            <h1 className="text-xl font-bold text-white">Data & Privacy</h1>
           </div>
           <div className="flex items-center gap-4">
             <Link
               to="/"
-              className="text-sm text-gray-600 hover:text-gray-900 font-medium transition"
+              className="text-sm text-slate-400 hover:text-white font-medium transition"
             >
               Tailor
             </Link>
             <Link
               to="/dashboard"
-              className="text-sm text-gray-600 hover:text-gray-900 font-medium transition"
+              className="text-sm text-slate-400 hover:text-white font-medium transition"
             >
               Dashboard
             </Link>
-            <span className="text-sm text-gray-500 hidden sm:block">{user.email}</span>
+            <span className="text-sm text-slate-500 hidden sm:block">{user.email}</span>
             <button
               onClick={signOut}
-              className="text-sm text-gray-500 hover:text-gray-700 font-medium transition"
+              className="text-sm text-slate-400 hover:text-white font-medium transition"
             >
               Sign out
             </button>
@@ -106,21 +106,21 @@ export default function DataExport() {
 
       <main className="max-w-3xl mx-auto px-4 py-8 space-y-6">
         {/* Consent Status */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-          <h2 className="text-base font-semibold text-gray-900 mb-3">Consent Status</h2>
+        <div className="bg-slate-800 rounded-xl shadow-lg border border-slate-700 p-6">
+          <h2 className="text-base font-semibold text-white mb-3">Consent Status</h2>
           <div className="flex items-center gap-3">
             <div
-              className={`w-3 h-3 rounded-full ${consentGiven ? 'bg-green-500' : 'bg-yellow-500'}`}
+              className={`w-3 h-3 rounded-full ${consentGiven ? 'bg-emerald-500' : 'bg-amber-500'}`}
             />
-            <span className="text-sm text-gray-700">
+            <span className="text-sm text-slate-300">
               {consentGiven
                 ? 'You have consented to data processing.'
                 : 'You have not yet provided consent for data processing.'}
             </span>
           </div>
-          <p className="text-xs text-gray-400 mt-2">
+          <p className="text-xs text-slate-500 mt-2">
             View our{' '}
-            <Link to="/privacy" className="text-blue-600 hover:text-blue-700 underline">
+            <Link to="/privacy" className="text-blue-400 hover:text-blue-300 underline">
               Privacy Policy
             </Link>{' '}
             for details on how your data is used.
@@ -128,9 +128,9 @@ export default function DataExport() {
         </div>
 
         {/* Export Data */}
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-          <h2 className="text-base font-semibold text-gray-900 mb-1">Export My Data</h2>
-          <p className="text-sm text-gray-500 mb-4">
+        <div className="bg-slate-800 rounded-xl shadow-lg border border-slate-700 p-6">
+          <h2 className="text-base font-semibold text-white mb-1">Export My Data</h2>
+          <p className="text-sm text-slate-400 mb-4">
             Download a ZIP archive containing all your personal data, including your profile,
             job search history, match scores, resumes, and preferences. This fulfills your
             GDPR Article 20 right to data portability.
@@ -138,8 +138,8 @@ export default function DataExport() {
           <button
             onClick={handleExport}
             disabled={exporting}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition
-              focus:outline-none focus:ring-2 focus:ring-blue-300 focus:ring-offset-2
+            className="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition
+              focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-slate-900
               disabled:opacity-50 disabled:cursor-not-allowed
               inline-flex items-center gap-2"
           >
@@ -152,8 +152,8 @@ export default function DataExport() {
           {exportStatus && (
             <div
               className={`mt-3 p-3 rounded-lg text-sm border
-                ${exportStatus.type === 'success' ? 'bg-green-50 border-green-200 text-green-700' : ''}
-                ${exportStatus.type === 'error' ? 'bg-red-50 border-red-200 text-red-700' : ''}`}
+                ${exportStatus.type === 'success' ? 'bg-emerald-900/30 border-emerald-800 text-emerald-300' : ''}
+                ${exportStatus.type === 'error' ? 'bg-red-900/30 border-red-800 text-red-300' : ''}`}
             >
               {exportStatus.message}
             </div>
@@ -161,9 +161,9 @@ export default function DataExport() {
         </div>
 
         {/* Delete Account */}
-        <div className="bg-white rounded-xl shadow-sm border border-red-200 p-6">
-          <h2 className="text-base font-semibold text-red-700 mb-1">Delete My Account</h2>
-          <p className="text-sm text-gray-500 mb-4">
+        <div className="bg-slate-800 rounded-xl shadow-lg border border-red-800/50 p-6">
+          <h2 className="text-base font-semibold text-red-400 mb-1">Delete My Account</h2>
+          <p className="text-sm text-slate-400 mb-4">
             Permanently delete your account and all associated data. This action is
             irreversible and fulfills your GDPR Article 17 right to erasure. All your
             profile data, job history, resumes, and scores will be permanently removed.
@@ -172,8 +172,8 @@ export default function DataExport() {
           {!showDeleteConfirm ? (
             <button
               onClick={() => setShowDeleteConfirm(true)}
-              className="bg-red-600 hover:bg-red-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition
-                focus:outline-none focus:ring-2 focus:ring-red-300 focus:ring-offset-2
+              className="bg-red-600 hover:bg-red-500 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition
+                focus:outline-none focus:ring-2 focus:ring-red-400 focus:ring-offset-2 focus:ring-offset-slate-900
                 inline-flex items-center gap-2"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -182,9 +182,9 @@ export default function DataExport() {
               Delete My Account
             </button>
           ) : (
-            <div className="border border-red-200 bg-red-50 rounded-lg p-4">
-              <p className="text-sm text-red-700 font-medium mb-3">
-                This will permanently delete all your data. Type <strong>DELETE</strong> to confirm.
+            <div className="border border-red-800/50 bg-red-900/20 rounded-lg p-4">
+              <p className="text-sm text-red-300 font-medium mb-3">
+                This will permanently delete all your data. Type <strong className="text-white">DELETE</strong> to confirm.
               </p>
               <div className="flex items-center gap-3">
                 <input
@@ -192,13 +192,13 @@ export default function DataExport() {
                   value={deleteConfirmText}
                   onChange={(e) => setDeleteConfirmText(e.target.value)}
                   placeholder="Type DELETE to confirm"
-                  className="flex-1 border border-red-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-red-500 focus:border-red-500 placeholder:text-gray-400"
+                  className="flex-1 bg-slate-700/50 border border-red-800/50 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-red-500 focus:border-red-500 placeholder:text-slate-500"
                 />
                 <button
                   onClick={handleDelete}
                   disabled={deleteConfirmText !== 'DELETE' || deleting}
-                  className="bg-red-600 hover:bg-red-700 text-white px-5 py-2 rounded-lg text-sm font-medium transition
-                    focus:outline-none focus:ring-2 focus:ring-red-300 focus:ring-offset-2
+                  className="bg-red-600 hover:bg-red-500 text-white px-5 py-2 rounded-lg text-sm font-medium transition
+                    focus:outline-none focus:ring-2 focus:ring-red-400 focus:ring-offset-2 focus:ring-offset-slate-900
                     disabled:opacity-50 disabled:cursor-not-allowed
                     inline-flex items-center gap-2"
                 >
@@ -207,7 +207,7 @@ export default function DataExport() {
                 </button>
                 <button
                   onClick={() => { setShowDeleteConfirm(false); setDeleteConfirmText('') }}
-                  className="text-sm text-gray-500 hover:text-gray-700 font-medium transition px-3 py-2"
+                  className="text-sm text-slate-400 hover:text-white font-medium transition px-3 py-2"
                 >
                   Cancel
                 </button>
@@ -218,8 +218,8 @@ export default function DataExport() {
           {deleteStatus && (
             <div
               className={`mt-3 p-3 rounded-lg text-sm border
-                ${deleteStatus.type === 'success' ? 'bg-green-50 border-green-200 text-green-700' : ''}
-                ${deleteStatus.type === 'error' ? 'bg-red-50 border-red-200 text-red-700' : ''}`}
+                ${deleteStatus.type === 'success' ? 'bg-emerald-900/30 border-emerald-800 text-emerald-300' : ''}
+                ${deleteStatus.type === 'error' ? 'bg-red-900/30 border-red-800 text-red-300' : ''}`}
             >
               {deleteStatus.message}
             </div>
@@ -228,8 +228,8 @@ export default function DataExport() {
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-gray-200 mt-12">
-        <div className="max-w-3xl mx-auto px-4 py-4 text-center text-xs text-gray-400">
+      <footer className="border-t border-slate-700 mt-12">
+        <div className="max-w-3xl mx-auto px-4 py-4 text-center text-xs text-slate-500">
           Built by Utkarsh Singh -- FastAPI + React + Tailwind
         </div>
       </footer>

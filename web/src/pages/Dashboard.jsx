@@ -157,7 +157,7 @@ export default function Dashboard() {
               <select
                 value={statusFilter}
                 onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
-                className="bg-slate-800 border border-slate-600 text-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors"
+                className="bg-slate-800 border border-slate-600 text-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors"
               >
                 {STATUS_OPTIONS.map((s) => (
                   <option key={s} value={s}>{s}</option>
@@ -169,7 +169,7 @@ export default function Dashboard() {
               <select
                 value={sourceFilter}
                 onChange={(e) => { setSourceFilter(e.target.value); setPage(1); }}
-                className="bg-slate-800 border border-slate-600 text-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors"
+                className="bg-slate-800 border border-slate-600 text-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors"
               >
                 {SOURCES.map((s) => (
                   <option key={s} value={s}>{s}</option>
@@ -198,7 +198,7 @@ export default function Dashboard() {
                 onChange={(e) => setCompanySearch(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') { setPage(1); } }}
                 placeholder="Search company..."
-                className="bg-slate-800 border border-slate-600 text-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none placeholder:text-slate-500 w-40 transition-colors"
+                className="bg-slate-800 border border-slate-600 text-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none placeholder:text-slate-500 w-40 transition-colors"
               />
             </div>
             <button
