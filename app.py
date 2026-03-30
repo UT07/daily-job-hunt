@@ -89,8 +89,7 @@ _config: dict = {}
 _resumes: dict[str, str] = {}  # {key: tex_content}
 _db: Optional[SupabaseClient] = None
 
-# In-memory task store for async operations (lives in Lambda /tmp on warm instances)
-_tasks: dict[str, dict] = {}  # {task_id: {"status": "pending"|"running"|"done"|"error", "result": ..., "error": ...}}
+# Task store — Supabase pipeline_tasks table (persistent across cold starts)
 
 
 def _resolve_env(value: str) -> str:
@@ -366,23 +365,53 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
 # so API Gateway's 29s timeout doesn't kill them.
 # ---------------------------------------------------------------------------
 
-def _run_in_background(task_id: str, fn, *args, **kwargs):
-    """Execute fn in a background thread, storing result in _tasks."""
-    _tasks[task_id] = {"status": "running"}
+def _save_task(task_id: str, user_id: str, data: dict):
+    """Persist task state to Supabase pipeline_tasks table."""
+    if not _db:
+        raise HTTPException(503, "Database not configured")
+    row = {
+        "task_id": task_id,
+        "user_id": user_id,
+        "status": data.get("status", "running"),
+        "result": data.get("result"),
+        "error": data.get("error"),
+    }
+    _db.client.table("pipeline_tasks").upsert(row, on_conflict="task_id").execute()
+
+
+def _load_task(task_id: str) -> dict | None:
+    """Load task state from Supabase."""
+    if not _db:
+        return None
+    result = _db.client.table("pipeline_tasks").select("*").eq("task_id", task_id).maybe_single().execute()
+    if not result or not result.data:
+        return None
+    row = result.data
+    task = {"status": row["status"]}
+    if row.get("result"):
+        task["result"] = row["result"]
+    if row.get("error"):
+        task["error"] = row["error"]
+    return task
+
+
+def _run_in_background(task_id: str, user_id: str, fn, *args, **kwargs):
+    """Execute fn in a background thread, persisting result to Supabase."""
+    _save_task(task_id, user_id, {"status": "running"})
     def _worker():
         try:
             result = fn(*args, **kwargs)
-            _tasks[task_id] = {"status": "done", "result": result}
+            _save_task(task_id, user_id, {"status": "done", "result": result})
         except Exception as e:
             logger.error("Background task %s failed: %s", task_id, e)
-            _tasks[task_id] = {"status": "error", "error": str(e)}
+            _save_task(task_id, user_id, {"status": "error", "error": str(e)})
     threading.Thread(target=_worker, daemon=True).start()
 
 
 @app.get("/api/tasks/{task_id}")
 def get_task(task_id: str, user: AuthUser = Depends(get_current_user)):
     """Poll for the result of an async task."""
-    task = _tasks.get(task_id)
+    task = _load_task(task_id)
     if not task:
         raise HTTPException(404, "Task not found")
     return task
@@ -449,7 +478,7 @@ def tailor_job(req: TailorRequest, user: AuthUser = Depends(get_current_user)):
 
     task_id = str(uuid.uuid4())
     job = _Job(req.job_title, req.company, req.job_description)
-    _run_in_background(task_id, _do_tailor, job, _resumes[req.resume_type],
+    _run_in_background(task_id, user.id, _do_tailor, job, _resumes[req.resume_type],
                        req.resume_type, req.company, req.job_title)
     return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
 
@@ -461,7 +490,7 @@ def cover_letter(req: CoverLetterRequest, user: AuthUser = Depends(get_current_u
 
     task_id = str(uuid.uuid4())
     job = _Job(req.job_title, req.company, req.job_description)
-    _run_in_background(task_id, _do_cover_letter, job, _resumes[req.resume_type],
+    _run_in_background(task_id, user.id, _do_cover_letter, job, _resumes[req.resume_type],
                        req.company, req.job_title)
     return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
 
@@ -470,7 +499,7 @@ def cover_letter(req: CoverLetterRequest, user: AuthUser = Depends(get_current_u
 def contacts(req: ContactsRequest, user: AuthUser = Depends(get_current_user)):
     task_id = str(uuid.uuid4())
     job = _Job(req.job_title, req.company, req.job_description)
-    _run_in_background(task_id, _do_contacts, job)
+    _run_in_background(task_id, user.id, _do_contacts, job)
     return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
 
 
