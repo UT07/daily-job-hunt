@@ -10,16 +10,19 @@ RUN wget -qO /tmp/tectonic.tar.gz https://github.com/tectonic-typesetting/tecton
     tar xzf /tmp/tectonic.tar.gz -C /usr/local/bin/ && \
     chmod +x /usr/local/bin/tectonic && \
     rm -f /tmp/tectonic.tar.gz
-# Collect all required shared libs into a flat staging directory
+# Collect ONLY the libs tectonic needs that Lambda doesn't have
+# (skip glibc/ld/libc/libm/libdl/libpthread — Lambda has those)
 RUN mkdir -p /tectonic-libs && \
-    ldd /usr/local/bin/tectonic | grep "=> /" | awk '{print $3}' | \
-    xargs -I{} cp -L {} /tectonic-libs/ 2>/dev/null; \
+    for lib in libgraphite2 libharfbuzz libfontconfig libfreetype libpng16 \
+               libicuuc libicudata libssl libcrypto libbrotlidec libbrotlicommon; do \
+      find /lib/ /usr/lib/ -name "${lib}.so*" -exec cp -L {} /tectonic-libs/ \; 2>/dev/null; \
+    done && \
     ls /tectonic-libs/
 
 # Stage 2: Lambda runtime
 FROM public.ecr.aws/lambda/python:3.11
 
-# Copy tectonic binary and all its shared libs
+# Copy tectonic binary + ONLY its non-system shared libs
 COPY --from=tectonic-builder /usr/local/bin/tectonic /usr/local/bin/tectonic
 COPY --from=tectonic-builder /tectonic-libs/ /lib64/
 
