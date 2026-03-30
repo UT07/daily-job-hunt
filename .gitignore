@@ -83,3 +83,4 @@ htmlcov/
 # Local Netlify folder
 .netlify
 .mcp.json
+supabase/
