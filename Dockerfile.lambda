@@ -1,32 +1,27 @@
-# Stage 1: Build tectonic environment on Ubuntu 22.04 (has glibc 2.35)
-FROM --platform=linux/amd64 ubuntu:22.04 AS tectonic-builder
+# Stage 1: Get tectonic + required shared libraries from Ubuntu 22.04
+# Ubuntu 22.04 has glibc 2.35 which tectonic 0.15 requires
+FROM ubuntu:22.04 AS tectonic-builder
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends wget tar gzip \
+    apt-get install -y --no-install-recommends wget ca-certificates \
       libgraphite2-3 libharfbuzz0b libfontconfig1 libfreetype6 \
-      libpng16-16 libicu70 libssl3 && \
-    cd /tmp && \
-    wget -qO tectonic.tar.gz https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.15.0/tectonic-0.15.0-x86_64-unknown-linux-gnu.tar.gz && \
-    tar xzf tectonic.tar.gz -C /usr/local/bin/ && \
+      libpng16-16 libicu70 && \
+    rm -rf /var/lib/apt/lists/*
+RUN wget -qO /tmp/tectonic.tar.gz https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.15.0/tectonic-0.15.0-x86_64-unknown-linux-gnu.tar.gz && \
+    tar xzf /tmp/tectonic.tar.gz -C /usr/local/bin/ && \
     chmod +x /usr/local/bin/tectonic && \
-    rm -f /tmp/tectonic.tar.gz && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+    rm -f /tmp/tectonic.tar.gz
+# Collect all required shared libs into a flat staging directory
+RUN mkdir -p /tectonic-libs && \
+    ldd /usr/local/bin/tectonic | grep "=> /" | awk '{print $3}' | \
+    xargs -I{} cp -L {} /tectonic-libs/ 2>/dev/null; \
+    ls /tectonic-libs/
 
 # Stage 2: Lambda runtime
 FROM public.ecr.aws/lambda/python:3.12
 
-# Copy tectonic binary + required shared libs from Ubuntu
+# Copy tectonic binary and all its shared libs
 COPY --from=tectonic-builder /usr/local/bin/tectonic /usr/local/bin/tectonic
-COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libgraphite2.so.3* /lib64/
-COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libharfbuzz.so.0* /lib64/
-COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libfontconfig.so.1* /lib64/
-COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libfreetype.so.6* /lib64/
-COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libpng16.so.16* /lib64/
-COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libicuuc.so.70* /lib64/
-COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libicudata.so.70* /lib64/
-COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libssl.so.1.1* /lib64/
-COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libcrypto.so.1.1* /lib64/
-COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libbrotlidec.so.1* /lib64/
-COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libbrotlicommon.so.1* /lib64/
+COPY --from=tectonic-builder /tectonic-libs/ /lib64/
 
 COPY requirements-web.txt ${LAMBDA_TASK_ROOT}/
 RUN pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/requirements-web.txt
@@ -37,7 +32,6 @@ COPY resumes/ ${LAMBDA_TASK_ROOT}/resumes/
 COPY templates/ ${LAMBDA_TASK_ROOT}/templates/
 COPY config.yaml ${LAMBDA_TASK_ROOT}/
 
-# Fix permissions — Lambda needs read access to all files
 RUN chmod -R 755 ${LAMBDA_TASK_ROOT}/
 
 ENV PYTHONDONTWRITEBYTECODE=1
