@@ -1,6 +1,6 @@
 FROM public.ecr.aws/lambda/python:3.12
 
-RUN dnf install -y wget tar gzip && \
+RUN dnf install -y wget tar gzip graphite2 harfbuzz fontconfig freetype libpng && \
     cd /tmp && \
     wget -qO tectonic.tar.gz https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.15.0/tectonic-0.15.0-x86_64-unknown-linux-gnu.tar.gz && \
     tar xzf tectonic.tar.gz -C /usr/local/bin/ && \

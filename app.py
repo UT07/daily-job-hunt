@@ -157,10 +157,10 @@ class ScoreRequest(BaseModel):
 
 
 class ScoreResponse(BaseModel):
-    ats_score: int
-    hiring_manager_score: int
-    tech_recruiter_score: int
-    avg_score: int
+    ats_score: float
+    hiring_manager_score: float
+    tech_recruiter_score: float
+    avg_score: float
     reasoning: str
     matched_resume: str
 
