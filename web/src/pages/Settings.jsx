@@ -1,7 +1,8 @@
-import { useState, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
-import { apiPut, apiUpload } from '../api'
+import { apiGet, apiPut, apiUpload, apiDelete } from '../api'
+import LoginPage from './LoginPage'
 
 function TagInput({ value, onChange, placeholder }) {
   const [input, setInput] = useState('')
@@ -307,6 +308,22 @@ function ResumeSection() {
   const [uploadStatus, setUploadStatus] = useState(null)
   const [uploading, setUploading] = useState(false)
   const [dragOver, setDragOver] = useState(false)
+  const [resumes, setResumes] = useState([])
+
+  useEffect(() => {
+    apiGet('/api/resumes')
+      .then((data) => setResumes(Array.isArray(data) ? data : data.resumes || []))
+      .catch((e) => console.warn('Failed to load resumes:', e))
+  }, [])
+
+  async function handleDelete(id) {
+    try {
+      await apiDelete(`/api/resumes/${id}`)
+      setResumes((prev) => prev.filter((r) => r.id !== id))
+    } catch (e) {
+      console.warn('Failed to delete resume:', e)
+    }
+  }
 
   function handleFile(file) {
     if (file && file.type === 'application/pdf') {
@@ -331,6 +348,8 @@ function ResumeSection() {
       await apiUpload('/api/resumes/upload', resumeFile)
       setUploadStatus({ type: 'success', message: 'Resume uploaded and parsed successfully.' })
       setResumeFile(null)
+      const data = await apiGet('/api/resumes').catch(() => null)
+      if (data) setResumes(Array.isArray(data) ? data : data.resumes || [])
     } catch (e) {
       if (e.message.includes('404') || e.message.includes('Not Found')) {
         setUploadStatus({ type: 'info', message: 'Resume upload API coming soon. Your file has been saved locally.' })
@@ -346,9 +365,36 @@ function ResumeSection() {
     <div className="bg-slate-800 rounded-xl shadow-lg border border-slate-700 p-6">
       <SectionHeader title="Resumes" description="Upload and manage your resume files." />
 
-      <div className="text-sm text-slate-400 mb-4 p-3 bg-slate-700/50 rounded-lg border border-slate-600">
-        Resume listing will appear here once the API is connected.
-      </div>
+      {resumes.length > 0 ? (
+        <ul className="mb-4 divide-y divide-slate-700 border border-slate-700 rounded-lg overflow-hidden">
+          {resumes.map((resume) => (
+            <li key={resume.id} className="flex items-center justify-between px-4 py-3 bg-slate-700/30 hover:bg-slate-700/50 transition">
+              <div>
+                <p className="text-sm font-medium text-white">{resume.filename || resume.name || `Resume ${resume.id}`}</p>
+                {resume.uploaded_at && (
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    {new Date(resume.uploaded_at).toLocaleDateString()}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => handleDelete(resume.id)}
+                className="text-slate-400 hover:text-red-400 p-1.5 rounded transition"
+                title="Delete resume"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <div className="text-sm text-slate-400 mb-4 p-3 bg-slate-700/50 rounded-lg border border-slate-600">
+          No resumes uploaded yet.
+        </div>
+      )}
 
       <div
         onDrop={handleDrop}
@@ -428,8 +474,8 @@ function PreferencesSection({ prefs, setPrefs }) {
         <div>
           <label className="block text-sm font-medium text-slate-300 mb-1">Search Queries</label>
           <TagInput
-            value={prefs.search_queries}
-            onChange={(v) => updateField('search_queries', v)}
+            value={prefs.queries}
+            onChange={(v) => updateField('queries', v)}
             placeholder="e.g. DevOps Engineer, SRE, Platform Engineer"
           />
           <p className="text-xs text-slate-500 mt-1">Press Enter to add a keyword</p>
@@ -524,7 +570,7 @@ export default function Settings() {
 
   const [profile, setProfile] = useState({
     name: '',
-    email: user?.email || '',
+    email: '',
     phone: '',
     location: '',
     github_url: '',
@@ -535,7 +581,7 @@ export default function Settings() {
   })
 
   const [prefs, setPrefs] = useState({
-    search_queries: [],
+    queries: [],
     locations: [],
     experience_levels: ['entry_level'],
     days_back: 7,
@@ -543,10 +589,35 @@ export default function Settings() {
     min_match_score: 60,
   })
 
-  // Keep email in sync
-  if (user?.email && !profile.email) {
-    setProfile((prev) => ({ ...prev, email: user.email }))
-  }
+  useEffect(() => {
+    if (!user) return
+    apiGet('/api/profile')
+      .then((data) => {
+        setProfile((prev) => ({
+          ...prev,
+          name: data.full_name ?? prev.name,
+          email: data.email ?? user.email ?? prev.email,
+          linkedin_url: data.linkedin_url ?? prev.linkedin_url,
+          github_url: data.github_url ?? prev.github_url,
+          phone: data.phone ?? prev.phone,
+        }))
+      })
+      .catch((e) => console.warn('Failed to load profile:', e))
+
+    apiGet('/api/search-config')
+      .then((data) => {
+        setPrefs((prev) => ({
+          ...prev,
+          queries: data.queries ?? prev.queries,
+          locations: data.locations ?? prev.locations,
+          experience_levels: data.experience_levels ?? prev.experience_levels,
+          days_back: data.days_back ?? prev.days_back,
+          max_jobs_per_run: data.max_jobs_per_run ?? prev.max_jobs_per_run,
+          min_match_score: data.min_match_score ?? prev.min_match_score,
+        }))
+      })
+      .catch((e) => console.warn('Failed to load search config:', e))
+  }, [user])
 
   if (loading) {
     return (
@@ -554,6 +625,10 @@ export default function Settings() {
         <div className="text-slate-400 text-sm">Loading...</div>
       </div>
     )
+  }
+
+  if (!user) {
+    return <LoginPage />
   }
 
   return (
