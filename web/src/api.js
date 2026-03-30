@@ -3,6 +3,7 @@ import { supabase } from './lib/supabase'
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
 async function authHeaders() {
+  if (!supabase) return { 'Content-Type': 'application/json' }
   const { data: { session } } = await supabase.auth.getSession()
   const headers = { 'Content-Type': 'application/json' }
   if (session?.access_token) {
@@ -11,7 +12,7 @@ async function authHeaders() {
   return headers
 }
 
-export async function apiCall(endpoint, body) {
+export async function apiCall(endpoint, body, options = {}) {
   const headers = await authHeaders()
   const res = await fetch(`${API_BASE}${endpoint}`, {
     method: 'POST',
@@ -24,21 +25,21 @@ export async function apiCall(endpoint, body) {
   }
   const data = await res.json();
 
-  // If backend returned a task_id (async pattern), poll until done
   if (data.task_id && data.poll_url) {
-    return pollTask(data.poll_url);
+    return pollTask(data.poll_url, options);
   }
   return data;
 }
 
-async function pollTask(pollUrl, intervalMs = 2000, maxWaitMs = 240000) {
-  const headers = await authHeaders();
+async function pollTask(pollUrl, { intervalMs = 2000, maxWaitMs = 240000, onProgress } = {}) {
   const deadline = Date.now() + maxWaitMs;
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, intervalMs));
+    const headers = await authHeaders();
     const res = await fetch(`${API_BASE}${pollUrl}`, { method: 'GET', headers });
     if (!res.ok) throw new Error(`Poll failed: HTTP ${res.status}`);
     const task = await res.json();
+    if (onProgress) onProgress(task.status);
     if (task.status === 'done') return task.result;
     if (task.status === 'error') throw new Error(task.error || 'Task failed');
   }
