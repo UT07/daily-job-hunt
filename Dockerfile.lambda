@@ -17,7 +17,7 @@ RUN mkdir -p /tectonic-libs && \
     ls /tectonic-libs/
 
 # Stage 2: Lambda runtime
-FROM public.ecr.aws/lambda/python:3.12
+FROM public.ecr.aws/lambda/python:3.11
 
 # Copy tectonic binary and all its shared libs
 COPY --from=tectonic-builder /usr/local/bin/tectonic /usr/local/bin/tectonic
