@@ -284,9 +284,7 @@ def _upload_pdf_to_drive(pdf_path: str, filename: str) -> str:
     try:
         from drive_uploader import _authenticate, _get_or_create_folder, _upload_file
         creds_path = drive_cfg.get("credentials_path", "google_credentials.json")
-        # Lambda passes credentials as env var JSON; write to temp file if needed
         if not Path(creds_path).exists() and os.environ.get("GOOGLE_CREDENTIALS_JSON"):
-            import json
             creds_path = "/tmp/google_credentials.json"
             with open(creds_path, "w") as f:
                 f.write(os.environ["GOOGLE_CREDENTIALS_JSON"])
@@ -294,8 +292,11 @@ def _upload_pdf_to_drive(pdf_path: str, filename: str) -> str:
         import datetime
         date_str = datetime.date.today().isoformat()
         root_id = drive_cfg.get("folder_id", "")
-        parent_id = _get_or_create_folder(service, f"Job Hunt/{date_str}/web", root_id)
-        url = _upload_file(service, pdf_path, parent_id,
+        # Build folder hierarchy one level at a time
+        jh_id = _get_or_create_folder(service, "Job Hunt", root_id)
+        date_id = _get_or_create_folder(service, date_str, jh_id)
+        web_id = _get_or_create_folder(service, "web", date_id)
+        url = _upload_file(service, pdf_path, web_id,
                           share_with=drive_cfg.get("share_with", ""))
         return url
     except Exception as e:
@@ -523,12 +524,18 @@ def _process_sqs_task(event, context):
 def _do_tailor(job, base_tex, resume_type, company, job_title):
     with tempfile.TemporaryDirectory() as tmpdir:
         tex_path = tailor_resume(job, base_tex, _ai_client, Path(tmpdir))
+        if not tex_path or not Path(tex_path).exists():
+            raise RuntimeError(f"Tailoring failed for {company} — AI returned empty result")
         tailored_tex = Path(tex_path).read_text()
+
+        scoring_failed = False
         try:
             final_tex, scores = score_and_improve(tailored_tex, job, _ai_client)
-        except Exception:
+        except Exception as e:
+            logger.warning("score_and_improve failed: %s — using unscored resume", e)
             scores = {"ats_score": 0, "hiring_manager_score": 0, "tech_recruiter_score": 0}
             final_tex = tailored_tex
+            scoring_failed = True
 
         final_tex_path = Path(tmpdir) / "final_resume.tex"
         final_tex_path.write_text(final_tex)
@@ -545,7 +552,8 @@ def _do_tailor(job, base_tex, resume_type, company, job_title):
         return {
             "ats_score": ats, "hiring_manager_score": hm,
             "tech_recruiter_score": tr, "avg_score": round((ats + hm + tr) / 3),
-            "pdf_url": pdf_path if not drive_url else "", "drive_url": drive_url or "",
+            "drive_url": drive_url or "",
+            "scoring_failed": scoring_failed,
         }
 
 
@@ -558,7 +566,7 @@ def _do_cover_letter(job, resume_tex, company, job_title):
 
         safe_name = f"{company}_{job_title}_cover_letter.pdf".replace(" ", "_")
         drive_url = _upload_pdf_to_drive(pdf_path, safe_name)
-        return {"pdf_url": pdf_path if not drive_url else "", "drive_url": drive_url or ""}
+        return {"drive_url": drive_url or ""}
 
 
 def _do_contacts(job):
