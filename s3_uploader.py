@@ -36,13 +36,13 @@ PRESIGN_EXPIRY = 7 * 24 * 60 * 60
 
 
 def _get_s3_client():
-    """Create a boto3 S3 client from environment variables."""
-    return boto3.client(
-        "s3",
-        aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID", ""),
-        aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY", ""),
-        region_name=os.environ.get("AWS_REGION", "eu-west-1"),
-    )
+    """Create a boto3 S3 client, using explicit env vars if set or boto3 default chain."""
+    key_id = os.environ.get("AWS_ACCESS_KEY_ID", "").strip()
+    secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip()
+    region = os.environ.get("AWS_REGION", "eu-west-1")
+    if key_id and secret:
+        return boto3.client("s3", aws_access_key_id=key_id, aws_secret_access_key=secret, region_name=region)
+    return boto3.client("s3", region_name=region)
 
 
 def _s3_prefix(run_date: str, user_id: Optional[str] = None) -> str:
