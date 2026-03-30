@@ -43,7 +43,7 @@ jobs:
         env:
           DOCKER_BUILDKIT: "0"
           SAM_CLI_TELEMETRY: "0"
-        run: sam build --use-container=false
+        run: sam build
 
       - name: SAM Deploy
         env:
