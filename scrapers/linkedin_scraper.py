@@ -163,8 +163,8 @@ class LinkedInScraper(BaseScraper):
                         logger.info(f"[LinkedIn] No cards found on page {page_num + 1}")
                         break
 
-                    # Got real results — reset the consecutive auth wall counter
-                    LinkedInScraper._consecutive_auth_walls = 0
+                    # Got real cards — but don't reset auth wall counter here
+                    # because description fetches may still be auth-walled
 
                     for card in cards:
                         try:
@@ -192,6 +192,8 @@ class LinkedInScraper(BaseScraper):
                 for i, job in enumerate(to_fetch):
                     if not job.apply_url:
                         continue
+                    if LinkedInScraper._consecutive_auth_walls >= LinkedInScraper._AUTH_WALL_THRESHOLD:
+                        break
                     try:
                         desc = await self._fetch_description(browser, desc_page, job.apply_url)
                         if desc == "__AUTH_WALL__":
