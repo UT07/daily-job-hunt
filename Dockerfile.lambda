@@ -1,12 +1,32 @@
-FROM public.ecr.aws/lambda/python:3.12
-
-RUN dnf install -y wget tar gzip graphite2 harfbuzz fontconfig freetype libpng && \
+# Stage 1: Build tectonic environment on Ubuntu 22.04 (has glibc 2.35)
+FROM --platform=linux/amd64 ubuntu:22.04 AS tectonic-builder
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends wget tar gzip \
+      libgraphite2-3 libharfbuzz0b libfontconfig1 libfreetype6 \
+      libpng16-16 libicu70 libssl3 && \
     cd /tmp && \
     wget -qO tectonic.tar.gz https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.15.0/tectonic-0.15.0-x86_64-unknown-linux-gnu.tar.gz && \
     tar xzf tectonic.tar.gz -C /usr/local/bin/ && \
     chmod +x /usr/local/bin/tectonic && \
     rm -f /tmp/tectonic.tar.gz && \
-    dnf clean all
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Stage 2: Lambda runtime
+FROM public.ecr.aws/lambda/python:3.12
+
+# Copy tectonic binary + required shared libs from Ubuntu
+COPY --from=tectonic-builder /usr/local/bin/tectonic /usr/local/bin/tectonic
+COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libgraphite2.so.3* /lib64/
+COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libharfbuzz.so.0* /lib64/
+COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libfontconfig.so.1* /lib64/
+COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libfreetype.so.6* /lib64/
+COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libpng16.so.16* /lib64/
+COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libicuuc.so.70* /lib64/
+COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libicudata.so.70* /lib64/
+COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libssl.so.1.1* /lib64/
+COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libcrypto.so.1.1* /lib64/
+COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libbrotlidec.so.1* /lib64/
+COPY --from=tectonic-builder /lib/x86_64-linux-gnu/libbrotlicommon.so.1* /lib64/
 
 COPY requirements-web.txt ${LAMBDA_TASK_ROOT}/
 RUN pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/requirements-web.txt
