@@ -327,7 +327,10 @@ Return ONLY valid JSON:
     ]
 }
 
-Provide exactly 3 contacts: hiring manager, peer, recruiter."""
+Provide exactly 3 contacts:
+- hiring manager: direct hiring manager or team lead at the appropriate level for the role (e.g., Engineering Manager for mid-level roles, NOT VP/Director/Head-of unless the position reports directly to them)
+- peer: a potential teammate at a similar level
+- recruiter: a technical or talent recruiter at the company"""
 
 
 def find_contacts(job: Job, ai_client: AIClient) -> list[dict]:
@@ -420,10 +423,10 @@ def _get_search_roles(job: Job, ai_client: AIClient, prompt: str) -> list[dict]:
         roles = []
         for c in data.get("contacts", []):
             message = c.get("message", "")
-            # Truncate to LinkedIn's 300 char limit (with margin)
-            if len(message) > 300:
-                message = message[:297] + "..."
-                logger.debug(f"[CONTACTS] Truncated connection message to 300 chars")
+            # Truncate to LinkedIn's 300 char limit (prompt states 280-char max)
+            if len(message) > 280:
+                message = message[:277] + "..."
+                logger.debug(f"[CONTACTS] Truncated connection message to 280 chars")
             roles.append({
                 "search_title": c.get("search_title", ""),
                 "role_type": c.get("role_type", "peer"),

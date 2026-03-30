@@ -94,6 +94,7 @@ CRITICAL RULES:
 - Improvements must NEVER fabricate experience — only reword, reorder, emphasize existing content
 - The candidate is a real person. Only suggest changes based on what's already in the resume.
 - Each improvement suggestion must reference a specific section and bullet point to change.
+- IMPORTANT: Only flag fabrication_detected=true for outright invented companies, degrees, or certifications that do not appear in the original resume. Rephrasing existing experience (e.g., "led" vs "contributed to", quantifying existing achievements) is resume optimization, NOT fabrication.
 
 CALIBRATION (to prevent score inflation):
 - 95-100: Perfect match, candidate exceeds all requirements
@@ -474,9 +475,11 @@ def _score_and_improve_latex(
 ) -> tuple[str, dict]:
     """Internal: LaTeX score-and-improve loop."""
     current_tex = tailored_tex
+    last_scores: dict = {}
 
     for round_num in range(1, max_rounds + 1):
         scores = score_resume(current_tex, job, ai_client)
+        last_scores = scores
 
         ats = scores.get("ats_score", 0)
         hm = scores.get("hiring_manager_score", 0)
@@ -495,14 +498,13 @@ def _score_and_improve_latex(
         logger.info(f"Round {round_num}: ATS={ats}, HM={hm}, TR={tr} — improving...")
         current_tex = improve_resume(current_tex, job, scores, ai_client)
 
-    # Final score after last improvement
-    final_scores = score_resume(current_tex, job, ai_client)
-    ats = final_scores.get("ats_score", 0)
-    hm = final_scores.get("hiring_manager_score", 0)
-    tr = final_scores.get("tech_recruiter_score", 0)
+    # Reuse scores from the last loop iteration — no redundant 4th API call
+    ats = last_scores.get("ats_score", 0)
+    hm = last_scores.get("hiring_manager_score", 0)
+    tr = last_scores.get("tech_recruiter_score", 0)
     logger.info(f"Final: ATS={ats}, HM={hm}, TR={tr}")
 
-    return current_tex, final_scores
+    return current_tex, last_scores
 
 
 def _score_and_improve_text(
@@ -514,9 +516,11 @@ def _score_and_improve_text(
 ) -> tuple[Dict[str, str], dict]:
     """Internal: plain text score-and-improve loop."""
     current_sections = dict(sections)
+    last_scores: dict = {}
 
     for round_num in range(1, max_rounds + 1):
         scores = score_resume_text(current_sections, job, ai_client)
+        last_scores = scores
 
         ats = scores.get("ats_score", 0)
         hm = scores.get("hiring_manager_score", 0)
@@ -533,11 +537,10 @@ def _score_and_improve_text(
         logger.info(f"[TEXT] Round {round_num}: ATS={ats}, HM={hm}, TR={tr} — improving...")
         current_sections = improve_resume_text(current_sections, job, scores, ai_client)
 
-    # Final score after last improvement
-    final_scores = score_resume_text(current_sections, job, ai_client)
-    ats = final_scores.get("ats_score", 0)
-    hm = final_scores.get("hiring_manager_score", 0)
-    tr = final_scores.get("tech_recruiter_score", 0)
+    # Reuse scores from the last loop iteration — no redundant 4th API call
+    ats = last_scores.get("ats_score", 0)
+    hm = last_scores.get("hiring_manager_score", 0)
+    tr = last_scores.get("tech_recruiter_score", 0)
     logger.info(f"[TEXT] Final: ATS={ats}, HM={hm}, TR={tr}")
 
-    return current_sections, final_scores
+    return current_sections, last_scores

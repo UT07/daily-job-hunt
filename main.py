@@ -132,6 +132,7 @@ def _job_to_supabase_row(job: Job) -> dict:
         "matched_resume": job.matched_resume or "",
         "application_status": job.application_status or "New",
         "linkedin_contacts": job.linkedin_contacts or "",
+        "tailoring_model": getattr(job, "tailoring_model", None) or "",
     }
 
 
@@ -1129,6 +1130,10 @@ def run_pipeline(context: PipelineContext, dry_run: bool = False, scrape_only: b
                     row["resume_s3_url"] = job.resume_s3_url
                 if job.cover_letter_s3_url:
                     row["cover_letter_s3_url"] = job.cover_letter_s3_url
+                if getattr(job, "resume_drive_url", None):
+                    row["resume_drive_url"] = job.resume_drive_url
+                if getattr(job, "cover_letter_drive_url", None):
+                    row["cover_letter_drive_url"] = job.cover_letter_drive_url
                 context.db.upsert_job(context.user.id, row)
             except Exception as e:
                 logger.warning(f"[DB] Failed to upsert enriched job {job.job_id}: {e}")

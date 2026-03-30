@@ -5,13 +5,18 @@ Appends entries to output/ai_quality_log.jsonl for analysis by self_improver.py.
 
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-LOG_PATH = Path("output/ai_quality_log.jsonl")
+LOG_PATH = (
+    Path("/tmp/ai_quality_log.jsonl")
+    if os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+    else Path("output/ai_quality_log.jsonl")
+)
 
 
 def log_quality(
