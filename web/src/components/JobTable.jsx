@@ -114,7 +114,12 @@ const SORTABLE_COLUMNS = [
   { key: 'location', label: 'Location' },
   { key: 'source', label: 'Source' },
   { key: 'matched_resume', label: 'Resume Type' },
+  { key: 'tailoring_model', label: 'AI Model' },
 ];
+
+function isValidUrl(str) {
+  return str && (str.startsWith('http://') || str.startsWith('https://'));
+}
 
 export default function JobTable({ jobs, onStatusChange }) {
   const [sortKey, setSortKey] = useState('first_seen');
@@ -233,6 +238,17 @@ export default function JobTable({ jobs, onStatusChange }) {
                   {job.matched_resume || '--'}
                 </td>
 
+                {/* AI Model */}
+                <td className="px-3 py-2.5 whitespace-nowrap">
+                  {job.tailoring_model ? (
+                    <span className="bg-violet-500/10 text-violet-400 text-[10px] font-medium px-2 py-0.5 rounded-full">
+                      {job.tailoring_model}
+                    </span>
+                  ) : (
+                    <span className="text-slate-600 text-xs font-mono">--</span>
+                  )}
+                </td>
+
                 {/* ATS / HM / TR scores */}
                 <td className="px-3 py-2.5 whitespace-nowrap">
                   <div className="flex items-center gap-1">
@@ -248,17 +264,17 @@ export default function JobTable({ jobs, onStatusChange }) {
                 <td className="px-3 py-2.5">
                   <div className="flex items-center gap-2">
                     <AssetIcon
-                      href={job.resume_s3_url || job.tailored_pdf_path}
+                      href={isValidUrl(job.resume_s3_url) ? job.resume_s3_url : isValidUrl(job.resume_doc_url) ? job.resume_doc_url : null}
                       icon={<span role="img" aria-label="Resume">&#128196;</span>}
                       title="Resume PDF"
                     />
                     <AssetIcon
-                      href={job.cover_letter_s3_url || job.cover_letter_pdf_path}
+                      href={isValidUrl(job.cover_letter_s3_url) ? job.cover_letter_s3_url : null}
                       icon={<span role="img" aria-label="Cover Letter">&#128221;</span>}
                       title="Cover Letter"
                     />
                     <AssetIcon
-                      href={job.resume_doc_url}
+                      href={isValidUrl(job.resume_doc_url) ? job.resume_doc_url : null}
                       icon={<span role="img" aria-label="Google Doc">&#128203;</span>}
                       title="Google Doc"
                     />
