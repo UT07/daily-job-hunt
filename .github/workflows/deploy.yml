@@ -58,6 +58,10 @@ jobs:
           APIFY_KEY: ${{ secrets.APIFY_API_KEY }}
         run: |
           sam deploy \
+            --stack-name job-hunt-api \
+            --region eu-west-1 \
+            --capabilities CAPABILITY_IAM \
+            --image-repository 385017713886.dkr.ecr.eu-west-1.amazonaws.com/job-hunt-api \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
             --parameter-overrides \
