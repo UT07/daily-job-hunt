@@ -84,3 +84,4 @@ htmlcov/
 .netlify
 .mcp.json
 supabase/
+.superpowers/
