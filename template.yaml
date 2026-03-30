@@ -4,7 +4,7 @@ Description: Job Hunt API — FastAPI on Lambda (container image with tectonic)
 
 Globals:
   Function:
-    Timeout: 300
+    Timeout: 900
     MemorySize: 1024
 
 Parameters:
@@ -44,12 +44,33 @@ Parameters:
 
 Resources:
 
+  # --- SQS Task Queue ---
+  TaskQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 5400
+      MessageRetentionPeriod: 86400
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt TaskDLQ.Arn
+        maxReceiveCount: 3
+
+  # --- SQS Dead Letter Queue ---
+  TaskDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600
+
   # --- Lambda Function (Docker container with tectonic) ---
   JobHuntApi:
     Type: AWS::Serverless::Function
     Properties:
       PackageType: Image
       Description: Job Hunt FastAPI backend with LaTeX (tectonic) support
+      Policies:
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt TaskQueue.QueueName
+        - SQSPollerPolicy:
+            QueueName: !GetAtt TaskQueue.QueueName
       Environment:
         Variables:
           GROQ_API_KEY: !Ref GroqApiKey
@@ -62,6 +83,7 @@ Resources:
           SUPABASE_JWT_SECRET: !Ref SupabaseJwtSecret
           SERPER_API_KEY: !Ref SerperApiKey
           APIFY_API_KEY: !Ref ApifyApiKey
+          TASK_QUEUE_URL: !Ref TaskQueue
       Events:
         ApiGateway:
           Type: HttpApi
@@ -69,6 +91,13 @@ Resources:
             ApiId: !Ref HttpApi
             Path: /{proxy+}
             Method: ANY
+        TaskWorker:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt TaskQueue.Arn
+            BatchSize: 1
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
     Metadata:
       DockerTag: latest
       DockerContext: .
@@ -81,14 +110,18 @@ Resources:
       StageName: prod
       CorsConfiguration:
         AllowOrigins:
-          - "*"
+          - "https://naukribaba.netlify.app"
+          - "http://localhost:5173"
         AllowMethods:
-          - "*"
           - GET
           - POST
+          - PUT
+          - PATCH
+          - DELETE
           - OPTIONS
         AllowHeaders:
           - "*"
+        AllowCredentials: true
 
   # --- S3 Bucket for Frontend ---
   FrontendBucket:
@@ -123,3 +156,9 @@ Outputs:
   FrontendUrl:
     Description: Frontend S3 website URL
     Value: !GetAtt FrontendBucket.WebsiteURL
+  TaskQueueUrl:
+    Description: SQS Task Queue URL
+    Value: !Ref TaskQueue
+  TaskDLQUrl:
+    Description: SQS Dead Letter Queue URL
+    Value: !Ref TaskDLQ
