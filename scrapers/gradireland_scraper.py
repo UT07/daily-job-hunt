@@ -188,6 +188,9 @@ class GradIrelandScraper(BaseScraper):
 
             # Extract company and location from nearby HTML
             company = self._extract_nearby(html, match.end(), "company")
+            # Fallback: derive company from URL slug when HTML extraction fails
+            if not company:
+                company = self._company_from_url(full_url)
             loc = self._extract_nearby(html, match.end(), "location")
             posted = self._extract_nearby(html, match.end(), "date")
 
@@ -216,9 +219,11 @@ class GradIrelandScraper(BaseScraper):
                 title = re.sub(r'\s+', ' ', title)
                 if not title or len(title) < 5:
                     continue
+                # Derive company from URL slug as best-effort extraction
+                company = self._company_from_url(url)
                 jobs.append(Job(
                     title=title,
-                    company="",
+                    company=company,
                     location=fallback_location or "Ireland",
                     description="",
                     apply_url=url,
@@ -227,6 +232,53 @@ class GradIrelandScraper(BaseScraper):
                 ))
 
         return jobs
+
+    def _company_from_url(self, url: str) -> str:
+        """Try to infer company name from a GradIreland job URL.
+
+        GradIreland URLs commonly follow the pattern:
+            /graduate-jobs/{employer-slug}/{job-slug}
+        or the full URL:
+            https://gradireland.com/graduate-jobs/{employer-slug}/{job-slug}
+
+        The segment immediately after the top-level path prefix is often the
+        employer slug (hyphen-separated words). We convert it to title-case as
+        a best-effort company name. Returns "" on any failure.
+        """
+        try:
+            parsed = urllib.parse.urlparse(url)
+            path = parsed.path.rstrip("/")
+            parts = [p for p in path.split("/") if p]
+
+            # Paths we recognise as job-listing prefixes whose next segment
+            # is likely the employer slug:
+            #   /graduate-jobs/{employer}/{title}
+            #   /job/{employer}/{title}
+            #   /jobs/{employer}/{title}
+            #   /vacancy/{employer}/{title}
+            #   /opportunities/{employer}/{title}
+            _JOB_PREFIXES = {"graduate-jobs", "job", "jobs", "vacancy", "opportunities"}
+
+            if len(parts) >= 2 and parts[0] in _JOB_PREFIXES:
+                employer_slug = parts[1]
+                # Skip single-segment paths like /jobs/12345 (numeric IDs)
+                if not employer_slug.isdigit() and len(employer_slug) >= 2:
+                    # Convert slug to readable name: hyphens/underscores → spaces, title-case
+                    name = re.sub(r"[-_]+", " ", employer_slug).strip()
+                    # Discard slugs that look like job titles (very long or
+                    # containing common job-title words) — they probably mean
+                    # the URL lacks an employer segment.
+                    _JOB_WORDS = {
+                        "engineer", "developer", "analyst", "manager", "graduate",
+                        "intern", "trainee", "associate", "officer", "specialist",
+                        "consultant", "coordinator", "executive", "director",
+                    }
+                    words = name.lower().split()
+                    if not any(w in _JOB_WORDS for w in words):
+                        return name.title()
+        except Exception:
+            pass
+        return ""
 
     def _extract_nearby(self, html: str, pos: int, field: str) -> str:
         """Try to extract a field value from HTML near the given position.
@@ -239,8 +291,11 @@ class GradIrelandScraper(BaseScraper):
             "company": [
                 r'class="[^"]*[Cc]ompany[^"]*"[^>]*>\s*([^<]{2,80})',
                 r'class="[^"]*employer[^"]*"[^>]*>\s*([^<]{2,80})',
-                r'class="[^"]*org[^"]*"[^>]*>\s*([^<]{2,80})',
+                r'class="[^"]*org(?:anisation|anization)?[^"]*"[^>]*>\s*([^<]{2,80})',
+                r'class="[^"]*recruiter[^"]*"[^>]*>\s*([^<]{2,80})',
+                r'class="[^"]*brand[^"]*"[^>]*>\s*([^<]{2,80})',
                 r'data-company="([^"]{2,80})"',
+                r'data-employer="([^"]{2,80})"',
             ],
             "location": [
                 r'class="[^"]*[Ll]ocation[^"]*"[^>]*>\s*([^<]{2,80})',
