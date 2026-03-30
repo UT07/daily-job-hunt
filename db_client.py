@@ -111,10 +111,18 @@ class SupabaseClient:
         logger.info(f"[DB] Upserted resume '{data.get('resume_key')}' for user {user_id}")
         return result.data[0]
 
-    def delete_resume(self, resume_id: str) -> None:
-        """Delete a resume by its primary key ID."""
-        self.client.table("user_resumes").delete().eq("id", resume_id).execute()
-        logger.info(f"[DB] Deleted resume {resume_id}")
+    def delete_resume(self, resume_id: str, user_id: str) -> None:
+        """Delete a resume by primary key, scoped to the owning user."""
+        result = (
+            self.client.table("user_resumes")
+            .delete()
+            .eq("id", resume_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        if not result.data:
+            raise ValueError(f"Resume {resume_id} not found for user")
+        logger.info(f"[DB] Deleted resume {resume_id} for user {user_id}")
 
     # ── Search Config ─────────────────────────────────────────────
 
@@ -163,8 +171,10 @@ class SupabaseClient:
         filters: Optional[Dict[str, Any]] = None,
         page: int = 1,
         per_page: int = 25,
-    ) -> List[Dict[str, Any]]:
+    ):
         """Get paginated jobs for a user with optional filters.
+
+        Returns a tuple of (rows, total_count).
 
         Supported filters:
             source       — exact match on job source
@@ -174,7 +184,7 @@ class SupabaseClient:
         """
         query = (
             self.client.table("jobs")
-            .select("*")
+            .select("*", count="exact")
             .eq("user_id", user_id)
         )
 
@@ -192,7 +202,8 @@ class SupabaseClient:
         query = query.order("first_seen", desc=True).range(offset, offset + per_page - 1)
 
         result = query.execute()
-        return result.data
+        total = result.count if result.count is not None else len(result.data)
+        return result.data, total
 
     def update_job_status(
         self, user_id: str, job_id: str, status: str
@@ -205,6 +216,8 @@ class SupabaseClient:
             .eq("user_id", user_id)
             .execute()
         )
+        if not result.data:
+            raise ValueError(f"Job {job_id} not found for user {user_id}")
         logger.info(f"[DB] Job {job_id} status -> {status}")
         return result.data[0]
 

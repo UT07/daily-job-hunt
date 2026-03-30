@@ -671,6 +671,8 @@ def update_profile(
         raise HTTPException(400, "No fields to update")
 
     row = _db.update_user(user.id, update_data)
+    if row is None:
+        raise HTTPException(404, "User not found")
     return ProfileResponse(
         id=row["id"],
         email=row["email"],
@@ -694,6 +696,7 @@ def update_search_config(body: dict, user: AuthUser = Depends(get_current_user))
     # Map frontend field names to DB column names and filter unknown keys
     _FIELD_MAP = {
         "queries": "queries", "keywords": "queries", "job_titles": "queries",
+        "search_queries": "queries",
         "locations": "locations",
         "geo_regions": "geo_regions",
         "experience_levels": "experience_levels", "experience_level": "experience_levels",
@@ -758,8 +761,8 @@ def get_dashboard_jobs(
     if company:
         filters["company"] = company
 
-    jobs = _db.get_jobs(user.id, filters=filters, page=page, per_page=per_page)
-    return {"jobs": jobs, "page": page, "per_page": per_page}
+    jobs, total = _db.get_jobs(user.id, filters=filters, page=page, per_page=per_page)
+    return {"jobs": jobs, "page": page, "per_page": per_page, "total": total}
 
 
 @app.patch("/api/dashboard/jobs/{job_id}")
@@ -778,7 +781,10 @@ def update_job_status(
     if status not in _VALID_STATUSES:
         raise HTTPException(400, f"Invalid status. Must be one of: {sorted(_VALID_STATUSES)}")
 
-    result = _db.update_job_status(user.id, job_id, status)
+    try:
+        result = _db.update_job_status(user.id, job_id, status)
+    except ValueError:
+        raise HTTPException(404, "Job not found")
     return result
 
 
@@ -857,10 +863,13 @@ def list_resumes(user: AuthUser = Depends(get_current_user)):
 
 @app.delete("/api/resumes/{resume_id}")
 def delete_resume(resume_id: str, user: AuthUser = Depends(get_current_user)):
-    """Delete a resume."""
+    """Delete a resume owned by the authenticated user."""
     if not _db:
         raise HTTPException(503, "Database not configured")
-    _db.delete_resume(resume_id)
+    try:
+        _db.delete_resume(resume_id, user.id)
+    except ValueError:
+        raise HTTPException(404, "Resume not found")
     return {"status": "deleted"}
 
 
