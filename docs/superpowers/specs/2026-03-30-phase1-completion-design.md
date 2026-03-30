@@ -72,16 +72,33 @@ SELF_FUNCTION_ARN: !GetAtt JobHuntApi.Arn
 
 ### Handler Routing (app.py)
 
-Replace the current `handler = Mangum(app)` with:
+Replace the current handler setup:
 
 ```python
-_mangum = Mangum(app)
+# Current (broken for async):
+try:
+    from mangum import Mangum
+    handler = Mangum(app, api_gateway_base_path="/prod")
+except ImportError:
+    handler = None
+```
+
+With:
+
+```python
+try:
+    from mangum import Mangum
+    _mangum = Mangum(app, api_gateway_base_path="/prod")
+except ImportError:
+    _mangum = None
 
 def handler(event, context):
     if "Records" in event and event["Records"][0].get("eventSource") == "aws:sqs":
         return _process_sqs_task(event, context)
     return _mangum(event, context)
 ```
+
+Note: `api_gateway_base_path="/prod"` must be preserved — it strips the `/prod` stage prefix from API Gateway URLs.
 
 The SQS worker function `_process_sqs_task` reads `task_id` from the SQS message body, fetches task details from Supabase `pipeline_tasks`, and dispatches to the appropriate worker (`_do_tailor`, `_do_cover_letter`, `_do_contacts`).
 
@@ -207,7 +224,7 @@ Add `count="exact"` to the Supabase query. Return `{"jobs": [...], "total": coun
 
 **File:** `contact_finder.py:304-330`
 
-Change "hiring manager" to: "the most relevant hiring manager or team lead at the same level as the role (NOT VP/Director/Head-of unless the role itself is senior leadership)". Add: "For a mid-level role, suggest Engineering Manager or Senior Engineer, not executives."
+The prompt says "hiring manager" without seniority constraints. The AI interprets this as VP/Director/Head-of because those are technically "hiring managers" for most roles. Fix: change "hiring manager" to "direct hiring manager or team lead at the appropriate level for the role (e.g., Engineering Manager for mid-level roles, NOT VP/Director/Head-of unless the position reports directly to them)". Add: "The hiring manager contact should be someone the candidate would realistically report to."
 
 ### B11: Fabrication detection threshold
 
@@ -237,7 +254,7 @@ When Drive upload fails, return `"pdf_url": ""` (not the temp path) and include 
 
 **File:** `app.py:576-591`
 
-Accept both `search_queries` and `queries` as valid keys (map `search_queries` → `queries` internally). This fixes the frontend/backend field name mismatch at the source.
+Add `"search_queries": "queries"` to `_FIELD_MAP` (currently has `queries`, `keywords`, `job_titles` mapping to `queries` column, but NOT `search_queries`). This fixes the frontend/backend field name mismatch at the source. Also fix the frontend to use `queries` going forward for consistency.
 
 ### B10: Connection message length
 
@@ -272,7 +289,9 @@ Add `if (!user && !loading) return <LoginPage />` pattern (same as Dashboard).
 
 **File:** `web/src/pages/Dashboard.jsx:161-211`
 
-Make status/source dropdown `onChange` call `handleFilterApply()` directly (or add `statusFilter`/`sourceFilter` to `fetchJobs` dependencies).
+The dropdowns call `setPage(1)` on change, and `page` is in `fetchJobs` dependencies `[filterVersion, page]`. This means a filter change triggers a fetch ONLY if page was not already 1. On the first page (most common case), changing a dropdown does nothing until "Apply Filters" is clicked.
+
+Fix: add `statusFilter` and `sourceFilter` to the `fetchJobs` dependency array so any dropdown change triggers an immediate re-fetch. Remove the separate "Apply Filters" button — all controls become live.
 
 ### F18: Fix pagination with total count
 
@@ -375,8 +394,8 @@ Make `onMouseUp`/`onTouchEnd` call `handleFilterApply()`.
 | File | Changes |
 |------|---------|
 | `template.yaml` | +TaskQueue, +TaskDLQ, +SQS event, +IAM policies, timeout 900s, CORS origins |
-| `Dockerfile.lambda` | +boto3 in requirements (for SQS client) |
-| `requirements-web.txt` | +boto3 |
+| `Dockerfile.lambda` | No changes needed (boto3 already in requirements-web.txt) |
+| `requirements-web.txt` | No changes needed (boto3>=1.34.0 already present) |
 | `app.py` | Handler routing, _enqueue_task, _process_sqs_task, CORS fix, IDOR fix, tailor crash fix, Drive folder fix, save_task guard, score failure indicator, field map fix, pdf_url fix, update_user guard |
 | `db_client.py` | Resume delete ownership, update_job_status guard, total count, |
 | `tailorer.py` | (no change — error handled by caller) |
