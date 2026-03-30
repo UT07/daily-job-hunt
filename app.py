@@ -34,6 +34,8 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
+import boto3
+
 # Load .env file if present (for local development)
 _env_path = Path(__file__).parent / ".env"
 if _env_path.exists():
@@ -74,7 +76,7 @@ app = FastAPI(title="Job Hunt API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://naukribaba.netlify.app", "http://localhost:5173"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -365,16 +367,21 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
 # so API Gateway's 29s timeout doesn't kill them.
 # ---------------------------------------------------------------------------
 
+TASK_QUEUE_URL = os.environ.get("TASK_QUEUE_URL", "")
+
+
 def _save_task(task_id: str, user_id: str, data: dict):
     """Persist task state to Supabase pipeline_tasks table."""
     if not _db:
-        raise HTTPException(503, "Database not configured")
+        logger.warning("_save_task: database not configured, skipping persist for %s", task_id)
+        return
     row = {
         "task_id": task_id,
         "user_id": user_id,
         "status": data.get("status", "running"),
         "result": data.get("result"),
         "error": data.get("error"),
+        "payload": data.get("payload"),
     }
     _db.client.table("pipeline_tasks").upsert(row, on_conflict="task_id").execute()
 
@@ -395,17 +402,30 @@ def _load_task(task_id: str) -> dict | None:
     return task
 
 
-def _run_in_background(task_id: str, user_id: str, fn, *args, **kwargs):
-    """Execute fn in a background thread, persisting result to Supabase."""
-    _save_task(task_id, user_id, {"status": "running"})
-    def _worker():
-        try:
-            result = fn(*args, **kwargs)
-            _save_task(task_id, user_id, {"status": "done", "result": result})
-        except Exception as e:
-            logger.error("Background task %s failed: %s", task_id, e)
-            _save_task(task_id, user_id, {"status": "error", "error": str(e)})
-    threading.Thread(target=_worker, daemon=True).start()
+def _enqueue_task(task_id: str, user_id: str, task_type: str, payload: dict):
+    """Save task to Supabase then send an SQS message (or fall back to threading for local dev)."""
+    _save_task(task_id, user_id, {"status": "running", "payload": payload})
+
+    sqs_message = json.dumps({"task_id": task_id, "task_type": task_type})
+
+    if TASK_QUEUE_URL:
+        # Production path: send to SQS
+        sqs = boto3.client("sqs")
+        sqs.send_message(QueueUrl=TASK_QUEUE_URL, MessageBody=sqs_message)
+        logger.info("Enqueued task %s (%s) to SQS", task_id, task_type)
+    else:
+        # Local dev fallback: run in a background thread (same as old behaviour)
+        logger.info("TASK_QUEUE_URL not set — running task %s (%s) in background thread", task_id, task_type)
+
+        def _local_worker():
+            try:
+                result = _dispatch_task(task_type, payload)
+                _save_task(task_id, user_id, {"status": "done", "result": result})
+            except Exception as e:
+                logger.error("Background task %s failed: %s", task_id, e)
+                _save_task(task_id, user_id, {"status": "error", "error": str(e)})
+
+        threading.Thread(target=_local_worker, daemon=True).start()
 
 
 @app.get("/api/tasks/{task_id}")
@@ -415,6 +435,85 @@ def get_task(task_id: str, user: AuthUser = Depends(get_current_user)):
     if not task:
         raise HTTPException(404, "Task not found")
     return task
+
+
+# ---------------------------------------------------------------------------
+# SQS task dispatch + processing
+# ---------------------------------------------------------------------------
+
+def _dispatch_task(task_type: str, payload: dict) -> dict:
+    """Route a task to the appropriate worker function based on task_type."""
+    job = _Job(
+        title=payload.get("job_title", "Software Engineer"),
+        company=payload.get("company", "Unknown"),
+        description=payload.get("job_description", ""),
+    )
+
+    if task_type == "tailor":
+        resume_type = payload.get("resume_type", "sre_devops")
+        base_tex = _resumes.get(resume_type, "")
+        return _do_tailor(job, base_tex, resume_type, payload.get("company", "Unknown"), payload.get("job_title", "Software Engineer"))
+    elif task_type == "cover_letter":
+        resume_type = payload.get("resume_type", "sre_devops")
+        resume_tex = _resumes.get(resume_type, "")
+        return _do_cover_letter(job, resume_tex, payload.get("company", "Unknown"), payload.get("job_title", "Software Engineer"))
+    elif task_type == "contacts":
+        return _do_contacts(job)
+    else:
+        raise ValueError(f"Unknown task_type: {task_type}")
+
+
+def _process_sqs_task(event, context):
+    """Process SQS records (Lambda handler for the task queue).
+
+    Uses the ReportBatchItemFailures pattern so only failed messages
+    are retried rather than the entire batch.
+    """
+    # Ensure config / AI client / resumes are loaded (cold start)
+    startup()
+
+    batch_item_failures = []
+
+    for record in event.get("Records", []):
+        message_id = record.get("messageId", "")
+        try:
+            body = json.loads(record["body"])
+            task_id = body["task_id"]
+            task_type = body["task_type"]
+
+            # Load the full payload from Supabase
+            task_row = None
+            if _db:
+                res = _db.client.table("pipeline_tasks").select("*").eq("task_id", task_id).maybe_single().execute()
+                if res and res.data:
+                    task_row = res.data
+
+            if not task_row:
+                logger.error("SQS task %s: no matching row in pipeline_tasks", task_id)
+                batch_item_failures.append({"itemIdentifier": message_id})
+                continue
+
+            payload = task_row.get("payload") or {}
+            user_id = task_row.get("user_id", "")
+
+            result = _dispatch_task(task_type, payload)
+            _save_task(task_id, user_id, {"status": "done", "result": result})
+
+        except Exception as e:
+            logger.error("SQS message %s failed: %s", message_id, e, exc_info=True)
+            # Mark the task as errored in Supabase (best-effort)
+            try:
+                body = json.loads(record["body"])
+                task_id = body.get("task_id", "")
+                if task_id and _db:
+                    res = _db.client.table("pipeline_tasks").select("user_id").eq("task_id", task_id).maybe_single().execute()
+                    uid = res.data["user_id"] if res and res.data else ""
+                    _save_task(task_id, uid, {"status": "error", "error": str(e)})
+            except Exception:
+                pass
+            batch_item_failures.append({"itemIdentifier": message_id})
+
+    return {"batchItemFailures": batch_item_failures}
 
 
 # ---------------------------------------------------------------------------
@@ -477,9 +576,13 @@ def tailor_job(req: TailorRequest, user: AuthUser = Depends(get_current_user)):
         raise HTTPException(400, f"Unknown resume type: {req.resume_type}")
 
     task_id = str(uuid.uuid4())
-    job = _Job(req.job_title, req.company, req.job_description)
-    _run_in_background(task_id, user.id, _do_tailor, job, _resumes[req.resume_type],
-                       req.resume_type, req.company, req.job_title)
+    payload = {
+        "job_description": req.job_description,
+        "job_title": req.job_title,
+        "company": req.company,
+        "resume_type": req.resume_type,
+    }
+    _enqueue_task(task_id, user.id, "tailor", payload)
     return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
 
 
@@ -489,17 +592,25 @@ def cover_letter(req: CoverLetterRequest, user: AuthUser = Depends(get_current_u
         raise HTTPException(400, f"Unknown resume type: {req.resume_type}")
 
     task_id = str(uuid.uuid4())
-    job = _Job(req.job_title, req.company, req.job_description)
-    _run_in_background(task_id, user.id, _do_cover_letter, job, _resumes[req.resume_type],
-                       req.company, req.job_title)
+    payload = {
+        "job_description": req.job_description,
+        "job_title": req.job_title,
+        "company": req.company,
+        "resume_type": req.resume_type,
+    }
+    _enqueue_task(task_id, user.id, "cover_letter", payload)
     return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
 
 
 @app.post("/api/contacts", status_code=202)
 def contacts(req: ContactsRequest, user: AuthUser = Depends(get_current_user)):
     task_id = str(uuid.uuid4())
-    job = _Job(req.job_title, req.company, req.job_description)
-    _run_in_background(task_id, user.id, _do_contacts, job)
+    payload = {
+        "job_description": req.job_description,
+        "job_title": req.job_title,
+        "company": req.company,
+    }
+    _enqueue_task(task_id, user.id, "contacts", payload)
     return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
 
 
@@ -797,6 +908,17 @@ def gdpr_delete(user: AuthUser = Depends(get_current_user)):
 
 try:
     from mangum import Mangum
-    handler = Mangum(app, api_gateway_base_path="/prod")
+    _mangum = Mangum(app, api_gateway_base_path="/prod")
 except ImportError:
-    handler = None
+    _mangum = None
+
+
+def handler(event, context):
+    """Route Lambda invocations: SQS events go to the task processor,
+    everything else (API Gateway) goes to Mangum."""
+    records = event.get("Records") if isinstance(event, dict) else None
+    if records and any(r.get("eventSource") == "aws:sqs" for r in records):
+        return _process_sqs_task(event, context)
+    if _mangum:
+        return _mangum(event, context)
+    raise RuntimeError("Mangum is not installed — cannot handle API Gateway events")
