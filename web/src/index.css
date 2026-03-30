@@ -1,15 +1,50 @@
 @import "tailwindcss";
 
-body {
-  font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
-  margin: 0;
-  background-color: #0f172a; /* slate-900 */
-  color: #e2e8f0; /* slate-200 */
+@theme {
+  --color-cream: #fafaf9;
+  --color-cream-dark: #f5f5f4;
+
+  --color-stone-100: #f5f5f4;
+  --color-stone-200: #e7e5e4;
+  --color-stone-300: #d6d3d1;
+  --color-stone-400: #a8a29e;
+  --color-stone-500: #78716c;
+  --color-stone-600: #57534e;
+  --color-stone-700: #44403c;
+  --color-stone-800: #292524;
+  --color-stone-900: #1c1917;
+
+  --color-black: #1c1917;
+  --color-white: #ffffff;
+
+  --color-yellow: #fbbf24;
+  --color-yellow-light: #fef3c7;
+  --color-yellow-dark: #f59e0b;
+
+  --color-success: #16a34a;
+  --color-success-light: #dcfce7;
+  --color-error: #dc2626;
+  --color-error-light: #fef2f2;
+  --color-info: #2563eb;
+  --color-info-light: #dbeafe;
+  --color-warning: #ea580c;
+  --color-warning-light: #fff7ed;
+
+  --font-heading: "Space Grotesk", system-ui, sans-serif;
+  --font-body: "Space Grotesk", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --shadow-brutal-sm: 2px 2px 0px 0px #1c1917;
+  --shadow-brutal: 4px 4px 0px 0px #1c1917;
+  --shadow-brutal-lg: 6px 6px 0px 0px #1c1917;
+  --shadow-brutal-yellow: 4px 4px 0px 0px #fbbf24;
 }
 
-.font-mono,
-[class*="font-mono"] {
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
+body {
+  font-family: "Space Grotesk", system-ui, sans-serif;
+  margin: 0;
+  background-color: #fafaf9;
+  color: #1c1917;
 }
 
 @keyframes spin {
@@ -17,22 +52,17 @@ body {
 }
 
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(8px); }
+  from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
-@keyframes pulse-glow {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
-  50% { box-shadow: 0 0 12px 2px rgba(59, 130, 246, 0.15); }
-}
-
 .animate-fade-in {
-  animation: fadeIn 0.3s ease-in;
+  animation: fadeIn 0.2s ease-out;
 }
 
 .spinner {
-  border: 3px solid #334155; /* slate-700 */
-  border-top-color: #3b82f6; /* blue-500 */
+  border: 3px solid #e7e5e4;
+  border-top-color: #1c1917;
   border-radius: 50%;
   width: 18px;
   height: 18px;
@@ -40,28 +70,7 @@ body {
   display: inline-block;
 }
 
-/* Custom scrollbar for dark theme */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-track {
-  background: #1e293b; /* slate-800 */
-}
-
-::-webkit-scrollbar-thumb {
-  background: #475569; /* slate-600 */
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: #64748b; /* slate-500 */
-}
-
-/* Glass morphism utility */
-.glass {
-  background: rgba(30, 41, 59, 0.5);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-}
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: #f5f5f4; }
+::-webkit-scrollbar-thumb { background: #d6d3d1; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #a8a29e; }
