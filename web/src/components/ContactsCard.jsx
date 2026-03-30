@@ -4,14 +4,14 @@ function ContactItem({ contact }) {
   const [copied, setCopied] = useState(false);
 
   const copy = () => {
-    navigator.clipboard.writeText(contact.message).then(() => {
+    navigator.clipboard.writeText(contact.message || '').then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
   };
 
   const linkUrl = contact.profile_url || contact.google_url || contact.search_url;
-  const linkLabel = contact.profile_url ? 'View Profile' : 'Search LinkedIn';
+  const linkLabel = contact.profile_url ? 'View Profile' : contact.google_url ? 'Find on Google' : 'Search LinkedIn';
 
   return (
     <div className="border border-slate-600 rounded-lg p-4">

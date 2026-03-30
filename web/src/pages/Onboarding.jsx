@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { apiPut, apiUpload } from '../api'
@@ -407,8 +407,8 @@ function StepPreferences({ prefs, setPrefs }) {
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-1">Search Queries</label>
         <TagInput
-          value={prefs.search_queries}
-          onChange={(v) => updateField('search_queries', v)}
+          value={prefs.queries}
+          onChange={(v) => updateField('queries', v)}
           placeholder="e.g. DevOps Engineer, SRE, Platform Engineer"
         />
         <p className="text-xs text-slate-500 mt-1">Press Enter to add a keyword</p>
@@ -498,6 +498,7 @@ export default function Onboarding() {
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
+  const [success, setSuccess] = useState(false)
 
   const [profile, setProfile] = useState({
     name: '',
@@ -515,7 +516,7 @@ export default function Onboarding() {
   const [uploadStatus, setUploadStatus] = useState(null)
 
   const [prefs, setPrefs] = useState({
-    search_queries: [],
+    queries: [],
     locations: [],
     experience_levels: ['entry_level'],
     days_back: 7,
@@ -524,9 +525,11 @@ export default function Onboarding() {
   })
 
   // Keep email in sync if user loads after initial render
-  if (user?.email && !profile.email) {
-    setProfile((prev) => ({ ...prev, email: user.email }))
-  }
+  useEffect(() => {
+    if (user?.email && !profile.email) {
+      setProfile((prev) => ({ ...prev, email: user.email }))
+    }
+  }, [user])
 
   if (loading) {
     return (
@@ -564,7 +567,7 @@ export default function Onboarding() {
     }
 
     setSaving(false)
-    alert('Setup complete! Your preferences have been saved.')
+    setSuccess(true)
     navigate('/')
   }
 
@@ -601,6 +604,12 @@ export default function Onboarding() {
           )}
           {step === 2 && <StepPreferences prefs={prefs} setPrefs={setPrefs} />}
         </div>
+
+        {success && (
+          <div className="mb-4 bg-emerald-900/50 border border-emerald-500 rounded p-3 text-emerald-200 text-sm">
+            Setup complete! Your preferences have been saved.
+          </div>
+        )}
 
         {error && (
           <div className="mb-4 p-3 bg-red-900/30 border border-red-800 rounded-lg text-sm text-red-300">

@@ -273,11 +273,13 @@ export default function JobTable({ jobs, onStatusChange }) {
                       icon={<span role="img" aria-label="Cover Letter">&#128221;</span>}
                       title="Cover Letter"
                     />
-                    <AssetIcon
-                      href={isValidUrl(job.resume_doc_url) ? job.resume_doc_url : null}
-                      icon={<span role="img" aria-label="Google Doc">&#128203;</span>}
-                      title="Google Doc"
-                    />
+                    {isValidUrl(job.resume_doc_url) && isValidUrl(job.resume_s3_url) && (
+                      <AssetIcon
+                        href={job.resume_doc_url}
+                        icon={<span role="img" aria-label="Google Doc">&#128203;</span>}
+                        title="Google Doc"
+                      />
+                    )}
                   </div>
                 </td>
 

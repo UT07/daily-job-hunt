@@ -1,4 +1,5 @@
 export default function ScoreBadge({ score, label, large }) {
+  if (score == null || score === 0) return <span className="text-gray-500 text-sm">--</span>
   const color =
     score >= 85 ? 'bg-emerald-900/50 text-emerald-300 ring-emerald-500/50' :
     score >= 60 ? 'bg-amber-900/50 text-amber-300 ring-amber-500/50' :
