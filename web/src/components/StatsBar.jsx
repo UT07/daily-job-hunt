@@ -38,7 +38,7 @@ export default function StatsBar({ stats }) {
     },
     {
       label: 'Avg Score',
-      value: stats.avg_match_score ?? 0,
+      value: Math.round(stats.avg_match_score ?? 0),
       accent:
         (stats.avg_match_score ?? 0) >= 85
           ? 'from-emerald-500 to-emerald-400'

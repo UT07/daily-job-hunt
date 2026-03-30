@@ -3,14 +3,15 @@ import StatusDropdown from './StatusDropdown';
 
 function ScoreBadge({ score }) {
   if (score == null || score === 0) return <span className="text-slate-600 text-xs font-mono">--</span>;
-  const bg = score >= 85
+  const rounded = Math.round(score);
+  const bg = rounded >= 85
     ? 'bg-gradient-to-r from-emerald-600 to-emerald-500 text-white'
-    : score >= 60
+    : rounded >= 60
       ? 'bg-gradient-to-r from-amber-600 to-amber-500 text-white'
       : 'bg-gradient-to-r from-red-600 to-red-500 text-white';
   return (
     <span className={`${bg} text-xs font-mono font-bold px-2 py-0.5 rounded`}>
-      {score}
+      {rounded}
     </span>
   );
 }

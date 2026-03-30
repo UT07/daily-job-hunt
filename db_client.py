@@ -12,7 +12,7 @@ Requires environment variables:
 from __future__ import annotations
 import logging
 import os
-from datetime import date, time, datetime
+from datetime import date, time, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from supabase import create_client, Client
@@ -196,7 +196,7 @@ class SupabaseClient:
             if "status" in filters:
                 query = query.eq("application_status", filters["status"])
             if "company" in filters:
-                query = query.eq("company", filters["company"])
+                query = query.ilike("company", f"%{filters['company']}%")
 
         offset = (page - 1) * per_page
         query = query.order("first_seen", desc=True).range(offset, offset + per_page - 1)
@@ -285,6 +285,41 @@ class SupabaseClient:
         )
         logger.info(f"[DB] Completed run {run_id}")
         return result.data[0]
+
+    def fail_run(self, run_id: str, error: str = "Pipeline cancelled or timed out") -> Dict[str, Any]:
+        """Mark a run as failed."""
+        update_data = {"status": "failed", "completed_at": datetime.utcnow().isoformat()}
+        result = (
+            self.client.table("runs")
+            .update(update_data)
+            .eq("run_id", run_id)
+            .execute()
+        )
+        logger.info(f"[DB] Failed run {run_id}: {error}")
+        return result.data[0] if result.data else {}
+
+    def cleanup_stale_runs(self, user_id: str, max_age_hours: int = 2) -> int:
+        """Mark runs stuck in 'running' status for longer than max_age_hours as failed.
+
+        Returns the number of runs cleaned up.
+        """
+        cutoff_date = (datetime.utcnow() - timedelta(hours=max_age_hours)).date().isoformat()
+        # Find stale runs: status='running' and run_date before cutoff
+        stale = (
+            self.client.table("runs")
+            .select("run_id")
+            .eq("user_id", user_id)
+            .eq("status", "running")
+            .lt("run_date", cutoff_date)
+            .execute()
+        )
+        count = 0
+        for row in (stale.data or []):
+            self.fail_run(row["run_id"], "Automatically marked as failed (stale)")
+            count += 1
+        if count:
+            logger.info(f"[DB] Cleaned up {count} stale runs for user {user_id}")
+        return count
 
     def get_runs(
         self, user_id: str, limit: int = 20

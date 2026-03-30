@@ -809,6 +809,12 @@ def get_dashboard_runs(user: AuthUser = Depends(get_current_user)):
     if _db is None:
         return {"runs": [], "message": "Database not configured"}
 
+    # Auto-clean stale runs stuck in "running" for > 2 hours
+    try:
+        _db.cleanup_stale_runs(user.id)
+    except Exception as e:
+        logger.warning("Stale run cleanup failed: %s", e)
+
     return {"runs": _db.get_runs(user.id)}
 
 

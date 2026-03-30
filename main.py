@@ -114,10 +114,10 @@ from pipeline_context import PipelineContext
 def _job_to_supabase_row(job: Job) -> dict:
     """Convert a Job dataclass to a dict matching the Supabase 'jobs' table schema.
 
-    Only includes columns that exist in the DB schema.  Skips local-only
-    fields like tex paths and S3/Drive URLs that aren't in the DB.
+    Includes all fields the dashboard needs: scores, artifact URLs/paths,
+    contacts, and AI model metadata.
     """
-    return {
+    row = {
         "job_id": job.job_id,
         "title": job.title,
         "company": job.company,
@@ -133,7 +133,24 @@ def _job_to_supabase_row(job: Job) -> dict:
         "application_status": job.application_status or "New",
         "linkedin_contacts": job.linkedin_contacts or "",
         "tailoring_model": getattr(job, "tailoring_model", None) or "",
+        "cover_letter_model": getattr(job, "cover_letter_model", None) or "",
     }
+    # Include artifact paths/URLs when populated
+    if job.tailored_pdf_path:
+        row["tailored_pdf_path"] = Path(job.tailored_pdf_path).name
+    if job.cover_letter_pdf_path:
+        row["cover_letter_pdf_path"] = Path(job.cover_letter_pdf_path).name
+    if getattr(job, "resume_doc_url", None):
+        row["resume_doc_url"] = job.resume_doc_url
+    if getattr(job, "resume_s3_url", None):
+        row["resume_s3_url"] = job.resume_s3_url
+    if getattr(job, "cover_letter_s3_url", None):
+        row["cover_letter_s3_url"] = job.cover_letter_s3_url
+    if getattr(job, "resume_drive_url", None):
+        row["resume_drive_url"] = job.resume_drive_url
+    if getattr(job, "cover_letter_drive_url", None):
+        row["cover_letter_drive_url"] = job.cover_letter_drive_url
+    return row
 
 
 def _try_init_supabase():
@@ -802,6 +819,21 @@ def run_pipeline(context: PipelineContext, dry_run: bool = False, scrape_only: b
         except Exception as e:
             logger.warning(f"[DB] Failed to record run start: {e}")
 
+    try:
+        _run_pipeline_body(context, config, run_date, run_record, dry_run, scrape_only)
+    except Exception as e:
+        logger.error(f"Pipeline failed: {e}", exc_info=True)
+        # Mark the run as failed in Supabase so the dashboard doesn't show it as "running"
+        if context.db and run_record:
+            try:
+                context.db.fail_run(run_record["run_id"], str(e))
+            except Exception as db_err:
+                logger.warning(f"[DB] Failed to record run failure: {db_err}")
+        raise
+
+
+def _run_pipeline_body(context, config, run_date, run_record, dry_run, scrape_only):
+    """Inner pipeline body — separated so run_pipeline can catch crashes and mark runs as failed."""
     # Create daily output directory using context properties
     base_dir = context.output_dir
     daily_dir = context.daily_dir
@@ -1123,17 +1155,6 @@ def run_pipeline(context: PipelineContext, dry_run: bool = False, scrape_only: b
         for job in matched_jobs:
             try:
                 row = _job_to_supabase_row(job)
-                # Include artifact URLs that are now populated
-                if job.resume_doc_url:
-                    row["resume_doc_url"] = job.resume_doc_url
-                if job.resume_s3_url:
-                    row["resume_s3_url"] = job.resume_s3_url
-                if job.cover_letter_s3_url:
-                    row["cover_letter_s3_url"] = job.cover_letter_s3_url
-                if getattr(job, "resume_drive_url", None):
-                    row["resume_drive_url"] = job.resume_drive_url
-                if getattr(job, "cover_letter_drive_url", None):
-                    row["cover_letter_drive_url"] = job.cover_letter_drive_url
                 context.db.upsert_job(context.user.id, row)
             except Exception as e:
                 logger.warning(f"[DB] Failed to upsert enriched job {job.job_id}: {e}")
