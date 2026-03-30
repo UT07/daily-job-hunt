@@ -1,7 +1,7 @@
 # NaukriBaba v2 — Complete Product Design Specification
 
 **Date**: 2026-03-30
-**Status**: Draft — Pending user review
+**Status**: Approved
 **Scope**: Full product revamp from job scraper to all-in-one job search command center
 
 ---
@@ -66,11 +66,13 @@ NaukriBaba is an **all-in-one AI-powered job search platform** covering the full
 
 ### 2.3 n8n Hosting
 
-**Self-hosted on EC2 t3.small with Docker** (~$15/mo):
+**Self-hosted on EC2 t3.micro with Docker** (~$8/mo):
 - Community Edition: free, unlimited executions, no timeout limits
 - Docker Compose: n8n + PostgreSQL + Caddy (reverse proxy with auto-SSL)
+- t3.micro (1GB RAM) sufficient for single-pipeline workloads; upgrade to t3.small if needed
 - Pipeline can run 90+ minutes without timeout constraints
 - Webhook URL for "Run Pipeline Now" from React frontend
+- Future: convert to 1-year Reserved Instance (~$5/mo, 40% savings) once stable
 
 ### 2.4 Migration Path (4 phases)
 
@@ -87,16 +89,18 @@ NaukriBaba is an **all-in-one AI-powered job search platform** covering the full
 
 **Automated pipeline** (n8n orchestrated, daily weekday runs):
 
-| Scraper | Method | Source |
-|---------|--------|--------|
-| Adzuna | n8n HTTP Request (API) | adzuna.com |
-| Indeed | Apify actor via n8n (`misceres/indeed-scraper`) | indeed.com |
-| LinkedIn | Apify actor via n8n | linkedin.com |
-| IrishJobs | n8n HTTP Request | irishjobs.ie |
-| Jobs.ie | n8n HTTP Request | jobs.ie |
-| GradIreland | n8n HTTP Request | gradireland.com |
-| YC Jobs | n8n HTTP Request (parse Inertia.js SSR) | ycombinator.com |
-| HN Hiring | n8n HTTP Request | news.ycombinator.com |
+| Scraper | Method | Source | Cost |
+|---------|--------|--------|------|
+| Adzuna | n8n HTTP Request (API) | adzuna.com | Free (API key) |
+| Indeed + LinkedIn + ZipRecruiter | RapidAPI JSearch (single API, free 500 req/mo) | Multiple boards | $0 (free tier) |
+| IrishJobs | n8n HTTP Request | irishjobs.ie | $0 |
+| Jobs.ie | n8n HTTP Request | jobs.ie | $0 |
+| GradIreland | n8n HTTP Request | gradireland.com | $0 |
+| YC Jobs | n8n HTTP Request (parse Inertia.js SSR) | ycombinator.com | $0 |
+| HN Hiring | n8n HTTP Request | news.ycombinator.com | $0 |
+| LinkedIn (fallback) | Existing Python scraper called via Lambda | linkedin.com | $0 |
+
+**Scraping strategy**: RapidAPI JSearch as primary for Indeed/LinkedIn (free tier, single API for multiple boards). Existing Python LinkedIn scraper as secondary fallback. Apify actors as tertiary fallback (already working, free $5/mo credit). Three-tier failover: JSearch → Python scraper → Apify.
 
 All scrapers run as **parallel branches** in n8n. Each has "Continue On Fail" enabled — one failure doesn't block others. Results merge via a Merge node → deduplicate → send to Lambda for AI council matching.
 
@@ -111,24 +115,24 @@ All scrapers run as **parallel branches** in n8n. Each has "Continue On Fail" en
 
 Automatic enrichment triggered when a new job enters the system.
 
-**Data sources** (all within free/cheap tiers):
+**Data sources** (all free tier):
 
 | Data | Source | Cost |
 |------|--------|------|
-| Reviews & ratings | OpenWeb Ninja / RapidAPI (Glassdoor data) | $0-25/mo |
-| Company basics, tech stack | CompanyLens API | Free (500/mo) |
-| Salary data | OpenWeb Ninja Job Salary API + Levels.fyi | $0-25/mo |
+| Reviews & ratings | Apify Glassdoor actor (on-demand, free $5/mo credit) | $0 |
+| Company basics, tech stack | CompanyLens API | $0 (500 free/mo) |
+| Salary data | Levels.fyi (embeds/scrape for tech) + CareerOneStop API (US BLS data, free) | $0 |
 | Recent news | GDELT (free, unlimited) + GNews (100/day free) | $0 |
-| Layoff signals | Layoffs.fyi scrape (daily) | $0 |
+| Layoff signals | Layoffs.fyi scrape (daily via n8n) | $0 |
 | Red flags | AI-computed from above data | $0 (existing AI providers) |
 
 **Caching**: Supabase `company_intel` table with per-field TTLs:
 - Company basics: 30 days
-- Reviews: 7 days
+- Reviews: 7 days (on-demand fetch only when user views Research tab)
 - News: 24 hours
 - Salary: 14 days
 
-**Total cost**: $0-25/month using free tiers strategically.
+**Total cost**: $0/month — all sources within free tiers. Glassdoor data fetched on-demand (not batch), cached 7 days, ~50 unique companies/mo = well within Apify free $5 credit.
 
 ### Stage 3: Tailor
 
@@ -223,6 +227,55 @@ After each pipeline run:
 3. Generates adjustments stored in Supabase `pipeline_adjustments` table
 4. Next run reads adjustments: disable failing scrapers, tune keyword weights, adjust prompts
 5. Cycle repeats
+
+### Security & Multi-Tenancy
+
+- **Supabase RLS**: All tables enforce Row Level Security — `user_id = auth.uid()` on SELECT/INSERT/UPDATE/DELETE. No data leaks between users at the database level.
+- **API rate limiting**: Per-user throttling on AI-heavy endpoints. Free tier: 5 tailor/score/interview requests per hour. Paid tier: 50/hour. Implemented via Supabase `user_usage` table + Lambda middleware check.
+- **GDPR compliance**: Data export (existing `/api/data-export`), account deletion, consent banner (existing). Privacy page already built.
+
+### Pipeline Data Migration
+
+- **seen_jobs.json → Supabase**: Migrate job tracking from filesystem JSON to a `seen_jobs` Supabase table with columns: `job_id`, `user_id`, `first_seen`, `last_seen`, `score`, `matched`. Pipeline queries this table instead of reading/writing a JSON file. Eliminates the git-commit-from-pipeline pattern.
+
+### User Onboarding Flow
+
+New user journey:
+1. **Sign up** (email/password or Google OAuth)
+2. **Upload resume** (PDF → LaTeX conversion, preview, select template)
+3. **Set preferences** (target roles, locations, min score threshold)
+4. **First run** — choice of: paste a JD manually OR wait for next automated pipeline run
+5. **Dashboard** — shows results with guided tour tooltips
+
+### Pricing Model (Future Public Launch)
+
+| | Free | Pro ($9/mo) |
+|---|---|---|
+| Jobs discovered | 10/day | Unlimited |
+| Tailor/score requests | 5/hour | 50/hour |
+| Interview prep | Basic (question lists) | Full (mock interviews, AI evaluation) |
+| Company intel | Basic (name, size) | Full (Glassdoor, salary, news, red flags) |
+| Pipeline runs | 1x daily | On-demand + daily |
+| Resume templates | 1 | All |
+| Storage | 30 days | Unlimited |
+| AI model | Single model | Council (multi-model consensus) |
+
+### File Storage
+
+**S3-only** — drop Google Drive integration. Simplifies architecture:
+- S3 presigned URLs for sharing (30-day expiry, regenerable)
+- S3 Intelligent-Tiering for auto cost optimization on old PDFs
+- Resume version history: store each tailored version as a separate S3 key with timestamp
+
+### Lambda Architecture
+
+- **ARM64 (Graviton2)**: 20% cheaper per ms, better performance. Change SAM template `Architectures: [arm64]`. Musl-linked tectonic binary works on ARM64.
+
+### UX Enhancements
+
+- **In-app notifications**: Supabase Realtime subscription for pipeline events. Toast: "Pipeline completed — 12 new jobs found". Badge count on Dashboard nav item.
+- **Keyboard shortcuts**: ⌘K command palette for quick navigation. J/K to navigate job table rows. Enter to open job workspace. Esc to close modals.
+- **Resume version history**: Each tailored version stored with timestamp. Compare before/after in the Resume tab of job workspace.
 
 ---
 
@@ -378,25 +431,26 @@ components/ui/              — Button, Card, Badge, Input, Table, KPICard, Tabs
 
 ## 6. Cost Projection (Monthly)
 
-| Service | Current | After v2 |
-|---------|---------|----------|
-| AWS Lambda | ~$0 (free tier) | ~$5 (more invocations) |
-| S3 | ~$1 | ~$2 |
-| Supabase | Free tier | Free tier (or $25 Pro if needed) |
-| Netlify | Free tier | Free tier |
-| n8n (EC2) | $0 | ~$15 |
-| Apify (Indeed/LinkedIn/Glassdoor) | $0 | ~$5-15 |
-| OpenWeb Ninja (Glassdoor API) | $0 | $0-25 |
-| CompanyLens | $0 | $0 (500 free/mo) |
-| AI providers | $0 (free tiers) | $0 (free tiers) |
-| **Total** | **~$1** | **~$25-60** |
+| Service | Current | After v2 | Notes |
+|---------|---------|----------|-------|
+| AWS Lambda (ARM64) | ~$0 | ~$3 | Graviton2, 20% cheaper |
+| S3 | ~$1 | ~$1 | Intelligent-Tiering, drop Google Drive |
+| Supabase | $0 | $0 | Free tier sufficient |
+| Netlify | $0 | $0 | Free tier |
+| n8n (EC2 t3.micro) | $0 | ~$8 | Reserved Instance → $5/mo later |
+| RapidAPI JSearch | $0 | $0 | Free tier (500 req/mo) |
+| Apify (backup scrapers + Glassdoor) | $0 | $0 | Free $5/mo credit |
+| CompanyLens | $0 | $0 | Free (500/mo) |
+| GDELT + GNews | $0 | $0 | Free, unlimited / 100 req/day |
+| AI providers | $0 | $0 | Free tiers (Groq, DeepSeek, Qwen) |
+| **Total** | **~$1** | **~$8-12** | **All free tiers, only EC2 costs money** |
 
 ---
 
 ## 7. Key Technical Decisions
 
 1. **n8n over GitHub Actions**: Visual debugging, parallel branches, webhook triggers, no timeout limits
-2. **Apify over custom scrapers for bot-detection sites**: Managed infra, anti-detection built-in, reliable
+2. **JSearch + Apify failover**: RapidAPI JSearch as primary (free, multi-board), Apify as backup (already working, free $5 credit)
 3. **pymupdf4llm over pdfplumber**: Better multi-column handling, structured Markdown output ideal for LLM processing
 4. **Zustand over React Context**: Fine-grained reactivity for dashboard with many independent data widgets
 5. **Recharts over Chart.js**: SVG-based, easy to style with thick borders for brutalist aesthetic
@@ -404,4 +458,8 @@ components/ui/              — Button, Card, Badge, Input, Table, KPICard, Tabs
 7. **Synchronous PDF-to-LaTeX**: ~12-20s fits within Lambda timeout, simpler than async polling
 8. **AI evaluation over code execution**: Avoids sandbox complexity for MVP, add Judge0 later
 9. **Neo-Brutalist Light over dark theme**: User preference — bold, distinctive, stands out from generic SaaS
-10. **Company data via APIs over scraping**: Legal safety, reliability, structured responses
+10. **Company data via free APIs**: CompanyLens (free 500/mo) + Apify Glassdoor (free $5 credit) + GDELT (free unlimited)
+11. **S3-only storage**: Drop Google Drive — simplifies architecture, presigned URLs for sharing
+12. **Lambda ARM64 (Graviton2)**: 20% cheaper, better performance, musl tectonic works on ARM
+13. **Supabase RLS**: Database-level row security for multi-tenant public launch
+14. **Three-tier scraper failover**: JSearch → Python scraper → Apify — maximum reliability at zero cost
