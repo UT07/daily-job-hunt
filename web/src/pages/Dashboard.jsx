@@ -22,6 +22,7 @@ export default function Dashboard() {
   });
   const [page, setPage] = useState(1);
   const [perPage] = useState(25);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -48,13 +49,13 @@ export default function Dashboard() {
 
       const data = await apiGet(`/api/dashboard/jobs?${params.toString()}`);
       setJobs(data.jobs || []);
+      setTotal(data.total || data.jobs?.length || 0);
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filterVersion, page]);
+  }, [filterVersion, page, statusFilter, sourceFilter, minScore, companySearch]);
 
   const fetchStats = useCallback(async () => {
     try {
@@ -88,7 +89,7 @@ export default function Dashboard() {
   }
 
   // Compute page numbers for pagination
-  const totalPages = Math.max(1, Math.ceil((stats.total_jobs || jobs.length) / perPage));
+  const totalPages = Math.max(1, Math.ceil((total || jobs.length) / perPage));
   function getPageNumbers() {
     const pages = [];
     const maxVisible = 5;
@@ -186,9 +187,7 @@ export default function Dashboard() {
                 min={0}
                 max={100}
                 value={minScore}
-                onChange={(e) => setMinScore(Number(e.target.value))}
-                onMouseUp={() => { setPage(1); }}
-                onTouchEnd={() => { setPage(1); }}
+                onChange={(e) => { setMinScore(Number(e.target.value)); setPage(1); }}
                 className="w-32 accent-blue-500"
               />
             </div>
