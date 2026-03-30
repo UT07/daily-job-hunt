@@ -1,17 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Link } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
 import { apiGet } from '../api';
-import LoginPage from './LoginPage';
 import StatsBar from '../components/StatsBar';
 import JobTable from '../components/JobTable';
-import AIQualityStats from '../components/AIQualityStats';
+import Button from '../components/ui/Button';
+import { Select } from '../components/ui/Input';
 
 const SOURCES = ['All', 'adzuna', 'linkedin', 'irishjobs', 'jobs_ie', 'gradireland', 'yc', 'hn', 'web'];
 const STATUS_OPTIONS = ['All', 'New', 'Applied', 'Interview', 'Offer', 'Rejected', 'Withdrawn'];
 
 export default function Dashboard() {
-  const { user, loading: authLoading, signOut } = useAuth();
+  const { user, loading: authLoading } = useAuth();
 
   const [jobs, setJobs] = useState([]);
   const [stats, setStats] = useState({
@@ -106,202 +105,176 @@ export default function Dashboard() {
 
   if (authLoading) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
-        <div className="flex items-center gap-3">
-          <span className="spinner" />
-          <span className="text-slate-400 text-sm">Loading...</span>
-        </div>
+      <div className="flex items-center justify-center py-20">
+        <span className="spinner" />
       </div>
     );
   }
 
-  if (!user) {
-    return <LoginPage />;
-  }
-
   return (
-    <div className="min-h-screen bg-slate-900">
-      {/* Header */}
-      <header className="bg-slate-800 border-b border-slate-700 sticky top-0 z-10">
-        <div className="max-w-[1600px] mx-auto px-6 py-3.5 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center">
-              <span className="text-white text-sm font-bold font-mono">JH</span>
-            </div>
-            <h1 className="text-lg font-semibold text-white">NaukriBaba</h1>
-            <span className="text-xs text-slate-500 font-medium tracking-wider uppercase ml-1">Command Center</span>
-          </div>
-          <div className="flex items-center gap-5">
-            <Link
-              to="/"
-              className="text-sm text-slate-400 hover:text-white font-medium transition-colors"
-            >
-              Tailor
-            </Link>
-            <span className="text-sm text-slate-500 hidden sm:block">{user.email}</span>
-            <button
-              onClick={signOut}
-              className="text-sm text-slate-500 hover:text-slate-300 font-medium transition-colors"
-            >
-              Sign out
-            </button>
-          </div>
+    <div>
+      {/* Page header */}
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-heading font-bold text-black tracking-tight">
+            Job Dashboard
+          </h1>
+          <p className="text-sm text-stone-500 mt-0.5">
+            Your AI-powered job search command center
+          </p>
         </div>
-      </header>
-
-      <main className="max-w-[1600px] mx-auto px-6 py-6">
-        {/* Stats */}
-        <StatsBar stats={stats} />
-
-        {/* Filter Bar */}
-        <div className="glass rounded-lg border border-slate-700 p-4 mb-6">
-          <div className="flex flex-wrap items-end gap-4">
-            <div>
-              <label className="block text-[11px] font-medium text-slate-400 uppercase tracking-wider mb-1.5">Status</label>
-              <select
-                value={statusFilter}
-                onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
-                className="bg-slate-800 border border-slate-600 text-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors"
-              >
-                {STATUS_OPTIONS.map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-[11px] font-medium text-slate-400 uppercase tracking-wider mb-1.5">Source</label>
-              <select
-                value={sourceFilter}
-                onChange={(e) => { setSourceFilter(e.target.value); setPage(1); }}
-                className="bg-slate-800 border border-slate-600 text-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-colors"
-              >
-                {SOURCES.map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="block text-[11px] font-medium text-slate-400 uppercase tracking-wider mb-1.5">
-                Min Score: <span className="font-mono text-blue-400">{minScore}</span>
-              </label>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={minScore}
-                onChange={(e) => { setMinScore(Number(e.target.value)); setPage(1); }}
-                className="w-32 accent-blue-500"
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] font-medium text-slate-400 uppercase tracking-wider mb-1.5">Company</label>
-              <input
-                value={companySearch}
-                onChange={(e) => setCompanySearch(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') { setPage(1); } }}
-                placeholder="Search company..."
-                className="bg-slate-800 border border-slate-600 text-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none placeholder:text-slate-500 w-40 transition-colors"
-              />
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="block text-[11px] font-medium text-slate-400 uppercase tracking-wider">Tailored</label>
-              <button
-                onClick={() => { setTailoredOnly((v) => !v); setPage(1); }}
-                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
-                  tailoredOnly ? 'bg-blue-600' : 'bg-slate-600'
-                }`}
-              >
-                <span
-                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                    tailoredOnly ? 'translate-x-6' : 'translate-x-1'
-                  }`}
-                />
-              </button>
-            </div>
-            <button
-              onClick={handleFilterApply}
-              className="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg text-sm font-medium transition-colors shadow-lg shadow-blue-600/20"
-            >
-              Apply Filters
-            </button>
-          </div>
-        </div>
-
-        {/* Error */}
-        {error && (
-          <div className="bg-red-900/30 border border-red-800/50 text-red-300 text-sm rounded-lg p-4 mb-6 animate-fade-in">
-            <span className="font-medium">Error:</span> {error}
-          </div>
-        )}
-
-        {/* Loading */}
-        {loading && (
-          <div className="text-center py-12">
-            <div className="flex items-center justify-center gap-3">
-              <span className="spinner" />
-              <span className="text-slate-400 text-sm">Loading jobs...</span>
-            </div>
-          </div>
-        )}
-
-        {/* Job Table */}
-        {!loading && <JobTable jobs={jobs} onStatusChange={handleStatusChange} />}
-
-        {/* Pagination */}
-        {!loading && jobs.length > 0 && (
-          <div className="flex items-center justify-center gap-2 mt-6">
-            <button
-              onClick={() => setPage(1)}
-              disabled={page <= 1}
-              className="bg-slate-800 border border-slate-700 text-slate-300 px-3 py-1.5 rounded-lg text-sm font-medium
-                hover:bg-slate-700 hover:border-slate-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-              First
-            </button>
-            <button
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={page <= 1}
-              className="bg-slate-800 border border-slate-700 text-slate-300 px-3 py-1.5 rounded-lg text-sm font-medium
-                hover:bg-slate-700 hover:border-slate-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-              Prev
-            </button>
-            {getPageNumbers().map((p) => (
-              <button
-                key={p}
-                onClick={() => setPage(p)}
-                className={`px-3 py-1.5 rounded-lg text-sm font-mono font-medium transition-colors
-                  ${p === page
-                    ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/25'
-                    : 'bg-slate-800 border border-slate-700 text-slate-400 hover:bg-slate-700 hover:text-slate-200'
-                  }`}
-              >
-                {p}
-              </button>
-            ))}
-            <button
-              onClick={() => setPage((p) => p + 1)}
-              disabled={jobs.length < perPage}
-              className="bg-slate-800 border border-slate-700 text-slate-300 px-3 py-1.5 rounded-lg text-sm font-medium
-                hover:bg-slate-700 hover:border-slate-600 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
-            >
-              Next
-            </button>
-          </div>
-        )}
-      </main>
-
-      {/* AI Quality Stats */}
-      <div className="max-w-[1600px] mx-auto px-6 pb-6">
-        <AIQualityStats />
+        <Button variant="accent" size="sm">
+          + Add Job
+        </Button>
       </div>
 
-      {/* Footer */}
-      <footer className="border-t border-slate-800 mt-12">
-        <div className="max-w-[1600px] mx-auto px-6 py-4 text-center text-xs text-slate-600">
-          Built by Utkarsh Singh -- FastAPI + React + Tailwind
+      {/* Pipeline status bar */}
+      <div className="bg-success-light border-2 border-success px-4 py-2.5 mb-6 flex items-center gap-2">
+        <span className="inline-block w-2 h-2 bg-success rounded-full animate-pulse" />
+        <span className="text-sm font-medium text-success">
+          Pipeline active — runs daily at 7:00 UTC
+        </span>
+      </div>
+
+      {/* KPI Stats */}
+      <StatsBar stats={stats} />
+
+      {/* Filter Bar */}
+      <div className="border-2 border-black bg-white p-4 mb-6">
+        <div className="flex flex-wrap items-end gap-4">
+          <Select
+            label="Status"
+            value={statusFilter}
+            onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+            className="w-36"
+          >
+            {STATUS_OPTIONS.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </Select>
+
+          <Select
+            label="Source"
+            value={sourceFilter}
+            onChange={(e) => { setSourceFilter(e.target.value); setPage(1); }}
+            className="w-36"
+          >
+            {SOURCES.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </Select>
+
+          <div>
+            <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider mb-1.5">
+              Min Score: <span className="font-mono text-black">{minScore}</span>
+            </label>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              value={minScore}
+              onChange={(e) => { setMinScore(Number(e.target.value)); setPage(1); }}
+              className="w-32 accent-black"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider mb-1.5">Company</label>
+            <input
+              value={companySearch}
+              onChange={(e) => setCompanySearch(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') { setPage(1); } }}
+              placeholder="Search company..."
+              className="bg-white border-2 border-black px-4 py-2.5 font-body text-sm text-black
+                placeholder:text-stone-400 focus:outline-none focus:shadow-brutal-yellow
+                transition-shadow w-40"
+            />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider">Tailored</label>
+            <button
+              onClick={() => { setTailoredOnly((v) => !v); setPage(1); }}
+              className={`relative inline-flex h-6 w-11 items-center border-2 border-black transition-colors cursor-pointer ${
+                tailoredOnly ? 'bg-black' : 'bg-white'
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform transition-transform ${
+                  tailoredOnly ? 'translate-x-[22px] bg-yellow' : 'translate-x-[2px] bg-stone-300'
+                }`}
+              />
+            </button>
+          </div>
+
+          <Button variant="primary" size="md" onClick={handleFilterApply}>
+            Apply Filters
+          </Button>
         </div>
-      </footer>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="bg-error-light border-2 border-error text-error text-sm p-4 mb-6 animate-fade-in">
+          <span className="font-bold">Error:</span> {error}
+        </div>
+      )}
+
+      {/* Loading */}
+      {loading && (
+        <div className="text-center py-12">
+          <div className="flex items-center justify-center gap-3">
+            <span className="spinner" />
+            <span className="text-stone-500 text-sm">Loading jobs...</span>
+          </div>
+        </div>
+      )}
+
+      {/* Job Table */}
+      {!loading && <JobTable jobs={jobs} onStatusChange={handleStatusChange} />}
+
+      {/* Pagination */}
+      {!loading && jobs.length > 0 && (
+        <div className="flex items-center justify-center gap-2 mt-6">
+          <button
+            onClick={() => setPage(1)}
+            disabled={page <= 1}
+            className="border-2 border-black bg-white text-black px-3 py-1.5 text-sm font-heading font-bold
+              hover:bg-stone-100 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            First
+          </button>
+          <button
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page <= 1}
+            className="border-2 border-black bg-white text-black px-3 py-1.5 text-sm font-heading font-bold
+              hover:bg-stone-100 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            Prev
+          </button>
+          {getPageNumbers().map((p) => (
+            <button
+              key={p}
+              onClick={() => setPage(p)}
+              className={`border-2 border-black px-3 py-1.5 text-sm font-mono font-bold transition-colors
+                ${p === page
+                  ? 'bg-yellow text-black'
+                  : 'bg-white text-stone-600 hover:bg-stone-100'
+                }`}
+            >
+              {p}
+            </button>
+          ))}
+          <button
+            onClick={() => setPage((p) => p + 1)}
+            disabled={jobs.length < perPage}
+            className="border-2 border-black bg-white text-black px-3 py-1.5 text-sm font-heading font-bold
+              hover:bg-stone-100 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          >
+            Next
+          </button>
+        </div>
+      )}
     </div>
   );
 }
