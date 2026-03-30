@@ -93,6 +93,7 @@ from scrapers import (
     WorkAtAStartupScraper, HackerNewsScraper,
     JobsIeScraper, GradIrelandScraper,
     JobSurfaceScraper,
+    GlassdoorScraper, IndeedScraper, JSearchScraper, SerpAPIScraper,
 )
 from scrapers.base import Job, BaseScraper
 from ai_client import AIClient
@@ -248,6 +249,8 @@ def resolve_api_key(config: dict, key_name: str) -> str:
             "anthropic": "ANTHROPIC_API_KEY",
             "adzuna_app_id": "ADZUNA_APP_ID",
             "adzuna_app_key": "ADZUNA_APP_KEY",
+            "jsearch": "JSEARCH_API_KEY",
+            "serpapi": "SERPAPI_API_KEY",
         }
         val = os.environ.get(env_map.get(key_name, ""), "")
     return val
@@ -317,6 +320,32 @@ def init_scrapers(config: dict) -> List[BaseScraper]:
         scrapers.append(JobSurfaceScraper())
         logger.info("JobSurface scraper enabled")
 
+    # --- Browser-based job boards (heavy bot detection) ---
+    if "glassdoor" in enabled:
+        scrapers.append(GlassdoorScraper(max_pages=max_pages))
+        logger.info("Glassdoor scraper enabled")
+
+    if "indeed" in enabled:
+        scrapers.append(IndeedScraper(max_pages=max_pages))
+        logger.info("Indeed scraper enabled")
+
+    # --- API-based aggregators (need API keys) ---
+    if "jsearch" in enabled:
+        jsearch_key = resolve_api_key(config, "jsearch")
+        if jsearch_key:
+            scrapers.append(JSearchScraper(api_key=jsearch_key, delay=delay))
+            logger.info("JSearch (RapidAPI) scraper enabled")
+        else:
+            logger.warning("JSearch enabled but JSEARCH_API_KEY not set. Skipping.")
+
+    if "serpapi" in enabled:
+        serpapi_key = resolve_api_key(config, "serpapi")
+        if serpapi_key:
+            scrapers.append(SerpAPIScraper(api_key=serpapi_key, delay=delay))
+            logger.info("SerpAPI scraper enabled")
+        else:
+            logger.warning("SerpAPI enabled but SERPAPI_API_KEY not set. Skipping.")
+
     return scrapers
 
 
@@ -336,7 +365,7 @@ def load_resumes(config: dict) -> Dict[str, str]:
     return resumes
 
 
-BROWSER_SCRAPERS = {"linkedin", "irishjobs", "jobsurface"}
+BROWSER_SCRAPERS = {"linkedin", "irishjobs", "jobsurface", "glassdoor", "indeed"}
 
 # Consolidated queries for browser scrapers — broad enough to catch everything,
 # few enough to not take 30 minutes. Each of these covers multiple specific titles.

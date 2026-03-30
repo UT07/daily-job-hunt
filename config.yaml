@@ -139,23 +139,30 @@ api_keys:
   # Job scraper APIs
   adzuna_app_id: "${ADZUNA_APP_ID}"
   adzuna_app_key: "${ADZUNA_APP_KEY}"
+  jsearch: "${JSEARCH_API_KEY}"         # RapidAPI JSearch (free: 200 req/mo)
+  serpapi: "${SERPAPI_API_KEY}"          # SerpAPI Google Jobs (free: 100 searches)
 
 # --- Scraper Settings ---
 scrapers:
   enabled:
     # API-based (reliable, no bot detection):
     - "adzuna"       # Adzuna API (free: 250 req/mo, strong for Ireland/UK)
+    # API-based aggregators (need API keys set in env):
+    - "jsearch"      # RapidAPI JSearch -- aggregates LinkedIn/Indeed/Glassdoor (free: 200 req/mo)
+    - "serpapi"      # SerpAPI Google Jobs -- best single aggregator (free: 100 searches)
     # Irish job boards (lightweight HTML scrapers):
-    - "irishjobs"    # IrishJobs.ie (requests-first, Playwright fallback)
-    - "jobs_ie"      # Jobs.ie — major Irish job board
-    - "gradireland"  # GradIreland — graduate roles in Ireland
+    - "irishjobs"    # IrishJobs.ie -- has health check, skips fast if site is down (Akamai)
+    - "jobs_ie"      # Jobs.ie -- has health check, skips fast if site is down
+    - "gradireland"  # GradIreland -- graduate roles in Ireland
     # LinkedIn (multi-geo via Playwright stealth):
-    - "linkedin"     # LinkedIn — one instance per geo_region above
-    # Startup-focused (API/HTML — lightweight):
+    - "linkedin"     # LinkedIn -- cards work, descriptions auth-walled (acceptable)
+    # Startup-focused (API/HTML -- lightweight):
     - "yc_wats"      # YC Work at a Startup (US startups, some remote)
     - "hn_hiring"    # Hacker News "Who is Hiring?" threads
-    # Remote DevOps/Cloud (browser-based):
-    - "jobsurface"   # JobSurface.com — remote DevOps/Cloud jobs from career pages
+    # Browser-based job boards (heavy bot detection):
+    - "glassdoor"    # Glassdoor -- Playwright stealth (Cloudflare + Akamai)
+    - "indeed"       # Indeed -- Playwright stealth (Cloudflare)
+    - "jobsurface"   # JobSurface.com -- remote DevOps/Cloud jobs (Cloudflare Turnstile)
 
   # Parallel scraping workers
   max_workers: 8

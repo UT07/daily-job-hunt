@@ -31,7 +31,7 @@ _HEADERS = {
 
 
 class JobsIeScraper(BaseScraper):
-    """Scrapes Jobs.ie — Ireland's leading job site.
+    """Scrapes Jobs.ie -- Ireland's leading job site.
 
     Uses lightweight requests + regex parsing. No Playwright dependency.
     """
@@ -39,17 +39,38 @@ class JobsIeScraper(BaseScraper):
     name = "jobs_ie"
     BASE_URL = "https://www.jobs.ie"
     _MAX_RETRIES = 2  # Don't retry endlessly on an unresponsive site
-    _TIMEOUT = 15     # Seconds — reduced from 30 to fail fast
+    _TIMEOUT = 15     # Seconds -- reduced from 30 to fail fast
 
     def __init__(self, max_pages: int = 2):
         self.max_pages = max_pages
 
     _site_reachable: bool | None = None  # Class-level: skip all queries if site is down
+    _health_checked: bool = False  # Only run health check once per process
+
+    def _health_check(self) -> bool:
+        """Quick HEAD request to verify the site is reachable. Run once per process."""
+        if JobsIeScraper._health_checked:
+            return JobsIeScraper._site_reachable is not False
+        JobsIeScraper._health_checked = True
+        try:
+            resp = requests.head(self.BASE_URL, headers=_HEADERS, timeout=5, allow_redirects=True)
+            if resp.status_code < 500:
+                JobsIeScraper._site_reachable = True
+                return True
+        except requests.RequestException:
+            pass
+        logger.warning("[Jobs.ie] Site unreachable (health check failed) -- skipping all queries this run")
+        JobsIeScraper._site_reachable = False
+        return False
 
     def search(self, query: str, location: str = "", days_back: int = 1, **kwargs) -> List[Job]:
         """Search Jobs.ie and return normalized Job objects."""
         # Fast bail: if we already know the site is unreachable, skip immediately
         if JobsIeScraper._site_reachable is False:
+            return []
+
+        # One-time health check before first real request
+        if not self._health_check():
             return []
 
         jobs: List[Job] = []
@@ -58,7 +79,7 @@ class JobsIeScraper(BaseScraper):
             if jobs:
                 JobsIeScraper._site_reachable = True
         except requests.exceptions.Timeout:
-            logger.warning(f"[Jobs.ie] Timeout for '{query}' — marking site unreachable for this run")
+            logger.warning(f"[Jobs.ie] Timeout for '{query}' -- marking site unreachable for this run")
             JobsIeScraper._site_reachable = False
             return []
         except Exception as e:
@@ -89,7 +110,7 @@ class JobsIeScraper(BaseScraper):
                     url, headers=_HEADERS, timeout=self._TIMEOUT,
                 )
                 if resp.status_code == 429:
-                    logger.warning("[Jobs.ie] Rate limited — stopping pagination")
+                    logger.warning("[Jobs.ie] Rate limited -- stopping pagination")
                     break
                 if resp.status_code != 200:
                     logger.warning(f"[Jobs.ie] HTTP {resp.status_code} for page {page}")
@@ -109,7 +130,7 @@ class JobsIeScraper(BaseScraper):
 
             except requests.exceptions.Timeout:
                 # Fast fail: first timeout on any page means site is down
-                logger.warning(f"[Jobs.ie] Timeout on page {page} — skipping remaining pages")
+                logger.warning(f"[Jobs.ie] Timeout on page {page} -- skipping remaining pages")
                 raise  # Propagate to search() which marks site unreachable
             except requests.RequestException as e:
                 logger.error(f"[Jobs.ie] Request failed (page {page}): {e}")
@@ -265,7 +286,7 @@ class JobsIeScraper(BaseScraper):
             "salary": [
                 r'class="[^"]*[Ss]alary[^"]*"[^>]*>\s*([^<]{2,80})',
                 r'class="[^"]*pay[^"]*"[^>]*>\s*([^<]{2,80})',
-                r'(?:€|EUR)\s*[\d,.]+\s*[-–]\s*(?:€|EUR)?\s*[\d,.]+',
+                r'(?:\u20ac|EUR)\s*[\d,.]+\s*[-\u2013]\s*(?:\u20ac|EUR)?\s*[\d,.]+',
             ],
             "date": [
                 r'class="[^"]*[Dd]ate[^"]*"[^>]*>\s*([^<]{2,40})',

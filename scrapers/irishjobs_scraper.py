@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 class IrishJobsScraper(BaseScraper):
-    """Scrapes IrishJobs.ie — requests-first with Playwright fallback.
+    """Scrapes IrishJobs.ie -- requests-first with Playwright fallback.
 
     IrishJobs uses aggressive Akamai bot protection. This scraper will
     often return 0 results. Enable Adzuna/SerpAPI for reliable Irish coverage.
@@ -37,10 +37,34 @@ class IrishJobsScraper(BaseScraper):
         self.max_pages = max_pages
 
     _site_reachable: bool | None = None  # Class-level: skip all queries if site is down
+    _health_checked: bool = False  # Only run health check once per process
+
+    def _health_check(self) -> bool:
+        """Quick HEAD request to verify the site is reachable. Run once per process."""
+        if IrishJobsScraper._health_checked:
+            return IrishJobsScraper._site_reachable is not False
+        IrishJobsScraper._health_checked = True
+        try:
+            resp = http_requests.head(
+                self.BASE_URL, timeout=5, allow_redirects=True,
+                headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"},
+            )
+            if resp.status_code < 500:
+                IrishJobsScraper._site_reachable = True
+                return True
+        except http_requests.RequestException:
+            pass
+        logger.warning("[IrishJobs] Site unreachable (health check failed) -- skipping all queries this run")
+        IrishJobsScraper._site_reachable = False
+        return False
 
     def search(self, query: str, location: str = "", days_back: int = 1, **kwargs) -> List[Job]:
         # Fast bail: if site already known to be unreachable, skip immediately
         if IrishJobsScraper._site_reachable is False:
+            return []
+
+        # One-time health check before first real request
+        if not self._health_check():
             return []
 
         # Try requests-based approach first (fast, no browser)
@@ -50,7 +74,7 @@ class IrishJobsScraper(BaseScraper):
                 IrishJobsScraper._site_reachable = True
                 return self.deduplicate(jobs)
         except http_requests.exceptions.Timeout:
-            logger.warning(f"[IrishJobs] Timeout — marking site unreachable for this run")
+            logger.warning("[IrishJobs] Timeout -- marking site unreachable for this run")
             IrishJobsScraper._site_reachable = False
             return []
         except Exception as e:
@@ -149,7 +173,7 @@ class IrishJobsScraper(BaseScraper):
 
             success = await browser.safe_goto(page, url, timeout=45000)
             if not success:
-                logger.warning("[IrishJobs] Blocked by Akamai — try enabling Adzuna/SerpAPI for Irish coverage")
+                logger.warning("[IrishJobs] Blocked by Akamai -- try enabling Adzuna/SerpAPI for Irish coverage")
                 return jobs
 
             await browser.human_delay(2000, 4000)
