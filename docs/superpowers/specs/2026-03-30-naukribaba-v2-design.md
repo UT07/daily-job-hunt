@@ -292,7 +292,7 @@ New user journey:
   --color-cream: #fafaf9;
   --color-cream-dark: #f5f5f4;
   --color-stone-*: [stone palette from 100-900];
-  --color-black: #000000;
+  --color-black: #1c1917;
   --color-yellow: #fbbf24;
   --color-yellow-light: #fde68a;
   --color-success: #22c55e;

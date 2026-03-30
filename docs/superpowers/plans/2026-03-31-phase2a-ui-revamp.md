@@ -814,6 +814,7 @@ import { Outlet, Navigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
 import Sidebar from '../components/layout/Sidebar';
 import MobileNav from '../components/layout/MobileNav';
+import ConsentBanner from '../components/ConsentBanner';
 
 export default function AppLayout() {
   const { user, loading } = useAuth();
@@ -837,6 +838,7 @@ export default function AppLayout() {
         <Outlet />
       </main>
       <MobileNav />
+      <ConsentBanner />
     </div>
   );
 }
