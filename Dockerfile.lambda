@@ -1,30 +1,16 @@
-# Stage 1: Get tectonic + required shared libraries from Ubuntu 22.04
-# Ubuntu 22.04 has glibc 2.35 which tectonic 0.15 requires
-FROM ubuntu:22.04 AS tectonic-builder
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends wget ca-certificates \
-      libgraphite2-3 libharfbuzz0b libfontconfig1 libfreetype6 \
-      libpng16-16 libicu70 && \
-    rm -rf /var/lib/apt/lists/*
-RUN wget -qO /tmp/tectonic.tar.gz https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.15.0/tectonic-0.15.0-x86_64-unknown-linux-gnu.tar.gz && \
+# Stage 1: Get tectonic static binary (musl-linked, no glibc dependency)
+FROM alpine:3.19 AS tectonic-builder
+RUN apk add --no-cache wget
+RUN wget -qO /tmp/tectonic.tar.gz https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.15.0/tectonic-0.15.0-x86_64-unknown-linux-musl.tar.gz && \
     tar xzf /tmp/tectonic.tar.gz -C /usr/local/bin/ && \
     chmod +x /usr/local/bin/tectonic && \
     rm -f /tmp/tectonic.tar.gz
-# Collect ONLY the libs tectonic needs that Lambda doesn't have
-# (skip glibc/ld/libc/libm/libdl/libpthread — Lambda has those)
-RUN mkdir -p /tectonic-libs && \
-    for lib in libgraphite2 libharfbuzz libfontconfig libfreetype libpng16 \
-               libicuuc libicudata libssl libcrypto libbrotlidec libbrotlicommon; do \
-      find /lib/ /usr/lib/ -name "${lib}.so*" -exec cp -L {} /tectonic-libs/ \; 2>/dev/null; \
-    done && \
-    ls /tectonic-libs/
 
 # Stage 2: Lambda runtime
 FROM public.ecr.aws/lambda/python:3.11
 
-# Copy tectonic binary + ONLY its non-system shared libs
+# Copy statically-linked tectonic binary (no shared lib dependencies)
 COPY --from=tectonic-builder /usr/local/bin/tectonic /usr/local/bin/tectonic
-COPY --from=tectonic-builder /tectonic-libs/ /lib64/
 
 COPY requirements-web.txt ${LAMBDA_TASK_ROOT}/
 # Install cryptography first from binary wheel (avoids stack smash during C compilation)

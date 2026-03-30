@@ -741,6 +741,7 @@ def get_dashboard_jobs(
     min_score: Optional[float] = None,
     source: Optional[str] = None,
     company: Optional[str] = None,
+    tailored: Optional[str] = None,
 ):
     """Paginated, filterable job list."""
     if _db is None:
@@ -760,6 +761,8 @@ def get_dashboard_jobs(
         filters["source"] = source
     if company:
         filters["company"] = company
+    if tailored:
+        filters["tailored"] = tailored
 
     jobs, total = _db.get_jobs(user.id, filters=filters, page=page, per_page=per_page)
     return {"jobs": jobs, "page": page, "per_page": per_page, "total": total}

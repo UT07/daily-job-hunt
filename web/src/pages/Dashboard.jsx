@@ -31,6 +31,7 @@ export default function Dashboard() {
   const [sourceFilter, setSourceFilter] = useState('All');
   const [minScore, setMinScore] = useState(0);
   const [companySearch, setCompanySearch] = useState('');
+  const [tailoredOnly, setTailoredOnly] = useState(true);
 
   // Track filter version to avoid redundant fetches
   const [filterVersion, setFilterVersion] = useState(0);
@@ -46,6 +47,7 @@ export default function Dashboard() {
       if (sourceFilter !== 'All') params.set('source', sourceFilter);
       if (minScore > 0) params.set('min_score', String(minScore));
       if (companySearch.trim()) params.set('company', companySearch.trim());
+      if (tailoredOnly) params.set('tailored', 'true');
 
       const data = await apiGet(`/api/dashboard/jobs?${params.toString()}`);
       setJobs(data.jobs || []);
@@ -55,7 +57,7 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, [filterVersion, page, statusFilter, sourceFilter, minScore, companySearch]);
+  }, [filterVersion, page, statusFilter, sourceFilter, minScore, companySearch, tailoredOnly]);
 
   const fetchStats = useCallback(async () => {
     try {
@@ -200,6 +202,21 @@ export default function Dashboard() {
                 placeholder="Search company..."
                 className="bg-slate-800 border border-slate-600 text-slate-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none placeholder:text-slate-500 w-40 transition-colors"
               />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="block text-[11px] font-medium text-slate-400 uppercase tracking-wider">Tailored</label>
+              <button
+                onClick={() => { setTailoredOnly((v) => !v); setPage(1); }}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                  tailoredOnly ? 'bg-blue-600' : 'bg-slate-600'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    tailoredOnly ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
             </div>
             <button
               onClick={handleFilterApply}

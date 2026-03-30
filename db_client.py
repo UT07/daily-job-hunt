@@ -181,6 +181,7 @@ class SupabaseClient:
             min_score    — match_score >= value
             status       — exact match on application_status
             company      — exact match on company name
+            tailored     — if "true", only return jobs with resume_s3_url
         """
         query = (
             self.client.table("jobs")
@@ -197,9 +198,11 @@ class SupabaseClient:
                 query = query.eq("application_status", filters["status"])
             if "company" in filters:
                 query = query.ilike("company", f"%{filters['company']}%")
+            if filters.get("tailored") == "true":
+                query = query.neq("resume_s3_url", None).neq("resume_s3_url", "")
 
         offset = (page - 1) * per_page
-        query = query.order("first_seen", desc=True).range(offset, offset + per_page - 1)
+        query = query.order("resume_s3_url", desc=True, nullsfirst=False).order("first_seen", desc=True).range(offset, offset + per_page - 1)
 
         result = query.execute()
         total = result.count if result.count is not None else len(result.data)
