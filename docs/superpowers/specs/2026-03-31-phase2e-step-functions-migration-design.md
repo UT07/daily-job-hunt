@@ -1,6 +1,6 @@
 # Phase 2E: Step Functions Pipeline Migration — Design Specification
 
-**Date**: 2026-03-31 (v3 — all review issues addressed)
+**Date**: 2026-03-31 (v4 — product features + all review issues)
 **Status**: Under Review
 **Replaces**: `2026-03-31-phase2e-n8n-migration-design.md` (archived)
 **Depends on**: Phase 2A (complete)
@@ -791,7 +791,132 @@ Same scrapers, same pipeline, different inputs. AI scores against whatever resum
 
 ---
 
-## 15. How Future Phases Fit In
+## 15. Product Features (built alongside pipeline migration)
+
+### 15.1 Onboarding Wizard
+
+New user flow: **Upload Resume → Set Location → Pick Roles → Choose Sources → First Run**
+
+Step 1: Upload resume PDF → AI auto-extracts profile (name, location, skills, experience level)
+Step 2: Confirm/edit location, toggle "include remote jobs"
+Step 3: AI suggests search queries from resume (e.g., "Software Engineer", "DevOps"). User can add/remove.
+Step 4: Toggle job sources on/off (default: all enabled)
+Step 5: "Start Searching" → triggers first Step Functions pipeline execution
+
+Requires: `/api/resumes/upload` already exists. New: AI query suggestion Lambda, onboarding page refactor.
+
+### 15.2 Resume Versioning & Re-Tailoring
+
+When a user uploads a new resume:
+- New jobs use the latest resume automatically
+- Existing jobs show: "⚠ Newer resume available — [Re-tailor with v2]"
+- User clicks to re-tailor individual jobs on demand
+- Re-tailoring triggers `single-job-pipeline` with the new resume
+- Track `resume_version` on each job to detect stale tailorings
+
+### 15.3 Job Expiry
+
+**Active checking** (weekly EventBridge → Lambda `check_job_expiry`):
+- HTTP HEAD request to each job's `apply_url`
+- 404/redirect/error → mark `is_expired = true`
+- LinkedIn URLs older than 45 days → auto-mark expired (LinkedIn blocks HEAD requests)
+- Cost: minimal (HTTP HEAD is free, no Apify needed for most sites)
+
+**Visual treatment**:
+- Expired jobs: red "EXPIRED" badge, dimmed row, "Archive" button
+- Rejected jobs: grey "REJECTED" badge, dimmed row (separate styling from expired)
+- Both filterable: "Show expired" / "Show rejected" toggles on dashboard
+- Neither auto-deleted — user controls their data
+
+Requires: `is_expired BOOLEAN DEFAULT false` column on `jobs` table.
+
+### 15.4 Source Control
+
+User's `user_search_configs` includes a `sources` array:
+
+```json
+{
+  "sources": ["linkedin", "indeed", "adzuna", "glassdoor", "gradireland"],
+  "queries": ["software engineer", "devops"],
+  "locations": ["Dublin", "Remote"],
+  "experience_levels": ["entry_level", "mid_level"],
+  "job_types": ["full_time"]
+}
+```
+
+Settings page: checkbox grid of all available sources. `CheckScraperCache` Lambda reads this and only runs scrapers the user has enabled.
+
+### 15.5 Notifications
+
+**Email**: daily summary (existing) + stale nudges (weekly) + follow-up reminders (daily) + pipeline error alerts.
+
+**SMS / WhatsApp** (future, not Phase 2E):
+- SNS for SMS ($0.00645/msg to Ireland)
+- WhatsApp Business API via Twilio ($0.005/msg)
+- Add as notification preferences in Settings: email (always), SMS (opt-in), WhatsApp (opt-in)
+- For Phase 2E: email only. SMS/WhatsApp deferred to when multi-tenant launches (justifies the cost).
+
+**In-app badge + toast**:
+- Store `last_pipeline_run` timestamp in Supabase per user
+- Store `last_seen_at` timestamp (updated on each dashboard visit)
+- If `last_pipeline_run > last_seen_at` → show badge on Dashboard nav item + toast notification
+- Badge shows count of new jobs since last visit
+- Toast: "Pipeline ran at 7:00 AM — 5 new jobs matched. [View] [Dismiss]"
+
+### 15.6 Cross-Source Deduplication
+
+Same job posted on LinkedIn AND Indeed → keep the **richest version** (longest description, most fields populated):
+
+```python
+def dedup_cross_source(jobs):
+    """Dedup across sources. Keep the version with the richest data."""
+    grouped = {}  # key: (normalized_company, normalized_title)
+    for job in jobs:
+        key = (normalize(job.company), normalize(job.title))
+        if key in grouped:
+            existing = grouped[key]
+            # Keep the one with longer description
+            if len(job.description or '') > len(existing.description or ''):
+                grouped[key] = job
+        else:
+            grouped[key] = job
+    return list(grouped.values())
+```
+
+This runs inside `merge_and_dedup` Lambda BEFORE writing to `jobs_raw`.
+
+### 15.7 Scraper Schema Resilience
+
+Apify actors can change their output format without warning. Protection:
+
+1. **Schema validation**: each scraper Lambda validates Apify output against expected schema before normalizing. Missing fields → use defaults, don't crash.
+2. **Alerting**: if a scraper returns 0 results for 3 consecutive days, trigger error notification email: "LinkedIn scraper hasn't found jobs in 3 days — actor may have changed."
+3. **SSM-stored selectors**: for Apify Web Scraper (Irish sites), CSS selectors stored in SSM Parameter Store. Update selectors without redeploying Lambda.
+4. **Graceful degradation**: scraper failure in the Parallel state returns `{count: 0, error: "..."}` — pipeline continues with other sources.
+
+---
+
+## 16. Additional Schema Changes
+
+```sql
+-- Resume versioning
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS resume_version INT DEFAULT 1;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS is_expired BOOLEAN DEFAULT false;
+
+-- In-app notification tracking
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_pipeline_run TIMESTAMPTZ;
+
+-- Source control in search config
+-- (sources array already part of user_search_configs JSONB)
+
+-- Notification preferences
+ALTER TABLE users ADD COLUMN IF NOT EXISTS notification_prefs JSONB DEFAULT '{"email": true, "sms": false, "whatsapp": false}';
+```
+
+---
+
+## 17. How Future Phases Fit In
 
 | Phase | Integration |
 |-------|-------------|
@@ -805,7 +930,7 @@ The architecture is **extensible by adding Lambda functions and Step Functions s
 
 ---
 
-## 16. Rollback Plan
+## 18. Rollback Plan
 
 GitHub Actions workflow stays in the repo (cron commented out, `workflow_dispatch` active):
 1. Re-enable cron: `0 7 * * 1-5`
@@ -815,7 +940,7 @@ GitHub Actions workflow stays in the repo (cron commented out, `workflow_dispatc
 
 ---
 
-## 17. Success Criteria
+## 19. Success Criteria
 
 - [ ] Pipeline runs daily without failure
 - [ ] Parallel scraping completes in < 15 minutes
@@ -831,3 +956,11 @@ GitHub Actions workflow stays in the repo (cron commented out, `workflow_dispatc
 - [ ] Apify budget tracking prevents overspend
 - [ ] Self-improvement adjustments visible and applied to next run
 - [ ] Existing 95 jobs migrated to jobs_raw + job_hash FK
+- [ ] Onboarding wizard: resume upload → auto-profile → queries → sources → first run
+- [ ] Re-tailor button shows on jobs with older resume version
+- [ ] Expired jobs checked weekly, dimmed on dashboard
+- [ ] Rejected jobs dimmed separately from expired
+- [ ] Source toggles work in Settings (pipeline respects user's source selection)
+- [ ] In-app badge + toast for new jobs since last visit
+- [ ] Cross-source dedup keeps richest version
+- [ ] Scraper schema validation prevents crashes on Apify changes
