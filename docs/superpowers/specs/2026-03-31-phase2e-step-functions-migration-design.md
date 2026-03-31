@@ -1,7 +1,7 @@
 # Phase 2E: Step Functions Pipeline Migration — Design Specification
 
-**Date**: 2026-03-31 (v4 — product features + all review issues)
-**Status**: Under Review
+**Date**: 2026-03-31 (v5 — final review, all issues resolved)
+**Status**: Approved
 **Replaces**: `2026-03-31-phase2e-n8n-migration-design.md` (archived)
 **Depends on**: Phase 2A (complete)
 **Unblocks**: Phase 2B (editor), Phase 2D (enrichment), Phase 2G (observability)
@@ -207,7 +207,7 @@ Each site has a config stored in SSM Parameter Store: `start_urls`, `page_functi
 | `scrape_adzuna` | 30s | Simple API call |
 | `scrape_hn` | 60s | API call + comment parsing |
 | `scrape_yc` | 30s | Simple JSON API |
-| `score_batch` | 120s | AI council with 5-job batches |
+| `score_batch` | 300s | AI council with 5-job batches (50 jobs = 10 batches × 30s) |
 | `tailor_resume` | 120s | AI council generation |
 | `compile_latex` | 60s | tectonic compilation |
 | `generate_cover_letter` | 120s | AI council generation |
@@ -719,30 +719,38 @@ Same UX (progress indicator already built), consistent scoring.
 
 ## 13. Migration Plan
 
-### Phase 1: Foundation (Days 1-2)
-- Create Supabase tables + migrate existing data
-- Build Lambda Layer with shared deps
-- Write scraper Lambdas (generic Apify + API scrapers)
-- Write pipeline Lambdas (score, tailor, compile, contacts, email, self-improve)
+### Phase 1: Foundation (Days 1-4)
+- Create Supabase tables (`jobs_raw`, `ai_cache`, `self_improvement_config`, `pipeline_metrics`) + migrate existing 95 jobs
+- Build Lambda Layer with shared deps (`apify-client`, `supabase`, etc.)
+- Write scraper Lambdas: generic Apify scraper + Adzuna/HN/YC API scrapers
+- Write pipeline Lambdas: `load_config`, `check_cache`, `merge_dedup`, `score_batch`, `filter_matched`, `save_job`, `upload_s3`, `send_email`, `self_improve`, `notify_error`, `check_job_expiry`
+- Refactor existing Lambdas: `tailor_resume`, `compile_latex`, `generate_cover_letter`, `find_contacts` to read/write Supabase (not receive full payloads)
 - Define both Step Functions state machines in `template.yaml`
 - `sam deploy`
 
-### Phase 2: Integration (Days 3-4)
-- Wire frontend: pipeline status, Run Pipeline button, Add Job refactor
-- Test each scraper individually
-- Test full pipeline end-to-end
-- Frontend polish (skills tags, card view, PDF preview, user profile)
+### Phase 2: Integration + Frontend (Days 5-8)
+- Wire frontend: pipeline status bar, Run Pipeline button, Add Job refactor to async polling
+- Keep `/api/tailor` working for backward compat during transition
+- Test each scraper individually (invoke Lambda directly)
+- Test full daily pipeline end-to-end (manual Step Functions execution)
+- Test single-job pipeline (Add Job flow)
+- Frontend polish: skills tags, card view, PDF preview, user profile, onboarding wizard, source control, in-app notifications
 
-### Phase 3: Shadow Mode (Days 5-6)
+### Phase 3: Shadow Mode (Days 9-11)
 - Run Step Functions pipeline alongside GitHub Actions
-- Compare results: same jobs? Same scores?
+- **Step Functions writes to `jobs_raw` only** — does NOT write to `jobs` table during shadow mode (prevents duplicate dashboard entries)
+- Compare: do both find the same jobs? Similar counts per source?
 - Fix discrepancies
+- Run for 3 days to build confidence
 
-### Phase 4: Cutover (Day 7)
-- Disable GitHub Actions cron (keep workflow_dispatch for fallback)
-- Activate EventBridge scheduler
-- Set up stale nudge + follow-up reminder EventBridge rules
+### Phase 4: Cutover (Day 12)
+- Disable GitHub Actions cron (keep `workflow_dispatch` for fallback)
+- Enable Step Functions to write to `jobs` table (remove shadow-mode flag)
+- Activate EventBridge scheduler (daily pipeline)
+- Set up EventBridge rules for stale nudges (weekly) + follow-up reminders (daily) + expiry check (weekly)
 - Monitor first 3 automated runs
+- **Remove dead code**: `scrapers/` directory, `main.py`, `seen_jobs.json`, `self_improver.py` (keep in git history, delete from main branch)
+- Remove old `/api/tailor` synchronous endpoint (all traffic now goes through Step Functions)
 
 ---
 
@@ -757,6 +765,15 @@ Same UX (progress indicator already built), consistent scoring.
 | User search config in Supabase | Each user customizes queries, locations, experience levels |
 | S3 paths by user_id | Clean isolation, no cross-user data leaks |
 | Lambda Layer shared deps | One layer, all functions, all users |
+
+### Multi-Tenant Apify Budget
+
+Single user: one Apify API key, one budget ($5-10/mo).
+Multi-tenant: ALL users share one Apify API key. Budget management:
+- **Global cap**: total Apify spend across all users (matches Apify plan limit)
+- **Per-user fair share**: `global_budget / active_users` = per-user daily Apify allocation
+- **Shared cache reduces cost**: if User 1 scrapes "software engineer Dublin" at 7:00, User 2 at 7:30 gets cache hit — no Apify cost
+- Track in `pipeline_metrics.apify_cost_cents` per user per run
 
 ### Multi-User Scheduling
 
