@@ -1,3 +1,4 @@
+import hashlib
 import logging
 
 import boto3
@@ -48,5 +49,11 @@ def handler(event, context):
             config["emphasis_keywords"] = adj["config_data"].get("keywords", [])
 
     config["user_id"] = user_id
+
+    # Compute a short hash of the search parameters for cache-keying downstream
+    query_str = "|".join(config.get("queries", []))
+    location_str = "|".join(config.get("locations", []))
+    config["query_hash"] = hashlib.md5(f"{query_str}|{location_str}".encode()).hexdigest()[:12]
+
     logger.info(f"[load_config] User {user_id}: {len(config.get('queries', []))} queries, min_score={config.get('min_match_score', 60)}")
     return config

@@ -22,7 +22,7 @@ def handler(event, context):
     db = get_supabase()
 
     # Get active jobs with apply_urls
-    jobs = db.table("jobs").select("id, apply_url, job_hash") \
+    jobs = db.table("jobs").select("job_id, apply_url, job_hash") \
         .eq("is_expired", False) \
         .not_.is_("apply_url", "null") \
         .limit(100).execute()
@@ -34,8 +34,8 @@ def handler(event, context):
             continue
         try:
             resp = httpx.head(url, timeout=10, follow_redirects=True)
-            if resp.status_code in (404, 410, 301):
-                db.table("jobs").update({"is_expired": True}).eq("id", job["id"]).execute()
+            if resp.status_code in (404, 410):
+                db.table("jobs").update({"is_expired": True}).eq("job_id", job["job_id"]).execute()
                 expired_count += 1
         except Exception:
             pass  # Network errors don't mean expired

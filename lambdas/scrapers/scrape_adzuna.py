@@ -20,14 +20,13 @@ def get_supabase():
 
 def handler(event, context):
     queries = event.get("queries", ["software engineer"])
-    locations = event.get("locations", ["ireland"])
     query_hash = event.get("query_hash", "")
     cache_ttl_hours = event.get("cache_ttl_hours", 24)
 
     db = get_supabase()
 
     # Check cache
-    cached = db.table("jobs_raw").select("*", count="exact") \
+    cached = db.table("jobs_raw").select("job_hash", count="exact") \
         .eq("source", "adzuna").eq("query_hash", query_hash) \
         .gte("scraped_at", (datetime.utcnow() - timedelta(hours=cache_ttl_hours)).isoformat()) \
         .execute()
@@ -55,10 +54,14 @@ def handler(event, context):
             jobs = normalize_adzuna(results, query_hash)
             all_jobs.extend(jobs)
             logger.info(f"[adzuna] Query '{query}': {len(jobs)} jobs")
+        else:
+            logger.warning(f"[adzuna] Query '{query}': HTTP {resp.status_code}")
 
-    # Write to jobs_raw
-    for job in all_jobs:
-        job["scraped_at"] = datetime.utcnow().isoformat()
-        db.table("jobs_raw").upsert(job, on_conflict="job_hash").execute()
+    # Write to jobs_raw (bulk upsert)
+    if all_jobs:
+        now = datetime.utcnow().isoformat()
+        for job in all_jobs:
+            job["scraped_at"] = now
+        db.table("jobs_raw").upsert(all_jobs, on_conflict="job_hash").execute()
 
     return {"count": len(all_jobs), "source": "adzuna"}

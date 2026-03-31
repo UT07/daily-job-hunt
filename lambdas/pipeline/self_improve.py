@@ -1,22 +1,14 @@
 import json
 import logging
+import os
 from datetime import datetime, timedelta
 
 import boto3
 
+from ai_helper import ai_complete, get_supabase
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-
-ssm = boto3.client("ssm")
-
-
-def get_param(name):
-    return ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
-
-
-def get_supabase():
-    from supabase import create_client
-    return create_client(get_param("/naukribaba/SUPABASE_URL"), get_param("/naukribaba/SUPABASE_SERVICE_KEY"))
 
 
 def handler(event, context):
@@ -47,10 +39,10 @@ def handler(event, context):
 
     if unhealthy:
         logger.warning(f"[self_improve] Unhealthy scrapers: {unhealthy}")
-        # Trigger alert via notify_error
+        notify_fn = os.environ.get("NOTIFY_ERROR_FUNCTION", "naukribaba-notify-error")
         lambda_client = boto3.client("lambda")
         lambda_client.invoke(
-            FunctionName="naukribaba-notify-error",
+            FunctionName=notify_fn,
             InvocationType="Event",
             Payload=json.dumps({
                 "user_id": user_id,
@@ -73,8 +65,7 @@ Return JSON with adjustments:
 - keyword_emphasis: {{"keywords": [list]}}
 """
         try:
-            from ai_client import get_ai_response
-            response = get_ai_response(prompt, system="You are a job search optimization AI. Return only valid JSON.")
+            response = ai_complete(prompt, system="You are a job search optimization AI. Return only valid JSON.")
             adjustments = json.loads(response)
 
             for config_type, config_data in adjustments.items():

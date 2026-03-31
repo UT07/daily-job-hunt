@@ -1,22 +1,14 @@
 import json
 import logging
-from datetime import datetime, timedelta
+import uuid
+from datetime import datetime
 
 import boto3
 
+from ai_helper import ai_complete_cached, get_supabase
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-
-ssm = boto3.client("ssm")
-
-
-def get_param(name):
-    return ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
-
-
-def get_supabase():
-    from supabase import create_client
-    return create_client(get_param("/naukribaba/SUPABASE_URL"), get_param("/naukribaba/SUPABASE_SERVICE_KEY"))
 
 
 def handler(event, context):
@@ -29,99 +21,91 @@ def handler(event, context):
 
     db = get_supabase()
 
-    # Read jobs from jobs_raw
-    jobs = []
-    for h in job_hashes:
-        result = db.table("jobs_raw").select("*").eq("job_hash", h).execute()
-        if result.data:
-            jobs.append(result.data[0])
+    # Bulk fetch all jobs in one query
+    jobs_result = db.table("jobs_raw").select("*").in_("job_hash", job_hashes).execute()
+    jobs = jobs_result.data or []
 
-    # Read user's active resume
-    resume = db.table("user_resumes").select("*").eq("user_id", user_id) \
-        .eq("is_active", True).execute()
-    resume_text = resume.data[0]["resume_text"] if resume.data else ""
-
-    if not resume_text:
-        logger.warning(f"[score_batch] No active resume for user {user_id}")
+    # Get latest resume (no is_active column; use most recently created)
+    resume_result = db.table("user_resumes").select("*").eq("user_id", user_id) \
+        .order("created_at", desc=True).limit(1).execute()
+    if not resume_result.data:
+        logger.warning(f"[score_batch] No resume found for user {user_id}")
         return {"matched_items": [], "matched_count": 0, "error": "no_resume"}
 
-    # Score each job using AI (batches of 5)
+    resume_tex = resume_result.data[0].get("tex_content", "")
+    if not resume_tex:
+        logger.warning(f"[score_batch] Resume tex_content is empty for user {user_id}")
+        return {"matched_items": [], "matched_count": 0, "error": "no_resume"}
+
     matched_items = []
-    for i in range(0, len(jobs), 5):
-        batch = jobs[i:i+5]
-        for job in batch:
-            # Call AI scoring
-            score_result = score_single_job(job, resume_text, db)
+    for job in jobs:
+        score_result = score_single_job(job, resume_tex)
 
-            if score_result and score_result.get("match_score", 0) >= min_score:
-                # Write scored job to jobs table
-                job_record = {
-                    "user_id": user_id,
-                    "job_hash": job["job_hash"],
-                    "title": job["title"],
-                    "company": job["company"],
-                    "description": job["description"],
-                    "location": job.get("location"),
-                    "apply_url": job.get("apply_url"),
-                    "source": job["source"],
-                    "match_score": score_result["match_score"],
-                    "ats_score": score_result.get("ats_score", 0),
-                    "hiring_manager_score": score_result.get("hiring_manager_score", 0),
-                    "tech_recruiter_score": score_result.get("tech_recruiter_score", 0),
-                    "matched_resume": resume_text[:100],
-                    "first_seen": datetime.utcnow().isoformat(),
-                }
-                db.table("jobs").insert(job_record).execute()
+        if score_result is None:
+            continue
 
-                light_touch = score_result["match_score"] >= 85
-                matched_items.append({
-                    "job_hash": job["job_hash"],
-                    "user_id": user_id,
-                    "light_touch": light_touch,
-                })
+        match_score = score_result.get("match_score", 0)
+        if match_score < min_score:
+            continue
 
-    logger.info(f"[score_batch] {len(jobs)} scored → {len(matched_items)} matched (min_score={min_score})")
+        job_record = {
+            "job_id": str(uuid.uuid4()),
+            "user_id": user_id,
+            "job_hash": job["job_hash"],
+            "title": job["title"],
+            "company": job["company"],
+            "description": job.get("description"),
+            "location": job.get("location"),
+            "apply_url": job.get("apply_url"),
+            "source": job["source"],
+            "match_score": match_score,
+            "ats_score": score_result.get("ats_score", 0),
+            "hiring_manager_score": score_result.get("hiring_manager_score", 0),
+            "tech_recruiter_score": score_result.get("tech_recruiter_score", 0),
+            "first_seen": datetime.utcnow().isoformat(),
+        }
+        try:
+            db.table("jobs").insert(job_record).execute()
+        except Exception as e:
+            logger.warning(f"[score_batch] Insert failed for {job['job_hash']}: {e}")
+            continue
+
+        light_touch = match_score >= 85
+        matched_items.append({
+            "job_hash": job["job_hash"],
+            "user_id": user_id,
+            "light_touch": light_touch,
+        })
+
+    logger.info(f"[score_batch] {len(jobs)} scored -> {len(matched_items)} matched (min_score={min_score})")
     return {"matched_items": matched_items, "matched_count": len(matched_items)}
 
 
-def score_single_job(job, resume_text, db):
-    """Score a single job against user's resume using AI."""
-    import hashlib
-
-    # Check AI cache
-    cache_key = hashlib.md5(f"score|{job['job_hash']}|{resume_text[:200]}".encode()).hexdigest()
-    cached = db.table("ai_cache").select("response") \
-        .eq("cache_key", cache_key) \
-        .gte("expires_at", datetime.utcnow().isoformat()).execute()
-    if cached.data:
-        return json.loads(cached.data[0]["response"])
-
-    # Call AI for scoring
+def score_single_job(job: dict, resume_tex: str) -> dict | None:
+    """Score a single job against the user's resume using AI. Returns parsed dict or None."""
     prompt = f"""Score this job against the candidate's resume.
 
 Job: {job['title']} at {job['company']}
 Description: {job.get('description', '')[:2000]}
 
-Resume: {resume_text[:3000]}
+Resume (LaTeX): {resume_tex[:3000]}
 
 Return JSON with: match_score (0-100), ats_score (0-100), hiring_manager_score (0-100), tech_recruiter_score (0-100), reasoning (string).
 """
+    system = "You are a job matching AI. Return only valid JSON."
 
-    from ai_client import get_ai_response
     try:
-        response = get_ai_response(prompt, system="You are a job matching AI. Return only valid JSON.")
-        result = json.loads(response)
-
-        # Cache the result
-        db.table("ai_cache").upsert({
-            "cache_key": cache_key,
-            "response": json.dumps(result),
-            "provider": "groq",
-            "model": "auto",
-            "expires_at": (datetime.utcnow() + timedelta(hours=72)).isoformat(),
-        }, on_conflict="cache_key").execute()
-
-        return result
+        response = ai_complete_cached(prompt, system=system)
+        # Strip markdown fences if present
+        text = response.strip()
+        if text.startswith("```"):
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+        return json.loads(text.strip())
+    except json.JSONDecodeError as e:
+        logger.error(f"[score_batch] JSON parse error for {job['job_hash']}: {e}")
+        return None
     except Exception as e:
         logger.error(f"[score_batch] AI scoring failed for {job['job_hash']}: {e}")
         return None

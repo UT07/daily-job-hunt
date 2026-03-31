@@ -52,7 +52,7 @@ def handler(event, context):
     db = get_supabase()
 
     # Check cache
-    cached = db.table("jobs_raw").select("*", count="exact") \
+    cached = db.table("jobs_raw").select("job_hash", count="exact") \
         .eq("source", "hn_hiring").eq("query_hash", query_hash) \
         .gte("scraped_at", (datetime.utcnow() - timedelta(hours=cache_ttl_hours)).isoformat()) \
         .execute()
@@ -63,6 +63,9 @@ def handler(event, context):
     search_url = "https://hn.algolia.com/api/v1/search"
     params = {"query": "Ask HN: Who is hiring?", "tags": "story", "hitsPerPage": 1}
     resp = httpx.get(search_url, params=params, timeout=15)
+    if resp.status_code != 200:
+        logger.warning(f"[hn_hiring] Thread search: HTTP {resp.status_code}")
+        return {"count": 0, "source": "hn_hiring", "error": f"http_{resp.status_code}"}
     hits = resp.json().get("hits", [])
     if not hits:
         return {"count": 0, "source": "hn_hiring", "error": "no_thread_found"}
@@ -73,6 +76,9 @@ def handler(event, context):
     comments_url = f"https://hn.algolia.com/api/v1/search"
     params = {"tags": f"comment,story_{thread_id}", "hitsPerPage": 200}
     resp = httpx.get(comments_url, params=params, timeout=30)
+    if resp.status_code != 200:
+        logger.warning(f"[hn_hiring] Comments fetch: HTTP {resp.status_code}")
+        return {"count": 0, "source": "hn_hiring", "error": f"http_{resp.status_code}"}
     comments = resp.json().get("hits", [])
 
     from normalizers import normalize_hn
@@ -87,9 +93,11 @@ def handler(event, context):
 
     jobs = normalize_hn(parsed, query_hash)
 
-    for job in jobs:
-        job["scraped_at"] = datetime.utcnow().isoformat()
-        db.table("jobs_raw").upsert(job, on_conflict="job_hash").execute()
+    if jobs:
+        now = datetime.utcnow().isoformat()
+        for job in jobs:
+            job["scraped_at"] = now
+        db.table("jobs_raw").upsert(jobs, on_conflict="job_hash").execute()
 
     logger.info(f"[hn_hiring] {len(jobs)} jobs from {len(comments)} comments")
     return {"count": len(jobs), "source": "hn_hiring"}

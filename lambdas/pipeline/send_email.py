@@ -1,3 +1,4 @@
+import html
 import logging
 import smtplib
 from datetime import datetime
@@ -77,19 +78,26 @@ def format_email_html(jobs, user_name):
         else:
             score_color = "#ef4444"
 
-        resume_link = f'<a href="{j["resume_s3_url"]}">Resume</a>' if j.get("resume_s3_url") else "-"
+        title = html.escape(j.get("title", ""))
+        company = html.escape(j.get("company", ""))
+        source = html.escape(j.get("source", ""))
+
+        resume_url = j.get("resume_s3_url", "")
+        resume_link = f'<a href="{html.escape(resume_url)}">Resume</a>' if resume_url else "-"
+
         rows += f"""<tr>
-            <td style="padding:8px;border-bottom:1px solid #eee"><b>{j['title']}</b><br><small>{j['company']}</small></td>
+            <td style="padding:8px;border-bottom:1px solid #eee"><b>{title}</b><br><small>{company}</small></td>
             <td style="padding:8px;border-bottom:1px solid #eee;text-align:center"><span style="color:{score_color};font-weight:bold">{score}</span></td>
-            <td style="padding:8px;border-bottom:1px solid #eee">{j.get('source', '')}</td>
+            <td style="padding:8px;border-bottom:1px solid #eee">{source}</td>
             <td style="padding:8px;border-bottom:1px solid #eee">{resume_link}</td>
         </tr>"""
 
+    safe_name = html.escape(user_name)
     return f"""<html><body style="font-family:system-ui;max-width:600px;margin:0 auto">
-    <h2>Hey {user_name}, {len(jobs)} new matches today!</h2>
+    <h2>Hey {safe_name}, {len(jobs)} new matches today!</h2>
     <table style="width:100%;border-collapse:collapse">
         <tr style="background:#f8f9fa"><th style="padding:8px;text-align:left">Job</th><th>Score</th><th>Source</th><th>Resume</th></tr>
         {rows}
     </table>
-    <p style="color:#666;font-size:12px">NaukriBaba — Your AI Job Hunt Assistant</p>
+    <p style="color:#666;font-size:12px">NaukriBaba &mdash; Your AI Job Hunt Assistant</p>
     </body></html>"""

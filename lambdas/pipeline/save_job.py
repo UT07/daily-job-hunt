@@ -3,26 +3,29 @@ import os
 
 import boto3
 
+from ai_helper import get_supabase
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-ssm = boto3.client("ssm")
-
-
-def get_param(name):
-    return ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
-
-
-def get_supabase():
-    from supabase import create_client
-    return create_client(get_param("/naukribaba/SUPABASE_URL"), get_param("/naukribaba/SUPABASE_SERVICE_KEY"))
-
 
 def handler(event, context):
-    job_hash = event["job_hash"]
-    user_id = event["user_id"]
-    resume_pdf_key = event.get("resume_pdf_s3_key")
-    cover_letter_pdf_key = event.get("cover_letter_pdf_s3_key")
+    job_hash = event.get("job_hash", "")
+    user_id = event.get("user_id", "")
+
+    # Extract PDF keys from accumulated step results — may not exist if upstream steps failed
+    resume_pdf_key = None
+    cover_letter_pdf_key = None
+
+    if "compile_result" in event:
+        resume_pdf_key = event["compile_result"].get("pdf_s3_key")
+    elif "resume_pdf_s3_key" in event:
+        resume_pdf_key = event["resume_pdf_s3_key"]
+
+    if "cover_compile_result" in event:
+        cover_letter_pdf_key = event["cover_compile_result"].get("pdf_s3_key")
+    elif "cover_letter_pdf_s3_key" in event:
+        cover_letter_pdf_key = event["cover_letter_pdf_s3_key"]
 
     s3 = boto3.client("s3")
     db = get_supabase()

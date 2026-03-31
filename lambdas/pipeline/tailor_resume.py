@@ -3,19 +3,10 @@ import os
 
 import boto3
 
+from ai_helper import ai_complete, get_supabase
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-
-ssm = boto3.client("ssm")
-
-
-def get_param(name):
-    return ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
-
-
-def get_supabase():
-    from supabase import create_client
-    return create_client(get_param("/naukribaba/SUPABASE_URL"), get_param("/naukribaba/SUPABASE_SERVICE_KEY"))
 
 
 def handler(event, context):
@@ -33,12 +24,12 @@ def handler(event, context):
         return {"error": f"Job {job_hash} not found"}
     job = job.data[0]
 
-    # Read user's active resume
+    # Get latest resume (no is_active column; use most recently created)
     resume = db.table("user_resumes").select("*").eq("user_id", user_id) \
-        .eq("is_active", True).execute()
+        .order("created_at", desc=True).limit(1).execute()
     if not resume.data:
-        return {"error": "No active resume"}
-    resume_tex = resume.data[0].get("resume_latex") or resume.data[0].get("resume_text", "")
+        return {"error": "No resume found"}
+    resume_tex = resume.data[0].get("tex_content", "")
 
     # Tailor using AI
     if light_touch:
@@ -56,16 +47,14 @@ Resume LaTeX:
 
 Return ONLY the tailored LaTeX document. No explanation."""
 
-    from ai_client import get_ai_response
-    tailored_tex = get_ai_response(prompt, system=system_prompt)
+    tailored_tex = ai_complete(prompt, system=system_prompt)
 
     # Write to S3
     tex_key = f"users/{user_id}/resumes/{job_hash}_tailored.tex"
     s3.put_object(Bucket=bucket, Key=tex_key, Body=tailored_tex.encode("utf-8"))
 
-    # Update job record
+    # Update job record (only columns that exist)
     db.table("jobs").update({
-        "tailoring_model": "auto",
         "resume_version": 1,
     }).eq("user_id", user_id).eq("job_hash", job_hash).execute()
 

@@ -24,7 +24,7 @@ def handler(event, context):
 
     db = get_supabase()
 
-    cached = db.table("jobs_raw").select("*", count="exact") \
+    cached = db.table("jobs_raw").select("job_hash", count="exact") \
         .eq("source", "yc").eq("query_hash", query_hash) \
         .gte("scraped_at", (datetime.utcnow() - timedelta(hours=cache_ttl_hours)).isoformat()) \
         .execute()
@@ -60,9 +60,11 @@ def handler(event, context):
                 logger.warning(f"[yc] Parse error: {e}")
 
     jobs = normalize_generic_web(all_jobs, "yc", query_hash)
-    for job in jobs:
-        job["scraped_at"] = datetime.utcnow().isoformat()
-        db.table("jobs_raw").upsert(job, on_conflict="job_hash").execute()
+    if jobs:
+        now = datetime.utcnow().isoformat()
+        for job in jobs:
+            job["scraped_at"] = now
+        db.table("jobs_raw").upsert(jobs, on_conflict="job_hash").execute()
 
     logger.info(f"[yc] {len(jobs)} jobs")
     return {"count": len(jobs), "source": "yc"}

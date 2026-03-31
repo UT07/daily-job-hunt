@@ -3,19 +3,10 @@ import os
 
 import boto3
 
+from ai_helper import ai_complete, get_supabase
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-
-ssm = boto3.client("ssm")
-
-
-def get_param(name):
-    return ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
-
-
-def get_supabase():
-    from supabase import create_client
-    return create_client(get_param("/naukribaba/SUPABASE_URL"), get_param("/naukribaba/SUPABASE_SERVICE_KEY"))
 
 
 def handler(event, context):
@@ -31,21 +22,21 @@ def handler(event, context):
         return {"error": f"Job {job_hash} not found"}
     job = job.data[0]
 
+    # Get latest resume (no is_active column; use most recently created)
     resume = db.table("user_resumes").select("*").eq("user_id", user_id) \
-        .eq("is_active", True).execute()
-    resume_text = resume.data[0].get("resume_text", "") if resume.data else ""
+        .order("created_at", desc=True).limit(1).execute()
+    resume_tex = resume.data[0].get("tex_content", "") if resume.data else ""
 
     prompt = f"""Write a cover letter for this job application.
 
 Job: {job['title']} at {job['company']}
 Description: {job.get('description', '')[:3000]}
 
-Candidate Resume: {resume_text[:3000]}
+Candidate Resume (LaTeX): {resume_tex[:3000]}
 
 Return ONLY a LaTeX document for the cover letter. Professional format, one page."""
 
-    from ai_client import get_ai_response
-    cover_letter_tex = get_ai_response(prompt, system="You are a cover letter expert. Return only LaTeX.")
+    cover_letter_tex = ai_complete(prompt, system="You are a cover letter expert. Return only LaTeX.")
 
     tex_key = f"users/{user_id}/cover_letters/{job_hash}_cover.tex"
     s3.put_object(Bucket=bucket, Key=tex_key, Body=cover_letter_tex.encode("utf-8"))

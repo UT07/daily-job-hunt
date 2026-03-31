@@ -76,7 +76,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: naukribaba-scrape-apify
-      Handler: lambdas/scrapers/scrape_apify.handler
+      CodeUri: lambdas/scrapers/
+      Handler: scrape_apify.handler
       Runtime: python3.11
       Timeout: 300
       MemorySize: 256
@@ -89,7 +90,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: naukribaba-scrape-adzuna
-      Handler: lambdas/scrapers/scrape_adzuna.handler
+      CodeUri: lambdas/scrapers/
+      Handler: scrape_adzuna.handler
       Runtime: python3.11
       Timeout: 30
       MemorySize: 128
@@ -102,7 +104,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: naukribaba-scrape-hn
-      Handler: lambdas/scrapers/scrape_hn.handler
+      CodeUri: lambdas/scrapers/
+      Handler: scrape_hn.handler
       Runtime: python3.11
       Timeout: 60
       MemorySize: 128
@@ -115,7 +118,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: naukribaba-scrape-yc
-      Handler: lambdas/scrapers/scrape_yc.handler
+      CodeUri: lambdas/scrapers/
+      Handler: scrape_yc.handler
       Runtime: python3.11
       Timeout: 30
       MemorySize: 128
@@ -129,7 +133,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: naukribaba-load-config
-      Handler: lambdas/pipeline/load_config.handler
+      CodeUri: lambdas/pipeline/
+      Handler: load_config.handler
       Runtime: python3.11
       Timeout: 30
       MemorySize: 128
@@ -142,7 +147,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: naukribaba-merge-dedup
-      Handler: lambdas/pipeline/merge_dedup.handler
+      CodeUri: lambdas/pipeline/
+      Handler: merge_dedup.handler
       Runtime: python3.11
       Timeout: 30
       MemorySize: 128
@@ -155,7 +161,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: naukribaba-score-batch
-      Handler: lambdas/pipeline/score_batch.handler
+      CodeUri: lambdas/pipeline/
+      Handler: score_batch.handler
       Runtime: python3.11
       Timeout: 300
       MemorySize: 512
@@ -168,7 +175,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: naukribaba-tailor-resume
-      Handler: lambdas/pipeline/tailor_resume.handler
+      CodeUri: lambdas/pipeline/
+      Handler: tailor_resume.handler
       Runtime: python3.11
       Timeout: 120
       MemorySize: 256
@@ -183,7 +191,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: naukribaba-compile-latex
-      Handler: lambdas/pipeline/compile_latex.handler
+      CodeUri: lambdas/pipeline/
+      Handler: compile_latex.handler
       Runtime: python3.11
       Timeout: 60
       MemorySize: 512
@@ -191,12 +200,15 @@ Resources:
       Policies:
         - S3CrudPolicy:
             BucketName: utkarsh-job-hunt
+        - SSMParameterReadPolicy:
+            ParameterName: /naukribaba/*
 
   GenerateCoverLetterFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: naukribaba-generate-cover-letter
-      Handler: lambdas/pipeline/generate_cover_letter.handler
+      CodeUri: lambdas/pipeline/
+      Handler: generate_cover_letter.handler
       Runtime: python3.11
       Timeout: 120
       MemorySize: 256
@@ -211,7 +223,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: naukribaba-find-contacts
-      Handler: lambdas/pipeline/find_contacts.handler
+      CodeUri: lambdas/pipeline/
+      Handler: find_contacts.handler
       Runtime: python3.11
       Timeout: 120
       MemorySize: 128
@@ -224,7 +237,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: naukribaba-save-job
-      Handler: lambdas/pipeline/save_job.handler
+      CodeUri: lambdas/pipeline/
+      Handler: save_job.handler
       Runtime: python3.11
       Timeout: 30
       MemorySize: 128
@@ -239,7 +253,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: naukribaba-save-metrics
-      Handler: lambdas/pipeline/save_metrics.handler
+      CodeUri: lambdas/pipeline/
+      Handler: save_metrics.handler
       Runtime: python3.11
       Timeout: 30
       MemorySize: 128
@@ -252,7 +267,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: naukribaba-send-email
-      Handler: lambdas/pipeline/send_email.handler
+      CodeUri: lambdas/pipeline/
+      Handler: send_email.handler
       Runtime: python3.11
       Timeout: 30
       MemorySize: 128
@@ -265,7 +281,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: naukribaba-self-improve
-      Handler: lambdas/pipeline/self_improve.handler
+      CodeUri: lambdas/pipeline/
+      Handler: self_improve.handler
       Runtime: python3.11
       Timeout: 120
       MemorySize: 256
@@ -280,7 +297,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: naukribaba-notify-error
-      Handler: lambdas/pipeline/notify_error.handler
+      CodeUri: lambdas/pipeline/
+      Handler: notify_error.handler
       Runtime: python3.11
       Timeout: 30
       MemorySize: 128
@@ -293,7 +311,8 @@ Resources:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: naukribaba-check-expiry
-      Handler: lambdas/pipeline/check_expiry.handler
+      CodeUri: lambdas/pipeline/
+      Handler: check_expiry.handler
       Runtime: python3.11
       Timeout: 120
       MemorySize: 128
@@ -601,22 +620,12 @@ Resources:
                   "SaveJob": {
                     "Type": "Task",
                     "Resource": "${SaveJobFunction.Arn}",
-                    "Parameters": {
-                      "job_hash.$": "$.job_hash",
-                      "user_id.$": "$.user_id",
-                      "resume_pdf_s3_key.$": "$.compile_result.pdf_s3_key",
-                      "cover_letter_pdf_s3_key.$": "$.cover_compile_result.pdf_s3_key"
-                    },
                     "End": true,
                     "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SaveJobAfterError"}]
                   },
                   "SaveJobAfterError": {
                     "Type": "Task",
                     "Resource": "${SaveJobFunction.Arn}",
-                    "Parameters": {
-                      "job_hash.$": "$.job_hash",
-                      "user_id.$": "$.user_id"
-                    },
                     "End": true
                   }
                 }
@@ -770,22 +779,11 @@ Resources:
             "SaveJobComplete": {
               "Type": "Task",
               "Resource": "${SaveJobFunction.Arn}",
-              "Parameters": {
-                "job_hash.$": "$.job_hash",
-                "user_id.$": "$.user_id",
-                "resume_pdf_s3_key.$": "$.compile_result.pdf_s3_key",
-                "cover_letter_pdf_s3_key.$": "$.cover_compile_result.pdf_s3_key"
-              },
               "End": true
             },
             "SaveJobWithoutCL": {
               "Type": "Task",
               "Resource": "${SaveJobFunction.Arn}",
-              "Parameters": {
-                "job_hash.$": "$.job_hash",
-                "user_id.$": "$.user_id",
-                "resume_pdf_s3_key.$": "$.compile_result.pdf_s3_key"
-              },
               "End": true
             },
             "JobFailed": {
