@@ -106,10 +106,12 @@ All scrapers run as **parallel branches** in n8n. Each has "Continue On Fail" en
 
 **User-submitted jobs** (same pipeline, source: "manual"):
 - "+ Add Job" button on dashboard opens a form
-- User pastes JD, enters title/company/URL
+- User pastes JD, enters title/company/URL/location
+- Dedup: checks existing jobs by company+title+JD similarity (SequenceMatcher 60% threshold). If match found, redirects to existing job instead of creating duplicate.
 - Frontend POSTs to Lambda API
 - Lambda runs the same scoring/tailoring/contacts pipeline
 - Job appears in dashboard with source badge "manual"
+- Missing fields: AI extracts location from JD text if user doesn't provide it. Contacts auto-generated after tailoring.
 
 ### Stage 2: Research (Company Intelligence)
 
