@@ -36,13 +36,14 @@ PRESIGN_EXPIRY = 7 * 24 * 60 * 60
 
 
 def _get_s3_client():
-    """Create a boto3 S3 client, using explicit env vars if set or boto3 default chain."""
-    key_id = os.environ.get("AWS_ACCESS_KEY_ID", "").strip()
-    secret = os.environ.get("AWS_SECRET_ACCESS_KEY", "").strip()
-    region = os.environ.get("AWS_REGION", "eu-west-1")
-    if key_id and secret:
-        return boto3.client("s3", aws_access_key_id=key_id, aws_secret_access_key=secret, region_name=region)
-    return boto3.client("s3", region_name=region)
+    """Create a boto3 S3 client using the default credential chain.
+
+    On Lambda, boto3 automatically uses the execution role credentials
+    (AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY + AWS_SESSION_TOKEN).
+    Locally, it uses ~/.aws/credentials or env vars.
+    Never pass credentials explicitly — it breaks STS session tokens.
+    """
+    return boto3.client("s3", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
 
 
 def _s3_prefix(run_date: str, user_id: Optional[str] = None) -> str:

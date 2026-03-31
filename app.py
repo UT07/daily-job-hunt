@@ -455,7 +455,7 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
         "first_seen": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
     try:
-        _db.client.table("jobs").upsert(row, on_conflict="job_id").execute()
+        _db.client.table("jobs").insert(row).execute()
     except Exception as e:
         logger.warning(f"Job creation failed: {e}")
     return job_id
