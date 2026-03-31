@@ -37,22 +37,25 @@
 | 12 | Frontend: in-app notifications (badge + toast) | Frontend | Yes |
 | 13 | Frontend: source control in Settings | Frontend | Yes |
 | 14 | Frontend: job expiry + rejected dimming | Frontend | After 7 |
-| 15 | Scoring consistency fix | Backend | Yes |
-| 16 | Score-first tailoring | Backend | Yes |
-| 17 | Resume versioning (re-tailor on demand) | Full-stack | Yes |
-| 18 | User profile from resume | Full-stack | Yes |
+| 15 | Frontend: manual job editing UI | Frontend | Yes |
+| 16 | Scoring consistency fix | Backend | Yes |
+| 17 | Score-first tailoring | Backend | Yes |
+| 18 | Resume versioning (re-tailor on demand) | Full-stack | Yes |
+| 19 | User profile from resume | Full-stack | Yes |
 
 ### Phase 3: Shadow Mode (Days 9-11)
 
 | # | Task | Type |
 |---|------|------|
-| 19 | Shadow mode testing | Testing |
+| 20 | Shadow mode testing | Testing |
 
 ### Phase 4: Cutover (Day 12)
 
 | # | Task | Type |
 |---|------|------|
-| 20 | Cutover + cleanup | Deploy |
+| 21 | Cutover + cleanup | Deploy |
+
+**Not in scope (deferred):** SMS/WhatsApp notifications, multi-tenant scheduling (SQS dispatch), pricing tiers.
 
 ---
 
@@ -824,13 +827,13 @@ See spec sections 4, 5, 6 for detailed logic of each Lambda. Code follows the sa
 
 - [ ] **Step 1: Create load_config Lambda** — reads user's search config + self-improvement adjustments from Supabase, merges them, returns the merged config (queries, locations, sources, thresholds).
 
-- [ ] **Step 2: Create check_cache Lambda** — for each source × query combination, checks if `jobs_raw` has recent enough entries. Returns list of scrapers to run vs skip.
+- [ ] ~~**Step 2: Create check_cache Lambda**~~ **REMOVED** — each scraper Lambda checks its own cache internally (already implemented in Task 3). Step Functions Parallel state has fixed branches and can't dynamically skip, so a separate check_cache step doesn't work. Each scraper returns `{cached: true}` if skipped.
 
 - [ ] **Step 3: Create merge_dedup Lambda** — reads today's `jobs_raw` entries, deduplicates cross-source (keep richest version), returns array of new job_hashes.
 
 - [ ] **Step 4: Create score_batch Lambda** — reads jobs by hashes from `jobs_raw`, reads user's resumes from Supabase, calls existing `match_jobs()` function, writes scored jobs to `jobs` table, returns matched hashes. Timeout: 300s.
 
-- [ ] **Step 5: Create filter_matched Lambda** — reads scored jobs from `jobs` table, filters by min_score, returns `{job_items: [{job_hash, user_id}]}` for Map state.
+- [ ] ~~**Step 5: Create filter_matched Lambda**~~ **MERGED into score_batch** — `score_batch` Lambda already filters by min_score and returns only matched hashes. No separate filter step needed. The `score_batch` output format becomes: `{matched_items: [{job_hash, user_id}, ...], matched_count: N}` which feeds directly into the Map state.
 
 - [ ] **Step 6: Refactor tailor_resume** — accept `{job_hash, user_id, light_touch}` as input, read job from `jobs_raw` + resume from Supabase, tailor, write tex to S3 temp path, return `{job_hash, tex_s3_key}`.
 
@@ -844,7 +847,7 @@ See spec sections 4, 5, 6 for detailed logic of each Lambda. Code follows the sa
 
 - [ ] **Step 11: Create send_email Lambda** — read today's matched jobs from `jobs` table, format HTML email, send via Gmail SMTP.
 
-- [ ] **Step 12: Create self_improve Lambda** — see spec section 6 for full logic.
+- [ ] **Step 12: Create self_improve Lambda** — see spec section 6 for full logic. Also includes: check `pipeline_metrics` for scrapers with 3+ consecutive days of `jobs_found = 0` → trigger alert email via `notify_error` Lambda ("LinkedIn scraper hasn't found jobs in 3 days — Apify actor may have changed").
 
 - [ ] **Step 13: Create notify_error Lambda** — send error notification email with step name and error message.
 
@@ -1040,7 +1043,25 @@ git add web/src/ && git commit -m "feat: live pipeline status bar + Run Pipeline
 
 ---
 
-## Task 15: Scoring Consistency Fix
+## Task 15: Frontend — Manual Job Editing UI
+
+**Files:**
+- Modify: `web/src/pages/JobWorkspace.jsx`
+
+The `PATCH /api/dashboard/jobs/{job_id}` endpoint already accepts `location` and `apply_url` (done this session). This task adds the UI.
+
+- [ ] **Step 1: Add editable fields to Job Workspace overview tab** — location and apply_url inputs, "Edit Details" toggle button, save/cancel. Import `apiPatch` from `../api`.
+
+- [ ] **Step 2: Build and commit**
+
+```bash
+cd web && npm run build
+git add web/src/ && git commit -m "feat: inline editing for job location and apply_url"
+```
+
+---
+
+## Task 16: Scoring Consistency Fix
 
 **Files:**
 - Modify: `app.py`
@@ -1053,7 +1074,7 @@ git add web/src/ && git commit -m "feat: live pipeline status bar + Run Pipeline
 
 ---
 
-## Task 16: Score-First Tailoring
+## Task 17: Score-First Tailoring
 
 **Files:**
 - Modify: `lambdas/pipeline/tailor_resume.py` (or existing `tailorer.py`)
@@ -1066,7 +1087,7 @@ git add web/src/ && git commit -m "feat: live pipeline status bar + Run Pipeline
 
 ---
 
-## Task 17: Resume Versioning (Re-Tailor on Demand)
+## Task 18: Resume Versioning (Re-Tailor on Demand)
 
 **Files:**
 - Modify: `web/src/pages/JobWorkspace.jsx`
@@ -1080,7 +1101,7 @@ git add web/src/ && git commit -m "feat: live pipeline status bar + Run Pipeline
 
 ---
 
-## Task 18: User Profile from Resume
+## Task 19: User Profile from Resume
 
 **Files:**
 - Modify: `app.py` (resume upload endpoint)
@@ -1094,7 +1115,7 @@ git add web/src/ && git commit -m "feat: live pipeline status bar + Run Pipeline
 
 ---
 
-## Task 19: Shadow Mode Testing
+## Task 20: Shadow Mode Testing
 
 - [ ] **Step 1: Run Step Functions daily pipeline manually** — verify all scrapers produce jobs, scoring works, tailoring produces PDFs.
 
@@ -1108,7 +1129,7 @@ git add web/src/ && git commit -m "feat: live pipeline status bar + Run Pipeline
 
 ---
 
-## Task 20: Cutover + Cleanup
+## Task 21: Cutover + Cleanup
 
 - [ ] **Step 1: Disable GitHub Actions cron** — comment out `schedule` in `daily_job_hunt.yml`, keep `workflow_dispatch`.
 

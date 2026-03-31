@@ -267,30 +267,27 @@ if total_cents >= budget_cents:
 
 ```
 LoadUserConfig
-    │
-    ▼
-CheckScraperCache
-    │ returns: { scrapers_to_run: [...], cached_sources: [...] }
+    │ reads: search config + self-improvement adjustments from Supabase
+    │ returns: { user_id, queries, locations, sources, min_score, ... }
     ▼
 RunScrapers (Parallel)
-    │ Each branch: scrape → write to jobs_raw → return {count, source}
+    │ Each branch: check own cache → scrape if needed → write to jobs_raw → return {count, source}
+    │ Cache check is INSIDE each scraper Lambda (not a separate state)
     │ Retry: 2 attempts, exponential backoff
     │ Catch: return {count: 0, error: "..."} (pipeline continues)
     ▼
 MergeAndDedup
     │ reads: today's jobs_raw entries
-    │ dedup: against ALL jobs_raw (not just today's)
+    │ cross-source dedup: keeps richest version (longest description)
+    │ dedup against ALL existing jobs_raw (not just today's)
     │ returns: { new_job_hashes: ["abc", ...], total_new: 25 }
     ▼
 ScoreBatch
-    │ reads: jobs_raw by hashes + user's resumes
-    │ scores using AI council (same endpoint as Add Job)
+    │ reads: jobs_raw by hashes + user's resumes from Supabase
+    │ scores using AI council (SAME code path as Add Job)
+    │ filters by min_score (from config, default 60)
     │ writes: scored entries to jobs table
-    │ returns: { matched_hashes: ["abc", ...], matched_count: 8 }
-    ▼
-FilterMatched
-    │ filters by min_score (from self_improvement_config or default 60)
-    │ returns: { job_items: [{job_hash, user_id}, ...] }
+    │ returns: { matched_items: [{job_hash, user_id}, ...], matched_count: 8 }
     ▼
 ProcessMatchedJobs (Map, MaxConcurrency: 3)
     │ Each iteration receives: { job_hash: "abc", user_id: "..." }
