@@ -808,30 +808,34 @@ class AIClient:
             future_to_provider = {
                 executor.submit(_generate_one, p): p for p in generators
             }
-            for future in concurrent.futures.as_completed(future_to_provider, timeout=90):
-                provider = future_to_provider[future]
-                try:
-                    result = future.result(timeout=60)
-                    results.append(result)
-                    self._stats["provider_calls"][provider.name] = (
-                        self._stats["provider_calls"].get(provider.name, 0) + 1
-                    )
-                    logger.info(f"[Council] {provider.name}:{provider.model} generated "
-                                f"{len(result['response'])} chars")
-                except concurrent.futures.TimeoutError:
-                    logger.warning(f"[Council] {provider.name}:{provider.model} timed out (60s)")
-                except Exception as e:
-                    logger.warning(f"[Council] {provider.name}:{provider.model} failed: {e}")
-                    # Mark permanently dead providers (402, 403, etc.)
-                    if isinstance(e, _req.HTTPError):
-                        status = e.response.status_code if hasattr(e, "response") and e.response else 0
-                        if status in self._DEAD_CODES:
+            try:
+                for future in concurrent.futures.as_completed(future_to_provider, timeout=120):
+                    provider = future_to_provider[future]
+                    try:
+                        result = future.result(timeout=60)
+                        results.append(result)
+                        self._stats["provider_calls"][provider.name] = (
+                            self._stats["provider_calls"].get(provider.name, 0) + 1
+                        )
+                        logger.info(f"[Council] {provider.name}:{provider.model} generated "
+                                    f"{len(result['response'])} chars")
+                    except concurrent.futures.TimeoutError:
+                        logger.warning(f"[Council] {provider.name}:{provider.model} timed out (60s)")
+                    except Exception as e:
+                        logger.warning(f"[Council] {provider.name}:{provider.model} failed: {e}")
+                        # Mark permanently dead providers (402, 403, etc.)
+                        if isinstance(e, _req.HTTPError):
+                            status = e.response.status_code if hasattr(e, "response") and e.response else 0
+                            if status in self._DEAD_CODES:
+                                self._dead_providers.add((provider.name, provider.model))
+                                logger.warning(f"[Council] Marked {provider.name}:{provider.model} dead ({status})")
+                        elif "Payment Required" in str(e) or "402" in str(e):
                             self._dead_providers.add((provider.name, provider.model))
-                            logger.warning(f"[Council] Marked {provider.name}:{provider.model} dead ({status})")
-                    elif "Payment Required" in str(e) or "402" in str(e):
-                        self._dead_providers.add((provider.name, provider.model))
-                        logger.warning(f"[Council] Marked {provider.name}:{provider.model} dead (payment)")
-                    continue
+                            logger.warning(f"[Council] Marked {provider.name}:{provider.model} dead (payment)")
+                        continue
+            except concurrent.futures.TimeoutError:
+                # Outer timeout — keep whatever results we have so far
+                logger.warning(f"[Council] Overall timeout (120s) — collected {len(results)} of {len(generators)} results")
 
         if not results:
             raise ProviderError("[Council] All generators failed — no candidates produced")
