@@ -71,6 +71,8 @@ Resources:
             QueueName: !GetAtt TaskQueue.QueueName
         - SQSPollerPolicy:
             QueueName: !GetAtt TaskQueue.QueueName
+        - S3CrudPolicy:
+            BucketName: utkarsh-job-hunt
       Environment:
         Variables:
           GROQ_API_KEY: !Ref GroqApiKey
