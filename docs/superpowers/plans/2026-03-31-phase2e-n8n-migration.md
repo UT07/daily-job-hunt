@@ -4,7 +4,7 @@
 
 **Goal:** Replace the GitHub Actions pipeline with n8n on EC2 — parallel scrapers, self-improvement, email workflows, and a tectonic compilation sidecar.
 
-**Architecture:** n8n orchestrates (scheduling, fan-out, retries, scraping via HTTP nodes), Lambda computes (AI scoring, tailoring, contacts). Docker Compose on EC2 t3.small runs n8n + PostgreSQL + tectonic sidecar. Python scrapers and `main.py` become dead code after cutover.
+**Architecture:** n8n Cloud (https://naukribaba.app.n8n.cloud) orchestrates (scheduling, fan-out, retries, scraping via HTTP nodes), Lambda computes (AI scoring, tailoring, contacts). No EC2 needed — n8n Cloud handles hosting. Python scrapers and `main.py` become dead code after cutover.
 
 **Tech Stack:** n8n (workflow engine), Docker Compose, EC2 t3.small, tectonic (LaTeX), FastAPI (Lambda), Supabase (PostgreSQL), S3
 
@@ -19,11 +19,9 @@
 ### New Files
 | File | Purpose |
 |------|---------|
-| `infra/docker-compose.yml` | n8n + PostgreSQL + tectonic services |
-| `infra/Dockerfile.tectonic` | tectonic HTTP sidecar Docker image |
-| `infra/tectonic_server.py` | Minimal HTTP server: POST LaTeX → PDF |
-| `infra/.env.example` | Template for EC2 environment variables |
-| `infra/setup-ec2.sh` | EC2 bootstrap script (Docker, Compose, start services) |
+| `web/src/components/SkillTags.jsx` | Tech skill chip display extracted from JD |
+| `web/src/components/JobCard.jsx` | Card grid view component |
+| `web/src/components/PipelineStatus.jsx` | Live pipeline status bar |
 
 ### Modified Files
 | File | Changes |
@@ -524,323 +522,7 @@ git add app.py && git commit -m "feat: add score-batch, deduplicate, self-improv
 
 ---
 
-## Task 4: Tectonic HTTP Sidecar
-
-**Files:**
-- Create: `infra/tectonic_server.py`
-- Create: `infra/Dockerfile.tectonic`
-
-- [ ] **Step 1: Create tectonic_server.py**
-
-```python
-"""Minimal HTTP server that compiles LaTeX to PDF via tectonic.
-
-Usage: python tectonic_server.py
-Listens on port 8081.
-POST /compile with JSON {"tex_source": "..."} → returns PDF binary.
-GET /health → returns {"status": "ok"}
-"""
-import json
-import os
-import subprocess
-import tempfile
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from pathlib import Path
-
-PORT = int(os.environ.get("TECTONIC_PORT", "8081"))
-
-
-class CompileHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        if self.path == "/health":
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(json.dumps({"status": "ok"}).encode())
-        else:
-            self.send_error(404)
-
-    def do_POST(self):
-        if self.path != "/compile":
-            self.send_error(404)
-            return
-
-        content_length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_length)
-
-        try:
-            data = json.loads(body)
-            tex_source = data.get("tex_source", "")
-        except (json.JSONDecodeError, KeyError):
-            self.send_error(400, "Invalid JSON. Expected: {\"tex_source\": \"...\"}")
-            return
-
-        if not tex_source:
-            self.send_error(400, "tex_source is required")
-            return
-
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tex_path = Path(tmpdir) / "document.tex"
-            tex_path.write_text(tex_source, encoding="utf-8")
-
-            result = subprocess.run(
-                ["tectonic", "-X", "compile", "--outdir", tmpdir, str(tex_path)],
-                capture_output=True, text=True, timeout=60,
-                env={**os.environ, "XDG_CACHE_HOME": "/tmp"},
-            )
-
-            pdf_path = Path(tmpdir) / "document.pdf"
-            if pdf_path.exists():
-                pdf_bytes = pdf_path.read_bytes()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/pdf")
-                self.send_header("Content-Length", str(len(pdf_bytes)))
-                self.end_headers()
-                self.wfile.write(pdf_bytes)
-            else:
-                error_msg = (result.stderr or result.stdout or "Unknown error")[-500:]
-                self.send_error(500, f"Compilation failed: {error_msg}")
-
-    def log_message(self, format, *args):
-        print(f"[tectonic] {args[0]}")
-
-
-if __name__ == "__main__":
-    server = HTTPServer(("0.0.0.0", PORT), CompileHandler)
-    print(f"[tectonic] Listening on port {PORT}")
-    server.serve_forever()
-```
-
-- [ ] **Step 2: Create Dockerfile.tectonic**
-
-```dockerfile
-FROM python:3.11-slim
-
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates && \
-    curl -fsSL https://drop-sh.fullyjustified.net | sh && \
-    mv tectonic /usr/local/bin/ && \
-    apt-get remove -y curl && \
-    apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/*
-
-# Pre-warm tectonic cache with a minimal compile
-RUN echo '\\documentclass{article}\\begin{document}Hello\\end{document}' > /tmp/test.tex && \
-    tectonic -X compile /tmp/test.tex && \
-    rm /tmp/test.tex /tmp/test.pdf
-
-COPY tectonic_server.py /app/
-WORKDIR /app
-EXPOSE 8081
-CMD ["python", "tectonic_server.py"]
-```
-
-- [ ] **Step 3: Test locally**
-
-```bash
-cd infra
-docker build -f Dockerfile.tectonic -t tectonic-sidecar .
-docker run -p 8081:8081 tectonic-sidecar &
-curl -X POST http://localhost:8081/compile \
-  -H "Content-Type: application/json" \
-  -d '{"tex_source": "\\documentclass{article}\\begin{document}Hello World\\end{document}"}' \
-  -o test.pdf
-file test.pdf  # Should say "PDF document"
-curl http://localhost:8081/health  # Should return {"status": "ok"}
-docker stop $(docker ps -q --filter ancestor=tectonic-sidecar)
-```
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add infra/ && git commit -m "feat: add tectonic HTTP sidecar for LaTeX compilation"
-```
-
----
-
-## Task 5: EC2 Infrastructure Setup
-
-**Files:**
-- Create: `infra/docker-compose.yml`
-- Create: `infra/.env.example`
-- Create: `infra/setup-ec2.sh`
-
-- [ ] **Step 1: Create docker-compose.yml**
-
-```yaml
-version: '3.8'
-services:
-  n8n:
-    image: n8nio/n8n:latest
-    ports:
-      - "5678:5678"
-    environment:
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=${N8N_USER}
-      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
-      - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=postgres
-      - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_DATABASE=n8n
-      - DB_POSTGRESDB_USER=n8n
-      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
-      - GENERIC_TIMEZONE=Europe/Dublin
-      - N8N_SECURE_COOKIE=false
-      - WEBHOOK_URL=http://${EC2_PUBLIC_IP}:5678/
-    volumes:
-      - n8n_data:/home/node/.n8n
-    depends_on:
-      - postgres
-    restart: unless-stopped
-
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      - POSTGRES_USER=n8n
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=n8n
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    restart: unless-stopped
-
-  tectonic:
-    build:
-      context: .
-      dockerfile: Dockerfile.tectonic
-    ports:
-      - "8081:8081"
-    restart: unless-stopped
-
-volumes:
-  n8n_data:
-  postgres_data:
-```
-
-- [ ] **Step 2: Create .env.example**
-
-```bash
-# n8n authentication
-N8N_USER=admin
-N8N_PASSWORD=changeme
-
-# PostgreSQL (n8n internal DB)
-POSTGRES_PASSWORD=changeme
-
-# EC2 public IP (for webhook URL)
-EC2_PUBLIC_IP=0.0.0.0
-```
-
-- [ ] **Step 3: Create setup-ec2.sh**
-
-```bash
-#!/bin/bash
-set -euo pipefail
-
-echo "=== NaukriBaba EC2 Setup ==="
-
-# Install Docker
-sudo yum update -y
-sudo yum install -y docker git
-sudo systemctl start docker
-sudo systemctl enable docker
-sudo usermod -aG docker ec2-user
-
-# Install Docker Compose
-sudo curl -L "https://github.com/docker/compose/releases/latest/download/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
-sudo chmod +x /usr/local/bin/docker-compose
-
-echo "=== Docker installed ==="
-echo "Log out and back in for docker group to take effect, then:"
-echo "  cd /home/ec2-user/naukribaba/infra"
-echo "  cp .env.example .env"
-echo "  # Edit .env with real values"
-echo "  docker-compose up -d"
-echo "  # Verify: curl http://localhost:5678 && curl http://localhost:8081/health"
-```
-
-- [ ] **Step 4: Provision EC2 via AWS CLI**
-
-```bash
-# Create security group
-aws ec2 create-security-group \
-  --group-name naukribaba-n8n \
-  --description "NaukriBaba n8n server" \
-  --region eu-west-1
-
-# Add inbound rules (replace YOUR_IP with your actual IP)
-MY_IP=$(curl -s ifconfig.me)/32
-SG_ID=$(aws ec2 describe-security-groups --group-names naukribaba-n8n --region eu-west-1 --query 'SecurityGroups[0].GroupId' --output text)
-
-aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 22 --cidr $MY_IP --region eu-west-1
-aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 5678 --cidr $MY_IP --region eu-west-1
-aws ec2 authorize-security-group-ingress --group-id $SG_ID --protocol tcp --port 8081 --cidr $MY_IP --region eu-west-1
-
-# Create key pair
-aws ec2 create-key-pair --key-name naukribaba-n8n --query 'KeyMaterial' --output text --region eu-west-1 > ~/.ssh/naukribaba-n8n.pem
-chmod 400 ~/.ssh/naukribaba-n8n.pem
-
-# Launch instance
-INSTANCE_ID=$(aws ec2 run-instances \
-  --image-id resolve:ssm:/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 \
-  --instance-type t3.small \
-  --key-name naukribaba-n8n \
-  --security-group-ids $SG_ID \
-  --block-device-mappings '[{"DeviceName":"/dev/xvda","Ebs":{"VolumeSize":20,"VolumeType":"gp3"}}]' \
-  --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=naukribaba-n8n}]' \
-  --region eu-west-1 \
-  --query 'Instances[0].InstanceId' --output text)
-
-echo "Instance: $INSTANCE_ID"
-
-# Allocate and associate Elastic IP
-ALLOC_ID=$(aws ec2 allocate-address --region eu-west-1 --query 'AllocationId' --output text)
-aws ec2 wait instance-running --instance-ids $INSTANCE_ID --region eu-west-1
-aws ec2 associate-address --instance-id $INSTANCE_ID --allocation-id $ALLOC_ID --region eu-west-1
-
-EC2_IP=$(aws ec2 describe-addresses --allocation-ids $ALLOC_ID --region eu-west-1 --query 'Addresses[0].PublicIp' --output text)
-echo "EC2 IP: $EC2_IP"
-echo "SSH: ssh -i ~/.ssh/naukribaba-n8n.pem ec2-user@$EC2_IP"
-```
-
-- [ ] **Step 5: Deploy to EC2**
-
-```bash
-# SSH into EC2 and run setup
-scp -i ~/.ssh/naukribaba-n8n.pem infra/setup-ec2.sh ec2-user@$EC2_IP:~
-ssh -i ~/.ssh/naukribaba-n8n.pem ec2-user@$EC2_IP 'bash setup-ec2.sh'
-
-# Log out and back in for docker group
-ssh -i ~/.ssh/naukribaba-n8n.pem ec2-user@$EC2_IP
-
-# Clone repo and start services
-git clone https://github.com/UT07/daily-job-hunt.git naukribaba
-cd naukribaba/infra
-cp .env.example .env
-# Edit .env with real passwords and EC2_PUBLIC_IP
-nano .env
-docker-compose up -d
-
-# Verify
-curl http://localhost:5678  # n8n UI
-curl http://localhost:8081/health  # tectonic
-```
-
-- [ ] **Step 6: Verify from local machine**
-
-```bash
-curl http://$EC2_IP:5678  # Should show n8n login page
-curl http://$EC2_IP:8081/health  # Should return {"status": "ok"}
-```
-
-- [ ] **Step 7: Commit infra files**
-
-```bash
-git add infra/ && git commit -m "feat: add EC2 infrastructure (Docker Compose, setup script, tectonic sidecar)"
-```
-
----
-
-## Task 6: Build n8n Workflows
+## Task 4: Build n8n Workflows
 
 This task is done in the n8n UI at `http://<ec2-ip>:5678`. Export workflows as JSON and save to `infra/workflows/` for version control.
 
@@ -1285,7 +967,195 @@ git add web/src/pages/JobWorkspace.jsx && git commit -m "feat: add inline editin
 
 ---
 
-## Task 12: Frontend Polish Bundle
+## Task 12: n8n Community Nodes + MCP Server
+
+**Files:**
+- Create: `infra/mcp_n8n_server.py`
+- Modify: `infra/docker-compose.yml` (add N8N_API_KEY env)
+
+- [ ] **Step 1: Enable n8n API and set API key**
+
+SSH into EC2 and add to the n8n environment in `docker-compose.yml`:
+
+```yaml
+environment:
+  # ... existing vars ...
+  - N8N_API_KEY=${N8N_API_KEY}
+```
+
+Add to `infra/.env`:
+```
+N8N_API_KEY=your-secret-api-key-here
+```
+
+Restart: `docker-compose up -d`
+
+- [ ] **Step 2: Install community nodes via n8n UI**
+
+In n8n UI → Settings → Community Nodes → Install:
+- `n8n-nodes-supabase` (direct Supabase reads/writes)
+
+The AWS S3, Gmail, HTTP Request, Schedule, Webhook, Merge, IF, SplitInBatches, and Code nodes are all built-in.
+
+- [ ] **Step 3: Create MCP server for n8n**
+
+Create `infra/mcp_n8n_server.py`:
+
+```python
+"""MCP server for n8n — lets Claude Code trigger pipelines, check status, manage workflows."""
+import json
+import os
+import httpx
+from mcp.server.fastmcp import FastMCP
+
+N8N_URL = os.environ.get("N8N_URL", "http://localhost:5678")
+N8N_API_KEY = os.environ.get("N8N_API_KEY", "")
+HEADERS = {"X-N8N-API-KEY": N8N_API_KEY, "Content-Type": "application/json"}
+
+mcp = FastMCP("n8n")
+
+
+@mcp.tool()
+def n8n_list_workflows() -> str:
+    """List all n8n workflows with their active/inactive status."""
+    r = httpx.get(f"{N8N_URL}/api/v1/workflows", headers=HEADERS, timeout=10)
+    r.raise_for_status()
+    workflows = r.json().get("data", [])
+    lines = []
+    for w in workflows:
+        status = "ACTIVE" if w.get("active") else "inactive"
+        lines.append(f"[{status}] {w['name']} (id: {w['id']})")
+    return "\n".join(lines) or "No workflows found"
+
+
+@mcp.tool()
+def n8n_trigger_pipeline(workflow_name: str = "Daily Pipeline") -> str:
+    """Trigger an n8n workflow by name. Defaults to 'Daily Pipeline'."""
+    # Find workflow by name
+    r = httpx.get(f"{N8N_URL}/api/v1/workflows", headers=HEADERS, timeout=10)
+    r.raise_for_status()
+    workflows = r.json().get("data", [])
+    match = next((w for w in workflows if workflow_name.lower() in w["name"].lower()), None)
+    if not match:
+        return f"Workflow '{workflow_name}' not found. Available: {[w['name'] for w in workflows]}"
+
+    # Trigger execution
+    r2 = httpx.post(
+        f"{N8N_URL}/api/v1/workflows/{match['id']}/execute",
+        headers=HEADERS, timeout=30,
+    )
+    r2.raise_for_status()
+    exec_data = r2.json().get("data", {})
+    return f"Triggered '{match['name']}' — execution ID: {exec_data.get('id', 'unknown')}"
+
+
+@mcp.tool()
+def n8n_get_executions(limit: int = 5) -> str:
+    """Get recent n8n workflow executions with status."""
+    r = httpx.get(
+        f"{N8N_URL}/api/v1/executions",
+        headers=HEADERS, params={"limit": limit}, timeout=10,
+    )
+    r.raise_for_status()
+    executions = r.json().get("data", [])
+    lines = []
+    for e in executions:
+        status = e.get("status", "unknown")
+        started = e.get("startedAt", "?")[:19]
+        workflow = e.get("workflowData", {}).get("name", "?")
+        duration = ""
+        if e.get("stoppedAt") and e.get("startedAt"):
+            from datetime import datetime
+            try:
+                start = datetime.fromisoformat(e["startedAt"].replace("Z", "+00:00"))
+                stop = datetime.fromisoformat(e["stoppedAt"].replace("Z", "+00:00"))
+                secs = int((stop - start).total_seconds())
+                duration = f" ({secs}s)"
+            except Exception:
+                pass
+        lines.append(f"[{status}] {workflow} — {started}{duration} (id: {e['id']})")
+    return "\n".join(lines) or "No executions found"
+
+
+@mcp.tool()
+def n8n_get_execution(execution_id: str) -> str:
+    """Get details of a specific execution — node results, errors, data."""
+    r = httpx.get(
+        f"{N8N_URL}/api/v1/executions/{execution_id}",
+        headers=HEADERS, timeout=10,
+    )
+    r.raise_for_status()
+    data = r.json().get("data", r.json())
+    
+    status = data.get("status", "unknown")
+    workflow = data.get("workflowData", {}).get("name", "?")
+    
+    # Summarize node results
+    node_summary = []
+    for node_name, node_data in (data.get("data", {}).get("resultData", {}).get("runData", {}) or {}).items():
+        if isinstance(node_data, list) and node_data:
+            last_run = node_data[-1]
+            items = len(last_run.get("data", {}).get("main", [[]])[0]) if last_run.get("data") else 0
+            error = last_run.get("error", {}).get("message", "") if last_run.get("error") else ""
+            node_summary.append(f"  {node_name}: {items} items" + (f" ERROR: {error}" if error else ""))
+    
+    result = f"Execution {execution_id}\nWorkflow: {workflow}\nStatus: {status}\n\nNodes:\n"
+    result += "\n".join(node_summary) or "  (no node data)"
+    return result
+
+
+@mcp.tool()
+def n8n_toggle_workflow(workflow_id: str, active: bool) -> str:
+    """Activate or deactivate an n8n workflow."""
+    r = httpx.patch(
+        f"{N8N_URL}/api/v1/workflows/{workflow_id}",
+        headers=HEADERS, json={"active": active}, timeout=10,
+    )
+    r.raise_for_status()
+    name = r.json().get("name", workflow_id)
+    return f"Workflow '{name}' is now {'ACTIVE' if active else 'INACTIVE'}"
+
+
+if __name__ == "__main__":
+    mcp.run()
+```
+
+- [ ] **Step 4: Add MCP server to project config**
+
+Create or update `.mcp.json` in the project root:
+
+```json
+{
+  "mcpServers": {
+    "n8n": {
+      "command": "python",
+      "args": ["infra/mcp_n8n_server.py"],
+      "env": {
+        "N8N_URL": "http://<EC2_IP>:5678",
+        "N8N_API_KEY": "<your-api-key>"
+      }
+    }
+  }
+}
+```
+
+- [ ] **Step 5: Test MCP tools**
+
+After EC2 is running, verify from Claude Code:
+- "List my n8n workflows" → calls `n8n_list_workflows`
+- "Run my pipeline" → calls `n8n_trigger_pipeline`
+- "How did today's pipeline go?" → calls `n8n_get_executions`
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add infra/mcp_n8n_server.py infra/docker-compose.yml .mcp.json
+git commit -m "feat: add n8n MCP server + community node config"
+```
+
+---
+
+## Task 13: Frontend Polish Bundle
 
 **Files:**
 - Create: `web/src/components/SkillTags.jsx`

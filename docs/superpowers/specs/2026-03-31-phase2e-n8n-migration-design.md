@@ -78,90 +78,27 @@ n8n calls Lambda endpoints via HTTP Request nodes. This means:
 
 ---
 
-## 3. EC2 Setup
+## 3. n8n Cloud Setup
 
-### Instance
-- **Type**: t3.small (2 vCPU, 2GB RAM) — comfortable headroom for n8n + PostgreSQL + tectonic
-- **Region**: eu-west-1 (Ireland, same as Lambda)
-- **OS**: Amazon Linux 2023
-- **Storage**: 20GB gp3 EBS
-- **Security Group**: SSH (22), n8n UI (5678), tectonic (8081) — restrict to your IP
-- **Key Pair**: new SSH key pair for this instance
-- **Elastic IP**: allocate one so the IP doesn't change on restart
+**Workspace**: https://naukribaba.app.n8n.cloud (already provisioned)
 
-### Docker Compose
+No self-hosted EC2 needed — n8n Cloud handles hosting, SSL, updates, and backups. This eliminates Docker Compose, EC2 provisioning, and security group management.
 
-```yaml
-version: '3.8'
-services:
-  n8n:
-    image: n8nio/n8n:latest
-    ports:
-      - "5678:5678"
-    environment:
-      - N8N_BASIC_AUTH_ACTIVE=true
-      - N8N_BASIC_AUTH_USER=${N8N_USER}
-      - N8N_BASIC_AUTH_PASSWORD=${N8N_PASSWORD}
-      - DB_TYPE=postgresdb
-      - DB_POSTGRESDB_HOST=postgres
-      - DB_POSTGRESDB_PORT=5432
-      - DB_POSTGRESDB_DATABASE=n8n
-      - DB_POSTGRESDB_USER=n8n
-      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
-      - GENERIC_TIMEZONE=Europe/Dublin
-      - N8N_SECURE_COOKIE=false
-    volumes:
-      - n8n_data:/home/node/.n8n
-    depends_on:
-      - postgres
-    restart: unless-stopped
+### What n8n Cloud provides:
+- Hosted n8n instance with SSL
+- Built-in nodes (HTTP Request, Gmail, Schedule, Webhook, Merge, IF, Code, etc.)
+- Community node installation via UI
+- REST API access for MCP integration
+- Webhook URLs (auto-generated, HTTPS)
 
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      - POSTGRES_USER=n8n
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - POSTGRES_DB=n8n
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    restart: unless-stopped
+### LaTeX Compilation
+Since there's no EC2 to host the tectonic sidecar, LaTeX compilation stays on Lambda via the new `POST /api/compile-latex` endpoint. Add a CloudWatch warmer (~$2-3/mo) in Phase 2B to eliminate cold starts for the editor use case. For the pipeline, cold starts are acceptable since compilation isn't interactive.
 
-  tectonic:
-    build:
-      context: .
-      dockerfile: Dockerfile.tectonic
-    ports:
-      - "8081:8081"
-    restart: unless-stopped
-
-volumes:
-  n8n_data:
-  postgres_data:
-```
-
-### Tectonic HTTP Sidecar
-
-A minimal Python HTTP server that accepts LaTeX source and returns compiled PDF:
-
-```
-POST /compile
-Content-Type: application/json
-Body: { "tex_source": "\\documentclass..." }
-Response: application/pdf (binary)
-```
-
-Dockerfile.tectonic:
-```dockerfile
-FROM python:3.11-slim
-RUN apt-get update && apt-get install -y curl && \
-    curl -fsSL https://drop-sh.fullyjustified.net | sh && \
-    mv tectonic /usr/local/bin/ && \
-    apt-get remove -y curl && apt-get autoremove -y
-COPY tectonic_server.py /app/
-WORKDIR /app
-EXPOSE 8081
-CMD ["python", "tectonic_server.py"]
-```
+### Cost
+- **n8n Cloud free tier**: 5 active workflows, 50 executions/day — sufficient for daily pipeline + nudges + reminders
+- **EC2**: $0 (not needed)
+- **CloudWatch warmer** (Phase 2B): ~$2-3/mo
+- **Total incremental**: ~$0/mo (free tier)
 
 ---
 
@@ -267,7 +204,64 @@ New endpoints needed for n8n integration:
 | `GET /api/pipeline/status` | New | Last run status, scraper health, next run time |
 | `PATCH /api/dashboard/jobs/{job_id}` | Modified | Extended to support editing location, apply_url (not just status) |
 
-### 4.8 Scoring Consistency Fix
+### 4.8 n8n Community Nodes
+
+Install these community/built-in nodes on the EC2 n8n instance:
+
+| Node | Purpose | Type |
+|------|---------|------|
+| HTTP Request | All scraper API calls, Lambda calls | Built-in |
+| Gmail | Email notifications, nudges, reminders | Built-in |
+| Schedule Trigger | Daily pipeline, weekly nudges | Built-in |
+| Webhook | "Run Pipeline Now" from frontend | Built-in |
+| Supabase | Direct DB reads/writes (jobs, config) | Community: `n8n-nodes-supabase` |
+| S3 | Upload PDFs after compilation | Community: `n8n-nodes-aws` or built-in AWS S3 |
+| Merge | Combine parallel scraper results | Built-in |
+| IF | Filter matched jobs, route errors | Built-in |
+| SplitInBatches | Process jobs one at a time | Built-in |
+| Code | Custom JS transforms (parse HTML, normalize job data) | Built-in |
+
+Install community nodes via n8n UI: Settings → Community Nodes → Install.
+
+### 4.9 MCP Server for n8n
+
+A lightweight MCP server that lets Claude Code interact with n8n directly from the terminal:
+
+**Tools exposed:**
+| Tool | Purpose |
+|------|---------|
+| `n8n_trigger_pipeline` | Trigger the daily pipeline workflow manually |
+| `n8n_get_executions` | List recent workflow executions with status |
+| `n8n_get_execution` | Get details of a specific execution (nodes, errors, data) |
+| `n8n_list_workflows` | List all workflows with active/inactive status |
+| `n8n_toggle_workflow` | Activate/deactivate a workflow |
+| `n8n_get_pipeline_status` | Get latest pipeline run results (jobs found/matched/tailored) |
+
+**Implementation:** Python FastMCP server that wraps n8n's REST API (`http://<ec2-ip>:5678/api/v1/`). n8n's API uses API key auth (`X-N8N-API-KEY` header).
+
+**Configuration:** Add to `.mcp.json` or Claude Code settings:
+```json
+{
+  "mcpServers": {
+    "n8n": {
+      "command": "python",
+      "args": ["infra/mcp_n8n_server.py"],
+      "env": {
+        "N8N_URL": "http://<ec2-ip>:5678",
+        "N8N_API_KEY": "<api-key>"
+      }
+    }
+  }
+}
+```
+
+**Use cases:**
+- "Run my pipeline" → triggers webhook
+- "How did today's pipeline go?" → fetches latest execution
+- "Which scrapers failed?" → parses execution node results
+- "Pause the pipeline" → deactivates the schedule trigger
+
+### 4.10 Scoring Consistency Fix
 
 **Problem**: A job scored 90 on the dashboard can score differently when the same JD is pasted in Add Job. This is because:
 - Pipeline `matcher.py` sends jobs in batches of 5 with both resumes
@@ -418,24 +412,22 @@ CREATE TABLE pipeline_metrics (
 
 | Component | Monthly Cost |
 |-----------|-------------|
-| EC2 t3.small (on-demand) | ~$17 |
-| EBS 20GB gp3 | ~$1.60 |
-| Elastic IP | $0 (attached to running instance) |
-| Data transfer | ~$1 (minimal) |
-| **Total** | **~$20/mo** |
+| n8n Cloud (free tier) | $0 |
+| Lambda (existing) | ~$1 |
+| S3 (existing) | ~$0.50 |
+| **Total incremental** | **~$0/mo** |
 
-Future optimization: 1-year Reserved Instance → ~$10/mo (40% savings).
+If n8n Cloud free tier limits are hit (50 executions/day), upgrade to Starter (~$20/mo) or migrate to self-hosted EC2 (~$20/mo).
 
 ---
 
 ## 8. Security
 
-- n8n UI protected by basic auth (N8N_BASIC_AUTH)
-- Security group: SSH + n8n port restricted to your IP only
-- tectonic sidecar on port 8081: restrict to EC2 internal + Lambda VPC (or your IP)
-- All API keys stored as n8n credentials (encrypted at rest)
+- n8n Cloud handles auth (email/password login, n8n manages SSL)
+- All API keys stored as n8n credentials (encrypted at rest by n8n Cloud)
 - Supabase service key stored as n8n credential (not in workflow JSON)
-- EC2 SSH key pair: store private key securely, don't commit
+- n8n API key for MCP server: store in local `.env`, don't commit
+- Webhook URLs are HTTPS (n8n Cloud provides SSL)
 
 ---
 
