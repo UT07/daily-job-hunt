@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
-import { Link } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { apiGet, apiPut, apiUpload, apiDelete } from '../api'
+import Card, { CardHeader, CardBody } from '../components/ui/Card'
+import Input from '../components/ui/Input'
+import Button from '../components/ui/Button'
 import LoginPage from './LoginPage'
 
 function TagInput({ value, onChange, placeholder }) {
@@ -30,17 +32,17 @@ function TagInput({ value, onChange, placeholder }) {
   }
 
   return (
-    <div className="w-full border border-slate-600 rounded-lg px-3 py-2 flex flex-wrap gap-2 bg-slate-700/50 focus-within:ring-2 focus-within:ring-blue-500 focus-within:border-blue-500">
+    <div className="w-full border-2 border-black px-3 py-2 flex flex-wrap gap-2 bg-white focus-within:shadow-brutal transition-shadow">
       {value.map((tag) => (
         <span
           key={tag}
-          className="inline-flex items-center gap-1 bg-blue-600/20 text-blue-300 text-sm px-2.5 py-0.5 rounded-full"
+          className="inline-flex items-center gap-1 bg-yellow-light border-2 border-yellow-dark text-black text-sm px-2.5 py-0.5 font-mono"
         >
           {tag}
           <button
             type="button"
             onClick={() => removeTag(tag)}
-            className="text-blue-400 hover:text-blue-300"
+            className="text-stone-500 hover:text-black"
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
@@ -55,47 +57,21 @@ function TagInput({ value, onChange, placeholder }) {
         onKeyDown={handleKeyDown}
         onBlur={addTag}
         placeholder={value.length === 0 ? placeholder : ''}
-        className="flex-1 min-w-[120px] outline-none text-sm bg-transparent text-white placeholder:text-slate-500"
+        className="flex-1 min-w-[120px] outline-none text-sm bg-transparent text-black placeholder:text-stone-400 font-mono"
       />
     </div>
-  )
-}
-
-function SectionHeader({ title, description }) {
-  return (
-    <div className="mb-4">
-      <h3 className="text-base font-semibold text-white">{title}</h3>
-      {description && <p className="text-sm text-slate-400 mt-0.5">{description}</p>}
-    </div>
-  )
-}
-
-function SaveButton({ onClick, saving, label = 'Save Changes' }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={saving}
-      className="bg-blue-600 hover:bg-blue-500 text-white px-5 py-2 rounded-lg text-sm font-medium transition
-        focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-slate-900
-        disabled:opacity-50 disabled:cursor-not-allowed
-        inline-flex items-center gap-2"
-    >
-      {saving && <span className="spinner" />}
-      {label}
-    </button>
   )
 }
 
 function StatusMessage({ status }) {
   if (!status) return null
   const styles = {
-    success: 'bg-emerald-900/30 border-emerald-800 text-emerald-300',
-    error: 'bg-red-900/30 border-red-800 text-red-300',
-    info: 'bg-blue-900/30 border-blue-800 text-blue-300',
+    success: 'bg-success-light border-2 border-success text-success',
+    error: 'bg-error-light border-2 border-error text-error',
+    info: 'bg-info-light border-2 border-info text-info',
   }
   return (
-    <div className={`mt-3 p-3 rounded-lg text-sm border ${styles[status.type] || styles.info}`}>
+    <div className={`mt-3 p-3 text-sm ${styles[status.type] || styles.info}`}>
       {status.message}
     </div>
   )
@@ -158,147 +134,147 @@ function ProfileSection({ profile, setProfile }) {
   }
 
   return (
-    <div className="bg-slate-800 rounded-xl shadow-lg border border-slate-700 p-6">
-      <SectionHeader title="Profile" description="Your personal and contact information." />
-
-      <div className="space-y-4">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1">Full Name</label>
-            <input
-              type="text"
-              value={profile.name}
-              onChange={(e) => updateField('name', e.target.value)}
-              placeholder="Utkarsh Singh"
-              className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder:text-slate-500"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1">Email</label>
-            <input
-              type="email"
-              value={profile.email}
-              disabled
-              className="w-full bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-400"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1">Phone</label>
-            <input
-              type="tel"
-              value={profile.phone}
-              onChange={(e) => updateField('phone', e.target.value)}
-              placeholder="+353 85 123 4567"
-              className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder:text-slate-500"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1">Location</label>
-            <input
-              type="text"
-              value={profile.location}
-              onChange={(e) => updateField('location', e.target.value)}
-              placeholder="Dublin, Ireland"
-              className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder:text-slate-500"
-            />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1">GitHub URL</label>
-            <input
-              type="url"
-              value={profile.github_url}
-              onChange={(e) => updateField('github_url', e.target.value)}
-              placeholder="https://github.com/username"
-              className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder:text-slate-500"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1">LinkedIn URL</label>
-            <input
-              type="url"
-              value={profile.linkedin_url}
-              onChange={(e) => updateField('linkedin_url', e.target.value)}
-              placeholder="https://linkedin.com/in/username"
-              className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder:text-slate-500"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1">Website</label>
-            <input
-              type="url"
-              value={profile.website}
-              onChange={(e) => updateField('website', e.target.value)}
-              placeholder="https://yoursite.com"
-              className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder:text-slate-500"
-            />
-          </div>
-        </div>
-
+    <Card>
+      <CardHeader>
         <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1">Visa Status</label>
-          <input
-            type="text"
-            value={profile.visa_status}
-            onChange={(e) => updateField('visa_status', e.target.value)}
-            placeholder="e.g. Stamp 1G, EU Citizen, H-1B"
-            className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder:text-slate-500"
-          />
+          <h3 className="text-base font-heading font-bold text-black">Profile</h3>
+          <p className="text-sm text-stone-500 mt-0.5">Your personal and contact information.</p>
+        </div>
+      </CardHeader>
+      <CardBody>
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-bold text-black mb-1">Full Name</label>
+              <Input
+                type="text"
+                value={profile.name}
+                onChange={(e) => updateField('name', e.target.value)}
+                placeholder="Utkarsh Singh"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-black mb-1">Email</label>
+              <Input
+                type="email"
+                value={profile.email}
+                disabled
+                className="opacity-60 cursor-not-allowed"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-black mb-1">Phone</label>
+              <Input
+                type="tel"
+                value={profile.phone}
+                onChange={(e) => updateField('phone', e.target.value)}
+                placeholder="+353 85 123 4567"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-black mb-1">Location</label>
+              <Input
+                type="text"
+                value={profile.location}
+                onChange={(e) => updateField('location', e.target.value)}
+                placeholder="Dublin, Ireland"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-bold text-black mb-1">GitHub URL</label>
+              <Input
+                type="url"
+                value={profile.github_url}
+                onChange={(e) => updateField('github_url', e.target.value)}
+                placeholder="https://github.com/username"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-black mb-1">LinkedIn URL</label>
+              <Input
+                type="url"
+                value={profile.linkedin_url}
+                onChange={(e) => updateField('linkedin_url', e.target.value)}
+                placeholder="https://linkedin.com/in/username"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-black mb-1">Website</label>
+              <Input
+                type="url"
+                value={profile.website}
+                onChange={(e) => updateField('website', e.target.value)}
+                placeholder="https://yoursite.com"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-bold text-black mb-1">Visa Status</label>
+            <Input
+              type="text"
+              value={profile.visa_status}
+              onChange={(e) => updateField('visa_status', e.target.value)}
+              placeholder="e.g. Stamp 1G, EU Citizen, H-1B"
+            />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="block text-sm font-bold text-black">Work Authorizations</label>
+              <button
+                type="button"
+                onClick={addWorkAuth}
+                className="text-sm text-info hover:underline font-bold"
+              >
+                + Add country
+              </button>
+            </div>
+            <div className="space-y-2">
+              {profile.work_authorizations.map((auth, i) => (
+                <div key={i} className="flex gap-2 items-center">
+                  <Input
+                    type="text"
+                    value={auth.country}
+                    onChange={(e) => updateWorkAuth(i, 'country', e.target.value)}
+                    placeholder="Country (e.g. Ireland)"
+                  />
+                  <Input
+                    type="text"
+                    value={auth.status}
+                    onChange={(e) => updateWorkAuth(i, 'status', e.target.value)}
+                    placeholder="Status (e.g. Stamp 1G)"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeWorkAuth(i)}
+                    className="text-stone-400 hover:text-error p-1 transition shrink-0"
+                  >
+                    <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+              {profile.work_authorizations.length === 0 && (
+                <p className="text-sm text-stone-400 italic">No work authorizations added yet.</p>
+              )}
+            </div>
+          </div>
         </div>
 
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <label className="block text-sm font-medium text-slate-300">Work Authorizations</label>
-            <button
-              type="button"
-              onClick={addWorkAuth}
-              className="text-sm text-blue-400 hover:text-blue-300 font-medium"
-            >
-              + Add country
-            </button>
-          </div>
-          <div className="space-y-2">
-            {profile.work_authorizations.map((auth, i) => (
-              <div key={i} className="flex gap-2 items-center">
-                <input
-                  type="text"
-                  value={auth.country}
-                  onChange={(e) => updateWorkAuth(i, 'country', e.target.value)}
-                  placeholder="Country (e.g. Ireland)"
-                  className="flex-1 bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder:text-slate-500"
-                />
-                <input
-                  type="text"
-                  value={auth.status}
-                  onChange={(e) => updateWorkAuth(i, 'status', e.target.value)}
-                  placeholder="Status (e.g. Stamp 1G)"
-                  className="flex-1 bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500 placeholder:text-slate-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => removeWorkAuth(i)}
-                  className="text-slate-400 hover:text-red-400 p-1 transition"
-                >
-                  <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                </button>
-              </div>
-            ))}
-            {profile.work_authorizations.length === 0 && (
-              <p className="text-sm text-slate-500 italic">No work authorizations added yet.</p>
-            )}
-          </div>
+        <div className="mt-5 flex items-center gap-3">
+          <Button onClick={handleSave} disabled={saving}>
+            {saving && <span className="spinner" />}
+            Save Changes
+          </Button>
+          <StatusMessage status={status} />
         </div>
-      </div>
-
-      <div className="mt-5 flex items-center gap-3">
-        <SaveButton onClick={handleSave} saving={saving} />
-        <StatusMessage status={status} />
-      </div>
-    </div>
+      </CardBody>
+    </Card>
   )
 }
 
@@ -362,73 +338,82 @@ function ResumeSection() {
   }
 
   return (
-    <div className="bg-slate-800 rounded-xl shadow-lg border border-slate-700 p-6">
-      <SectionHeader title="Resumes" description="Upload and manage your resume files." />
-
-      {resumes.length > 0 ? (
-        <ul className="mb-4 divide-y divide-slate-700 border border-slate-700 rounded-lg overflow-hidden">
-          {resumes.map((resume) => (
-            <li key={resume.id} className="flex items-center justify-between px-4 py-3 bg-slate-700/30 hover:bg-slate-700/50 transition">
-              <div>
-                <p className="text-sm font-medium text-white">{resume.filename || resume.name || `Resume ${resume.id}`}</p>
-                {resume.uploaded_at && (
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    {new Date(resume.uploaded_at).toLocaleDateString()}
-                  </p>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={() => handleDelete(resume.id)}
-                className="text-slate-400 hover:text-red-400 p-1.5 rounded transition"
-                title="Delete resume"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                </svg>
-              </button>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <div className="text-sm text-slate-400 mb-4 p-3 bg-slate-700/50 rounded-lg border border-slate-600">
-          No resumes uploaded yet.
+    <Card>
+      <CardHeader>
+        <div>
+          <h3 className="text-base font-heading font-bold text-black">Resumes</h3>
+          <p className="text-sm text-stone-500 mt-0.5">Upload and manage your resume files.</p>
         </div>
-      )}
-
-      <div
-        onDrop={handleDrop}
-        onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
-        onDragLeave={() => setDragOver(false)}
-        onClick={() => fileInputRef.current?.click()}
-        className={`border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition
-          ${dragOver ? 'border-blue-400 bg-blue-500/10' : 'border-slate-600 hover:border-slate-500 hover:bg-slate-700/50'}`}
-      >
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".pdf"
-          className="hidden"
-          onChange={(e) => handleFile(e.target.files[0])}
-        />
-        <svg className="w-8 h-8 mx-auto text-slate-400 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z" />
-        </svg>
-        {resumeFile ? (
-          <p className="text-sm font-medium text-white">{resumeFile.name} ({(resumeFile.size / 1024).toFixed(1)} KB)</p>
+      </CardHeader>
+      <CardBody>
+        {resumes.length > 0 ? (
+          <ul className="mb-4 divide-y divide-stone-200 border-2 border-black overflow-hidden">
+            {resumes.map((resume) => (
+              <li key={resume.id} className="flex items-center justify-between px-4 py-3 bg-white hover:bg-yellow-light transition-colors">
+                <div>
+                  <p className="text-sm font-bold text-black">{resume.filename || resume.name || `Resume ${resume.id}`}</p>
+                  {resume.uploaded_at && (
+                    <p className="text-xs text-stone-400 mt-0.5 font-mono">
+                      {new Date(resume.uploaded_at).toLocaleDateString()}
+                    </p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleDelete(resume.id)}
+                  className="text-stone-400 hover:text-error p-1.5 transition"
+                  title="Delete resume"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                  </svg>
+                </button>
+              </li>
+            ))}
+          </ul>
         ) : (
-          <p className="text-sm text-slate-400">Drop a PDF here, or click to browse</p>
+          <div className="text-sm text-stone-500 mb-4 p-3 bg-stone-100 border-2 border-stone-300">
+            No resumes uploaded yet.
+          </div>
         )}
-      </div>
 
-      {resumeFile && (
-        <div className="mt-4">
-          <SaveButton onClick={handleUpload} saving={uploading} label="Upload & Parse" />
+        <div
+          onDrop={handleDrop}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+          onDragLeave={() => setDragOver(false)}
+          onClick={() => fileInputRef.current?.click()}
+          className={`border-2 border-dashed p-8 text-center cursor-pointer transition
+            ${dragOver ? 'border-black bg-yellow-light' : 'border-stone-400 hover:border-black hover:bg-stone-50'}`}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf"
+            className="hidden"
+            onChange={(e) => handleFile(e.target.files[0])}
+          />
+          <svg className="w-8 h-8 mx-auto text-stone-400 mb-2" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z" />
+          </svg>
+          {resumeFile ? (
+            <p className="text-sm font-bold text-black">{resumeFile.name} ({(resumeFile.size / 1024).toFixed(1)} KB)</p>
+          ) : (
+            <p className="text-sm text-stone-500">Drop a PDF here, or click to browse</p>
+          )}
         </div>
-      )}
 
-      <StatusMessage status={uploadStatus} />
-    </div>
+        {resumeFile && (
+          <div className="mt-4">
+            <Button onClick={handleUpload} disabled={uploading}>
+              {uploading && <span className="spinner" />}
+              Upload &amp; Parse
+            </Button>
+          </div>
+        )}
+
+        <StatusMessage status={uploadStatus} />
+      </CardBody>
+    </Card>
   )
 }
 
@@ -467,106 +452,113 @@ function PreferencesSection({ prefs, setPrefs }) {
   }
 
   return (
-    <div className="bg-slate-800 rounded-xl shadow-lg border border-slate-700 p-6">
-      <SectionHeader title="Search Preferences" description="Configure your automated job search." />
-
-      <div className="space-y-4">
+    <Card>
+      <CardHeader>
         <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1">Search Queries</label>
-          <TagInput
-            value={prefs.queries}
-            onChange={(v) => updateField('queries', v)}
-            placeholder="e.g. DevOps Engineer, SRE, Platform Engineer"
-          />
-          <p className="text-xs text-slate-500 mt-1">Press Enter to add a keyword</p>
+          <h3 className="text-base font-heading font-bold text-black">Search Preferences</h3>
+          <p className="text-sm text-stone-500 mt-0.5">Configure your automated job search.</p>
         </div>
+      </CardHeader>
+      <CardBody>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-bold text-black mb-1">Search Queries</label>
+            <TagInput
+              value={prefs.queries}
+              onChange={(v) => updateField('queries', v)}
+              placeholder="e.g. DevOps Engineer, SRE, Platform Engineer"
+            />
+            <p className="text-xs text-stone-400 mt-1 font-mono">Press Enter to add a keyword</p>
+          </div>
 
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-1">Locations</label>
-          <TagInput
-            value={prefs.locations}
-            onChange={(v) => updateField('locations', v)}
-            placeholder="e.g. Dublin, Remote, London"
-          />
-          <p className="text-xs text-slate-500 mt-1">Press Enter to add a location</p>
-        </div>
+          <div>
+            <label className="block text-sm font-bold text-black mb-1">Locations</label>
+            <TagInput
+              value={prefs.locations}
+              onChange={(v) => updateField('locations', v)}
+              placeholder="e.g. Dublin, Remote, London"
+            />
+            <p className="text-xs text-stone-400 mt-1 font-mono">Press Enter to add a location</p>
+          </div>
 
-        <div>
-          <label className="block text-sm font-medium text-slate-300 mb-2">Experience Level</label>
-          <div className="flex flex-wrap gap-3">
-            {[
-              { value: 'entry_level', label: 'Entry Level' },
-              { value: 'mid_level', label: 'Mid Level' },
-              { value: 'senior', label: 'Senior' },
-            ].map(({ value, label }) => (
-              <label key={value} className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={prefs.experience_levels.includes(value)}
-                  onChange={() => toggleLevel(value)}
-                  className="w-4 h-4 rounded border-slate-600 bg-slate-700 text-blue-600 focus:ring-blue-500"
-                />
-                <span className="text-sm text-slate-300">{label}</span>
+          <div>
+            <label className="block text-sm font-bold text-black mb-2">Experience Level</label>
+            <div className="flex flex-wrap gap-3">
+              {[
+                { value: 'entry_level', label: 'Entry Level' },
+                { value: 'mid_level', label: 'Mid Level' },
+                { value: 'senior', label: 'Senior' },
+              ].map(({ value, label }) => (
+                <label key={value} className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={prefs.experience_levels.includes(value)}
+                    onChange={() => toggleLevel(value)}
+                    className="w-4 h-4 border-2 border-black accent-black"
+                  />
+                  <span className="text-sm font-bold text-black">{label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-bold text-black mb-1">Days Back</label>
+              <Input
+                type="number"
+                min={1}
+                max={30}
+                value={prefs.days_back}
+                onChange={(e) => updateField('days_back', parseInt(e.target.value) || 7)}
+              />
+              <p className="text-xs text-stone-400 mt-1 font-mono">How far back to search</p>
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-black mb-1">Max Jobs per Run</label>
+              <Input
+                type="number"
+                min={1}
+                max={100}
+                value={prefs.max_jobs_per_run}
+                onChange={(e) => updateField('max_jobs_per_run', parseInt(e.target.value) || 15)}
+              />
+              <p className="text-xs text-stone-400 mt-1 font-mono">Limit per pipeline run</p>
+            </div>
+            <div>
+              <label className="block text-sm font-bold text-black mb-1">
+                Min Match Score: <span className="text-yellow-dark font-mono">{prefs.min_match_score}</span>
               </label>
-            ))}
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1">Days Back</label>
-            <input
-              type="number"
-              min={1}
-              max={30}
-              value={prefs.days_back}
-              onChange={(e) => updateField('days_back', parseInt(e.target.value) || 7)}
-              className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            />
-            <p className="text-xs text-slate-500 mt-1">How far back to search</p>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1">Max Jobs per Run</label>
-            <input
-              type="number"
-              min={1}
-              max={100}
-              value={prefs.max_jobs_per_run}
-              onChange={(e) => updateField('max_jobs_per_run', parseInt(e.target.value) || 15)}
-              className="w-full bg-slate-700/50 border border-slate-600 rounded-lg px-3 py-2 text-sm text-white focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-            />
-            <p className="text-xs text-slate-500 mt-1">Limit per pipeline run</p>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-300 mb-1">
-              Min Match Score: <span className="text-blue-400">{prefs.min_match_score}</span>
-            </label>
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={prefs.min_match_score}
-              onChange={(e) => updateField('min_match_score', parseInt(e.target.value))}
-              className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500"
-            />
-            <div className="flex justify-between text-xs text-slate-500 mt-1">
-              <span>0</span>
-              <span>100</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={prefs.min_match_score}
+                onChange={(e) => updateField('min_match_score', parseInt(e.target.value))}
+                className="w-full h-2 bg-stone-200 rounded appearance-none cursor-pointer accent-black"
+              />
+              <div className="flex justify-between text-xs text-stone-400 mt-1 font-mono">
+                <span>0</span>
+                <span>100</span>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
-      <div className="mt-5 flex items-center gap-3">
-        <SaveButton onClick={handleSave} saving={saving} />
-        <StatusMessage status={status} />
-      </div>
-    </div>
+        <div className="mt-5 flex items-center gap-3">
+          <Button onClick={handleSave} disabled={saving}>
+            {saving && <span className="spinner" />}
+            Save Changes
+          </Button>
+          <StatusMessage status={status} />
+        </div>
+      </CardBody>
+    </Card>
   )
 }
 
 export default function Settings() {
-  const { user, loading, signOut } = useAuth()
+  const { user, loading } = useAuth()
 
   const [profile, setProfile] = useState({
     name: '',
@@ -621,8 +613,8 @@ export default function Settings() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
-        <div className="text-slate-400 text-sm">Loading...</div>
+      <div className="flex items-center justify-center py-20">
+        <div className="text-stone-400 text-sm font-mono">Loading...</div>
       </div>
     )
   }
@@ -632,50 +624,13 @@ export default function Settings() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-900">
-      {/* Header */}
-      <header className="bg-slate-800 border-b border-slate-700 sticky top-0 z-10">
-        <div className="max-w-4xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="text-2xl">🎯</span>
-            <h1 className="text-xl font-bold text-white">Settings</h1>
-          </div>
-          <div className="flex items-center gap-4">
-            <Link
-              to="/"
-              className="text-sm text-slate-400 hover:text-white font-medium transition"
-            >
-              Tailor
-            </Link>
-            <Link
-              to="/dashboard"
-              className="text-sm text-slate-400 hover:text-white font-medium transition"
-            >
-              Dashboard
-            </Link>
-            <span className="text-sm text-slate-500 hidden sm:block">{user?.email}</span>
-            <button
-              onClick={signOut}
-              className="text-sm text-slate-400 hover:text-white font-medium transition"
-            >
-              Sign out
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-3xl mx-auto px-4 py-8 space-y-6">
+    <div>
+      <h1 className="text-2xl font-heading font-bold text-black tracking-tight mb-6">Settings</h1>
+      <div className="space-y-6">
         <ProfileSection profile={profile} setProfile={setProfile} />
         <ResumeSection />
         <PreferencesSection prefs={prefs} setPrefs={setPrefs} />
-      </main>
-
-      {/* Footer */}
-      <footer className="border-t border-slate-700 mt-12">
-        <div className="max-w-4xl mx-auto px-4 py-4 text-center text-xs text-slate-500">
-          Built by Utkarsh Singh -- FastAPI + React + Tailwind
-        </div>
-      </footer>
+      </div>
     </div>
   )
 }
