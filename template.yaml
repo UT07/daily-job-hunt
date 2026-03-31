@@ -71,6 +71,59 @@ Resources:
     Metadata:
       BuildMethod: python3.11
 
+  # --- Scraper Lambda Functions ---
+  ScrapeApifyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-scrape-apify
+      Handler: lambdas/scrapers/scrape_apify.handler
+      Runtime: python3.11
+      Timeout: 300
+      MemorySize: 256
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: /naukribaba/*
+
+  ScrapeAdzunaFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-scrape-adzuna
+      Handler: lambdas/scrapers/scrape_adzuna.handler
+      Runtime: python3.11
+      Timeout: 30
+      MemorySize: 128
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: /naukribaba/*
+
+  ScrapeHNFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-scrape-hn
+      Handler: lambdas/scrapers/scrape_hn.handler
+      Runtime: python3.11
+      Timeout: 60
+      MemorySize: 128
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: /naukribaba/*
+
+  ScrapeYCFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-scrape-yc
+      Handler: lambdas/scrapers/scrape_yc.handler
+      Runtime: python3.11
+      Timeout: 30
+      MemorySize: 128
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: /naukribaba/*
+
   # --- Lambda Function (Docker container with tectonic) ---
   JobHuntApi:
     Type: AWS::Serverless::Function
