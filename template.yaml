@@ -302,6 +302,554 @@ Resources:
         - SSMParameterReadPolicy:
             ParameterName: /naukribaba/*
 
+  # --- IAM Role for Step Functions ---
+  StepFunctionsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: naukribaba-stepfunctions-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeLambdas
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource:
+                  - !GetAtt LoadConfigFunction.Arn
+                  - !GetAtt ScrapeApifyFunction.Arn
+                  - !GetAtt ScrapeAdzunaFunction.Arn
+                  - !GetAtt ScrapeHNFunction.Arn
+                  - !GetAtt ScrapeYCFunction.Arn
+                  - !GetAtt MergeDedupFunction.Arn
+                  - !GetAtt ScoreBatchFunction.Arn
+                  - !GetAtt TailorResumeFunction.Arn
+                  - !GetAtt CompileLatexFunction.Arn
+                  - !GetAtt GenerateCoverLetterFunction.Arn
+                  - !GetAtt FindContactsFunction.Arn
+                  - !GetAtt SaveJobFunction.Arn
+                  - !GetAtt SaveMetricsFunction.Arn
+                  - !GetAtt SendEmailFunction.Arn
+                  - !GetAtt SelfImproveFunction.Arn
+                  - !GetAtt NotifyErrorFunction.Arn
+                  - !GetAtt CheckExpiryFunction.Arn
+
+  # --- Daily Pipeline State Machine ---
+  DailyPipelineStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: naukribaba-daily-pipeline
+      RoleArn: !GetAtt StepFunctionsRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "NaukriBaba Daily Pipeline: scrape → score → tailor → email",
+          "StartAt": "LoadUserConfig",
+          "States": {
+            "LoadUserConfig": {
+              "Type": "Task",
+              "Resource": "${LoadConfigFunction.Arn}",
+              "ResultPath": "$",
+              "Next": "RunScrapers",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyError"}]
+            },
+            "RunScrapers": {
+              "Type": "Parallel",
+              "ResultPath": "$.scraper_results",
+              "Next": "MergeAndDedup",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyError"}],
+              "Branches": [
+                {
+                  "StartAt": "ScrapeLinkedIn",
+                  "States": {
+                    "ScrapeLinkedIn": {
+                      "Type": "Task",
+                      "Resource": "${ScrapeApifyFunction.Arn}",
+                      "Parameters": {
+                        "actor_id": "hMvNSpz3JnHgl5jkh",
+                        "source": "linkedin",
+                        "normalizer": "linkedin",
+                        "query_hash.$": "$.query_hash",
+                        "run_input": {
+                          "searchUrl.$": "States.Format('https://www.linkedin.com/jobs/search/?keywords={}&location=Ireland', $.queries[0])",
+                          "maxItems": 50
+                        }
+                      },
+                      "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 2, "BackoffRate": 2}],
+                      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "LinkedInFailed"}],
+                      "End": true
+                    },
+                    "LinkedInFailed": {
+                      "Type": "Pass",
+                      "Result": {"count": 0, "source": "linkedin", "error": "scraper_failed"},
+                      "End": true
+                    }
+                  }
+                },
+                {
+                  "StartAt": "ScrapeIndeed",
+                  "States": {
+                    "ScrapeIndeed": {
+                      "Type": "Task",
+                      "Resource": "${ScrapeApifyFunction.Arn}",
+                      "Parameters": {
+                        "actor_id": "misceres/indeed-scraper",
+                        "source": "indeed",
+                        "normalizer": "indeed",
+                        "query_hash.$": "$.query_hash",
+                        "run_input": {
+                          "position.$": "$.queries[0]",
+                          "country": "IE",
+                          "maxItems": 50
+                        }
+                      },
+                      "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 2, "BackoffRate": 2}],
+                      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "IndeedFailed"}],
+                      "End": true
+                    },
+                    "IndeedFailed": {
+                      "Type": "Pass",
+                      "Result": {"count": 0, "source": "indeed", "error": "scraper_failed"},
+                      "End": true
+                    }
+                  }
+                },
+                {
+                  "StartAt": "ScrapeGlassdoor",
+                  "States": {
+                    "ScrapeGlassdoor": {
+                      "Type": "Task",
+                      "Resource": "${ScrapeApifyFunction.Arn}",
+                      "Parameters": {
+                        "actor_id": "bebity/glassdoor-scraper",
+                        "source": "glassdoor",
+                        "normalizer": "glassdoor",
+                        "query_hash.$": "$.query_hash",
+                        "run_input": {
+                          "searchUrl.$": "States.Format('https://www.glassdoor.com/Job/ireland-{}-jobs-SRCH_IL.0,7_IN104_KO8,25.htm', $.queries[0])",
+                          "maxItems": 50
+                        }
+                      },
+                      "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 2, "BackoffRate": 2}],
+                      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "GlassdoorFailed"}],
+                      "End": true
+                    },
+                    "GlassdoorFailed": {
+                      "Type": "Pass",
+                      "Result": {"count": 0, "source": "glassdoor", "error": "scraper_failed"},
+                      "End": true
+                    }
+                  }
+                },
+                {
+                  "StartAt": "ScrapeAdzuna",
+                  "States": {
+                    "ScrapeAdzuna": {
+                      "Type": "Task",
+                      "Resource": "${ScrapeAdzunaFunction.Arn}",
+                      "Parameters": {
+                        "queries.$": "$.queries",
+                        "query_hash.$": "$.query_hash"
+                      },
+                      "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 10, "MaxAttempts": 2, "BackoffRate": 2}],
+                      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "AdzunaFailed"}],
+                      "End": true
+                    },
+                    "AdzunaFailed": {
+                      "Type": "Pass",
+                      "Result": {"count": 0, "source": "adzuna", "error": "scraper_failed"},
+                      "End": true
+                    }
+                  }
+                },
+                {
+                  "StartAt": "ScrapeHN",
+                  "States": {
+                    "ScrapeHN": {
+                      "Type": "Task",
+                      "Resource": "${ScrapeHNFunction.Arn}",
+                      "Parameters": {
+                        "query_hash.$": "$.query_hash"
+                      },
+                      "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 10, "MaxAttempts": 2, "BackoffRate": 2}],
+                      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "HNFailed"}],
+                      "End": true
+                    },
+                    "HNFailed": {
+                      "Type": "Pass",
+                      "Result": {"count": 0, "source": "hn_hiring", "error": "scraper_failed"},
+                      "End": true
+                    }
+                  }
+                },
+                {
+                  "StartAt": "ScrapeYC",
+                  "States": {
+                    "ScrapeYC": {
+                      "Type": "Task",
+                      "Resource": "${ScrapeYCFunction.Arn}",
+                      "Parameters": {
+                        "queries.$": "$.queries",
+                        "query_hash.$": "$.query_hash"
+                      },
+                      "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 10, "MaxAttempts": 2, "BackoffRate": 2}],
+                      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "YCFailed"}],
+                      "End": true
+                    },
+                    "YCFailed": {
+                      "Type": "Pass",
+                      "Result": {"count": 0, "source": "yc", "error": "scraper_failed"},
+                      "End": true
+                    }
+                  }
+                }
+              ]
+            },
+            "MergeAndDedup": {
+              "Type": "Task",
+              "Resource": "${MergeDedupFunction.Arn}",
+              "ResultPath": "$.dedup_result",
+              "Next": "ScoreBatch",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyError"}]
+            },
+            "ScoreBatch": {
+              "Type": "Task",
+              "Resource": "${ScoreBatchFunction.Arn}",
+              "Parameters": {
+                "user_id.$": "$.user_id",
+                "new_job_hashes.$": "$.dedup_result.new_job_hashes",
+                "min_match_score.$": "$.min_match_score"
+              },
+              "ResultPath": "$.score_result",
+              "Next": "ProcessMatchedJobs",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyError"}]
+            },
+            "ProcessMatchedJobs": {
+              "Type": "Map",
+              "ItemsPath": "$.score_result.matched_items",
+              "MaxConcurrency": 3,
+              "ResultPath": "$.processed_jobs",
+              "Next": "SavePipelineMetrics",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SavePipelineMetrics"}],
+              "ItemProcessor": {
+                "ProcessorConfig": {
+                  "Mode": "INLINE"
+                },
+                "StartAt": "TailorResume",
+                "States": {
+                  "TailorResume": {
+                    "Type": "Task",
+                    "Resource": "${TailorResumeFunction.Arn}",
+                    "ResultPath": "$.tailor_result",
+                    "Next": "CompileResume",
+                    "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 10, "MaxAttempts": 1, "BackoffRate": 2}],
+                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SaveJobAfterError"}]
+                  },
+                  "CompileResume": {
+                    "Type": "Task",
+                    "Resource": "${CompileLatexFunction.Arn}",
+                    "Parameters": {
+                      "tex_s3_key.$": "$.tailor_result.tex_s3_key",
+                      "job_hash.$": "$.job_hash",
+                      "user_id.$": "$.user_id",
+                      "doc_type": "resume"
+                    },
+                    "ResultPath": "$.compile_result",
+                    "Next": "GenerateCoverLetter",
+                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "FindContacts"}]
+                  },
+                  "GenerateCoverLetter": {
+                    "Type": "Task",
+                    "Resource": "${GenerateCoverLetterFunction.Arn}",
+                    "Parameters": {
+                      "job_hash.$": "$.job_hash",
+                      "user_id.$": "$.user_id"
+                    },
+                    "ResultPath": "$.cover_letter_result",
+                    "Next": "CompileCoverLetter",
+                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "FindContacts"}]
+                  },
+                  "CompileCoverLetter": {
+                    "Type": "Task",
+                    "Resource": "${CompileLatexFunction.Arn}",
+                    "Parameters": {
+                      "tex_s3_key.$": "$.cover_letter_result.tex_s3_key",
+                      "job_hash.$": "$.job_hash",
+                      "user_id.$": "$.user_id",
+                      "doc_type": "cover_letter"
+                    },
+                    "ResultPath": "$.cover_compile_result",
+                    "Next": "FindContacts",
+                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "FindContacts"}]
+                  },
+                  "FindContacts": {
+                    "Type": "Task",
+                    "Resource": "${FindContactsFunction.Arn}",
+                    "Parameters": {
+                      "job_hash.$": "$.job_hash",
+                      "user_id.$": "$.user_id"
+                    },
+                    "ResultPath": "$.contacts_result",
+                    "Next": "SaveJob",
+                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SaveJob"}]
+                  },
+                  "SaveJob": {
+                    "Type": "Task",
+                    "Resource": "${SaveJobFunction.Arn}",
+                    "Parameters": {
+                      "job_hash.$": "$.job_hash",
+                      "user_id.$": "$.user_id",
+                      "resume_pdf_s3_key.$": "$.compile_result.pdf_s3_key",
+                      "cover_letter_pdf_s3_key.$": "$.cover_compile_result.pdf_s3_key"
+                    },
+                    "End": true,
+                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SaveJobAfterError"}]
+                  },
+                  "SaveJobAfterError": {
+                    "Type": "Task",
+                    "Resource": "${SaveJobFunction.Arn}",
+                    "Parameters": {
+                      "job_hash.$": "$.job_hash",
+                      "user_id.$": "$.user_id"
+                    },
+                    "End": true
+                  }
+                }
+              }
+            },
+            "SavePipelineMetrics": {
+              "Type": "Task",
+              "Resource": "${SaveMetricsFunction.Arn}",
+              "Parameters": {
+                "user_id.$": "$.user_id",
+                "scraper_results.$": "$.scraper_results"
+              },
+              "ResultPath": "$.metrics_saved",
+              "Next": "SendEmailSummary",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SendEmailSummary"}]
+            },
+            "SendEmailSummary": {
+              "Type": "Task",
+              "Resource": "${SendEmailFunction.Arn}",
+              "Parameters": {
+                "user_id.$": "$.user_id",
+                "matched_count.$": "$.score_result.matched_count"
+              },
+              "ResultPath": "$.email_result",
+              "Next": "SelfImprove",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SelfImprove"}]
+            },
+            "SelfImprove": {
+              "Type": "Task",
+              "Resource": "${SelfImproveFunction.Arn}",
+              "Parameters": {
+                "user_id.$": "$.user_id"
+              },
+              "End": true,
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PipelineComplete"}]
+            },
+            "NotifyError": {
+              "Type": "Task",
+              "Resource": "${NotifyErrorFunction.Arn}",
+              "Parameters": {
+                "user_id.$": "$.user_id",
+                "error.$": "$.error",
+                "step": "pipeline"
+              },
+              "Next": "PipelineComplete"
+            },
+            "PipelineComplete": {
+              "Type": "Succeed"
+            }
+          }
+        }
+
+  # --- Single-Job Pipeline State Machine ---
+  SingleJobPipelineStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName: naukribaba-single-job-pipeline
+      RoleArn: !GetAtt StepFunctionsRole.Arn
+      DefinitionString: !Sub |
+        {
+          "Comment": "NaukriBaba Single Job Pipeline: score → tailor → compile → save",
+          "StartAt": "ScoreSingleJob",
+          "States": {
+            "ScoreSingleJob": {
+              "Type": "Task",
+              "Resource": "${ScoreBatchFunction.Arn}",
+              "Parameters": {
+                "user_id.$": "$.user_id",
+                "new_job_hashes.$": "States.Array($.job_hash)",
+                "min_match_score": 0
+              },
+              "ResultPath": "$.score_result",
+              "Next": "CheckScoreExists",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "JobFailed"}]
+            },
+            "CheckScoreExists": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.score_result.matched_count",
+                  "NumericGreaterThan": 0,
+                  "Next": "ExtractMatchedJob"
+                }
+              ],
+              "Default": "JobFailed"
+            },
+            "ExtractMatchedJob": {
+              "Type": "Pass",
+              "Parameters": {
+                "job_hash.$": "$.job_hash",
+                "user_id.$": "$.user_id",
+                "light_touch.$": "$.score_result.matched_items[0].light_touch"
+              },
+              "Next": "TailorResume"
+            },
+            "TailorResume": {
+              "Type": "Task",
+              "Resource": "${TailorResumeFunction.Arn}",
+              "ResultPath": "$.tailor_result",
+              "Next": "CompileResume",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "JobFailed"}]
+            },
+            "CompileResume": {
+              "Type": "Task",
+              "Resource": "${CompileLatexFunction.Arn}",
+              "Parameters": {
+                "tex_s3_key.$": "$.tailor_result.tex_s3_key",
+                "job_hash.$": "$.job_hash",
+                "user_id.$": "$.user_id",
+                "doc_type": "resume"
+              },
+              "ResultPath": "$.compile_result",
+              "Next": "GenerateCoverLetter",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "JobFailed"}]
+            },
+            "GenerateCoverLetter": {
+              "Type": "Task",
+              "Resource": "${GenerateCoverLetterFunction.Arn}",
+              "Parameters": {
+                "job_hash.$": "$.job_hash",
+                "user_id.$": "$.user_id"
+              },
+              "ResultPath": "$.cover_letter_result",
+              "Next": "CompileCoverLetter",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SaveJobWithoutCL"}]
+            },
+            "CompileCoverLetter": {
+              "Type": "Task",
+              "Resource": "${CompileLatexFunction.Arn}",
+              "Parameters": {
+                "tex_s3_key.$": "$.cover_letter_result.tex_s3_key",
+                "job_hash.$": "$.job_hash",
+                "user_id.$": "$.user_id",
+                "doc_type": "cover_letter"
+              },
+              "ResultPath": "$.cover_compile_result",
+              "Next": "FindContacts",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SaveJobWithoutCL"}]
+            },
+            "FindContacts": {
+              "Type": "Task",
+              "Resource": "${FindContactsFunction.Arn}",
+              "Parameters": {
+                "job_hash.$": "$.job_hash",
+                "user_id.$": "$.user_id"
+              },
+              "ResultPath": "$.contacts_result",
+              "Next": "SaveJobComplete",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SaveJobComplete"}]
+            },
+            "SaveJobComplete": {
+              "Type": "Task",
+              "Resource": "${SaveJobFunction.Arn}",
+              "Parameters": {
+                "job_hash.$": "$.job_hash",
+                "user_id.$": "$.user_id",
+                "resume_pdf_s3_key.$": "$.compile_result.pdf_s3_key",
+                "cover_letter_pdf_s3_key.$": "$.cover_compile_result.pdf_s3_key"
+              },
+              "End": true
+            },
+            "SaveJobWithoutCL": {
+              "Type": "Task",
+              "Resource": "${SaveJobFunction.Arn}",
+              "Parameters": {
+                "job_hash.$": "$.job_hash",
+                "user_id.$": "$.user_id",
+                "resume_pdf_s3_key.$": "$.compile_result.pdf_s3_key"
+              },
+              "End": true
+            },
+            "JobFailed": {
+              "Type": "Fail",
+              "Error": "JobProcessingFailed",
+              "Cause": "Failed to process job"
+            }
+          }
+        }
+
+  # --- EventBridge Schedule Rules ---
+  DailyPipelineSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: naukribaba-daily-pipeline-schedule
+      Description: Run daily pipeline on weekdays at 7:00 UTC
+      ScheduleExpression: "cron(0 7 ? * MON-FRI *)"
+      State: DISABLED
+      Targets:
+        - Arn: !GetAtt DailyPipelineStateMachine.Arn
+          Id: DailyPipelineTarget
+          RoleArn: !GetAtt EventBridgeRole.Arn
+          Input: '{"user_id": "default"}'
+
+  ExpiryCheckSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: naukribaba-expiry-check
+      Description: Check job expiry weekly on Sundays at 6:00 UTC
+      ScheduleExpression: "cron(0 6 ? * SUN *)"
+      State: DISABLED
+      Targets:
+        - Arn: !GetAtt CheckExpiryFunction.Arn
+          Id: ExpiryCheckTarget
+
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: naukribaba-eventbridge-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: StartStepFunctions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource:
+                  - !GetAtt DailyPipelineStateMachine.Arn
+
+  ExpiryCheckPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CheckExpiryFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ExpiryCheckSchedule.Arn
+
   # --- Lambda Function (Docker container with tectonic) ---
   JobHuntApi:
     Type: AWS::Serverless::Function
@@ -406,3 +954,9 @@ Outputs:
   TaskDLQUrl:
     Description: SQS Dead Letter Queue URL
     Value: !Ref TaskDLQ
+  DailyPipelineArn:
+    Description: Daily pipeline state machine ARN
+    Value: !GetAtt DailyPipelineStateMachine.Arn
+  SingleJobPipelineArn:
+    Description: Single job pipeline state machine ARN
+    Value: !GetAtt SingleJobPipelineStateMachine.Arn
