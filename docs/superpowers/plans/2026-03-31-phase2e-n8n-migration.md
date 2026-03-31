@@ -2,15 +2,21 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the GitHub Actions pipeline with n8n on EC2 — parallel scrapers, self-improvement, email workflows, and a tectonic compilation sidecar.
+**Goal:** Replace the GitHub Actions pipeline with n8n — parallel scrapers, self-improvement, email workflows, and a tectonic compilation sidecar for Phase 2B.
 
-**Architecture:** n8n Cloud (https://naukribaba.app.n8n.cloud) orchestrates (scheduling, fan-out, retries, scraping via HTTP nodes), Lambda computes (AI scoring, tailoring, contacts). No EC2 needed — n8n Cloud handles hosting. Python scrapers and `main.py` become dead code after cutover.
+**Architecture:** Two-phase deployment:
+1. **Build phase (Days 1-7)**: Use n8n Cloud trial (https://naukribaba.app.n8n.cloud) to build and test workflows quickly in the UI.
+2. **Production (Day 8+)**: Migrate to self-hosted n8n on EC2 t3.small before the 14-day trial expires. EC2 also hosts the tectonic sidecar for Phase 2B editor.
 
-**Tech Stack:** n8n (workflow engine), Docker Compose, EC2 t3.small, tectonic (LaTeX), FastAPI (Lambda), Supabase (PostgreSQL), S3
+Lambda handles AI compute (scoring, tailoring, contacts). Python scrapers and `main.py` become dead code after cutover.
+
+**Tech Stack:** n8n, Docker Compose, EC2 t3.small, tectonic (LaTeX), FastAPI (Lambda), Supabase (PostgreSQL), S3
 
 **Spec:** `docs/superpowers/specs/2026-03-31-phase2e-n8n-migration-design.md`
 
-**Scoring fix note:** The new `/api/score-batch` endpoint must be used by BOTH the n8n pipeline AND the existing `/api/tailor` Add Job flow so scores are consistent. Currently the pipeline's `matcher.py` and the API's `/api/score` use different prompts/batching, causing the same JD to score differently.
+**Key fixes included:**
+- Scoring consistency: `/api/score-batch` used by BOTH pipeline and Add Job
+- Score-first tailoring: light tweaks when base score >= 85, full rewrite when low
 
 ---
 
@@ -19,6 +25,11 @@
 ### New Files
 | File | Purpose |
 |------|---------|
+| `infra/docker-compose.yml` | n8n + PostgreSQL + tectonic services |
+| `infra/Dockerfile.tectonic` | tectonic HTTP sidecar Docker image |
+| `infra/tectonic_server.py` | Minimal HTTP server: POST LaTeX → PDF |
+| `infra/.env.example` | Template for EC2 environment variables |
+| `infra/setup-ec2.sh` | EC2 bootstrap script |
 | `web/src/components/SkillTags.jsx` | Tech skill chip display extracted from JD |
 | `web/src/components/JobCard.jsx` | Card grid view component |
 | `web/src/components/PipelineStatus.jsx` | Live pipeline status bar |
@@ -27,21 +38,43 @@
 | File | Changes |
 |------|---------|
 | `app.py` | Add 5 new endpoints: `/api/score-batch`, `/api/deduplicate`, `/api/self-improve`, `/api/pipeline/status`, `/api/compile-latex` |
-| `db_client.py` | Add methods: `get_pipeline_metrics()`, `save_pipeline_metrics()`, `get_self_improvement_config()`, `save_self_improvement_config()`, `deduplicate_jobs()` |
-| `web/src/pages/Dashboard.jsx` | Replace hardcoded pipeline status, add card/table view toggle |
-| `web/src/components/PipelineStatus.jsx` | New component for live pipeline status bar |
-| `web/src/components/JobCard.jsx` | New component for card grid view |
-| `web/src/components/SkillTags.jsx` | New component for tech skill chip display |
-| `web/src/pages/JobWorkspace.jsx` | Add inline PDF preview, skills tags, editable fields |
+| `db_client.py` | Add methods for pipeline metrics, self-improvement config, dedup |
+| `tailorer.py` | Score-first tailoring, store actual AI model name |
+| `web/src/pages/Dashboard.jsx` | Live pipeline status, card/table toggle, Run Pipeline button |
+| `web/src/pages/JobWorkspace.jsx` | Inline PDF preview, skills tags, editable fields |
 | `web/src/pages/Settings.jsx` | Auto-populate profile from uploaded resume |
-| `template.yaml` | Add new Lambda timeout/memory if needed |
 
-### n8n Workflows (configured in n8n UI, exported as JSON)
+### n8n Workflows (build in Cloud UI → export JSON → import to EC2)
 | Workflow | Purpose |
 |----------|---------|
-| `Daily Pipeline` | Schedule trigger → parallel scrapers → dedup → score → tailor → email |
-| `Stale Job Nudges` | Weekly Monday check for unactioned jobs → Gmail |
-| `Follow-Up Reminders` | Daily check for Applied jobs without updates → Gmail |
+| `Daily Pipeline` | Schedule → parallel scrapers → dedup → score → tailor → email → self-improve |
+| `Stale Job Nudges` | Weekly Monday: email for jobs 7+ days old still status "New" |
+| `Follow-Up Reminders` | Daily: email for Applied jobs without updates in 7+ days |
+
+---
+
+## Task Overview (execute in this order)
+
+| # | Task | Type | Phase |
+|---|------|------|-------|
+| 1 | Supabase tables | DB | Build |
+| 2 | DB client methods | Backend | Build |
+| 3 | Lambda API endpoints (5 new) | Backend | Build |
+| 4 | Tectonic HTTP sidecar | Infra | Build |
+| 5 | Build n8n workflows (on n8n Cloud trial) | n8n | Build |
+| 6 | n8n community nodes + MCP config | n8n | Build |
+| 7 | Frontend: pipeline status + Run Pipeline button | Frontend | Build |
+| 8 | Frontend polish: skills tags, card view, PDF preview, AI model | Frontend | Polish |
+| 9 | Manual job editing UI | Frontend | Polish |
+| 10 | Scoring consistency fix | Backend | Fix |
+| 11 | Score-first tailoring | Backend | Fix |
+| 12 | User profile from resume | Full-stack | Feature |
+| 13 | Shadow mode + testing | Testing | Validate |
+| 14 | EC2 provisioning + migrate n8n from Cloud to self-hosted | Infra | Migrate |
+| 15 | Cutover (disable GH Actions, activate n8n on EC2) | Deploy | Go-live |
+| 16 | Deploy Lambda + Frontend | Deploy | Go-live |
+
+**Note:** Task bodies below may appear in a different order due to editing. Follow the table above for execution order. EC2 migration (Task 14) should happen before the n8n Cloud 14-day trial expires.
 
 ---
 
@@ -522,7 +555,41 @@ git add app.py && git commit -m "feat: add score-batch, deduplicate, self-improv
 
 ---
 
-## Task 4: Build n8n Workflows
+## Task 4: Tectonic HTTP Sidecar
+
+**Files:**
+- Create: `infra/tectonic_server.py`
+- Create: `infra/Dockerfile.tectonic`
+
+- [ ] **Step 1: Create tectonic_server.py**
+
+Create `infra/tectonic_server.py` — a minimal HTTP server: `POST /compile` accepts `{"tex_source": "..."}`, compiles with tectonic, returns PDF binary. `GET /health` returns `{"status": "ok"}`. See spec section 3 for full code.
+
+- [ ] **Step 2: Create Dockerfile.tectonic**
+
+Create `infra/Dockerfile.tectonic` — Python 3.11 slim, install tectonic via drop-sh, pre-warm cache, copy server script. See spec section 3 for full Dockerfile.
+
+- [ ] **Step 3: Test locally**
+
+```bash
+cd infra && docker build -f Dockerfile.tectonic -t tectonic-sidecar .
+docker run -p 8081:8081 tectonic-sidecar &
+curl -X POST http://localhost:8081/compile -H "Content-Type: application/json" \
+  -d '{"tex_source": "\\documentclass{article}\\begin{document}Hello\\end{document}"}' -o test.pdf
+file test.pdf  # Should say "PDF document"
+docker stop $(docker ps -q --filter ancestor=tectonic-sidecar)
+```
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add infra/tectonic_server.py infra/Dockerfile.tectonic
+git commit -m "feat: add tectonic HTTP sidecar for LaTeX compilation"
+```
+
+---
+
+## Task 5: Build n8n Workflows (on Cloud Trial)
 
 This task is done in the n8n UI at `http://<ec2-ip>:5678`. Export workflows as JSON and save to `infra/workflows/` for version control.
 
@@ -597,7 +664,7 @@ git add infra/workflows/ && git commit -m "feat: add n8n workflow exports (daily
 
 ---
 
-## Task 7: Frontend — Live Pipeline Status
+## Task 7: Frontend — Live Pipeline Status + Run Pipeline
 
 **Files:**
 - Create: `web/src/components/PipelineStatus.jsx`
@@ -720,7 +787,7 @@ git commit -m "feat: replace hardcoded pipeline status with live API-driven comp
 
 ---
 
-## Task 8: Shadow Mode & Testing
+## Task 13: Shadow Mode + Testing
 
 - [ ] **Step 1: Run n8n pipeline manually**
 
@@ -763,7 +830,7 @@ Manually trigger the Stale Job Nudges and Follow-Up Reminders workflows. Verify 
 
 ---
 
-## Task 9: Cutover
+## Task 14: Cutover
 
 - [ ] **Step 1: Disable GitHub Actions cron**
 
@@ -865,7 +932,7 @@ git add app.py && git commit -m "fix: use same scoring path for pipeline and Add
 
 ---
 
-## Task 11: Manual Job Editing UI
+## Task 9: Manual Job Editing UI
 
 **Files:**
 - Modify: `web/src/pages/JobWorkspace.jsx`
@@ -967,7 +1034,7 @@ git add web/src/pages/JobWorkspace.jsx && git commit -m "feat: add inline editin
 
 ---
 
-## Task 12: n8n Community Nodes + MCP Server
+## Task 6: n8n Community Nodes + MCP Config
 
 **Files:**
 - Create: `infra/mcp_n8n_server.py`
@@ -1155,7 +1222,7 @@ git commit -m "feat: add n8n MCP server + community node config"
 
 ---
 
-## Task 13: Frontend Polish Bundle
+## Task 8: Frontend Polish Bundle
 
 **Files:**
 - Create: `web/src/components/SkillTags.jsx`
@@ -1350,7 +1417,7 @@ git add web/src/ && git commit -m "feat: add skill tags, inline PDF preview, car
 
 ---
 
-## Task 13: User Profile from Resume
+## Task 12: User Profile from Resume
 
 **Files:**
 - Modify: `app.py` (extend resume upload to extract profile fields)
@@ -1412,7 +1479,7 @@ git add app.py web/src/pages/Settings.jsx && git commit -m "feat: auto-extract u
 
 ---
 
-## Task 14: Score-First Tailoring
+## Task 11: Score-First Tailoring
 
 **Files:**
 - Modify: `tailorer.py`
@@ -1453,7 +1520,7 @@ git add tailorer.py app.py && git commit -m "feat: score-first tailoring — lig
 
 ---
 
-## Task 15: Deploy Lambda + Frontend Updates
+## Task 15: Deploy Lambda + Frontend
 
 - [ ] **Step 1: Deploy updated Lambda with new endpoints**
 
