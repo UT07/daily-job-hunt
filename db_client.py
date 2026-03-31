@@ -224,6 +224,19 @@ class SupabaseClient:
         logger.info(f"[DB] Job {job_id} status -> {status}")
         return result.data[0]
 
+    def delete_job(self, user_id: str, job_id: str) -> None:
+        """Delete a job by ID, scoped to the owning user."""
+        result = (
+            self.client.table("jobs")
+            .delete()
+            .eq("job_id", job_id)
+            .eq("user_id", user_id)
+            .execute()
+        )
+        if not result.data:
+            raise ValueError(f"Job {job_id} not found for user {user_id}")
+        logger.info(f"[DB] Deleted job {job_id} for user {user_id}")
+
     def get_job_stats(self, user_id: str) -> Dict[str, Any]:
         """Get aggregate job stats for a user.
 

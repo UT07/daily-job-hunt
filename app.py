@@ -12,6 +12,7 @@ Exposes the pipeline's core AI modules as REST endpoints:
 - DELETE /api/gdpr/delete  — request account deletion (soft-delete)
 - GET  /api/dashboard/jobs  — paginated, filterable job list
 - PATCH /api/dashboard/jobs/{job_id} — update a job's application status
+- DELETE /api/dashboard/jobs/{job_id} — delete a job from the dashboard
 - GET  /api/dashboard/stats — aggregate job metrics
 - GET  /api/dashboard/runs  — pipeline run history
 - POST /api/resumes/upload — upload a PDF resume, extract text, parse sections
@@ -830,26 +831,52 @@ def get_dashboard_jobs(
 
 
 @app.patch("/api/dashboard/jobs/{job_id}")
-def update_job_status(
+def update_job(
     job_id: str,
     body: dict,
     user: AuthUser = Depends(get_current_user),
 ):
-    """Update a job's application status."""
+    """Update a job's fields (status, location, apply_url)."""
     if _db is None:
         raise HTTPException(503, "Database not configured")
 
-    status = body.get("application_status")
-    if not status:
-        raise HTTPException(400, "application_status required")
-    if status not in _VALID_STATUSES:
+    _EDITABLE_FIELDS = {"application_status", "location", "apply_url"}
+    update_data = {k: v for k, v in body.items() if k in _EDITABLE_FIELDS and v is not None}
+
+    if not update_data:
+        raise HTTPException(400, f"At least one editable field required: {sorted(_EDITABLE_FIELDS)}")
+
+    if "application_status" in update_data and update_data["application_status"] not in _VALID_STATUSES:
         raise HTTPException(400, f"Invalid status. Must be one of: {sorted(_VALID_STATUSES)}")
 
     try:
-        result = _db.update_job_status(user.id, job_id, status)
+        result = (
+            _db.client.table("jobs")
+            .update(update_data)
+            .eq("job_id", job_id)
+            .eq("user_id", user.id)
+            .execute()
+        )
+        if not result.data:
+            raise ValueError("Not found")
     except ValueError:
         raise HTTPException(404, "Job not found")
-    return result
+    return result.data[0]
+
+
+@app.delete("/api/dashboard/jobs/{job_id}")
+def delete_job(
+    job_id: str,
+    user: AuthUser = Depends(get_current_user),
+):
+    """Delete a job from the dashboard."""
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+    try:
+        _db.delete_job(user.id, job_id)
+    except ValueError:
+        raise HTTPException(404, "Job not found")
+    return {"ok": True}
 
 
 @app.get("/api/dashboard/stats")

@@ -1,24 +1,36 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { apiPatch } from '../api';
 
 const STATUSES = ['New', 'Applied', 'Interview', 'Offer', 'Rejected', 'Withdrawn'];
 
 const STATUS_STYLES = {
-  New: 'text-slate-400 bg-slate-700 border-slate-600',
-  Applied: 'text-blue-400 bg-slate-700 border-blue-500/30',
-  Interview: 'text-purple-400 bg-slate-700 border-purple-500/30',
-  Offer: 'text-emerald-400 bg-slate-700 border-emerald-500/30',
-  Rejected: 'text-red-400 bg-slate-700 border-red-500/30',
-  Withdrawn: 'text-amber-400 bg-slate-700 border-amber-500/30',
+  New:       'bg-info-light text-info border-info',
+  Applied:   'bg-yellow-light text-yellow-dark border-yellow-dark',
+  Interview: 'bg-success-light text-success border-success',
+  Offer:     'bg-success text-white border-success',
+  Rejected:  'bg-error-light text-error border-error',
+  Withdrawn: 'bg-stone-200 text-stone-600 border-stone-400',
 };
 
 export default function StatusDropdown({ jobId, currentStatus, onStatusChange }) {
+  const [open, setOpen] = useState(false);
   const [updating, setUpdating] = useState(false);
+  const ref = useRef(null);
 
-  async function handleChange(e) {
-    const newStatus = e.target.value;
+  // Close on outside click
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (ref.current && !ref.current.contains(e.target)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  async function handleSelect(newStatus) {
+    setOpen(false);
     if (newStatus === currentStatus) return;
-
     setUpdating(true);
     try {
       await apiPatch(`/api/dashboard/jobs/${encodeURIComponent(jobId)}`, {
@@ -32,22 +44,48 @@ export default function StatusDropdown({ jobId, currentStatus, onStatusChange })
     }
   }
 
-  const style = STATUS_STYLES[currentStatus] || STATUS_STYLES.New;
+  const badgeClass = STATUS_STYLES[currentStatus] || STATUS_STYLES.New;
 
   return (
-    <select
-      value={currentStatus}
-      onChange={handleChange}
-      disabled={updating}
-      className={`${style} text-xs font-medium rounded-md px-2 py-1 border
-        cursor-pointer focus:ring-2 focus:ring-blue-500 focus:outline-none
-        disabled:opacity-50 disabled:cursor-not-allowed appearance-none transition-colors`}
-    >
-      {STATUSES.map((s) => (
-        <option key={s} value={s}>
-          {s}
-        </option>
-      ))}
-    </select>
+    <div ref={ref} className="relative inline-block">
+      {/* Trigger button — looks like a badge */}
+      <button
+        onClick={() => !updating && setOpen((o) => !o)}
+        disabled={updating}
+        className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 border-2 font-mono text-[11px]
+          font-bold uppercase tracking-wider cursor-pointer select-none
+          transition-shadow hover:shadow-brutal-sm
+          disabled:opacity-50 disabled:cursor-not-allowed
+          ${badgeClass}`}
+      >
+        {updating ? '…' : currentStatus}
+        <span className="text-[8px] leading-none opacity-60">▼</span>
+      </button>
+
+      {/* Dropdown panel */}
+      {open && (
+        <div className="absolute top-full left-0 mt-1 z-50 min-w-[130px]
+          bg-white border-2 border-black shadow-brutal py-1">
+          {STATUSES.map((s) => {
+            const sc = STATUS_STYLES[s] || STATUS_STYLES.New;
+            const isActive = s === currentStatus;
+            return (
+              <button
+                key={s}
+                onClick={() => handleSelect(s)}
+                className={`w-full flex items-center gap-2 px-3 py-1.5 text-left
+                  font-mono text-[11px] font-bold uppercase tracking-wider
+                  hover:bg-stone-100 transition-colors
+                  ${isActive ? 'bg-stone-50' : ''}`}
+              >
+                <span className={`inline-block w-2 h-2 border ${sc}`} />
+                {s}
+                {isActive && <span className="ml-auto text-[8px]">✓</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }

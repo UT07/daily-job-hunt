@@ -13,6 +13,7 @@ const Onboarding = lazy(() => import('./pages/Onboarding'));
 const Privacy = lazy(() => import('./pages/Privacy'));
 const DataExport = lazy(() => import('./pages/DataExport'));
 const LoginPage = lazy(() => import('./pages/LoginPage'));
+const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage'));
 
 // Placeholder pages (to be built in later tasks)
 function UploadResume() {
@@ -39,6 +40,9 @@ export default function App() {
       <AuthProvider>
         <Suspense fallback={<PageLoader />}>
           <Routes>
+            {/* Standalone auth page — outside AuthLayout so recovery session doesn't redirect */}
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
+
             {/* Auth pages */}
             <Route element={<AuthLayout />}>
               <Route path="/login" element={<LoginPage />} />

@@ -1,11 +1,116 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { apiGet } from '../api';
+
+function decodeHtml(text) {
+  if (!text) return '';
+  const doc = new DOMParser().parseFromString(text, 'text/html');
+  return doc.body.textContent || '';
+}
 import { ArrowLeft } from 'lucide-react';
 import Tabs from '../components/ui/Tabs';
 import Button from '../components/ui/Button';
 import { ScoreBadge } from '../components/ui/Badge';
 import Badge from '../components/ui/Badge';
+
+// ---- Contacts tab ----
+function ContactItem({ contact }) {
+  const [copied, setCopied] = useState(false);
+
+  const copy = () => {
+    navigator.clipboard.writeText(contact.message || '').then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  };
+
+  const linkUrl = contact.profile_url || contact.google_url || contact.search_url;
+  const linkLabel = contact.profile_url
+    ? 'View Profile'
+    : contact.google_url
+      ? 'Find on Google'
+      : 'Search LinkedIn';
+
+  return (
+    <div className="border-2 border-black shadow-brutal-sm bg-white p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          {contact.name && (
+            <p className="text-sm font-bold text-black">{contact.name}</p>
+          )}
+          <p className={`text-sm ${contact.name ? 'text-stone-600' : 'font-bold text-black'}`}>
+            {contact.role}
+          </p>
+          {contact.why && (
+            <p className="text-xs text-stone-400 mt-0.5 font-mono">{contact.why}</p>
+          )}
+        </div>
+        {linkUrl && (
+          <a
+            href={linkUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="shrink-0 text-xs px-2 py-1 border-2 border-black font-bold
+              hover:bg-yellow-light transition-colors"
+          >
+            {linkLabel}
+          </a>
+        )}
+      </div>
+      {contact.message && (
+        <div className="mt-3 bg-stone-50 border-2 border-stone-200 p-3 relative">
+          <p className="pr-16 font-mono text-xs leading-relaxed text-stone-600">
+            {contact.message}
+          </p>
+          <button
+            onClick={copy}
+            className="absolute top-2 right-2 text-xs px-2 py-1 border-2 border-black font-bold
+              bg-white hover:bg-yellow-light transition-colors"
+          >
+            {copied ? 'Copied!' : 'Copy'}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ContactsTab({ job }) {
+  let contacts = [];
+  if (job.linkedin_contacts) {
+    try {
+      const parsed = typeof job.linkedin_contacts === 'string'
+        ? JSON.parse(job.linkedin_contacts)
+        : job.linkedin_contacts;
+      contacts = Array.isArray(parsed) ? parsed : parsed.contacts || [];
+    } catch {
+      contacts = [];
+    }
+  }
+
+  if (!contacts.length) {
+    return (
+      <div className="text-center py-10">
+        <p className="text-stone-400 text-sm mb-2">No contacts found yet.</p>
+        <p className="text-xs text-stone-400">
+          Use <span className="font-mono font-bold">Add Job → Find Contacts</span> to search for
+          LinkedIn contacts at this company.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-3">
+        {contacts.length} Contact{contacts.length !== 1 ? 's' : ''} · {job.company}
+      </p>
+      {contacts.map((c, i) => (
+        <ContactItem key={i} contact={c} />
+      ))}
+    </div>
+  );
+}
 
 const JOB_TABS = [
   { id: 'overview', label: 'Overview' },
@@ -70,10 +175,10 @@ export default function JobWorkspace() {
         </button>
         <div className="flex-1">
           <h1 className="text-xl font-heading font-bold text-black tracking-tight">
-            {job.title}
+            {decodeHtml(job.title)}
           </h1>
           <p className="text-sm text-stone-500">
-            {job.company} {job.location && `· ${job.location}`}
+            {decodeHtml(job.company)} {job.location && `· ${decodeHtml(job.location)}`}
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -111,8 +216,8 @@ export default function JobWorkspace() {
             {job.description && (
               <div>
                 <h3 className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">Job Description</h3>
-                <p className="text-sm text-stone-700 leading-relaxed whitespace-pre-wrap">
-                  {job.description.slice(0, 1000)}{job.description.length > 1000 ? '...' : ''}
+                <p className="text-sm text-stone-700 leading-relaxed whitespace-pre-wrap max-h-[600px] overflow-y-auto">
+                  {decodeHtml(job.description)}
                 </p>
               </div>
             )}
@@ -144,9 +249,7 @@ export default function JobWorkspace() {
           </div>
         )}
         {activeTab === 'contacts' && (
-          <div>
-            <p className="text-stone-400">Contacts view — coming in Phase 2A refinement.</p>
-          </div>
+          <ContactsTab job={job} />
         )}
         {activeTab === 'research' && (
           <div>

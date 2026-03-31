@@ -84,6 +84,12 @@ export default function Dashboard() {
     fetchStats();
   }
 
+  function handleDelete(jobId) {
+    setJobs((prev) => prev.filter((j) => j.job_id !== jobId));
+    setTotal((t) => Math.max(0, t - 1));
+    fetchStats();
+  }
+
   function handleFilterApply() {
     setPage(1);
     setFilterVersion((v) => v + 1);
@@ -231,7 +237,7 @@ export default function Dashboard() {
       )}
 
       {/* Job Table */}
-      {!loading && <JobTable jobs={jobs} onStatusChange={handleStatusChange} />}
+      {!loading && <JobTable jobs={jobs} onStatusChange={handleStatusChange} onDelete={handleDelete} />}
 
       {/* Pagination */}
       {!loading && jobs.length > 0 && (

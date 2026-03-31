@@ -1077,8 +1077,12 @@ def _run_pipeline_body(context, config, run_date, run_record, dry_run, scrape_on
                     Path(job.tailored_tex_path).write_text(improved_tex, encoding="utf-8")
 
     # --- Step 6: Find LinkedIn contacts ---
-    logger.info("Finding LinkedIn contacts for networking...")
-    find_contacts_batch(matched_jobs, ai_client)
+    skip_contacts = config.get("skip_contacts", False) or os.environ.get("SKIP_CONTACTS", "").lower() in ("1", "true", "yes")
+    if skip_contacts:
+        logger.info("Skipping LinkedIn contacts (SKIP_CONTACTS set) — use dashboard on-demand instead")
+    else:
+        logger.info("Finding LinkedIn contacts for networking...")
+        find_contacts_batch(matched_jobs, ai_client)
 
     # --- Step 7: Generate cover letters ---
     # TODO: Add Google Docs cover letter template support once a template

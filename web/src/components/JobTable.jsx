@@ -1,9 +1,16 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileText, Mail, Users } from 'lucide-react';
+import { FileText, Mail, Users, Trash2 } from 'lucide-react';
 import { ScoreBadge } from './ui/Badge';
 import Badge from './ui/Badge';
 import StatusDropdown from './StatusDropdown';
+import { apiDelete } from '../api';
+
+function decodeHtml(text) {
+  if (!text) return '';
+  const doc = new DOMParser().parseFromString(text, 'text/html');
+  return doc.body.textContent || '';
+}
 
 function AssetIcon({ href, icon: Icon, title }) {
   if (!href || href === '--' || href === '-') {
@@ -114,7 +121,55 @@ function isValidUrl(str) {
   return str && (str.startsWith('http://') || str.startsWith('https://'));
 }
 
-export default function JobTable({ jobs, onStatusChange }) {
+function DeleteButton({ jobId, onDelete }) {
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function handleDelete() {
+    setDeleting(true);
+    try {
+      await apiDelete(`/api/dashboard/jobs/${jobId}`);
+      onDelete(jobId);
+    } catch (err) {
+      console.error('Delete failed:', err);
+    } finally {
+      setDeleting(false);
+      setConfirming(false);
+    }
+  }
+
+  if (confirming) {
+    return (
+      <div className="flex items-center gap-1">
+        <button
+          onClick={handleDelete}
+          disabled={deleting}
+          className="text-[10px] font-bold text-white bg-error border border-error px-1.5 py-0.5 hover:opacity-80 transition-opacity cursor-pointer disabled:opacity-50"
+        >
+          {deleting ? '...' : 'Yes'}
+        </button>
+        <button
+          onClick={() => setConfirming(false)}
+          className="text-[10px] font-bold text-stone-500 border border-stone-300 px-1.5 py-0.5 hover:bg-stone-100 transition-colors cursor-pointer"
+        >
+          No
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); setConfirming(true); }}
+      className="inline-flex items-center justify-center text-stone-400 hover:text-error w-5 h-5 transition-colors cursor-pointer"
+      title="Delete job"
+    >
+      <Trash2 size={13} />
+    </button>
+  );
+}
+
+export default function JobTable({ jobs, onStatusChange, onDelete }) {
   const navigate = useNavigate();
   const [sortKey, setSortKey] = useState('first_seen');
   const [sortDir, setSortDir] = useState('desc');
@@ -177,16 +232,19 @@ export default function JobTable({ jobs, onStatusChange }) {
           >
             <div className="flex justify-between items-start">
               <div>
-                <p className="font-heading font-bold text-black">{job.title}</p>
-                <p className="text-xs text-stone-500 mt-0.5">{job.company} · {job.location || 'Remote'}</p>
+                <p className="font-heading font-bold text-black">{decodeHtml(job.title)}</p>
+                <p className="text-xs text-stone-500 mt-0.5">{decodeHtml(job.company)} · {job.location || 'Remote'}</p>
               </div>
               <ScoreBadge score={job.match_score} className="text-lg" />
             </div>
-            <div className="flex items-center gap-2 mt-3">
-              <Badge status={job.application_status || 'New'} />
-              {job.tailoring_model && (
-                <span className="text-[10px] font-mono text-stone-400">{job.tailoring_model}</span>
-              )}
+            <div className="flex items-center justify-between mt-3">
+              <div className="flex items-center gap-2">
+                <Badge status={job.application_status || 'New'} />
+                {job.tailoring_model && (
+                  <span className="text-[10px] font-mono text-stone-400">{job.tailoring_model}</span>
+                )}
+              </div>
+              {onDelete && <DeleteButton jobId={job.job_id} onDelete={onDelete} />}
             </div>
           </div>
         ))}
@@ -216,6 +274,7 @@ export default function JobTable({ jobs, onStatusChange }) {
               <th className="px-3 py-3 text-[11px] font-bold text-cream uppercase tracking-wider">Contacts</th>
               <th className="px-3 py-3 text-[11px] font-bold text-cream uppercase tracking-wider">Status</th>
               <th className="px-3 py-3 text-[11px] font-bold text-cream uppercase tracking-wider">Apply</th>
+              <th className="px-3 py-3 text-[11px] font-bold text-cream uppercase tracking-wider w-10"></th>
             </tr>
           </thead>
           <tbody>
@@ -237,14 +296,14 @@ export default function JobTable({ jobs, onStatusChange }) {
                 {/* Title */}
                 <td
                   className="px-3 py-2.5 font-heading font-bold text-black max-w-[220px] truncate cursor-pointer hover:underline"
-                  title={job.title}
+                  title={decodeHtml(job.title)}
                   onClick={() => navigate(`/jobs/${job.job_id}`)}
                 >
-                  {job.title || '--'}
+                  {decodeHtml(job.title) || '--'}
                 </td>
 
                 {/* Company */}
-                <td className="px-3 py-2.5 text-stone-600 whitespace-nowrap">{job.company || '--'}</td>
+                <td className="px-3 py-2.5 text-stone-600 whitespace-nowrap">{decodeHtml(job.company) || '--'}</td>
 
                 {/* Location */}
                 <td className="px-3 py-2.5 text-stone-400 whitespace-nowrap text-xs">{job.location || '--'}</td>
@@ -336,6 +395,13 @@ export default function JobTable({ jobs, onStatusChange }) {
                     <span className="text-stone-400 text-xs font-mono">--</span>
                   )}
                 </td>
+
+                {/* Delete */}
+                {onDelete && (
+                  <td className="px-3 py-2.5">
+                    <DeleteButton jobId={job.job_id} onDelete={onDelete} />
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
