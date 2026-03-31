@@ -422,12 +422,17 @@ components/ui/              — Button, Card, Badge, Input, Table, KPICard, Tabs
 6. Build Interview Prep page with Monaco editor
 7. Add system design question bank + rubric evaluation
 
-### Phase 2G: Analytics
+### Phase 2G: Analytics + Observability
 1. Build analytics API endpoints (funnel, trends, model stats)
 2. Build Analytics page with Recharts
 3. Application funnel visualization
 4. Score trend line charts
 5. Weekly email digest (n8n Gmail node)
+6. **Pipeline observability dashboard** — scraper health per source (success/fail/timeout rates), pipeline duration trends, last run status with timestamp
+7. **Lambda log viewer** — stream CloudWatch logs to an in-app "Logs" page via API Gateway + CloudWatch Logs Insights. Filter by level (ERROR/WARN/INFO), time range, and request ID.
+8. **Error alerting** — CloudWatch alarms for Lambda error rate spikes, pipeline failures. Notify via n8n workflow (Slack/email).
+9. **API latency monitoring** — per-endpoint response time tracking, P50/P95/P99 latencies stored in Supabase, displayed on Analytics page.
+10. **Uptime monitoring** — health check endpoint polled by n8n every 5 min, alert on 3 consecutive failures.
 
 ---
 

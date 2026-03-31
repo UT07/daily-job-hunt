@@ -151,8 +151,10 @@ scrapers:
     - "jsearch"      # RapidAPI JSearch -- aggregates LinkedIn/Indeed/Glassdoor (free: 200 req/mo)
     - "serpapi"      # SerpAPI Google Jobs -- best single aggregator (free: 100 searches)
     # Irish job boards (lightweight HTML scrapers):
-    - "irishjobs"    # IrishJobs.ie -- has health check, skips fast if site is down (Akamai)
-    - "jobs_ie"      # Jobs.ie -- has health check, skips fast if site is down
+    # DISABLED 2026-03-31: both timing out for 4+ days, blocking pipeline
+    # Re-enable when sites recover or after n8n migration (parallel branches)
+    # - "irishjobs"    # IrishJobs.ie -- has health check, skips fast if site is down (Akamai)
+    # - "jobs_ie"      # Jobs.ie -- has health check, skips fast if site is down
     - "gradireland"  # GradIreland -- graduate roles in Ireland
     # LinkedIn (multi-geo via Playwright stealth):
     - "linkedin"     # LinkedIn -- cards work, descriptions auth-walled (acceptable)
