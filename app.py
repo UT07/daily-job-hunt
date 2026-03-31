@@ -421,11 +421,22 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
         return ""
     company = payload.get("company", "Unknown")
     title = payload.get("job_title", "Software Engineer")
+    description = payload.get("job_description", "")
     # Check for existing job with same company+title for this user
     try:
-        result = _db.client.table("jobs").select("job_id").eq("user_id", user_id).ilike("company", company).ilike("title", title).limit(1).execute()
+        result = _db.client.table("jobs").select("job_id,description").eq("user_id", user_id).ilike("company", company).ilike("title", title).execute()
         if result.data:
-            return result.data[0]["job_id"]
+            # Compare descriptions — same company+title but different JD = different job
+            from difflib import SequenceMatcher
+            for existing in result.data:
+                existing_desc = existing.get("description") or ""
+                if not existing_desc or not description:
+                    # If either has no description, match on company+title alone
+                    return existing["job_id"]
+                similarity = SequenceMatcher(None, description[:500], existing_desc[:500]).ratio()
+                if similarity > 0.6:
+                    return existing["job_id"]
+            # All matches had different JDs — this is a new job
     except Exception as e:
         logger.warning(f"Job lookup failed: {e}")
 
