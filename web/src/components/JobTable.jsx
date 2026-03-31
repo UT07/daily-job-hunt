@@ -166,7 +166,34 @@ export default function JobTable({ jobs, onStatusChange }) {
   }
 
   return (
-    <div className="border-2 border-black overflow-hidden">
+    <div>
+      {/* Mobile: card stack */}
+      <div className="md:hidden space-y-3">
+        {sorted.map((job) => (
+          <div
+            key={job.job_id}
+            className="bg-white border-2 border-black shadow-brutal-sm p-4 cursor-pointer hover:bg-yellow-light transition-colors"
+            onClick={() => navigate(`/jobs/${job.job_id}`)}
+          >
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="font-heading font-bold text-black">{job.title}</p>
+                <p className="text-xs text-stone-500 mt-0.5">{job.company} · {job.location || 'Remote'}</p>
+              </div>
+              <ScoreBadge score={job.match_score} className="text-lg" />
+            </div>
+            <div className="flex items-center gap-2 mt-3">
+              <Badge status={job.application_status || 'New'} />
+              {job.tailoring_model && (
+                <span className="text-[10px] font-mono text-stone-400">{job.tailoring_model}</span>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Desktop: full table */}
+    <div className="hidden md:block border-2 border-black overflow-hidden">
       <div className="overflow-x-auto">
         <table className="w-full text-sm text-left">
           <thead>
@@ -314,6 +341,7 @@ export default function JobTable({ jobs, onStatusChange }) {
           </tbody>
         </table>
       </div>
+    </div>
     </div>
   );
 }
