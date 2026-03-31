@@ -170,6 +170,7 @@ Split-pane editor: LaTeX sections on left, live PDF preview on right. Per-sectio
 - Follow-up reminders (n8n scheduled check)
 - Application deadline tracking
 - Email templates for outreach
+- **Stale job nudges**: email notification for jobs discovered 7+ days ago that are still status "New" (not applied). Weekly digest: "You have X jobs you haven't applied to yet — oldest is Y days old." Implemented via n8n scheduled workflow querying Supabase.
 
 ### Stage 5: Interview Prep
 
