@@ -124,6 +124,184 @@ Resources:
         - SSMParameterReadPolicy:
             ParameterName: /naukribaba/*
 
+  # --- Pipeline Lambda Functions ---
+  LoadConfigFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-load-config
+      Handler: lambdas/pipeline/load_config.handler
+      Runtime: python3.11
+      Timeout: 30
+      MemorySize: 128
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: /naukribaba/*
+
+  MergeDedupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-merge-dedup
+      Handler: lambdas/pipeline/merge_dedup.handler
+      Runtime: python3.11
+      Timeout: 30
+      MemorySize: 128
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: /naukribaba/*
+
+  ScoreBatchFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-score-batch
+      Handler: lambdas/pipeline/score_batch.handler
+      Runtime: python3.11
+      Timeout: 300
+      MemorySize: 512
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: /naukribaba/*
+
+  TailorResumeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-tailor-resume
+      Handler: lambdas/pipeline/tailor_resume.handler
+      Runtime: python3.11
+      Timeout: 120
+      MemorySize: 256
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: /naukribaba/*
+        - S3CrudPolicy:
+            BucketName: utkarsh-job-hunt
+
+  CompileLatexFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-compile-latex
+      Handler: lambdas/pipeline/compile_latex.handler
+      Runtime: python3.11
+      Timeout: 60
+      MemorySize: 512
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - S3CrudPolicy:
+            BucketName: utkarsh-job-hunt
+
+  GenerateCoverLetterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-generate-cover-letter
+      Handler: lambdas/pipeline/generate_cover_letter.handler
+      Runtime: python3.11
+      Timeout: 120
+      MemorySize: 256
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: /naukribaba/*
+        - S3CrudPolicy:
+            BucketName: utkarsh-job-hunt
+
+  FindContactsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-find-contacts
+      Handler: lambdas/pipeline/find_contacts.handler
+      Runtime: python3.11
+      Timeout: 120
+      MemorySize: 128
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: /naukribaba/*
+
+  SaveJobFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-save-job
+      Handler: lambdas/pipeline/save_job.handler
+      Runtime: python3.11
+      Timeout: 30
+      MemorySize: 128
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: /naukribaba/*
+        - S3CrudPolicy:
+            BucketName: utkarsh-job-hunt
+
+  SaveMetricsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-save-metrics
+      Handler: lambdas/pipeline/save_metrics.handler
+      Runtime: python3.11
+      Timeout: 30
+      MemorySize: 128
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: /naukribaba/*
+
+  SendEmailFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-send-email
+      Handler: lambdas/pipeline/send_email.handler
+      Runtime: python3.11
+      Timeout: 30
+      MemorySize: 128
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: /naukribaba/*
+
+  SelfImproveFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-self-improve
+      Handler: lambdas/pipeline/self_improve.handler
+      Runtime: python3.11
+      Timeout: 120
+      MemorySize: 256
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: /naukribaba/*
+        - LambdaInvokePolicy:
+            FunctionName: naukribaba-notify-error
+
+  NotifyErrorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-notify-error
+      Handler: lambdas/pipeline/notify_error.handler
+      Runtime: python3.11
+      Timeout: 30
+      MemorySize: 128
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: /naukribaba/*
+
+  CheckExpiryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-check-expiry
+      Handler: lambdas/pipeline/check_expiry.handler
+      Runtime: python3.11
+      Timeout: 120
+      MemorySize: 128
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: /naukribaba/*
+
   # --- Lambda Function (Docker container with tectonic) ---
   JobHuntApi:
     Type: AWS::Serverless::Function
