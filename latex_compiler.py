@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 import logging
+import os
 import re
-import subprocess
 import shutil
+import subprocess
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -233,6 +234,10 @@ def _compile_with_tectonic(tex_path: Path, out_dir: Path) -> str:
     and caches them (~50MB for a typical resume vs ~500MB for full texlive).
     """
     try:
+        # Tectonic needs a writable cache dir. On Lambda, only /tmp is writable.
+        env = os.environ.copy()
+        env.setdefault("XDG_CACHE_HOME", "/tmp")
+
         result = subprocess.run(
             [
                 "tectonic",
@@ -245,6 +250,7 @@ def _compile_with_tectonic(tex_path: Path, out_dir: Path) -> str:
             text=True,
             timeout=120,
             cwd=str(tex_path.parent.resolve()),
+            env=env,
         )
 
         pdf_path = out_dir / (tex_path.stem + ".pdf")
