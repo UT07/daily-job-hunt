@@ -62,6 +62,7 @@ from ai_client import AIClient
 from contact_finder import find_contacts
 from cover_letter import generate_cover_letter
 from latex_compiler import compile_tex_to_pdf
+from s3_uploader import upload_file as s3_upload_file
 from matcher import match_jobs
 from resume_scorer import score_and_improve
 from tailorer import tailor_resume
@@ -179,7 +180,6 @@ class TailorResponse(BaseModel):
     tech_recruiter_score: int
     avg_score: int
     pdf_url: str
-    drive_url: str
 
 
 class CoverLetterRequest(BaseModel):
@@ -191,7 +191,6 @@ class CoverLetterRequest(BaseModel):
 
 class CoverLetterResponse(BaseModel):
     pdf_url: str
-    drive_url: str
 
 
 class ContactsRequest(BaseModel):
@@ -276,32 +275,6 @@ class _Job:
         self._match_data = {}
 
 
-def _upload_pdf_to_drive(pdf_path: str, filename: str) -> str:
-    """Upload a PDF to Google Drive and return the shareable link."""
-    drive_cfg = _config.get("google_drive", {})
-    if not drive_cfg.get("enabled"):
-        return ""
-    try:
-        from drive_uploader import _authenticate, _get_or_create_folder, _upload_file
-        creds_path = drive_cfg.get("credentials_path", "google_credentials.json")
-        if not Path(creds_path).exists() and os.environ.get("GOOGLE_CREDENTIALS_JSON"):
-            creds_path = "/tmp/google_credentials.json"
-            with open(creds_path, "w") as f:
-                f.write(os.environ["GOOGLE_CREDENTIALS_JSON"])
-        service = _authenticate(creds_path)
-        import datetime
-        date_str = datetime.date.today().isoformat()
-        root_id = drive_cfg.get("folder_id", "")
-        # Build folder hierarchy one level at a time
-        jh_id = _get_or_create_folder(service, "Job Hunt", root_id)
-        date_id = _get_or_create_folder(service, date_str, jh_id)
-        web_id = _get_or_create_folder(service, "web", date_id)
-        url = _upload_file(service, pdf_path, web_id,
-                          share_with=drive_cfg.get("share_with", ""))
-        return url
-    except Exception as e:
-        logger.error("Drive upload failed: %s", e)
-        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -543,8 +516,13 @@ def _do_tailor(job, base_tex, resume_type, company, job_title):
         if not pdf_path:
             raise RuntimeError("LaTeX compilation failed")
 
+        # Upload to S3
+        import datetime
+        date_str = datetime.date.today().isoformat()
         safe_name = f"{company}_{job_title}_resume.pdf".replace(" ", "_")
-        drive_url = _upload_pdf_to_drive(pdf_path, safe_name)
+        bucket = os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt")
+        s3_key = f"web/{date_str}/resumes/{safe_name}"
+        pdf_url = s3_upload_file(pdf_path, s3_key, bucket) or ""
 
         ats = scores.get("ats_score", 0)
         hm = scores.get("hiring_manager_score", 0)
@@ -552,7 +530,7 @@ def _do_tailor(job, base_tex, resume_type, company, job_title):
         return {
             "ats_score": ats, "hiring_manager_score": hm,
             "tech_recruiter_score": tr, "avg_score": round((ats + hm + tr) / 3),
-            "drive_url": drive_url or "",
+            "pdf_url": pdf_url,
             "scoring_failed": scoring_failed,
         }
 
@@ -564,9 +542,13 @@ def _do_cover_letter(job, resume_tex, company, job_title):
         if not pdf_path:
             raise RuntimeError("LaTeX compilation failed")
 
+        import datetime
+        date_str = datetime.date.today().isoformat()
         safe_name = f"{company}_{job_title}_cover_letter.pdf".replace(" ", "_")
-        drive_url = _upload_pdf_to_drive(pdf_path, safe_name)
-        return {"drive_url": drive_url or ""}
+        bucket = os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt")
+        s3_key = f"web/{date_str}/cover_letters/{safe_name}"
+        pdf_url = s3_upload_file(pdf_path, s3_key, bucket) or ""
+        return {"pdf_url": pdf_url}
 
 
 def _do_contacts(job):
