@@ -393,7 +393,7 @@ def _enqueue_task(task_id: str, user_id: str, task_type: str, payload: dict):
 
         def _local_worker():
             try:
-                result = _dispatch_task(task_type, payload)
+                result = _dispatch_task(task_type, payload, user_id=user_id)
                 _save_task(task_id, user_id, {"status": "done", "result": result})
             except Exception as e:
                 logger.error("Background task %s failed: %s", task_id, e)
@@ -415,7 +415,52 @@ def get_task(task_id: str, user: AuthUser = Depends(get_current_user)):
 # SQS task dispatch + processing
 # ---------------------------------------------------------------------------
 
-def _dispatch_task(task_type: str, payload: dict) -> dict:
+def _find_or_create_job(user_id: str, payload: dict) -> str:
+    """Check if job exists in Supabase by company+title. Create if not. Return job_id."""
+    if not _db:
+        return ""
+    company = payload.get("company", "Unknown")
+    title = payload.get("job_title", "Software Engineer")
+    # Check for existing job with same company+title for this user
+    try:
+        result = _db.client.table("jobs").select("job_id").eq("user_id", user_id).ilike("company", company).ilike("title", title).limit(1).execute()
+        if result.data:
+            return result.data[0]["job_id"]
+    except Exception as e:
+        logger.warning(f"Job lookup failed: {e}")
+
+    # Create new job entry
+    import datetime
+    import hashlib
+    job_id = hashlib.md5(f"{company}:{title}:{user_id}".encode()).hexdigest()[:12]
+    row = {
+        "job_id": job_id,
+        "user_id": user_id,
+        "title": title,
+        "company": company,
+        "description": payload.get("job_description", ""),
+        "source": "manual",
+        "application_status": "New",
+        "first_seen": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    }
+    try:
+        _db.client.table("jobs").upsert(row, on_conflict="job_id").execute()
+    except Exception as e:
+        logger.warning(f"Job creation failed: {e}")
+    return job_id
+
+
+def _update_job_artifacts(job_id: str, updates: dict):
+    """Update a job row with tailor/cover-letter/contacts results."""
+    if not _db or not job_id:
+        return
+    try:
+        _db.client.table("jobs").update(updates).eq("job_id", job_id).execute()
+    except Exception as e:
+        logger.warning(f"Job artifact update failed: {e}")
+
+
+def _dispatch_task(task_type: str, payload: dict, user_id: str = "") -> dict:
     """Route a task to the appropriate worker function based on task_type."""
     job = _Job(
         title=payload.get("job_title", "Software Engineer"),
@@ -423,16 +468,39 @@ def _dispatch_task(task_type: str, payload: dict) -> dict:
         description=payload.get("job_description", ""),
     )
 
+    # Find or create job in dashboard
+    job_id = _find_or_create_job(user_id, payload) if user_id else ""
+
     if task_type == "tailor":
         resume_type = payload.get("resume_type", "sre_devops")
         base_tex = _resumes.get(resume_type, "")
-        return _do_tailor(job, base_tex, resume_type, payload.get("company", "Unknown"), payload.get("job_title", "Software Engineer"))
+        result = _do_tailor(job, base_tex, resume_type, payload.get("company", "Unknown"), payload.get("job_title", "Software Engineer"))
+        # Save artifacts to dashboard job
+        _update_job_artifacts(job_id, {
+            "resume_s3_url": result.get("pdf_url", ""),
+            "ats_score": result.get("ats_score", 0),
+            "hiring_manager_score": result.get("hiring_manager_score", 0),
+            "tech_recruiter_score": result.get("tech_recruiter_score", 0),
+            "match_score": result.get("avg_score", 0),
+            "tailoring_model": "council:consensus",
+            "matched_resume": resume_type,
+        })
+        result["job_id"] = job_id
+        return result
     elif task_type == "cover_letter":
         resume_type = payload.get("resume_type", "sre_devops")
         resume_tex = _resumes.get(resume_type, "")
-        return _do_cover_letter(job, resume_tex, payload.get("company", "Unknown"), payload.get("job_title", "Software Engineer"))
+        result = _do_cover_letter(job, resume_tex, payload.get("company", "Unknown"), payload.get("job_title", "Software Engineer"))
+        _update_job_artifacts(job_id, {"cover_letter_s3_url": result.get("pdf_url", "")})
+        result["job_id"] = job_id
+        return result
     elif task_type == "contacts":
-        return _do_contacts(job)
+        result = _do_contacts(job)
+        if result.get("contacts"):
+            import json as _json
+            _update_job_artifacts(job_id, {"linkedin_contacts": _json.dumps(result["contacts"])})
+        result["job_id"] = job_id
+        return result
     else:
         raise ValueError(f"Unknown task_type: {task_type}")
 
@@ -470,7 +538,7 @@ def _process_sqs_task(event, context):
             payload = task_row.get("payload") or {}
             user_id = task_row.get("user_id", "")
 
-            result = _dispatch_task(task_type, payload)
+            result = _dispatch_task(task_type, payload, user_id=user_id)
             _save_task(task_id, user_id, {"status": "done", "result": result})
 
         except Exception as e:

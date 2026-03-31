@@ -1,5 +1,6 @@
 import { ScoreBadge } from './ui/Badge';
 import Button from './ui/Button';
+import { Link } from 'react-router-dom';
 
 function ScoreWithLabel({ score, label }) {
   return (
@@ -23,13 +24,20 @@ export default function TailorCard({ data, company }) {
         <ScoreWithLabel score={data.hiring_manager_score} label="Hiring Mgr" />
         <ScoreWithLabel score={data.tech_recruiter_score} label="Tech Recruiter" />
       </div>
-      {link ? (
-        <a href={link} target="_blank" rel="noopener noreferrer">
-          <Button variant="secondary" size="sm">Download Resume PDF</Button>
-        </a>
-      ) : (
-        <p className="text-sm text-stone-400 mt-2 font-mono">PDF generation in progress...</p>
-      )}
+      <div className="flex items-center gap-3">
+        {link ? (
+          <a href={link} target="_blank" rel="noopener noreferrer">
+            <Button variant="secondary" size="sm">Download Resume PDF</Button>
+          </a>
+        ) : (
+          <p className="text-sm text-stone-400 font-mono">PDF generation in progress...</p>
+        )}
+        {data.job_id && (
+          <Link to={`/jobs/${data.job_id}`}>
+            <Button variant="ghost" size="sm">View in Dashboard</Button>
+          </Link>
+        )}
+      </div>
     </div>
   );
 }
