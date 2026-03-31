@@ -1,8 +1,8 @@
 # Phase 2E: Step Functions Pipeline Migration — Design Specification
 
-**Date**: 2026-03-31
-**Status**: Approved
-**Replaces**: `2026-03-31-phase2e-n8n-migration-design.md` (moved to archive)
+**Date**: 2026-03-31 (v3 — all review issues addressed)
+**Status**: Under Review
+**Replaces**: `2026-03-31-phase2e-n8n-migration-design.md` (archived)
 **Depends on**: Phase 2A (complete)
 **Unblocks**: Phase 2B (editor), Phase 2D (enrichment), Phase 2G (observability)
 
@@ -25,63 +25,92 @@ Step Functions + Lambda solves all of this:
 - **Built-in retry**: configurable per state with exponential backoff
 - **Multi-tenant native**: each user's pipeline is just an execution with `user_id` input
 - **No server**: no EC2, no Docker, no maintenance
-- **AI builds it**: defined as SAM YAML, not drag-and-drop — perfect for Claude Code
+- **AI builds it**: defined as SAM YAML — perfect for Claude Code
 
 ---
 
 ## 2. Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  AWS (Serverless)                                            │
-│                                                              │
-│  EventBridge Scheduler ──► Step Functions State Machine       │
-│  API Gateway ────────────► (same state machine)              │
-│                                                              │
-│  ┌──────────────────────────────────────────────────┐       │
-│  │  Step Functions: daily-pipeline                   │       │
-│  │                                                    │       │
-│  │  load_config → check_cache → Parallel(scrapers)   │       │
-│  │  → merge_dedup → score_batch → Map(tailor_job)    │       │
-│  │  → email_summary → self_improve                   │       │
-│  └──────────────────────────────────────────────────┘       │
-│                                                              │
-│  ┌──────────────────────────────────────────────────┐       │
-│  │  Step Functions: single-job-pipeline              │       │
-│  │                                                    │       │
-│  │  save_raw → score → tailor → compile → cover      │       │
-│  │  → contacts → save → return_result                │       │
-│  └──────────────────────────────────────────────────┘       │
-│                                                              │
-│  Lambda Functions (compute):                                 │
-│    scrape_adzuna, scrape_hn, scrape_yc,                     │
-│    scrape_apify_linkedin, scrape_apify_indeed, ...          │
-│    score_batch, tailor_resume, compile_latex,                │
-│    generate_cover_letter, find_contacts,                     │
-│    self_improve, send_email                                  │
-│                                                              │
-│  Supabase (data):     S3 (files):      Apify (scraping):   │
-│    jobs_raw (shared)    Resume PDFs      LinkedIn scraper    │
-│    jobs (per-user)      Cover letters    Indeed scraper      │
-│    users                                 Web scraper         │
-│    self_improvement                                          │
-│    pipeline_metrics                                          │
-└─────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│  AWS (Serverless)                                                │
+│                                                                  │
+│  EventBridge Scheduler ──► Step Functions: daily-pipeline         │
+│  API Gateway ────────────► Step Functions: daily-pipeline (manual)│
+│  API Gateway ────────────► Step Functions: single-job-pipeline    │
+│                                                                  │
+│  ┌──────────────────────────────────────────────────────────┐   │
+│  │  DATA BUS: Supabase                                       │   │
+│  │  (Step Functions passes only IDs/hashes between states,   │   │
+│  │   Lambdas read/write full data from Supabase)             │   │
+│  │                                                            │   │
+│  │  jobs_raw ──► jobs ──► pipeline_metrics                    │   │
+│  │  (shared)    (per-user)  (per-run)                         │   │
+│  │  ai_cache    self_improvement_config                       │   │
+│  └──────────────────────────────────────────────────────────┘   │
+│                                                                  │
+│  Lambda Functions (compute layer):                               │
+│    Scrapers: scrape_adzuna, scrape_hn, scrape_yc,               │
+│              scrape_apify (generic, actor_id as param)           │
+│    Pipeline: score_batch, tailor_resume, compile_latex,          │
+│              generate_cover_letter, find_contacts                │
+│    Support:  load_config, check_cache, merge_dedup,             │
+│              filter_matched, save_job, upload_s3,                │
+│              send_email, self_improve, notify_error              │
+│                                                                  │
+│  Lambda Layer: shared deps (apify-client, supabase, boto3)      │
+│                                                                  │
+│  S3: resume PDFs, cover letter PDFs                              │
+│  Apify: managed Playwright for LinkedIn/Indeed/Glassdoor/etc     │
+│  SSM Parameter Store: API keys (Apify, Groq, etc.)              │
+└─────────────────────────────────────────────────────────────────┘
 
 React Frontend (Netlify):
-  Dashboard → POST /api/pipeline/run → triggers daily-pipeline
-  Add Job → POST /api/pipeline/run-single → triggers single-job-pipeline
-  Status → GET /api/pipeline/status → reads pipeline_metrics
+  Dashboard  → POST /api/pipeline/run           → triggers daily-pipeline
+  Add Job    → POST /api/pipeline/run-single    → triggers single-job-pipeline
+  Poll       → GET  /api/pipeline/status/:execId → Step Functions describeExecution
+  Dashboard  → GET  /api/pipeline/status         → latest run from pipeline_metrics
 ```
 
 ### Two State Machines
 
-**1. `daily-pipeline`** — full automated run (scheduled + manual trigger)
-**2. `single-job-pipeline`** — user pastes a JD (Add Job flow)
+| State Machine | Type | Trigger | Purpose |
+|--------------|------|---------|---------|
+| `daily-pipeline` | Standard | EventBridge cron (weekdays 7:00 UTC) + API Gateway (manual) | Full automated run: scrape → score → tailor → email |
+| `single-job-pipeline` | Standard | API Gateway (Add Job form) | User-submitted JD: save → score → tailor → return |
 
-Both share the same Lambda functions for scoring, tailoring, compiling, contacts. The only difference is the entry point: daily-pipeline starts with scraping, single-job starts with a user-provided JD.
+Both share the same Lambda functions. Standard type for both (Express doesn't support Map state well for long iterations).
 
-### Key Principle: Scrape Once, Score Per-User
+### Key Principle 1: Supabase Is the Data Bus
+
+**Step Functions has a 256KB payload limit per state transition.** With 9 scrapers returning 50+ jobs with descriptions, full payloads would overflow immediately.
+
+Solution: **Lambdas read from and write to Supabase. Step Functions only passes references (IDs, hashes, counts).**
+
+```
+Scraper Lambda:
+  reads: search config from execution input
+  writes: jobs to jobs_raw table
+  returns: { count: 50, source: "linkedin" }     ← tiny payload
+
+MergeDedup Lambda:
+  reads: jobs_raw (today's scrape)
+  writes: nothing (dedup is a filter)
+  returns: { new_job_hashes: ["abc", "def"] }     ← array of strings
+
+ScoreBatch Lambda:
+  reads: jobs_raw by hashes, user's resumes from Supabase
+  writes: scored jobs to jobs table
+  returns: { matched_hashes: ["abc"] }             ← filtered array
+
+Map iterator (per job):
+  receives: { job_hash: "abc", user_id: "..." }    ← single hash
+  each Lambda reads full job data from Supabase
+```
+
+**No state transition ever exceeds a few KB.**
+
+### Key Principle 2: Scrape Once, Score Per-User
 
 ```
 jobs_raw (SHARED — no user_id)          jobs (PER-USER — has user_id)
@@ -94,14 +123,15 @@ jobs_raw (SHARED — no user_id)          jobs (PER-USER — has user_id)
 │ apply_url                │  resume   │ hiring_manager_score     │
 │ source                   │           │ tech_recruiter_score     │
 │ scraped_at               │           │ matched_resume           │
-│ experience_level         │           │ tailored_pdf_path        │
-│ job_type                 │           │ resume_s3_url            │
-│                          │           │ cover_letter_s3_url      │
-│ Cache: skip if < 24h     │           │ linkedin_contacts        │
-└──────────────────────────┘           │ application_status       │
-                                       │ tailoring_model          │
-  source="manual" entries              │ first_seen               │
-  go here too                          └──────────────────────────┘
+│ experience_level         │           │ resume_s3_url            │
+│ job_type                 │           │ cover_letter_s3_url      │
+│ query_hash               │           │ linkedin_contacts        │
+│                          │           │ application_status       │
+│ Cache key:               │           │ tailoring_model          │
+│ source + query_hash      │           │ first_seen               │
+└──────────────────────────┘           └──────────────────────────┘
+
+Manual jobs (source="manual") go into jobs_raw too — same flow from scoring onward.
 ```
 
 ---
@@ -110,235 +140,424 @@ jobs_raw (SHARED — no user_id)          jobs (PER-USER — has user_id)
 
 ### Sources (API or Apify only — no HTTP scraping)
 
-| Source | Method | Lambda | Cost |
-|--------|--------|--------|------|
-| LinkedIn | Apify LinkedIn Jobs Scraper (managed Playwright) | `scrape_apify_linkedin` | ~$0.50/1K |
-| Indeed | Apify Indeed Scraper (managed Playwright) | `scrape_apify_indeed` | ~$0.50/1K |
-| Glassdoor | Apify Glassdoor Scraper | `scrape_apify_glassdoor` | ~$0.50/1K |
-| Adzuna | REST API (API key) | `scrape_adzuna` | Free |
-| HN Hiring | Algolia API | `scrape_hn` | Free |
-| YC Jobs | WorkAtAStartup JSON API | `scrape_yc` | Free |
-| GradIreland | Apify Web Scraper | `scrape_apify_gradireland` | ~$0.25/1K |
-| IrishJobs | Apify Web Scraper | `scrape_apify_irishjobs` | ~$0.25/1K |
-| Jobs.ie | Apify Web Scraper | `scrape_apify_jobsie` | ~$0.25/1K |
+| Source | Method | Apify Actor ID | Cost |
+|--------|--------|---------------|------|
+| LinkedIn | Apify LinkedIn Jobs Scraper | `hMvNSpz3JnHgl5jkh` | ~$0.50/1K |
+| Indeed | Apify Indeed Scraper | `misceres/indeed-scraper` | ~$0.50/1K |
+| Glassdoor | Apify Glassdoor Scraper | `bebity/glassdoor-scraper` | ~$0.50/1K |
+| Adzuna | REST API (API key) | N/A | Free |
+| HN Hiring | Algolia API | N/A | Free |
+| YC Jobs | WorkAtAStartup JSON API | N/A | Free |
+| GradIreland | Apify Web Scraper | `apify/web-scraper` | ~$0.25/1K |
+| IrishJobs | Apify Web Scraper | `apify/web-scraper` | ~$0.25/1K |
+| Jobs.ie | Apify Web Scraper | `apify/web-scraper` | ~$0.25/1K |
 
-### Each Scraper Lambda
+### Generic Apify Scraper Lambda
 
-Every scraper Lambda follows the same contract:
+Instead of 9 separate scraper Lambdas, use ONE `scrape_apify` Lambda that takes `actor_id` and `run_input` as parameters. This reduces code duplication:
 
+```python
+def handler(event, context):
+    actor_id = event["actor_id"]       # e.g., "hMvNSpz3JnHgl5jkh"
+    run_input = event["run_input"]     # search queries, location filters
+    source_name = event["source"]      # e.g., "linkedin"
+    normalizer = event["normalizer"]   # e.g., "linkedin" → picks normalization logic
+
+    client = ApifyClient(ssm.get("APIFY_API_KEY"))
+    run = client.actor(actor_id).call(run_input=run_input, timeout_secs=300)
+    items = client.dataset(run["defaultDatasetId"]).list_items().items
+
+    # Normalize to standard schema, write to jobs_raw
+    jobs = normalize(items, source_name, normalizer)
+    write_to_jobs_raw(jobs)
+    return {"count": len(jobs), "source": source_name}
 ```
-Input:  { queries: [...], locations: [...], experience_levels: [...], job_types: [...] }
-Output: { jobs: [{ title, company, description, location, apply_url, source, experience_level, job_type }] }
+
+API scrapers (Adzuna, HN, YC) are separate Lambdas since they don't use Apify.
+
+### Apify Web Scraper Config for Irish Sites
+
+GradIreland, IrishJobs, Jobs.ie use the generic `apify/web-scraper` actor with custom page functions:
+
+```javascript
+// Page function for IrishJobs (passed as run_input.pageFunction)
+async function pageFunction(context) {
+    const { request, jQuery: $ } = context;
+    const jobs = [];
+    $('.job-listing').each((i, el) => {
+        jobs.push({
+            title: $(el).find('.job-title').text().trim(),
+            company: $(el).find('.company-name').text().trim(),
+            location: $(el).find('.location').text().trim(),
+            description: $(el).find('.job-description').text().trim(),
+            apply_url: $(el).find('a.job-title').attr('href'),
+        });
+    });
+    return jobs;
+}
 ```
 
-Apify scrapers: Lambda calls `ApifyClient.actor(actor_id).call(run_input)`, waits for results, normalizes to the output schema.
+Each site has a config stored in SSM Parameter Store: `start_urls`, `page_function`, `selectors`. When a site changes their HTML, update the SSM config — no Lambda redeployment needed.
 
-API scrapers: Lambda calls the REST API directly, normalizes response.
+### Lambda Timeouts
+
+| Lambda | Timeout | Why |
+|--------|---------|-----|
+| `scrape_apify` | 300s (5 min) | Apify actor runs take 2-5 min |
+| `scrape_adzuna` | 30s | Simple API call |
+| `scrape_hn` | 60s | API call + comment parsing |
+| `scrape_yc` | 30s | Simple JSON API |
+| `score_batch` | 120s | AI council with 5-job batches |
+| `tailor_resume` | 120s | AI council generation |
+| `compile_latex` | 60s | tectonic compilation |
+| `generate_cover_letter` | 120s | AI council generation |
+| `find_contacts` | 120s | Apify Google search |
+| All others | 30s | Simple DB operations |
+
+### Scraper Cache
+
+Cache key: **`source + query_hash`** (not just source).
+
+```python
+query_hash = hashlib.md5(f"{query}|{location}|{experience_level}".encode()).hexdigest()[:12]
+
+# Check cache before scraping
+cached = supabase.table("jobs_raw") \
+    .select("count", count="exact") \
+    .eq("source", source) \
+    .eq("query_hash", query_hash) \
+    .gte("scraped_at", now - timedelta(hours=cache_ttl)) \
+    .execute()
+
+if cached.count > 0:
+    return {"count": cached.count, "source": source, "cached": True}
+```
+
+Cache TTLs per source:
+| Source | TTL | Why |
+|--------|-----|-----|
+| LinkedIn | 24h | Job posts stay up for weeks |
+| Indeed | 24h | Similar to LinkedIn |
+| Adzuna | 24h | API results stable within a day |
+| HN Hiring | 168h (1 week) | Monthly thread, posts don't change |
+| YC | 48h | Startups update infrequently |
+| Irish sites | 24h | Daily refresh sufficient |
 
 ### Apify Budget Control
 
-- Track Apify spending per run in `pipeline_metrics` table
-- Each scraper Lambda checks `APIFY_MONTHLY_BUDGET` env var (default: $5)
-- If monthly spend > budget, skip Apify scrapers and log warning
-- Pipeline continues with API-only sources (Adzuna, HN, YC)
-- Email summary includes budget warning
+```python
+# In each Apify scraper Lambda
+monthly_spent = supabase.table("pipeline_metrics") \
+    .select("apify_cost_cents") \
+    .gte("created_at", first_of_month) \
+    .execute()
+
+total_cents = sum(r["apify_cost_cents"] for r in monthly_spent.data)
+budget_cents = int(os.environ.get("APIFY_MONTHLY_BUDGET_CENTS", "500"))  # $5 default
+
+if total_cents >= budget_cents:
+    return {"count": 0, "source": source, "skipped": "budget_exceeded"}
+```
 
 ---
 
-## 4. Caching & Rate Limiting
+## 4. State Machine Definitions
 
-### Scraper Cache (`jobs_raw`)
-- Before running scrapers, `check_cache` Lambda queries `jobs_raw` by source
-- If `source=linkedin` has `scraped_at > NOW() - 24h`, skip LinkedIn scraper
-- For multi-tenant: User 2 in Dublin benefits from User 1's scrape earlier that day
-- Cache TTL configurable per source (LinkedIn: 24h, HN: 12h, Adzuna: 24h)
+### 4.1 Daily Pipeline (Standard)
 
-### AI Response Cache
-- Migrate from SQLite (`output/.ai_cache.db`) to Supabase `ai_cache` table
-- Key: hash of (prompt + system + model)
-- TTL: 72h
-- Multi-tenant safe: cache entries are prompt-based, not user-based
-- Same JD scored twice = cache hit (solves scoring inconsistency too)
+```
+LoadUserConfig
+    │
+    ▼
+CheckScraperCache
+    │ returns: { scrapers_to_run: [...], cached_sources: [...] }
+    ▼
+RunScrapers (Parallel)
+    │ Each branch: scrape → write to jobs_raw → return {count, source}
+    │ Retry: 2 attempts, exponential backoff
+    │ Catch: return {count: 0, error: "..."} (pipeline continues)
+    ▼
+MergeAndDedup
+    │ reads: today's jobs_raw entries
+    │ dedup: against ALL jobs_raw (not just today's)
+    │ returns: { new_job_hashes: ["abc", ...], total_new: 25 }
+    ▼
+ScoreBatch
+    │ reads: jobs_raw by hashes + user's resumes
+    │ scores using AI council (same endpoint as Add Job)
+    │ writes: scored entries to jobs table
+    │ returns: { matched_hashes: ["abc", ...], matched_count: 8 }
+    ▼
+FilterMatched
+    │ filters by min_score (from self_improvement_config or default 60)
+    │ returns: { job_items: [{job_hash, user_id}, ...] }
+    ▼
+ProcessMatchedJobs (Map, MaxConcurrency: 3)
+    │ Each iteration receives: { job_hash: "abc", user_id: "..." }
+    │
+    │   ├── CheckScoreForTailoring (Choice)
+    │   │   score >= 85 → TailorLightTouch
+    │   │   score < 85  → TailorFullRewrite
+    │   ├── CompileResume
+    │   ├── GenerateCoverLetter
+    │   ├── CompileCoverLetter
+    │   ├── UploadArtifacts (S3)
+    │   ├── FindContacts
+    │   └── SaveJob (update jobs table with S3 URLs, contacts)
+    ▼
+SavePipelineMetrics
+    │ writes: per-scraper metrics to pipeline_metrics table
+    ▼
+SendEmailSummary
+    │ reads: today's matched jobs from jobs table
+    │ sends: HTML email via Gmail SMTP
+    ▼
+SelfImprove
+    │ reads: today's metrics + historical data
+    │ AI analyzes and suggests adjustments
+    │ writes: to self_improvement_config table
+    └── End
+
+TOP-LEVEL CATCH:
+    Any unhandled error → NotifyError Lambda → sends error email → End
+```
+
+### 4.2 Single-Job Pipeline (Standard)
+
+```
+SaveToJobsRaw
+    │ writes: user's JD to jobs_raw with source="manual"
+    │ returns: { job_hash: "abc" }
+    ▼
+ScoreSingleJob
+    │ reads: job from jobs_raw + user's resumes
+    │ uses SAME score_batch Lambda (consistent scoring)
+    │ writes: to jobs table
+    │ returns: { job_hash, match_score, matched_resume }
+    ▼
+CheckScoreThreshold (Choice)
+    │ match_score >= 85 → TailorLightTouch
+    │ match_score < 85  → TailorFullRewrite
+    ▼
+TailorLightTouch / TailorFullRewrite
+    │ reads: job from jobs_raw, base resume from Supabase
+    │ AI tailors (light or full)
+    │ writes: tailored_tex to S3 temp location
+    │ returns: { job_hash, tex_s3_key }
+    ▼
+CompileResume
+    │ reads: tex from S3
+    │ compiles with tectonic
+    │ writes: PDF to S3
+    │ returns: { job_hash, pdf_s3_key }
+    ▼
+GenerateCoverLetter → CompileCoverLetter
+    │ same pattern as resume
+    ▼
+UploadArtifacts
+    │ moves PDFs to permanent S3 paths (users/{user_id}/...)
+    │ generates presigned URLs
+    ▼
+FindContacts
+    │ Apify Google search for LinkedIn profiles
+    ▼
+SaveJob
+    │ updates jobs table with S3 URLs, contacts, model name
+    │ returns: full job object for frontend
+    └── End
+
+TOP-LEVEL CATCH:
+    Any error → return error details (no email, frontend shows error)
+```
+
+---
+
+## 5. API Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `POST /api/pipeline/run` | New | Trigger daily pipeline (manual) |
+| `POST /api/pipeline/run-single` | New | Trigger single-job pipeline (Add Job) |
+| `GET /api/pipeline/status` | New | Latest run metrics from pipeline_metrics |
+| `GET /api/pipeline/status/{executionId}` | New | Poll specific execution (Step Functions describeExecution) |
+| `POST /api/score-batch` | New | Score jobs against user's resumes |
+| `POST /api/compile-latex` | New | Compile LaTeX → PDF |
+| `POST /api/tailor` | Modified | Calls score-batch internally for consistency |
+| `PATCH /api/dashboard/jobs/{id}` | Existing | Extended for location, apply_url editing |
+
+### Execution Polling
+
+```python
+@app.get("/api/pipeline/status/{execution_id}")
+def get_execution_status(execution_id: str, user: AuthUser = Depends(get_current_user)):
+    """Poll a Step Functions execution. Used by Add Job and Run Pipeline UI."""
+    sfn = boto3.client("stepfunctions")
+    # Reconstruct ARN from execution_id
+    arn = f"arn:aws:states:{REGION}:{ACCOUNT_ID}:execution:{STATE_MACHINE_NAME}:{execution_id}"
+    response = sfn.describe_execution(executionArn=arn)
+
+    status = response["status"]  # RUNNING, SUCCEEDED, FAILED, TIMED_OUT
+    result = None
+    if status == "SUCCEEDED":
+        result = json.loads(response["output"])
+    elif status == "FAILED":
+        result = {"error": response.get("cause", "Unknown error")}
+
+    return {
+        "execution_id": execution_id,
+        "status": status.lower(),
+        "result": result,
+        "started_at": response["startDate"].isoformat(),
+    }
+```
+
+Frontend polls this every 2 seconds until status is `succeeded` or `failed`.
 
 ### Rate Limiting
-| Resource | Limit | Implementation |
-|----------|-------|----------------|
-| Apify monthly spend | $5 default, configurable | Track in `pipeline_metrics`, check before scraping |
-| Lambda concurrency | 10 reserved per scraper | SAM `ReservedConcurrentExecutions` |
-| Step Functions | 1 execution per user at a time | Check before starting, reject if already running |
-| AI providers | Existing council failover handles this | Groq → Qwen → OpenRouter → Claude chain |
-| Manual triggers | 5 per user per day | Counter in Supabase, check in API |
+
+```python
+@app.post("/api/pipeline/run")
+def trigger_pipeline(user: AuthUser = Depends(get_current_user)):
+    # 1. Check concurrent execution limit (1 per user)
+    running = sfn.list_executions(
+        stateMachineArn=STATE_MACHINE_ARN,
+        statusFilter="RUNNING",
+    )
+    user_running = [e for e in running["executions"] 
+                    if json.loads(e.get("input", "{}")).get("user_id") == user.id]
+    if user_running:
+        raise HTTPException(409, "Pipeline already running")
+
+    # 2. Check daily limit (5 manual triggers per user per day)
+    today_count = supabase.table("pipeline_metrics") \
+        .select("count", count="exact") \
+        .eq("user_id", user.id) \
+        .eq("run_date", date.today().isoformat()) \
+        .execute()
+    if today_count.count >= 5:
+        raise HTTPException(429, "Daily limit reached (5 runs/day)")
+
+    # 3. Start execution
+    response = sfn.start_execution(
+        stateMachineArn=STATE_MACHINE_ARN,
+        input=json.dumps({"user_id": user.id}),
+        name=f"{user.id}-{int(time.time())}",
+    )
+    return {"execution_id": response["executionArn"].split(":")[-1], "status": "started"}
+```
 
 ---
 
-## 5. State Machine Definitions
+## 6. Self-Improvement: How It Works
 
-### 5.1 Daily Pipeline State Machine
+### What Gets Analyzed (end of each pipeline run)
 
-```json
-{
-  "StartAt": "LoadUserConfig",
-  "States": {
-    "LoadUserConfig": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:...:load_user_config",
-      "Next": "CheckScraperCache"
-    },
-    "CheckScraperCache": {
-      "Type": "Task",
-      "Resource": "arn:aws:lambda:...:check_scraper_cache",
-      "Next": "RunScrapers"
-    },
-    "RunScrapers": {
-      "Type": "Parallel",
-      "Branches": [
-        { "StartAt": "ScrapeAdzuna", "States": { "ScrapeAdzuna": { "Type": "Task", "Resource": "...:scrape_adzuna", "End": true, "Retry": [{"ErrorEquals": ["States.ALL"], "MaxAttempts": 2, "BackoffRate": 2}], "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "ScrapeAdzunaFailed"}] }, "ScrapeAdzunaFailed": { "Type": "Pass", "Result": {"jobs": [], "error": "scraper failed"}, "End": true } } },
-        { "StartAt": "ScrapeLinkedIn", "States": { "ScrapeLinkedIn": { "Type": "Task", "Resource": "...:scrape_apify_linkedin", "End": true, "Retry": [{"ErrorEquals": ["States.ALL"], "MaxAttempts": 2}], "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "ScrapeLinkedInFailed"}] }, "ScrapeLinkedInFailed": { "Type": "Pass", "Result": {"jobs": [], "error": "scraper failed"}, "End": true } } },
-        { "StartAt": "ScrapeIndeed", "States": { "ScrapeIndeed": { "Type": "Task", "Resource": "...:scrape_apify_indeed", "End": true, "Retry": [{"ErrorEquals": ["States.ALL"], "MaxAttempts": 2}], "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "ScrapeIndeedFailed"}] }, "ScrapeIndeedFailed": { "Type": "Pass", "Result": {"jobs": [], "error": "scraper failed"}, "End": true } } },
-        { "StartAt": "ScrapeHN", "States": { "ScrapeHN": { "Type": "Task", "Resource": "...:scrape_hn", "End": true, "Retry": [{"ErrorEquals": ["States.ALL"], "MaxAttempts": 2}], "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "ScrapeHNFailed"}] }, "ScrapeHNFailed": { "Type": "Pass", "Result": {"jobs": [], "error": "scraper failed"}, "End": true } } },
-        { "StartAt": "ScrapeYC", "States": { "ScrapeYC": { "Type": "Task", "Resource": "...:scrape_yc", "End": true, "Retry": [{"ErrorEquals": ["States.ALL"], "MaxAttempts": 2}], "Catch": [{"ErrorEquals": ["States.ALL"], "Next": "ScrapeYCFailed"}] }, "ScrapeYCFailed": { "Type": "Pass", "Result": {"jobs": [], "error": "scraper failed"}, "End": true } } }
-      ],
-      "Next": "MergeAndDedup"
-    },
-    "MergeAndDedup": {
-      "Type": "Task",
-      "Resource": "...:merge_and_dedup",
-      "Next": "ScoreBatch"
-    },
-    "ScoreBatch": {
-      "Type": "Task",
-      "Resource": "...:score_batch",
-      "Next": "FilterMatched"
-    },
-    "FilterMatched": {
-      "Type": "Task",
-      "Resource": "...:filter_matched",
-      "Next": "ProcessMatchedJobs"
-    },
-    "ProcessMatchedJobs": {
-      "Type": "Map",
-      "ItemsPath": "$.matched_jobs",
-      "MaxConcurrency": 3,
-      "Iterator": {
-        "StartAt": "TailorResume",
-        "States": {
-          "TailorResume": { "Type": "Task", "Resource": "...:tailor_resume", "Next": "CompileResume" },
-          "CompileResume": { "Type": "Task", "Resource": "...:compile_latex", "Next": "GenerateCoverLetter" },
-          "GenerateCoverLetter": { "Type": "Task", "Resource": "...:generate_cover_letter", "Next": "CompileCoverLetter" },
-          "CompileCoverLetter": { "Type": "Task", "Resource": "...:compile_latex", "Next": "UploadArtifacts" },
-          "UploadArtifacts": { "Type": "Task", "Resource": "...:upload_s3", "Next": "FindContacts" },
-          "FindContacts": { "Type": "Task", "Resource": "...:find_contacts", "Next": "SaveJob" },
-          "SaveJob": { "Type": "Task", "Resource": "...:save_job_to_supabase", "End": true }
-        }
-      },
-      "Next": "SendEmailSummary"
-    },
-    "SendEmailSummary": {
-      "Type": "Task",
-      "Resource": "...:send_email_summary",
-      "Next": "SelfImprove"
-    },
-    "SelfImprove": {
-      "Type": "Task",
-      "Resource": "...:self_improve",
-      "End": true
-    }
-  }
-}
+```python
+def self_improve(event, context):
+    user_id = event["user_id"]
+    run_metrics = event["metrics"]  # from SavePipelineMetrics
+
+    # Read historical data
+    last_30_days = supabase.table("pipeline_metrics") \
+        .select("*").eq("user_id", user_id) \
+        .gte("run_date", thirty_days_ago).execute()
+
+    recent_jobs = supabase.table("jobs") \
+        .select("source,match_score,title").eq("user_id", user_id) \
+        .gte("first_seen", seven_days_ago).execute()
+
+    current_config = supabase.table("self_improvement_config") \
+        .select("*").eq("user_id", user_id).execute()
+
+    # AI analysis
+    adjustments = ai_council.analyze(metrics=last_30_days, jobs=recent_jobs, config=current_config)
+    # Returns: { query_weights, scraper_weights, scoring_threshold, keyword_emphasis }
+
+    # Save adjustments
+    for config_type, config_data in adjustments.items():
+        supabase.table("self_improvement_config").upsert({
+            "user_id": user_id,
+            "config_type": config_type,
+            "config_data": config_data,
+        }).execute()
 ```
 
-### 5.2 Single-Job Pipeline State Machine (Add Job)
+### How Adjustments Apply (start of next pipeline run)
 
-```json
-{
-  "StartAt": "SaveToJobsRaw",
-  "States": {
-    "SaveToJobsRaw": {
-      "Type": "Task",
-      "Resource": "...:save_raw_job",
-      "Next": "ScoreSingleJob"
-    },
-    "ScoreSingleJob": {
-      "Type": "Task",
-      "Resource": "...:score_batch",
-      "Comment": "Same Lambda, just one job — consistent scoring",
-      "Next": "CheckScoreThreshold"
-    },
-    "CheckScoreThreshold": {
-      "Type": "Choice",
-      "Choices": [
-        {
-          "Variable": "$.match_score",
-          "NumericGreaterThanEquals": 85,
-          "Next": "TailorLightTouch"
-        }
-      ],
-      "Default": "TailorFullRewrite"
-    },
-    "TailorLightTouch": {
-      "Type": "Task",
-      "Resource": "...:tailor_resume",
-      "Parameters": { "light_touch": true },
-      "Next": "CompileResume"
-    },
-    "TailorFullRewrite": {
-      "Type": "Task",
-      "Resource": "...:tailor_resume",
-      "Parameters": { "light_touch": false },
-      "Next": "CompileResume"
-    },
-    "CompileResume": { "Type": "Task", "Resource": "...:compile_latex", "Next": "GenerateCoverLetter" },
-    "GenerateCoverLetter": { "Type": "Task", "Resource": "...:generate_cover_letter", "Next": "CompileCoverLetter" },
-    "CompileCoverLetter": { "Type": "Task", "Resource": "...:compile_latex", "Next": "UploadArtifacts" },
-    "UploadArtifacts": { "Type": "Task", "Resource": "...:upload_s3", "Next": "FindContacts" },
-    "FindContacts": { "Type": "Task", "Resource": "...:find_contacts", "Next": "SaveJob" },
-    "SaveJob": { "Type": "Task", "Resource": "...:save_job_to_supabase", "End": true }
-  }
-}
+```python
+def load_user_config(event, context):
+    user_id = event["user_id"]
+
+    # 1. Load base search config
+    search_config = supabase.table("user_search_configs") \
+        .select("*").eq("user_id", user_id).execute()
+
+    # 2. Load self-improvement adjustments
+    adjustments = supabase.table("self_improvement_config") \
+        .select("*").eq("user_id", user_id).execute()
+
+    # 3. Merge: adjustments modify the base config
+    config = search_config.data[0] if search_config.data else DEFAULT_CONFIG
+
+    for adj in adjustments.data:
+        if adj["config_type"] == "query_weights":
+            # Reorder queries by weight (higher weight = scraped first)
+            config["queries"] = sorted(config["queries"],
+                key=lambda q: adj["config_data"].get(q, 0.5), reverse=True)
+        elif adj["config_type"] == "scraper_weights":
+            # Skip scrapers with weight < 0.1 (deemed unhelpful)
+            config["skip_scrapers"] = [s for s, w in adj["config_data"].items() if w < 0.1]
+        elif adj["config_type"] == "scoring_threshold":
+            config["min_match_score"] = adj["config_data"].get("threshold", 60)
+        elif adj["config_type"] == "keyword_emphasis":
+            # Pass to tailoring prompts as priority keywords
+            config["emphasis_keywords"] = adj["config_data"].get("keywords", [])
+
+    return config
 ```
-
-Note the **score-first branching**: `CheckScoreThreshold` routes to light-touch or full rewrite based on base score. This is built into the state machine, not buried in Python code.
 
 ---
 
-## 6. New Supabase Tables
+## 7. Supabase Schema
 
 ```sql
 -- Shared raw job data (scraped once, used by all users)
 CREATE TABLE jobs_raw (
-  job_hash TEXT PRIMARY KEY,
+  job_hash TEXT PRIMARY KEY,            -- hash of (company + title + description[:500])
   title TEXT NOT NULL,
   company TEXT NOT NULL,
   description TEXT,
   location TEXT,
   apply_url TEXT,
-  source TEXT NOT NULL,
-  experience_level TEXT,
-  job_type TEXT,
+  source TEXT NOT NULL,                 -- linkedin, indeed, adzuna, hn, manual, etc.
+  experience_level TEXT,                -- entry_level, mid_level, senior, internship
+  job_type TEXT,                        -- full_time, part_time, contract, internship
+  query_hash TEXT,                      -- hash of (query + location + filters) for cache key
   scraped_at TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_jobs_raw_source_scraped ON jobs_raw(source, scraped_at);
+CREATE INDEX idx_jobs_raw_source_query ON jobs_raw(source, query_hash, scraped_at);
+CREATE INDEX idx_jobs_raw_scraped ON jobs_raw(scraped_at);
 
--- Modify existing jobs table to reference jobs_raw
--- (add job_hash FK, keep existing columns for backward compat)
+-- Add job_hash FK to existing jobs table
 ALTER TABLE jobs ADD COLUMN IF NOT EXISTS job_hash TEXT REFERENCES jobs_raw(job_hash);
 
 -- Self-improvement configuration (per-user)
 CREATE TABLE self_improvement_config (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id UUID REFERENCES users(id) NOT NULL,
-  config_type TEXT NOT NULL,
+  config_type TEXT NOT NULL,            -- query_weights, scraper_weights, scoring_threshold, keyword_emphasis
   config_data JSONB NOT NULL,
   applied_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(user_id, config_type)
 );
 
--- Pipeline run metrics (per-user, per-scraper)
+-- Pipeline run metrics (per-user, per-scraper, per-run)
 CREATE TABLE pipeline_metrics (
   id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
   user_id UUID REFERENCES users(id) NOT NULL,
   run_date DATE NOT NULL,
+  execution_id TEXT,                    -- Step Functions execution ID
   scraper_name TEXT NOT NULL,
   jobs_found INT DEFAULT 0,
   jobs_matched INT DEFAULT 0,
@@ -348,10 +567,11 @@ CREATE TABLE pipeline_metrics (
   error_message TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+CREATE INDEX idx_metrics_user_date ON pipeline_metrics(user_id, run_date);
 
 -- AI response cache (migrated from SQLite, shared across users)
 CREATE TABLE ai_cache (
-  cache_key TEXT PRIMARY KEY,
+  cache_key TEXT PRIMARY KEY,           -- hash of (prompt + system + model)
   response TEXT NOT NULL,
   provider TEXT,
   model TEXT,
@@ -359,99 +579,106 @@ CREATE TABLE ai_cache (
   expires_at TIMESTAMPTZ NOT NULL
 );
 CREATE INDEX idx_ai_cache_expires ON ai_cache(expires_at);
+
+-- RLS policies
+ALTER TABLE jobs_raw ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Anyone can read jobs_raw" ON jobs_raw FOR SELECT USING (true);
+CREATE POLICY "Service role writes jobs_raw" ON jobs_raw FOR ALL USING (auth.role() = 'service_role');
+
+ALTER TABLE self_improvement_config ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users read own config" ON self_improvement_config FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Service role full access" ON self_improvement_config FOR ALL USING (auth.role() = 'service_role');
+
+ALTER TABLE pipeline_metrics ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users read own metrics" ON pipeline_metrics FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Service role full access" ON pipeline_metrics FOR ALL USING (auth.role() = 'service_role');
+
+ALTER TABLE ai_cache ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Service role only" ON ai_cache FOR ALL USING (auth.role() = 'service_role');
+```
+
+### Data Migration (existing 95 jobs)
+
+```sql
+-- Backfill jobs_raw from existing jobs
+INSERT INTO jobs_raw (job_hash, title, company, description, location, apply_url, source, scraped_at)
+SELECT
+  md5(company || '|' || title || '|' || left(coalesce(description, ''), 500)) as job_hash,
+  title, company, description, location, apply_url, source, first_seen
+FROM jobs
+ON CONFLICT (job_hash) DO NOTHING;
+
+-- Link existing jobs to jobs_raw
+UPDATE jobs SET job_hash = md5(company || '|' || title || '|' || left(coalesce(description, ''), 500));
 ```
 
 ---
 
-## 7. API Endpoints (new/modified)
+## 8. Lambda Layer (shared dependencies)
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `POST /api/pipeline/run` | New | Trigger daily pipeline for authenticated user |
-| `POST /api/pipeline/run-single` | New | Trigger single-job pipeline (Add Job) |
-| `GET /api/pipeline/status` | New | Latest run status, scraper health, cost |
-| `POST /api/score-batch` | New | Score jobs (used by both pipelines) |
-| `POST /api/compile-latex` | New | Compile LaTeX → PDF |
-| `POST /api/tailor` | Modified | Refactored to call score-batch internally |
-| `PATCH /api/dashboard/jobs/{id}` | Existing | Extended for location, apply_url editing |
+Package shared dependencies as a Lambda Layer to avoid duplicating them across 15+ functions:
 
-### Manual Trigger Endpoint
-
-```python
-@app.post("/api/pipeline/run")
-def trigger_pipeline(user: AuthUser = Depends(get_current_user)):
-    """Trigger the daily pipeline for the authenticated user."""
-    # Check if already running
-    # Check daily limit (5 manual triggers per day)
-    # Start Step Functions execution with user's config
-    import boto3
-    sfn = boto3.client("stepfunctions")
-    response = sfn.start_execution(
-        stateMachineArn=STATE_MACHINE_ARN,
-        input=json.dumps({"user_id": user.id}),
-    )
-    return {"execution_id": response["executionArn"].split(":")[-1], "status": "started"}
+```
+layer/
+  python/
+    apify_client/
+    supabase/
+    postgrest/
+    httpx/
+    yaml/
 ```
 
-### Add Job (Single-Job Pipeline)
-
-```python
-@app.post("/api/pipeline/run-single")
-def trigger_single_job(body: dict, user: AuthUser = Depends(get_current_user)):
-    """Trigger the single-job pipeline for a user-submitted JD."""
-    sfn = boto3.client("stepfunctions")
-    response = sfn.start_execution(
-        stateMachineArn=SINGLE_JOB_STATE_MACHINE_ARN,
-        input=json.dumps({
-            "user_id": user.id,
-            "title": body.get("title", ""),
-            "company": body.get("company", ""),
-            "description": body["description"],
-            "location": body.get("location", ""),
-            "apply_url": body.get("apply_url", ""),
-            "source": "manual",
-        }),
-    )
-    return {
-        "execution_id": response["executionArn"].split(":")[-1],
-        "poll_url": f"/api/pipeline/status/{response['executionArn'].split(':')[-1]}",
-    }
+SAM template:
+```yaml
+SharedDepsLayer:
+  Type: AWS::Serverless::LayerVersion
+  Properties:
+    ContentUri: layer/
+    CompatibleRuntimes:
+      - python3.11
 ```
+
+All Lambda functions reference this layer. Reduces individual function package size from ~50MB to ~5MB.
 
 ---
 
-## 8. Email Workflows
+## 9. Email Workflows
 
 ### Daily Summary
-Lambda `send_email_summary` runs at end of daily pipeline. Uses existing `email_notifier.py` logic (Gmail SMTP) or SES. Sends HTML table of matched jobs with scores, links, and artifacts.
+Lambda `send_email_summary` at end of daily pipeline. Uses existing Gmail SMTP (from `email_notifier.py`). Sends HTML table of matched jobs with scores, artifact links.
 
 ### Stale Job Nudges (weekly)
 EventBridge rule: every Monday 9:00 UTC → Lambda `send_stale_nudges`
-- Query Supabase: `application_status = 'New' AND first_seen < 7 days ago`
+- Query: `application_status = 'New' AND first_seen < 7 days ago`
 - Send Gmail digest if count > 0
 
 ### Follow-Up Reminders (daily)
 EventBridge rule: daily 10:00 UTC → Lambda `send_followup_reminders`
-- Query Supabase: `application_status = 'Applied' AND last update > 7 days ago`
-- Send Gmail reminder with job list and contacts
+- Query: `application_status = 'Applied'` with no status change in 7+ days
+- Send Gmail reminder with contacts
+
+### Error Notification
+Top-level Catch on both state machines → Lambda `notify_error`
+- Sends email: "Pipeline failed at step X: error message"
+- Records failure in `pipeline_metrics`
 
 ---
 
-## 9. Frontend Changes
+## 10. Frontend Changes
 
 ### Pipeline Status Bar
-Replace hardcoded "runs daily at 7:00 UTC" with live status from `GET /api/pipeline/status`:
+Replace hardcoded text with live `GET /api/pipeline/status`:
 - Last run date, jobs found/matched/tailored
 - Scraper health badges (green/red per source)
-- Apify budget usage
+- Apify budget usage bar
 
 ### Run Pipeline Button
-Dashboard header: "Run Pipeline" button → `POST /api/pipeline/run` → polls status
+Dashboard header: "Run Pipeline" button → `POST /api/pipeline/run` → shows spinner → polls `GET /api/pipeline/status/{execId}` every 5s → shows results when done.
 
 ### Add Job Flow (refactored)
-Current: synchronous `POST /api/tailor` → wait 30-60s → show result
-New: `POST /api/pipeline/run-single` → get `poll_url` → poll every 2s → show result
-Same UX, but uses the same Step Functions pipeline as automated runs.
+Current: synchronous `POST /api/tailor` → wait 30-60s
+New: `POST /api/pipeline/run-single` → get `poll_url` → poll `GET /api/pipeline/status/{execId}` every 2s → show result
+Same UX (progress indicator already built), consistent scoring.
 
 ### Additional Frontend Polish
 - Skills tags (extract from JD, show as chips)
@@ -459,10 +686,11 @@ Same UX, but uses the same Step Functions pipeline as automated runs.
 - Inline PDF preview (iframe)
 - Actual AI model name display
 - Manual job editing (location, apply_url)
+- User profile auto-generated from resume upload
 
 ---
 
-## 10. Cost Estimate
+## 11. Cost Estimate
 
 | Component | Monthly Cost (1 user) | Monthly Cost (100 users) |
 |-----------|----------------------|--------------------------|
@@ -471,36 +699,39 @@ Same UX, but uses the same Step Functions pipeline as automated runs.
 | Apify (shared cache) | ~$5-10 | ~$10-25 |
 | S3 storage | ~$0.50 | ~$5 |
 | EventBridge | ~$0.01 | ~$0.10 |
+| SSM Parameter Store | Free | Free |
+| Lambda Layer | Free | Free |
 | **Total** | **~$7-12/mo** | **~$30-55/mo** |
-
-Compare: n8n on EC2 = $20/mo for 1 user, $20/user for multi-tenant.
 
 ---
 
-## 11. Security
+## 12. Security
 
 - All Lambda functions use IAM roles (no hardcoded credentials)
-- Apify API key in SSM Parameter Store (not env vars)
-- Step Functions execution input contains user_id (validated by Lambda)
+- API keys in SSM Parameter Store (encrypted, versioned)
+- Step Functions execution input validated by Lambda (user_id must match JWT)
 - Rate limiting: 5 manual triggers/day/user, 1 concurrent execution/user
 - Supabase RLS on all per-user tables
 - S3 paths scoped by user_id: `users/{user_id}/...`
+- Presigned URLs for PDF access (30-day expiry)
 
 ---
 
-## 12. Migration Plan
+## 13. Migration Plan
 
 ### Phase 1: Foundation (Days 1-2)
-- Create Supabase tables (jobs_raw, ai_cache, self_improvement_config, pipeline_metrics)
-- Write all scraper Lambda functions
-- Define both Step Functions state machines in SAM template.yaml
+- Create Supabase tables + migrate existing data
+- Build Lambda Layer with shared deps
+- Write scraper Lambdas (generic Apify + API scrapers)
+- Write pipeline Lambdas (score, tailor, compile, contacts, email, self-improve)
+- Define both Step Functions state machines in `template.yaml`
 - `sam deploy`
 
 ### Phase 2: Integration (Days 3-4)
 - Wire frontend: pipeline status, Run Pipeline button, Add Job refactor
 - Test each scraper individually
 - Test full pipeline end-to-end
-- Frontend polish (skills tags, card view, PDF preview)
+- Frontend polish (skills tags, card view, PDF preview, user profile)
 
 ### Phase 3: Shadow Mode (Days 5-6)
 - Run Step Functions pipeline alongside GitHub Actions
@@ -508,14 +739,14 @@ Compare: n8n on EC2 = $20/mo for 1 user, $20/user for multi-tenant.
 - Fix discrepancies
 
 ### Phase 4: Cutover (Day 7)
-- Disable GitHub Actions cron
+- Disable GitHub Actions cron (keep workflow_dispatch for fallback)
 - Activate EventBridge scheduler
-- Set up stale nudge + follow-up reminder schedules
+- Set up stale nudge + follow-up reminder EventBridge rules
 - Monitor first 3 automated runs
 
 ---
 
-## 13. Multi-Tenant Scaling (architectural decisions made now)
+## 14. Multi-Tenant Scaling
 
 | Decision | Why |
 |----------|-----|
@@ -525,49 +756,78 @@ Compare: n8n on EC2 = $20/mo for 1 user, $20/user for multi-tenant.
 | Apify budget tracking | Prevent runaway costs as users scale |
 | User search config in Supabase | Each user customizes queries, locations, experience levels |
 | S3 paths by user_id | Clean isolation, no cross-user data leaks |
-| EventBridge per-user schedules | Each user can set their preferred pipeline time |
+| Lambda Layer shared deps | One layer, all functions, all users |
 
-### Multi-Domain (engineering, marketing, design, etc.)
-Pipeline is domain-agnostic. Users set their own queries and upload domain-specific resumes. AI council scores based on actual resume content — handles any domain naturally.
+### Multi-User Scheduling
 
-### Internships
-Just another `experience_level` filter. Users set `["internship", "entry_level"]` in their search config. Passed to Apify/API scraper parameters.
+For 1-10 users: one EventBridge rule triggers a `dispatch_pipelines` Lambda that loops through active users and starts an execution for each.
+
+For 100+ users: EventBridge rule → SQS queue with user_ids → Lambda consumes queue → starts Step Functions execution per user. This handles concurrency and throttling naturally.
+
+### Multi-Domain & Internships
+
+Pipeline is domain-agnostic. Each user's `user_search_configs` table row defines:
+```json
+{
+  "queries": ["software engineer", "devops"],
+  "locations": ["Dublin", "Remote"],
+  "experience_levels": ["entry_level", "mid_level"],
+  "job_types": ["full_time"],
+  "excluded_companies": ["Temu"]
+}
+```
+
+A marketing intern would have:
+```json
+{
+  "queries": ["digital marketing intern", "social media"],
+  "locations": ["Dublin"],
+  "experience_levels": ["internship"],
+  "job_types": ["internship", "part_time"]
+}
+```
+
+Same scrapers, same pipeline, different inputs. AI scores against whatever resume the user uploaded.
 
 ---
 
-## 14. How Future Phases Fit In
+## 15. How Future Phases Fit In
 
-| Phase | How it integrates with Step Functions |
-|-------|--------------------------------------|
-| **2B Editor** | `/api/compile-latex` already in this spec. Add CloudWatch warmer for fast compilation. Frontend-only — no pipeline changes. |
+| Phase | Integration |
+|-------|-------------|
+| **2B Editor** | `/api/compile-latex` already in this spec. Add CloudWatch warmer for sub-second compilation. Frontend-only. |
 | **2C PDF-to-LaTeX** | New Lambda endpoint. Feeds into editor. No pipeline changes. |
-| **2D Company Intel** | Add `enrich_company` Lambda step between scoring and tailoring in the daily pipeline. OR: separate on-demand Step Functions triggered when user views Research tab. Enrichment data cached in `company_intel` Supabase table. |
+| **2D Company Intel** | Add `enrich_company` step in daily pipeline (between scoring and tailoring). OR: separate on-demand Lambda triggered from Research tab. Cache in `company_intel` table. |
 | **2F Interview Prep** | Pure Lambda + frontend. No pipeline dependency. |
-| **2G Analytics** | `pipeline_metrics` table (this spec) feeds the dashboard. CloudWatch alarms replace n8n alerting. EventBridge + SNS for error notifications. |
+| **2G Analytics** | `pipeline_metrics` feeds dashboard. CloudWatch alarms for error alerting. EventBridge + SNS for notifications. |
 
-The Step Functions architecture is **extensible by adding Lambda functions and states** — no infrastructure changes needed for any future phase.
-
----
-
-## 15. Rollback Plan
-
-GitHub Actions workflow stays in the repo (cron commented out, `workflow_dispatch` active). If Step Functions fails:
-1. Re-enable GitHub Actions cron
-2. Pipeline runs on GH Actions as before
-3. Debug Step Functions without time pressure
+The architecture is **extensible by adding Lambda functions and Step Functions states** — no infrastructure changes for any future phase.
 
 ---
 
-## 15. Success Criteria
+## 16. Rollback Plan
+
+GitHub Actions workflow stays in the repo (cron commented out, `workflow_dispatch` active):
+1. Re-enable cron: `0 7 * * 1-5`
+2. Push to trigger GH Actions deploy
+3. Pipeline runs on GH Actions as before
+4. Debug Step Functions without time pressure
+
+---
+
+## 17. Success Criteria
 
 - [ ] Pipeline runs daily without failure
 - [ ] Parallel scraping completes in < 15 minutes
-- [ ] LinkedIn + Indeed jobs appear via Apify
-- [ ] Manual "Add Job" uses same scoring as automated pipeline
-- [ ] Score-first tailoring: light tweaks when base >= 85
-- [ ] Email summary sent after each run
-- [ ] Stale nudges sent weekly
+- [ ] LinkedIn + Indeed jobs appear via Apify with full descriptions
+- [ ] Manual "Add Job" uses same scoring as automated pipeline (consistent scores)
+- [ ] Score-first tailoring: light tweaks when base >= 85, full rewrite when low
+- [ ] No Step Functions state exceeds 256KB payload (Supabase data bus verified)
+- [ ] Email summary sent after each successful run
+- [ ] Error notification sent on pipeline failure
+- [ ] Stale nudges sent weekly, follow-up reminders daily
 - [ ] "Run Pipeline" button works from dashboard
-- [ ] Scraper cache prevents redundant Apify calls
+- [ ] Scraper cache prevents redundant Apify calls (verified with same-day re-run)
 - [ ] Apify budget tracking prevents overspend
-- [ ] Self-improvement adjustments applied to next run
+- [ ] Self-improvement adjustments visible and applied to next run
+- [ ] Existing 95 jobs migrated to jobs_raw + job_hash FK
