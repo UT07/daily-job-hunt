@@ -60,6 +60,17 @@ Resources:
     Properties:
       MessageRetentionPeriod: 1209600
 
+  # --- Lambda Layer (Shared Python Dependencies) ---
+  SharedDepsLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: naukribaba-shared-deps
+      ContentUri: layer/
+      CompatibleRuntimes:
+        - python3.11
+    Metadata:
+      BuildMethod: python3.11
+
   # --- Lambda Function (Docker container with tectonic) ---
   JobHuntApi:
     Type: AWS::Serverless::Function
