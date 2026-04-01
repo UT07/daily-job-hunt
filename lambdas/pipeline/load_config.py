@@ -22,6 +22,16 @@ def handler(event, context):
     user_id = event["user_id"]
     db = get_supabase()
 
+    # If user_id is "default", find the first active user — allows EventBridge
+    # rule to use Input: '{"user_id": "default"}' without hardcoding a UUID.
+    if user_id == "default":
+        users = db.table("users").select("id").limit(1).execute()
+        if not users.data:
+            logger.error("[load_config] No users found")
+            return {"error": "no_users", "user_id": "default"}
+        user_id = users.data[0]["id"]
+        logger.info(f"[load_config] Resolved 'default' to user {user_id}")
+
     # Load base search config
     search_config = db.table("user_search_configs") \
         .select("*").eq("user_id", user_id).execute()
