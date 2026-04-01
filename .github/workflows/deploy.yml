@@ -13,6 +13,8 @@ on:
       - 'requirements-web.txt'
       - 'Dockerfile.lambda'
       - 'template.yaml'
+      - 'lambdas/**'
+      - 'layer/**'
 
 jobs:
   deploy:
@@ -38,6 +40,15 @@ jobs:
 
       - name: Login to ECR
         run: aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin 385017713886.dkr.ecr.eu-west-1.amazonaws.com
+
+      # NOTE: test.yml runs the full test suite on PRs. This gate re-runs unit
+      # and contract tests here to block deploy on main if tests are broken.
+      - name: Run unit tests before deploy
+        run: |
+          pip install -r tests/requirements-test.txt
+          pytest tests/unit/ tests/contract/ -v --tb=short -x
+        env:
+          AWS_DEFAULT_REGION: eu-west-1
 
       - name: SAM Build
         env:
