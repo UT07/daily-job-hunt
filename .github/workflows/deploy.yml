@@ -71,7 +71,7 @@ jobs:
           sam deploy \
             --stack-name job-hunt-api \
             --region eu-west-1 \
-            --capabilities CAPABILITY_IAM \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --image-repository 385017713886.dkr.ecr.eu-west-1.amazonaws.com/job-hunt-api \
             --s3-bucket utkarsh-job-hunt \
             --s3-prefix sam-artifacts \
