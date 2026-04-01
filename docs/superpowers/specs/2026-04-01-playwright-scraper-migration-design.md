@@ -63,12 +63,15 @@ Step Functions (daily trigger, Mon-Fri 7:00 UTC)
 
 | Feature | Patchright | Scrapling |
 |---------|-----------|-----------|
-| Anti-bot engine | Patched Chromium (no CDP leaks) | Uses Patchright under the hood |
+| Anti-bot engine | Patched Chromium (no CDP leaks) | Modified Chromium (v0.4+, formerly Camoufox/Firefox) |
 | Tiered fetching | No — always launches browser | Yes — HTTP first, browser only if needed |
 | Built-in selectors | Playwright API | Enhanced with auto-retry + adaptive tracking |
 | Cloudflare bypass | Partial | Built-in for standard Cloudflare |
 | LinkedIn tested | Community reports | Confirmed working in tests |
 | API compatibility | Playwright drop-in | Own API, simpler |
+| Docker images | Build your own | Official images published per release |
+
+**Note (v0.4 changes):** StealthyFetcher moved from Camoufox (modified Firefox) to a lighter Chromium-based engine. It's 101% faster, uses less memory, and is more stable. Several arguments were removed (`humanize`, `block_images`, `addons`, `os_randomize`). Human-like delays must be implemented in our scraper loop, not via Scrapling args.
 
 ### Usage Pattern Per Source
 
@@ -89,15 +92,46 @@ page = StealthyFetcher(proxy=PROXY).get(
 )
 ```
 
-### Xvfb Requirement
+### Known Limitations (from GitHub issues)
 
-Scrapling's `StealthyFetcher` (via Patchright) works best in `headless=False` mode for maximum anti-detection. On Fargate (headless environment), this requires Xvfb (virtual display).
+1. **Cloudflare Turnstile hang (issue #100):** StealthyFetcher can hang indefinitely on embedded Cloudflare Turnstile when `solve_cloudflare=True`. Mitigation: set a timeout on all fetches, fall back to skipping the source on hang.
+2. **Python 3.14 issue:** CamoufoxConfig has a known issue on Python 3.14. Pin to Python 3.11 or 3.12 in the Docker image.
+3. **Removed args:** `humanize`, `block_images`, `addons`, `os_randomize`, `disable_ads`, `geoip` all removed in v0.4. Implement delays in our own scraper loop code.
+
+### Docker Setup
+
+Scrapling publishes official Docker images with every release. Use theirs as a base.
 
 ```dockerfile
-FROM mcr.microsoft.com/playwright/python:v1.50.0-noble
-RUN pip install scrapling patchright supabase httpx
-RUN apt-get update && apt-get install -y xvfb
-ENTRYPOINT ["xvfb-run", "--auto-servernum", "python3"]
+# Use Scrapling's official image as base (includes all browsers)
+FROM ghcr.io/d4vinci/scrapling:latest
+
+# Add our dependencies
+RUN pip install supabase httpx boto3
+
+# CRITICAL: Fargate /dev/shm is limited to 64MB, cannot be resized
+# Chromium must use /tmp instead — pass --disable-dev-shm-usage at browser launch
+
+# Scraper code
+COPY scrapers/playwright/ /app/
+COPY lambdas/scrapers/normalizers.py /app/
+
+WORKDIR /app
+
+# Pin Python 3.12 (Python 3.14 has known Camoufox issues)
+ENTRYPOINT ["python3", "main.py"]
+```
+
+**Browser launch args (mandatory for Fargate):**
+```python
+# In every StealthyFetcher call, pass extra browser args
+page = StealthyFetcher(
+    proxy=PROXY,
+    extra_headers={"Accept-Language": "en-US,en;q=0.9"},
+).get(url, disable_resources=True)
+
+# For DynamicFetcher, pass Chromium args directly:
+# --disable-dev-shm-usage --no-sandbox
 ```
 
 ## Per-Source Scraper Design
@@ -167,6 +201,77 @@ ENTRYPOINT ["xvfb-run", "--auto-servernum", "python3"]
 - **Volume:** ~30-45 Google searches per run (3 searches per matched job)
 - **Rate limit:** 5-10 second delay between searches, sticky proxy session
 - **Replaces:** Current Apify Google Search actor ($0.03-0.05 per job)
+
+## Scraper Output Contract
+
+### Problem: Fargate Can't Return Data to Step Functions
+
+Lambda scrapers return `{"new_job_hashes": [...]}` which `merge_dedup` reads directly. Fargate tasks communicate only via exit code (0/1). We need a way for Fargate scrapers to tell the pipeline what they found.
+
+### Solution: Supabase `scrape_runs` Table
+
+Each Fargate scraper writes a summary row to a new `scrape_runs` table when it finishes:
+
+```sql
+CREATE TABLE scrape_runs (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    pipeline_run_id TEXT NOT NULL,       -- links to Step Functions execution ID
+    source TEXT NOT NULL,                -- 'linkedin', 'indeed', etc.
+    status TEXT DEFAULT 'running',       -- 'running', 'completed', 'failed', 'blocked'
+    jobs_found INTEGER DEFAULT 0,
+    jobs_new INTEGER DEFAULT 0,          -- new (not cached)
+    new_job_hashes JSONB DEFAULT '[]',   -- list of hashes for merge_dedup
+    error_message TEXT,
+    blocked_reason TEXT,                 -- 'auth_wall', 'captcha', 'rate_limit', null
+    started_at TIMESTAMPTZ DEFAULT NOW(),
+    completed_at TIMESTAMPTZ
+);
+```
+
+### Flow
+
+1. Step Functions passes `pipeline_run_id` to each Fargate task as an env var
+2. Fargate scraper creates a `scrape_runs` row with `status: 'running'` on start
+3. Scraper writes jobs to `jobs_raw` (as before) and collects `new_job_hashes`
+4. On completion, updates the row: `status: 'completed'`, `jobs_found`, `new_job_hashes`
+5. On error/block, updates: `status: 'failed'` or `status: 'blocked'`, `error_message`
+6. `merge_dedup` Lambda queries `scrape_runs` for this `pipeline_run_id` to get all `new_job_hashes`
+
+### Lambda Scrapers (Adzuna, HN, YC)
+
+Same contract — they also write to `scrape_runs`. This unifies the output format across Lambda and Fargate scrapers.
+
+### Human-Like Delays (our responsibility, not Scrapling's)
+
+Since Scrapling v0.4 removed the `humanize` argument, each scraper must implement delays:
+
+```python
+import random
+import time
+
+def human_delay(min_s=2, max_s=5):
+    """Gaussian-distributed delay for human-like browsing."""
+    delay = random.gauss((min_s + max_s) / 2, (max_s - min_s) / 4)
+    time.sleep(max(min_s, min(max_s, delay)))
+
+def scrape_with_delays(fetcher, urls, max_jobs=50):
+    """Scrape URLs with rate limiting and circuit breaking."""
+    results = []
+    consecutive_failures = 0
+    for url in urls[:max_jobs]:
+        try:
+            page = fetcher.get(url, timeout=30)
+            results.append(page)
+            consecutive_failures = 0
+            human_delay()
+        except Exception as e:
+            consecutive_failures += 1
+            if consecutive_failures >= 3:
+                logger.warning(f"Circuit breaker: 3 consecutive failures, stopping")
+                break
+            human_delay(5, 10)  # longer delay after failure
+    return results
+```
 
 ## Data Quality Layer
 
@@ -428,6 +533,7 @@ OpenClaw runs as a separate service (self-hosted daemon or Docker container). It
 1. **LinkedIn blocks despite stealth + proxy** — Mitigation: graceful degradation, pipeline continues with other sources. LinkedIn is highest value but not the only source.
 2. **Fargate Spot interruption during scrape** — Mitigation: retry 2× on Spot, fallback to on-demand Fargate.
 3. **Bright Data pricing changes** — Mitigation: proxy config is in SSM, swap provider without code changes. IPRoyal is a backup at similar pricing.
+4. **Cloudflare Turnstile hang (Scrapling issue #100)** — StealthyFetcher can hang indefinitely on embedded Turnstile. Mitigation: 30-second timeout on all fetches, catch and skip on timeout. Indeed is the most likely source to trigger this.
 4. **Scrapling library abandoned** — Mitigation: Scrapling wraps Patchright. If Scrapling dies, we drop to raw Patchright with minimal code changes.
 5. **Indeed/Glassdoor change HTML structure** — Mitigation: Scrapling's adaptive element tracking handles minor changes. Major redesigns require selector updates.
 6. **Proxy cost exceeds estimate** — Mitigation: monitor bandwidth in Bright Data dashboard. At current volume (~1-2 GB/month), even 3× growth stays under $25/month.
