@@ -125,6 +125,15 @@ def handler(event, context):
 
     all_jobs = result.data or []
 
+    # If we have specific hashes from this pipeline run, scope to those
+    # This prevents processing stale jobs from previous runs
+    if fargate_hashes:
+        fargate_set = set(fargate_hashes)
+        scoped = [j for j in all_jobs if j["job_hash"] in fargate_set]
+        if scoped:
+            all_jobs = scoped
+            logger.info(f"[merge_dedup] Scoped to {len(all_jobs)} jobs from this pipeline run")
+
     # --- Tier 1: Exact hash dedup (already done during scraping, but verify) ---
     by_hash = {}
     for job in all_jobs:

@@ -15,7 +15,8 @@ RUN pip install --no-cache-dir -r /tmp/requirements-playwright.txt
 # Install Scrapling browsers
 RUN scrapling install
 
-# Scraper code
+# Scraper code — include parent __init__.py for absolute imports
+COPY scrapers/__init__.py /app/scrapers/__init__.py
 COPY scrapers/playwright/ /app/scrapers/playwright/
 COPY lambdas/scrapers/normalizers.py /app/normalizers.py
 

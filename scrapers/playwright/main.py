@@ -15,11 +15,11 @@ logging.basicConfig(
 logger = logging.getLogger("scraper")
 
 SCRAPERS = {
-    "linkedin": "scrapers.playwright.linkedin",
-    "indeed": "scrapers.playwright.indeed",
-    "glassdoor": "scrapers.playwright.glassdoor",
-    "irish_portals": "scrapers.playwright.irish_portals",
-    "contacts": "scrapers.playwright.contacts",
+    "linkedin": ("scrapers.playwright.linkedin", "LinkedInScraper"),
+    "indeed": ("scrapers.playwright.indeed", "IndeedScraper"),
+    "glassdoor": ("scrapers.playwright.glassdoor", "GlassdoorScraper"),
+    "irish_portals": ("scrapers.playwright.irish_portals", "IrishPortalsScraper"),
+    "contacts": ("scrapers.playwright.contacts", "Scraper"),
 }
 
 
@@ -35,9 +35,9 @@ def main():
 
     logger.info(f"Starting scraper: {source}")
 
-    module_path = SCRAPERS[source]
-    module = __import__(module_path, fromlist=["Scraper"])
-    scraper_class = module.Scraper
+    module_path, class_name = SCRAPERS[source]
+    module = __import__(module_path, fromlist=[class_name])
+    scraper_class = getattr(module, class_name)
     scraper = scraper_class()
     scraper.run()
 

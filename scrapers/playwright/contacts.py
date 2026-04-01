@@ -48,7 +48,7 @@ class Scraper(BaseScraper):
 
         logger.info(f"[contacts] Finding contacts for {len(jobs_needing_contacts)} jobs")
 
-        fetcher = StealthyFetcher(proxy=self.proxy_url) if self.proxy_url else StealthyFetcher()
+        fetcher = StealthyFetcher()
 
         for job in jobs_needing_contacts:
             contacts = []
@@ -62,7 +62,8 @@ class Scraper(BaseScraper):
                 url = f"https://www.google.com/search?q={quote_plus(query)}&num=3"
 
                 try:
-                    page = fetcher.get(url, timeout=30)
+                    proxy_cfg = {"server": self.proxy_url} if self.proxy_url else None
+                    page = fetcher.fetch(url, headless=True, proxy=proxy_cfg, timeout=30)
                     profiles = self._extract_google_results(page, role)
                     contacts.extend(profiles)
                     self.consecutive_failures = 0

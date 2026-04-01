@@ -403,6 +403,16 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: SSMSecretsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameters
+                Resource:
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/naukribaba/*"
 
   FargateTaskRole:
     Type: AWS::IAM::Role
@@ -442,8 +452,8 @@ Resources:
       NetworkMode: awsvpc
       RequiresCompatibilities:
         - FARGATE
-      Cpu: '512'
-      Memory: '2048'
+      Cpu: '1024'
+      Memory: '3072'
       ExecutionRoleArn: !GetAtt FargateExecutionRole.Arn
       TaskRoleArn: !GetAtt FargateTaskRole.Arn
       ContainerDefinitions:
@@ -455,10 +465,13 @@ Resources:
               Value: linkedin
             - Name: SUPABASE_URL
               Value: !Sub "{{resolve:ssm:/naukribaba/SUPABASE_URL}}"
+            # PIPELINE_RUN_ID is injected at runtime via Step Functions
+            # ContainerOverrides — not set statically here
+          Secrets:
             - Name: SUPABASE_SERVICE_KEY
-              Value: !Sub "{{resolve:ssm:/naukribaba/SUPABASE_SERVICE_KEY}}"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/naukribaba/SUPABASE_SERVICE_KEY"
             - Name: PROXY_URL
-              Value: !Sub "{{resolve:ssm:/naukribaba/PROXY_URL}}"
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/naukribaba/PROXY_URL"
           LogConfiguration:
             LogDriver: awslogs
             Options:
