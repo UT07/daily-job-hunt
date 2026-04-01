@@ -12,6 +12,98 @@ function decodeHtml(text) {
   return doc.body.textContent || '';
 }
 
+// ---- Skills Tags ----
+const TECH_SKILLS = [
+  'Python', 'Java', 'JavaScript', 'TypeScript', 'React', 'Angular', 'Vue',
+  'Node', 'Node.js', 'Express', 'Django', 'Flask', 'FastAPI', 'Spring',
+  'AWS', 'Azure', 'GCP', 'Docker', 'Kubernetes', 'K8s', 'Terraform',
+  'Go', 'Golang', 'Rust', 'C++', 'C#', '.NET', 'Ruby', 'Rails',
+  'SQL', 'PostgreSQL', 'MySQL', 'MongoDB', 'Redis', 'Elasticsearch',
+  'GraphQL', 'REST', 'gRPC', 'Kafka', 'RabbitMQ',
+  'CI/CD', 'Jenkins', 'GitHub Actions', 'GitLab',
+  'Linux', 'Bash', 'Shell',
+  'Machine Learning', 'ML', 'AI', 'NLP', 'Deep Learning',
+  'TensorFlow', 'PyTorch', 'Pandas', 'NumPy', 'Scikit-learn',
+  'Spark', 'Hadoop', 'Airflow', 'dbt',
+  'Figma', 'Tailwind', 'CSS', 'HTML', 'SASS',
+  'Swift', 'Kotlin', 'Flutter', 'React Native',
+  'Agile', 'Scrum', 'Jira',
+  'Microservices', 'Serverless', 'Lambda',
+  'Power BI', 'Tableau', 'Looker',
+  'Snowflake', 'BigQuery', 'Redshift', 'Databricks',
+  'Next.js', 'Remix', 'Svelte', 'Nuxt',
+];
+
+// Normalize skill names for display (merge duplicates)
+const SKILL_NORMALIZE = {
+  'node': 'Node.js',
+  'node.js': 'Node.js',
+  'k8s': 'Kubernetes',
+  'golang': 'Go',
+  'rails': 'Ruby on Rails',
+};
+
+function extractSkills(job) {
+  const text = [
+    job.key_matches || '',
+    job.description || '',
+  ].join(' ');
+
+  if (!text.trim()) return [];
+
+  const found = new Set();
+  const lowerText = ` ${text.toLowerCase()} `;
+
+  for (const skill of TECH_SKILLS) {
+    const lowerSkill = skill.toLowerCase();
+    // Word-boundary match: check for the skill surrounded by non-alphanumeric chars
+    const pattern = new RegExp(`[^a-zA-Z0-9]${lowerSkill.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^a-zA-Z0-9]`);
+    if (pattern.test(lowerText)) {
+      const normalized = SKILL_NORMALIZE[lowerSkill] || skill;
+      found.add(normalized);
+    }
+  }
+
+  return [...found];
+}
+
+const MAX_VISIBLE_TAGS = 5;
+
+function SkillsTags({ job }) {
+  const skills = extractSkills(job);
+  if (!skills.length) return <span className="text-stone-400 font-mono text-xs">--</span>;
+
+  const visible = skills.slice(0, MAX_VISIBLE_TAGS);
+  const overflow = skills.length - MAX_VISIBLE_TAGS;
+
+  return (
+    <div className="flex flex-wrap gap-1">
+      {visible.map((skill) => (
+        <span
+          key={skill}
+          className="border border-black bg-stone-50 text-xs font-mono px-1.5 py-0.5 text-stone-700 whitespace-nowrap"
+        >
+          {skill}
+        </span>
+      ))}
+      {overflow > 0 && (
+        <span className="text-[10px] font-mono text-stone-400 self-center">
+          +{overflow} more
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ModelBadge({ model }) {
+  if (!model) return <span className="text-stone-400 text-xs font-mono">--</span>;
+  return (
+    <span className="border border-black bg-stone-900 text-cream font-mono text-[10px] font-bold px-2 py-0.5 whitespace-nowrap">
+      {model}
+    </span>
+  );
+}
+
 function AssetIcon({ href, icon: Icon, title }) {
   if (!href || href === '--' || href === '-') {
     return (
@@ -115,6 +207,7 @@ const SORTABLE_COLUMNS = [
   { key: 'source', label: 'Source' },
   { key: 'matched_resume', label: 'Resume Type' },
   { key: 'tailoring_model', label: 'AI Model' },
+  { key: null, label: 'Skills', sortable: false },
 ];
 
 function isValidUrl(str) {
@@ -237,12 +330,13 @@ export default function JobTable({ jobs, onStatusChange, onDelete }) {
               </div>
               <ScoreBadge score={job.match_score} className="text-lg" />
             </div>
+            <div className="mt-2">
+              <SkillsTags job={job} />
+            </div>
             <div className="flex items-center justify-between mt-3">
               <div className="flex items-center gap-2">
                 <Badge status={job.application_status || 'New'} />
-                {job.tailoring_model && (
-                  <span className="text-[10px] font-mono text-stone-400">{job.tailoring_model}</span>
-                )}
+                <ModelBadge model={job.tailoring_model} />
               </div>
               {onDelete && <DeleteButton jobId={job.job_id} onDelete={onDelete} />}
             </div>
@@ -257,15 +351,24 @@ export default function JobTable({ jobs, onStatusChange, onDelete }) {
           <thead>
             <tr className="bg-black">
               {SORTABLE_COLUMNS.map((col) => (
-                <th
-                  key={col.key}
-                  onClick={() => handleSort(col.key)}
-                  className="group px-3 py-3 text-[11px] font-bold text-cream uppercase tracking-wider cursor-pointer
-                    hover:text-yellow select-none whitespace-nowrap transition-colors"
-                >
-                  {col.label}
-                  <SortArrow columnKey={col.key} />
-                </th>
+                col.sortable === false ? (
+                  <th
+                    key={col.label}
+                    className="px-3 py-3 text-[11px] font-bold text-cream uppercase tracking-wider whitespace-nowrap"
+                  >
+                    {col.label}
+                  </th>
+                ) : (
+                  <th
+                    key={col.key}
+                    onClick={() => handleSort(col.key)}
+                    className="group px-3 py-3 text-[11px] font-bold text-cream uppercase tracking-wider cursor-pointer
+                      hover:text-yellow select-none whitespace-nowrap transition-colors"
+                  >
+                    {col.label}
+                    <SortArrow columnKey={col.key} />
+                  </th>
+                )
               ))}
               <th className="px-3 py-3 text-[11px] font-bold text-cream uppercase tracking-wider whitespace-nowrap">
                 ATS / HM / TR
@@ -322,13 +425,12 @@ export default function JobTable({ jobs, onStatusChange, onDelete }) {
 
                 {/* AI Model */}
                 <td className="px-3 py-2.5 whitespace-nowrap">
-                  {job.tailoring_model ? (
-                    <span className="border-2 border-stone-300 text-stone-500 font-mono text-[10px] font-bold px-2 py-0.5">
-                      {job.tailoring_model}
-                    </span>
-                  ) : (
-                    <span className="text-stone-400 text-xs font-mono">--</span>
-                  )}
+                  <ModelBadge model={job.tailoring_model} />
+                </td>
+
+                {/* Skills Tags */}
+                <td className="px-3 py-2.5 max-w-[260px]">
+                  <SkillsTags job={job} />
                 </td>
 
                 {/* ATS / HM / TR scores */}
@@ -411,3 +513,5 @@ export default function JobTable({ jobs, onStatusChange, onDelete }) {
     </div>
   );
 }
+
+export { SkillsTags, ModelBadge, decodeHtml };

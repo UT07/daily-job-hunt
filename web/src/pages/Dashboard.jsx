@@ -1,14 +1,102 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
 import { apiGet } from '../api';
+import { LayoutList, LayoutGrid } from 'lucide-react';
 import PipelineStatus from '../components/PipelineStatus';
 import StatsBar from '../components/StatsBar';
 import JobTable from '../components/JobTable';
+import { SkillsTags, ModelBadge, decodeHtml } from '../components/JobTable';
+import { ScoreBadge } from '../components/ui/Badge';
+import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import { Select } from '../components/ui/Input';
 
 const SOURCES = ['All', 'adzuna', 'linkedin', 'irishjobs', 'jobs_ie', 'gradireland', 'yc', 'hn', 'web'];
 const STATUS_OPTIONS = ['All', 'New', 'Applied', 'Interview', 'Offer', 'Rejected', 'Withdrawn'];
+
+function getViewPreference() {
+  try { return localStorage.getItem('naukribaba_view') || 'list'; } catch { return 'list'; }
+}
+
+function setViewPreference(view) {
+  try { localStorage.setItem('naukribaba_view', view); } catch { /* noop */ }
+}
+
+function CardView({ jobs, onStatusChange, onDelete }) {
+  const navigate = useNavigate();
+
+  if (jobs.length === 0) {
+    return (
+      <div className="border-2 border-black bg-white p-12 text-center">
+        <div className="text-stone-400 text-sm">
+          <svg className="w-12 h-12 mx-auto mb-3 text-stone-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+          No jobs found. Run the pipeline or adjust your filters.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {jobs.map((job) => (
+        <div
+          key={job.job_id}
+          className="bg-white border-2 border-black shadow-brutal cursor-pointer
+            hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-brutal-sm
+            transition-all"
+          onClick={() => navigate(`/jobs/${job.job_id}`)}
+        >
+          {/* Card header */}
+          <div className="p-4 border-b border-stone-200">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0 flex-1">
+                <p className="font-heading font-bold text-black text-sm truncate">
+                  {decodeHtml(job.title)}
+                </p>
+                <p className="text-xs text-stone-500 mt-0.5 truncate">
+                  {decodeHtml(job.company)} {job.location && `\u00b7 ${job.location}`}
+                </p>
+              </div>
+              <ScoreBadge score={job.match_score} className="text-xl shrink-0" />
+            </div>
+          </div>
+
+          {/* Card body */}
+          <div className="p-4 space-y-3">
+            {/* Skills tags */}
+            <SkillsTags job={job} />
+
+            {/* Bottom row: status, source, model */}
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Badge status={job.application_status || 'New'} />
+                <span className="border border-stone-300 text-stone-500 font-mono text-[10px] font-bold px-1.5 py-0.5">
+                  {job.source || '--'}
+                </span>
+                <ModelBadge model={job.tailoring_model} />
+              </div>
+              {job.apply_url && job.apply_url !== 'Apply' && (
+                <a
+                  href={job.apply_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  className="border-2 border-black bg-black text-cream text-[10px] font-heading font-bold px-2 py-1
+                    hover:bg-stone-700 transition-colors shrink-0"
+                >
+                  Apply
+                </a>
+              )}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function Dashboard() {
   const { user, loading: authLoading } = useAuth();
@@ -32,6 +120,14 @@ export default function Dashboard() {
   const [minScore, setMinScore] = useState(0);
   const [companySearch, setCompanySearch] = useState('');
   const [tailoredOnly, setTailoredOnly] = useState(true);
+
+  // View mode: 'list' or 'card'
+  const [viewMode, setViewMode] = useState(getViewPreference);
+
+  function toggleView(mode) {
+    setViewMode(mode);
+    setViewPreference(mode);
+  }
 
   // Track filter version to avoid redundant fetches
   const [filterVersion, setFilterVersion] = useState(0);
@@ -232,8 +328,46 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Job Table */}
-      {!loading && <JobTable jobs={jobs} onStatusChange={handleStatusChange} onDelete={handleDelete} />}
+      {/* View Toggle + Job Display */}
+      {!loading && (
+        <div>
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs font-bold text-stone-400 uppercase tracking-wider">
+              {total} job{total !== 1 ? 's' : ''}
+            </p>
+            <div className="flex items-center border-2 border-black">
+              <button
+                onClick={() => toggleView('list')}
+                className={`p-1.5 transition-colors cursor-pointer ${
+                  viewMode === 'list'
+                    ? 'bg-black text-cream'
+                    : 'bg-white text-stone-400 hover:text-black'
+                }`}
+                title="List view"
+              >
+                <LayoutList size={16} />
+              </button>
+              <button
+                onClick={() => toggleView('card')}
+                className={`p-1.5 transition-colors cursor-pointer border-l-2 border-black ${
+                  viewMode === 'card'
+                    ? 'bg-black text-cream'
+                    : 'bg-white text-stone-400 hover:text-black'
+                }`}
+                title="Card view"
+              >
+                <LayoutGrid size={16} />
+              </button>
+            </div>
+          </div>
+
+          {viewMode === 'list' ? (
+            <JobTable jobs={jobs} onStatusChange={handleStatusChange} onDelete={handleDelete} />
+          ) : (
+            <CardView jobs={jobs} onStatusChange={handleStatusChange} onDelete={handleDelete} />
+          )}
+        </div>
+      )}
 
       {/* Pagination */}
       {!loading && jobs.length > 0 && (

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { apiGet } from '../api';
 
@@ -213,6 +213,33 @@ export default function JobWorkspace() {
                 <p className="text-2xl font-mono font-bold"><ScoreBadge score={job.tech_recruiter_score} /></p>
               </div>
             </div>
+            {/* Metadata row: AI model, source, date */}
+            <div className="flex items-center gap-4 mb-6 flex-wrap">
+              {job.tailoring_model && (
+                <div>
+                  <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mr-2">AI Model</span>
+                  <span className="border border-black bg-stone-900 text-cream font-mono text-[10px] font-bold px-2 py-0.5">
+                    {job.tailoring_model}
+                  </span>
+                </div>
+              )}
+              {job.source && (
+                <div>
+                  <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mr-2">Source</span>
+                  <span className="border border-stone-300 text-stone-500 font-mono text-[10px] font-bold px-2 py-0.5">
+                    {job.source}
+                  </span>
+                </div>
+              )}
+              {job.first_seen && (
+                <div>
+                  <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mr-2">Found</span>
+                  <span className="font-mono text-xs text-stone-600">
+                    {new Date(job.first_seen).toLocaleDateString('en-IE', { day: '2-digit', month: 'short', year: 'numeric' })}
+                  </span>
+                </div>
+              )}
+            </div>
             {job.description && (
               <div>
                 <h3 className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">Job Description</h3>
@@ -227,24 +254,60 @@ export default function JobWorkspace() {
           <div>
             {job.resume_s3_url ? (
               <div>
-                <p className="text-sm text-stone-500 mb-4">AI Model: <span className="font-mono font-bold text-black">{job.tailoring_model || '--'}</span></p>
-                <a href={job.resume_s3_url} target="_blank" rel="noopener noreferrer">
-                  <Button variant="primary" size="sm">Download Resume PDF</Button>
-                </a>
+                <div className="flex items-center justify-between mb-4">
+                  <p className="text-sm text-stone-500">
+                    AI Model: <span className="border border-black bg-stone-900 text-cream font-mono text-[10px] font-bold px-2 py-0.5">{job.tailoring_model || '--'}</span>
+                  </p>
+                  <a href={job.resume_s3_url} target="_blank" rel="noopener noreferrer">
+                    <Button variant="primary" size="sm">Download Resume PDF</Button>
+                  </a>
+                </div>
+                <div className="border-2 border-black bg-stone-100">
+                  <iframe
+                    src={job.resume_s3_url}
+                    title="Resume PDF Preview"
+                    className="w-full bg-white"
+                    style={{ height: '700px' }}
+                  />
+                </div>
               </div>
             ) : (
-              <p className="text-stone-400">No tailored resume yet.</p>
+              <div className="text-center py-16">
+                <svg className="w-16 h-16 mx-auto mb-4 text-stone-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                <p className="text-stone-400 font-heading font-bold">No resume generated yet</p>
+                <p className="text-xs text-stone-400 mt-1">Run the pipeline to generate a tailored resume for this job.</p>
+              </div>
             )}
           </div>
         )}
         {activeTab === 'cover-letter' && (
           <div>
             {job.cover_letter_s3_url ? (
-              <a href={job.cover_letter_s3_url} target="_blank" rel="noopener noreferrer">
-                <Button variant="primary" size="sm">Download Cover Letter PDF</Button>
-              </a>
+              <div>
+                <div className="flex items-center justify-end mb-4">
+                  <a href={job.cover_letter_s3_url} target="_blank" rel="noopener noreferrer">
+                    <Button variant="primary" size="sm">Download Cover Letter PDF</Button>
+                  </a>
+                </div>
+                <div className="border-2 border-black bg-stone-100">
+                  <iframe
+                    src={job.cover_letter_s3_url}
+                    title="Cover Letter PDF Preview"
+                    className="w-full bg-white"
+                    style={{ height: '700px' }}
+                  />
+                </div>
+              </div>
             ) : (
-              <p className="text-stone-400">No cover letter yet.</p>
+              <div className="text-center py-16">
+                <svg className="w-16 h-16 mx-auto mb-4 text-stone-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                <p className="text-stone-400 font-heading font-bold">No cover letter generated yet</p>
+                <p className="text-xs text-stone-400 mt-1">Run the pipeline to generate a cover letter for this job.</p>
+              </div>
             )}
           </div>
         )}
