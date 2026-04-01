@@ -64,7 +64,7 @@ def test_happy_path(mock_get_supabase, mock_get_param):
     mock_get_supabase.return_value = _make_db(count=0)
     mock_get_param.return_value = "mock-value"
 
-    respx.get("https://api.adzuna.com/v1/api/jobs/ie/search/1").mock(
+    respx.get("https://api.adzuna.com/v1/api/jobs/gb/search/1").mock(
         return_value=httpx.Response(200, json={"results": _ADZUNA_RESULTS})
     )
 
@@ -111,7 +111,7 @@ def test_api_error(mock_get_supabase, mock_get_param):
     mock_get_supabase.return_value = _make_db(count=0)
     mock_get_param.return_value = "mock-value"
 
-    respx.get("https://api.adzuna.com/v1/api/jobs/ie/search/1").mock(
+    respx.get("https://api.adzuna.com/v1/api/jobs/gb/search/1").mock(
         return_value=httpx.Response(500)
     )
 

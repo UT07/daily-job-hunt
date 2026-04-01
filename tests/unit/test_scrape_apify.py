@@ -120,13 +120,10 @@ def test_cache_hit(mock_get_supabase, mock_get_param, mock_apify_cls):
 @patch("scrape_apify.get_param")
 @patch("scrape_apify.get_supabase")
 def test_budget_exceeded(mock_get_supabase, mock_get_param, mock_apify_cls, monkeypatch):
-    """Monthly spend >= budget → skipped: budget_exceeded, Apify NOT called."""
+    """Apify usage >= hard limit → skipped: budget_exceeded, Apify NOT called."""
     import scrape_apify
 
-    monkeypatch.setenv("APIFY_MONTHLY_BUDGET_CENTS", "500")
-
-    # DB: cache miss but monthly spend is at the limit
-    monthly_rows = [{"apify_cost_cents": 300}, {"apify_cost_cents": 200}]  # total = 500
+    monkeypatch.setenv("APIFY_BUDGET_LIMIT_USD", "4.80")
 
     db = MagicMock()
     table = MagicMock()
@@ -135,17 +132,17 @@ def test_budget_exceeded(mock_get_supabase, mock_get_param, mock_apify_cls, monk
                    "insert", "update", "upsert", "delete"):
         getattr(table, method).return_value = table
 
-    # First execute() → cache check (count=0); second execute() → monthly spend
     cache_result = MagicMock()
     cache_result.count = 0
-    budget_result = MagicMock()
-    budget_result.data = monthly_rows
-    table.execute.side_effect = [cache_result, budget_result]
+    table.execute.return_value = cache_result
 
     mock_get_supabase.return_value = db
     mock_get_param.return_value = "mock-value"
 
-    result = scrape_apify.handler(_base_event(), {})
+    # Mock _check_apify_budget to return usage above hard limit
+    with patch.object(scrape_apify, '_check_apify_budget', return_value=(4.90, 5.0)):
+        with patch.object(scrape_apify, '_send_budget_alert'):
+            result = scrape_apify.handler(_base_event(), {})
 
     assert result["skipped"] == "budget_exceeded"
     assert result["count"] == 0
