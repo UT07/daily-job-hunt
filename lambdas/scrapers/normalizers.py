@@ -94,6 +94,25 @@ def normalize_hn(items: list, query_hash: str) -> list:
     return jobs
 
 
+def normalize_glassdoor(items: list, query_hash: str) -> list:
+    """Normalize orgupdate/glassdoor-jobs-scraper output.
+
+    Actor returns: job_title, company_name, location, salary, date, URL, description
+    """
+    jobs = []
+    for item in items:
+        job = normalize_job({
+            "title": item.get("job_title"),
+            "company": item.get("company_name"),
+            "description": item.get("description"),
+            "location": item.get("location"),
+            "url": item.get("URL"),
+        }, source="glassdoor", query_hash=query_hash)
+        if job:
+            jobs.append(job)
+    return jobs
+
+
 def normalize_generic_web(items: list, source: str, query_hash: str) -> list:
     """Normalize Apify Web Scraper output (GradIreland, IrishJobs, Jobs.ie)."""
     jobs = []

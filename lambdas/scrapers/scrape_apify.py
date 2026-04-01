@@ -59,17 +59,18 @@ def handler(event, context):
 
         # Normalize
         from normalizers import (normalize_linkedin, normalize_indeed,
-                                  normalize_generic_web)
+                                  normalize_glassdoor, normalize_generic_web)
         normalizer_map = {
             "linkedin": normalize_linkedin,
             "indeed": normalize_indeed,
-            "glassdoor": normalize_generic_web,
+            "glassdoor": normalize_glassdoor,
             "gradireland": normalize_generic_web,
             "irishjobs": normalize_generic_web,
             "jobsie": normalize_generic_web,
         }
         normalize_fn = normalizer_map.get(normalizer_name, normalize_generic_web)
-        if normalizer_name in ("glassdoor", "gradireland", "irishjobs", "jobsie"):
+        # Normalizers that need (items, source, query_hash) vs (items, query_hash)
+        if normalizer_name in ("gradireland", "irishjobs", "jobsie"):
             jobs = normalize_fn(items, source, query_hash)
         else:
             jobs = normalize_fn(items, query_hash)

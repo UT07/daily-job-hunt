@@ -370,6 +370,8 @@ Resources:
                   - !GetAtt CheckExpiryFunction.Arn
 
   # --- Daily Pipeline State Machine ---
+  # NOTE (2026-04-01): Jobs.ie, IrishJobs, and GradIreland have NO existing Apify actors.
+  # They were dropped because custom scrapers timed out. Can be built as custom Apify actors later.
   DailyPipelineStateMachine:
     Type: AWS::StepFunctions::StateMachine
     Properties:
@@ -506,6 +508,34 @@ Resources:
                     "YCFailed": {
                       "Type": "Pass",
                       "Result": {"count": 0, "source": "yc", "error": "scraper_failed"},
+                      "End": true
+                    }
+                  }
+                },
+                {
+                  "StartAt": "ScrapeGlassdoor",
+                  "States": {
+                    "ScrapeGlassdoor": {
+                      "Type": "Task",
+                      "Resource": "${ScrapeApifyFunction.Arn}",
+                      "Parameters": {
+                        "actor_id": "orgupdate/glassdoor-jobs-scraper",
+                        "source": "glassdoor",
+                        "normalizer": "glassdoor",
+                        "query_hash.$": "$.query_hash",
+                        "run_input": {
+                          "keyword.$": "$.queries[0]",
+                          "location": "Ireland",
+                          "maxItems": 50
+                        }
+                      },
+                      "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 2, "BackoffRate": 2}],
+                      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "GlassdoorFailed"}],
+                      "End": true
+                    },
+                    "GlassdoorFailed": {
+                      "Type": "Pass",
+                      "Result": {"count": 0, "source": "glassdoor", "error": "scraper_failed"},
                       "End": true
                     }
                   }
