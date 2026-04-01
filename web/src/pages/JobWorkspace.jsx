@@ -1,15 +1,16 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { apiGet } from '../api';
+import { apiGet, apiPatch } from '../api';
 
 function decodeHtml(text) {
   if (!text) return '';
   const doc = new DOMParser().parseFromString(text, 'text/html');
   return doc.body.textContent || '';
 }
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Pencil, Save, X } from 'lucide-react';
 import Tabs from '../components/ui/Tabs';
 import Button from '../components/ui/Button';
+import Input from '../components/ui/Input';
 import { ScoreBadge } from '../components/ui/Badge';
 import Badge from '../components/ui/Badge';
 
@@ -128,6 +129,48 @@ export default function JobWorkspace() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
 
+  // Inline editing state
+  const [editing, setEditing] = useState(false);
+  const [editFields, setEditFields] = useState({});
+  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState(null);
+
+  function startEditing() {
+    setEditFields({
+      title: job.title || '',
+      company: job.company || '',
+      location: job.location || '',
+      apply_url: job.apply_url || '',
+    });
+    setEditing(true);
+    setSaveStatus(null);
+  }
+
+  function cancelEditing() {
+    setEditing(false);
+    setEditFields({});
+    setSaveStatus(null);
+  }
+
+  async function handleSave() {
+    setSaving(true);
+    setSaveStatus(null);
+    try {
+      await apiPatch(`/api/dashboard/jobs/${job.job_id}`, editFields);
+      setJob((prev) => ({ ...prev, ...editFields }));
+      setEditing(false);
+      setSaveStatus({ type: 'success', message: 'Job updated.' });
+    } catch (e) {
+      setSaveStatus({ type: 'error', message: `Save failed: ${e.message}` });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function updateEditField(field, value) {
+    setEditFields((prev) => ({ ...prev, [field]: value }));
+  }
+
   useEffect(() => {
     async function load() {
       try {
@@ -199,6 +242,114 @@ export default function JobWorkspace() {
       <div className="border-2 border-t-0 border-black bg-white p-6 min-h-[300px]">
         {activeTab === 'overview' && (
           <div>
+            {/* Inline editable fields */}
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xs font-bold text-stone-400 uppercase tracking-wider">Job Details</h3>
+              {!editing ? (
+                <button
+                  onClick={startEditing}
+                  className="inline-flex items-center gap-1.5 text-xs font-bold text-stone-500 border-2 border-stone-300 px-2.5 py-1
+                    hover:border-black hover:text-black transition-colors cursor-pointer"
+                >
+                  <Pencil size={12} />
+                  Edit
+                </button>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleSave}
+                    disabled={saving}
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-cream bg-black border-2 border-black px-2.5 py-1
+                      hover:bg-stone-700 transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    <Save size={12} />
+                    {saving ? 'Saving...' : 'Save'}
+                  </button>
+                  <button
+                    onClick={cancelEditing}
+                    className="inline-flex items-center gap-1.5 text-xs font-bold text-stone-500 border-2 border-stone-300 px-2.5 py-1
+                      hover:border-black hover:text-black transition-colors cursor-pointer"
+                  >
+                    <X size={12} />
+                    Cancel
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {saveStatus && (
+              <div className={`mb-4 p-2.5 text-sm border-2 ${
+                saveStatus.type === 'success' ? 'bg-success-light border-success text-success' : 'bg-error-light border-error text-error'
+              }`}>
+                {saveStatus.message}
+              </div>
+            )}
+
+            {editing ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6 border-2 border-yellow bg-yellow-light p-4">
+                <div>
+                  <label className="block text-sm font-bold text-black mb-1">Title</label>
+                  <Input
+                    type="text"
+                    value={editFields.title}
+                    onChange={(e) => updateEditField('title', e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-black mb-1">Company</label>
+                  <Input
+                    type="text"
+                    value={editFields.company}
+                    onChange={(e) => updateEditField('company', e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-black mb-1">Location</label>
+                  <Input
+                    type="text"
+                    value={editFields.location}
+                    onChange={(e) => updateEditField('location', e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-black mb-1">Apply URL</label>
+                  <Input
+                    type="url"
+                    value={editFields.apply_url}
+                    onChange={(e) => updateEditField('apply_url', e.target.value)}
+                    placeholder="https://..."
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
+                <div className="border-2 border-stone-200 p-3">
+                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Title</p>
+                  <p className="text-sm font-bold text-black mt-0.5 truncate">{decodeHtml(job.title) || '--'}</p>
+                </div>
+                <div className="border-2 border-stone-200 p-3">
+                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Company</p>
+                  <p className="text-sm font-bold text-black mt-0.5 truncate">{decodeHtml(job.company) || '--'}</p>
+                </div>
+                <div className="border-2 border-stone-200 p-3">
+                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Location</p>
+                  <p className="text-sm text-stone-600 mt-0.5 truncate">{job.location || '--'}</p>
+                </div>
+                <div className="border-2 border-stone-200 p-3">
+                  <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Apply URL</p>
+                  {job.apply_url && job.apply_url !== 'Apply' ? (
+                    <a href={job.apply_url} target="_blank" rel="noopener noreferrer"
+                      className="text-sm text-info hover:underline mt-0.5 block truncate">
+                      {job.apply_url}
+                    </a>
+                  ) : (
+                    <p className="text-sm text-stone-400 mt-0.5">--</p>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Score cards */}
             <div className="grid grid-cols-3 gap-4 mb-6">
               <div className="border-2 border-black p-4">
                 <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">ATS</p>
