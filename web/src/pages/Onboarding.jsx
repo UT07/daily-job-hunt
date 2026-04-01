@@ -5,7 +5,7 @@ import { apiPut, apiUpload } from '../api'
 import Input from '../components/ui/Input'
 import Button from '../components/ui/Button'
 
-const STEPS = ['Profile', 'Resume', 'Preferences']
+const STEPS = ['Profile', 'Resume', 'Review', 'Preferences']
 
 function StepIndicator({ current }) {
   return (
@@ -267,7 +267,7 @@ function StepProfile({ profile, setProfile }) {
   )
 }
 
-function StepResume({ resumeFile, setResumeFile, uploadStatus, setUploadStatus }) {
+function StepResume({ resumeFile, setResumeFile, uploadStatus, setUploadStatus, setExtractedProfile }) {
   const fileInputRef = useRef(null)
   const [dragOver, setDragOver] = useState(false)
 
@@ -298,10 +298,15 @@ function StepResume({ resumeFile, setResumeFile, uploadStatus, setUploadStatus }
 
   async function handleUpload() {
     if (!resumeFile) return
-    setUploadStatus({ type: 'loading', message: 'Uploading...' })
+    setUploadStatus({ type: 'loading', message: 'Uploading and extracting profile...' })
     try {
-      await apiUpload('/api/resumes/upload', resumeFile)
-      setUploadStatus({ type: 'success', message: 'Resume uploaded and parsed successfully.' })
+      const result = await apiUpload('/api/resumes/upload', resumeFile)
+      if (result.extracted_profile) {
+        setExtractedProfile(result.extracted_profile)
+        setUploadStatus({ type: 'success', message: 'Resume uploaded and profile extracted. Review your details on the next step.' })
+      } else {
+        setUploadStatus({ type: 'success', message: 'Resume uploaded and parsed successfully.' })
+      }
     } catch (e) {
       if (e.message.includes('404') || e.message.includes('Not Found')) {
         setUploadStatus({ type: 'info', message: 'Resume upload API coming soon. Your file has been saved locally.' })
@@ -371,6 +376,144 @@ function StepResume({ resumeFile, setResumeFile, uploadStatus, setUploadStatus }
           {uploadStatus.message}
         </div>
       )}
+    </div>
+  )
+}
+
+function StepReview({ extractedProfile, setExtractedProfile, onApplyToProfile }) {
+  function updateField(field, value) {
+    setExtractedProfile((prev) => ({ ...prev, [field]: value }))
+  }
+
+  function updateSkill(index, value) {
+    setExtractedProfile((prev) => {
+      const skills = [...(prev.skills || [])]
+      skills[index] = value
+      return { ...prev, skills }
+    })
+  }
+
+  function removeSkill(index) {
+    setExtractedProfile((prev) => ({
+      ...prev,
+      skills: (prev.skills || []).filter((_, i) => i !== index),
+    }))
+  }
+
+  function addSkill() {
+    setExtractedProfile((prev) => ({
+      ...prev,
+      skills: [...(prev.skills || []), ''],
+    }))
+  }
+
+  if (!extractedProfile || Object.keys(extractedProfile).length === 0) {
+    return (
+      <div className="space-y-5">
+        <div>
+          <h2 className="text-lg font-heading font-bold text-black">Review Extracted Profile</h2>
+          <p className="text-sm text-stone-500 mt-1">No profile was extracted from your resume. You can skip this step or go back and upload a resume.</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-lg font-heading font-bold text-black">Review Extracted Profile</h2>
+        <p className="text-sm text-stone-500 mt-1">
+          We extracted these details from your resume. Edit anything that looks off, then continue.
+        </p>
+      </div>
+
+      <div className="border-2 border-black bg-yellow-light p-3 text-sm font-bold text-black">
+        These fields will be merged into your profile when you click "Apply to Profile".
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <label className="block text-sm font-bold text-black mb-1">Name</label>
+          <Input
+            type="text"
+            value={extractedProfile.name || ''}
+            onChange={(e) => updateField('name', e.target.value)}
+            placeholder="Extracted name"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-bold text-black mb-1">Location</label>
+          <Input
+            type="text"
+            value={extractedProfile.location || ''}
+            onChange={(e) => updateField('location', e.target.value)}
+            placeholder="Extracted location"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-bold text-black mb-1">Email</label>
+          <Input
+            type="email"
+            value={extractedProfile.email || ''}
+            onChange={(e) => updateField('email', e.target.value)}
+            placeholder="Extracted email"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-bold text-black mb-1">Phone</label>
+          <Input
+            type="tel"
+            value={extractedProfile.phone || ''}
+            onChange={(e) => updateField('phone', e.target.value)}
+            placeholder="Extracted phone"
+          />
+        </div>
+      </div>
+
+      {/* Skills */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <label className="block text-sm font-bold text-black">Skills</label>
+          <button
+            type="button"
+            onClick={addSkill}
+            className="text-sm text-info hover:underline font-bold"
+          >
+            + Add skill
+          </button>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {(extractedProfile.skills || []).map((skill, i) => (
+            <span
+              key={i}
+              className="inline-flex items-center gap-1 bg-white border-2 border-black text-black text-sm px-2.5 py-0.5 font-mono"
+            >
+              <input
+                type="text"
+                value={skill}
+                onChange={(e) => updateSkill(i, e.target.value)}
+                className="bg-transparent outline-none w-24 text-sm font-mono"
+              />
+              <button
+                type="button"
+                onClick={() => removeSkill(i)}
+                className="text-stone-500 hover:text-black"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </span>
+          ))}
+          {(!extractedProfile.skills || extractedProfile.skills.length === 0) && (
+            <p className="text-sm text-stone-400 italic">No skills extracted.</p>
+          )}
+        </div>
+      </div>
+
+      <Button onClick={onApplyToProfile}>
+        Apply to Profile
+      </Button>
     </div>
   )
 }
@@ -504,6 +647,7 @@ export default function Onboarding() {
 
   const [resumeFile, setResumeFile] = useState(null)
   const [uploadStatus, setUploadStatus] = useState(null)
+  const [extractedProfile, setExtractedProfile] = useState({})
 
   const [prefs, setPrefs] = useState({
     queries: [],
@@ -575,7 +719,7 @@ export default function Onboarding() {
         {/* Header */}
         <div className="text-center mb-8">
           <h1 className="text-3xl font-heading font-bold text-black tracking-tight">Welcome to NaukriBaba</h1>
-          <p className="text-stone-500 mt-2">Let's set up your profile in 3 quick steps.</p>
+          <p className="text-stone-500 mt-2">Let's set up your profile in {STEPS.length} quick steps.</p>
         </div>
 
         <StepIndicator current={step} />
@@ -588,9 +732,24 @@ export default function Onboarding() {
               setResumeFile={setResumeFile}
               uploadStatus={uploadStatus}
               setUploadStatus={setUploadStatus}
+              setExtractedProfile={setExtractedProfile}
             />
           )}
-          {step === 2 && <StepPreferences prefs={prefs} setPrefs={setPrefs} />}
+          {step === 2 && (
+            <StepReview
+              extractedProfile={extractedProfile}
+              setExtractedProfile={setExtractedProfile}
+              onApplyToProfile={() => {
+                setProfile((prev) => ({
+                  ...prev,
+                  name: extractedProfile.name || prev.name,
+                  location: extractedProfile.location || prev.location,
+                  phone: extractedProfile.phone || prev.phone,
+                }))
+              }}
+            />
+          )}
+          {step === 3 && <StepPreferences prefs={prefs} setPrefs={setPrefs} />}
         </div>
 
         {success && (
@@ -615,7 +774,7 @@ export default function Onboarding() {
             )}
           </div>
           <div className="flex items-center gap-3">
-            {step === 1 && (
+            {(step === 1 || step === 2) && (
               <Button variant="ghost" onClick={next}>
                 Skip
               </Button>
