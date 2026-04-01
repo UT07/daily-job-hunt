@@ -1,26 +1,29 @@
-"""FastAPI backend for the Job Hunt landing page.
+"""FastAPI backend for NaukriBaba.
 
-Exposes the pipeline's core AI modules as REST endpoints:
-- POST /api/score          — score a JD against base resumes
-- POST /api/tailor         — tailor resume + compile PDF, return Drive URL
-- POST /api/cover-letter   — generate cover letter PDF, return Drive URL
-- POST /api/contacts       — find LinkedIn contacts + intro messages
-- GET  /api/profile        — get authenticated user's profile
-- PUT  /api/profile        — update authenticated user's profile
-- POST /api/gdpr/consent   — record GDPR consent timestamp
-- GET  /api/gdpr/export    — export all user data as ZIP (Article 15)
-- DELETE /api/gdpr/delete  — request account deletion (soft-delete)
-- GET  /api/dashboard/jobs  — paginated, filterable job list
-- PATCH /api/dashboard/jobs/{job_id} — update a job's application status
-- DELETE /api/dashboard/jobs/{job_id} — delete a job from the dashboard
-- GET  /api/dashboard/stats — aggregate job metrics
-- GET  /api/dashboard/runs  — pipeline run history
-- POST /api/resumes/upload — upload a PDF resume, extract text, parse sections
-- GET  /api/resumes        — list all resumes for the authenticated user
-- DELETE /api/resumes/{id} — delete a resume
-- GET  /api/templates      — list available resume templates (public)
-- GET  /api/quality-stats  — AI model quality statistics (authenticated)
-- GET  /api/health         — health check (public)
+Endpoints:
+- POST /api/pipeline/run            — start daily pipeline (Step Functions)
+- POST /api/pipeline/run-single     — start single-job pipeline (Add Job)
+- GET  /api/pipeline/status         — latest pipeline metrics
+- GET  /api/pipeline/status/{name}  — poll specific execution
+- POST /api/compile-latex           — compile LaTeX to PDF
+- POST /api/score                   — score a JD against base resumes
+- POST /api/tailor                  — tailor resume + compile PDF
+- POST /api/cover-letter            — generate cover letter PDF
+- POST /api/contacts                — find LinkedIn contacts
+- GET  /api/profile                 — user profile
+- PUT  /api/profile                 — update profile
+- GET  /api/dashboard/jobs          — paginated job list
+- PATCH /api/dashboard/jobs/{id}    — update job status
+- DELETE /api/dashboard/jobs/{id}   — delete job
+- GET  /api/dashboard/stats         — aggregate metrics
+- GET  /api/dashboard/runs          — run history
+- POST /api/resumes/upload          — upload PDF resume
+- GET  /api/resumes                 — list resumes
+- DELETE /api/resumes/{id}          — delete resume
+- POST /api/gdpr/consent            — record GDPR consent
+- GET  /api/gdpr/export             — export user data (Article 15)
+- DELETE /api/gdpr/delete           — request deletion
+- GET  /api/health                  — health check (public)
 
 All endpoints except /api/health and /api/templates require a valid Supabase JWT.
 """
@@ -907,6 +910,187 @@ def get_dashboard_runs(user: AuthUser = Depends(get_current_user)):
         logger.warning("Stale run cleanup failed: %s", e)
 
     return {"runs": _db.get_runs(user.id)}
+
+
+# ---------------------------------------------------------------------------
+# Pipeline trigger + status endpoints (Step Functions)
+# ---------------------------------------------------------------------------
+
+_sfn_client = None
+
+def _get_sfn():
+    global _sfn_client
+    if _sfn_client is None:
+        _sfn_client = boto3.client("stepfunctions", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
+    return _sfn_client
+
+
+class PipelineRunRequest(BaseModel):
+    queries: list[str] = Field(default=["software engineer"], description="Search queries")
+
+
+class SingleJobRunRequest(BaseModel):
+    job_description: str = Field(..., min_length=20)
+    job_title: str = "Software Engineer"
+    company: str = "Unknown"
+    resume_type: str = "sre_devops"
+
+
+@app.post("/api/pipeline/run", status_code=202)
+def run_pipeline(req: PipelineRunRequest, user: AuthUser = Depends(get_current_user)):
+    """Start a daily pipeline execution via Step Functions."""
+    daily_arn = os.environ.get("DAILY_PIPELINE_ARN")
+    if not daily_arn:
+        raise HTTPException(500, "Pipeline not configured")
+
+    # Rate limit: max 5 runs per day, 1 concurrent
+    if _db:
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).date().isoformat()
+        runs = _db.get_runs(user.id)
+        today_runs = [r for r in runs if r.get("run_date") == today]
+        if len(today_runs) >= 5:
+            raise HTTPException(429, "Maximum 5 pipeline runs per day")
+        running = [r for r in runs if r.get("status") == "running"]
+        if running:
+            raise HTTPException(409, "A pipeline is already running")
+
+    import hashlib
+    query_hash = hashlib.md5("|".join(req.queries).encode()).hexdigest()[:12]
+
+    sfn = _get_sfn()
+    execution = sfn.start_execution(
+        stateMachineArn=daily_arn,
+        input=json.dumps({
+            "user_id": user.id,
+            "queries": req.queries,
+            "query_hash": query_hash,
+        }),
+    )
+
+    return {
+        "executionArn": execution["executionArn"],
+        "startDate": execution["startDate"].isoformat(),
+        "pollUrl": f"/api/pipeline/status/{execution['executionArn'].split(':')[-1]}",
+    }
+
+
+@app.post("/api/pipeline/run-single", status_code=202)
+def run_single_job(req: SingleJobRunRequest, user: AuthUser = Depends(get_current_user)):
+    """Start a single-job pipeline (Add Job) via Step Functions."""
+    single_arn = os.environ.get("SINGLE_JOB_PIPELINE_ARN")
+    if not single_arn:
+        raise HTTPException(500, "Pipeline not configured")
+
+    sfn = _get_sfn()
+    execution = sfn.start_execution(
+        stateMachineArn=single_arn,
+        input=json.dumps({
+            "user_id": user.id,
+            "job_description": req.job_description,
+            "job_title": req.job_title,
+            "company": req.company,
+            "resume_type": req.resume_type,
+        }),
+    )
+
+    return {
+        "executionArn": execution["executionArn"],
+        "startDate": execution["startDate"].isoformat(),
+        "pollUrl": f"/api/pipeline/status/{execution['executionArn'].split(':')[-1]}",
+    }
+
+
+@app.get("/api/pipeline/status")
+def pipeline_status(user: AuthUser = Depends(get_current_user)):
+    """Get latest pipeline metrics and run status."""
+    if _db is None:
+        raise HTTPException(500, "Database not configured")
+
+    runs = _db.get_runs(user.id)
+    latest = runs[0] if runs else None
+
+    # Get scraper-level metrics for today
+    metrics = []
+    try:
+        from datetime import datetime, timezone
+        today = datetime.now(timezone.utc).date().isoformat()
+        result = _db.client.table("pipeline_metrics").select("*") \
+            .eq("user_id", user.id) \
+            .gte("run_date", today) \
+            .order("created_at", desc=True) \
+            .limit(20).execute()
+        metrics = result.data or []
+    except Exception as e:
+        logger.warning("Failed to fetch metrics: %s", e)
+
+    return {
+        "latest_run": latest,
+        "today_metrics": metrics,
+    }
+
+
+@app.get("/api/pipeline/status/{execution_name}")
+def pipeline_execution_status(execution_name: str, user: AuthUser = Depends(get_current_user)):
+    """Poll a specific Step Functions execution by name."""
+    daily_arn = os.environ.get("DAILY_PIPELINE_ARN", "")
+    single_arn = os.environ.get("SINGLE_JOB_PIPELINE_ARN", "")
+
+    # Reconstruct full ARN from execution name (try both state machines)
+    base_arn = daily_arn.rsplit(":", 1)[0] if daily_arn else ""
+    execution_arn = f"{base_arn}:{execution_name}" if base_arn else ""
+
+    sfn = _get_sfn()
+    try:
+        result = sfn.describe_execution(executionArn=execution_arn)
+    except Exception:
+        # Try single-job pipeline ARN
+        base_arn = single_arn.rsplit(":", 1)[0] if single_arn else ""
+        execution_arn = f"{base_arn}:{execution_name}" if base_arn else ""
+        try:
+            result = sfn.describe_execution(executionArn=execution_arn)
+        except Exception as e:
+            raise HTTPException(404, f"Execution not found: {execution_name}")
+
+    output = None
+    if result.get("output"):
+        try:
+            output = json.loads(result["output"])
+        except (json.JSONDecodeError, TypeError):
+            output = result["output"]
+
+    return {
+        "name": result.get("name"),
+        "status": result["status"],  # RUNNING, SUCCEEDED, FAILED, TIMED_OUT, ABORTED
+        "startDate": result["startDate"].isoformat(),
+        "stopDate": result.get("stopDate", "").isoformat() if result.get("stopDate") else None,
+        "output": output,
+    }
+
+
+class CompileLatexRequest(BaseModel):
+    tex_source: str = Field(..., min_length=10)
+
+
+@app.post("/api/compile-latex")
+def compile_latex(req: CompileLatexRequest, user: AuthUser = Depends(get_current_user)):
+    """Compile LaTeX source to PDF and return the binary."""
+    try:
+        pdf_path = compile_tex_to_pdf(req.tex_source)
+        if not pdf_path or not Path(pdf_path).exists():
+            raise HTTPException(500, "LaTeX compilation failed — no PDF produced")
+
+        pdf_bytes = Path(pdf_path).read_bytes()
+        return StreamingResponse(
+            io.BytesIO(pdf_bytes),
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=output.pdf"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("LaTeX compile error: %s", e)
+        raise HTTPException(500, f"Compilation error: {str(e)}")
 
 
 # ---------------------------------------------------------------------------
