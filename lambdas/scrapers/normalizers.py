@@ -40,11 +40,11 @@ def normalize_linkedin(items: list, query_hash: str) -> list:
         job = normalize_job({
             "title": item.get("title"),
             "company": item.get("companyName"),
-            "description": item.get("description") or item.get("descriptionHtml"),
+            "description": item.get("descriptionText") or item.get("description") or item.get("descriptionHtml"),
             "location": item.get("location"),
-            "url": item.get("url") or item.get("link"),
+            "url": item.get("link") or item.get("url"),
             "experienceLevel": item.get("experienceLevel"),
-            "jobType": item.get("contractType"),
+            "jobType": item.get("employmentType") or item.get("contractType"),
         }, source="linkedin", query_hash=query_hash)
         if job:
             jobs.append(job)

@@ -86,12 +86,12 @@ Resources:
       CodeUri: lambdas/scrapers/
       Handler: scrape_apify.handler
       Runtime: python3.11
-      Timeout: 300
+      Timeout: 600
       MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
-            ParameterName: /naukribaba/*
+            ParameterName: naukribaba/*
 
   ScrapeAdzunaFunction:
     Type: AWS::Serverless::Function
@@ -100,12 +100,12 @@ Resources:
       CodeUri: lambdas/scrapers/
       Handler: scrape_adzuna.handler
       Runtime: python3.11
-      Timeout: 30
-      MemorySize: 128
+      Timeout: 120
+      MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
-            ParameterName: /naukribaba/*
+            ParameterName: naukribaba/*
 
   ScrapeHNFunction:
     Type: AWS::Serverless::Function
@@ -114,12 +114,12 @@ Resources:
       CodeUri: lambdas/scrapers/
       Handler: scrape_hn.handler
       Runtime: python3.11
-      Timeout: 60
-      MemorySize: 128
+      Timeout: 120
+      MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
-            ParameterName: /naukribaba/*
+            ParameterName: naukribaba/*
 
   ScrapeYCFunction:
     Type: AWS::Serverless::Function
@@ -128,12 +128,12 @@ Resources:
       CodeUri: lambdas/scrapers/
       Handler: scrape_yc.handler
       Runtime: python3.11
-      Timeout: 30
-      MemorySize: 128
+      Timeout: 120
+      MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
-            ParameterName: /naukribaba/*
+            ParameterName: naukribaba/*
 
   # --- Pipeline Lambda Functions ---
   LoadConfigFunction:
@@ -143,12 +143,12 @@ Resources:
       CodeUri: lambdas/pipeline/
       Handler: load_config.handler
       Runtime: python3.11
-      Timeout: 30
-      MemorySize: 128
+      Timeout: 60
+      MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
-            ParameterName: /naukribaba/*
+            ParameterName: naukribaba/*
 
   MergeDedupFunction:
     Type: AWS::Serverless::Function
@@ -157,12 +157,12 @@ Resources:
       CodeUri: lambdas/pipeline/
       Handler: merge_dedup.handler
       Runtime: python3.11
-      Timeout: 30
-      MemorySize: 128
+      Timeout: 60
+      MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
-            ParameterName: /naukribaba/*
+            ParameterName: naukribaba/*
 
   ScoreBatchFunction:
     Type: AWS::Serverless::Function
@@ -171,12 +171,12 @@ Resources:
       CodeUri: lambdas/pipeline/
       Handler: score_batch.handler
       Runtime: python3.11
-      Timeout: 300
+      Timeout: 600
       MemorySize: 512
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
-            ParameterName: /naukribaba/*
+            ParameterName: naukribaba/*
 
   TailorResumeFunction:
     Type: AWS::Serverless::Function
@@ -190,7 +190,7 @@ Resources:
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
-            ParameterName: /naukribaba/*
+            ParameterName: naukribaba/*
         - S3CrudPolicy:
             BucketName: utkarsh-job-hunt
 
@@ -208,7 +208,7 @@ Resources:
         - S3CrudPolicy:
             BucketName: utkarsh-job-hunt
         - SSMParameterReadPolicy:
-            ParameterName: /naukribaba/*
+            ParameterName: naukribaba/*
 
   GenerateCoverLetterFunction:
     Type: AWS::Serverless::Function
@@ -222,7 +222,7 @@ Resources:
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
-            ParameterName: /naukribaba/*
+            ParameterName: naukribaba/*
         - S3CrudPolicy:
             BucketName: utkarsh-job-hunt
 
@@ -234,11 +234,11 @@ Resources:
       Handler: find_contacts.handler
       Runtime: python3.11
       Timeout: 120
-      MemorySize: 128
+      MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
-            ParameterName: /naukribaba/*
+            ParameterName: naukribaba/*
 
   SaveJobFunction:
     Type: AWS::Serverless::Function
@@ -247,12 +247,12 @@ Resources:
       CodeUri: lambdas/pipeline/
       Handler: save_job.handler
       Runtime: python3.11
-      Timeout: 30
-      MemorySize: 128
+      Timeout: 60
+      MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
-            ParameterName: /naukribaba/*
+            ParameterName: naukribaba/*
         - S3CrudPolicy:
             BucketName: utkarsh-job-hunt
 
@@ -263,12 +263,12 @@ Resources:
       CodeUri: lambdas/pipeline/
       Handler: save_metrics.handler
       Runtime: python3.11
-      Timeout: 30
-      MemorySize: 128
+      Timeout: 60
+      MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
-            ParameterName: /naukribaba/*
+            ParameterName: naukribaba/*
 
   SendEmailFunction:
     Type: AWS::Serverless::Function
@@ -277,12 +277,12 @@ Resources:
       CodeUri: lambdas/pipeline/
       Handler: send_email.handler
       Runtime: python3.11
-      Timeout: 30
-      MemorySize: 128
+      Timeout: 60
+      MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
-            ParameterName: /naukribaba/*
+            ParameterName: naukribaba/*
 
   SelfImproveFunction:
     Type: AWS::Serverless::Function
@@ -299,7 +299,7 @@ Resources:
           NOTIFY_ERROR_FUNCTION: !Ref NotifyErrorFunction
       Policies:
         - SSMParameterReadPolicy:
-            ParameterName: /naukribaba/*
+            ParameterName: naukribaba/*
         - LambdaInvokePolicy:
             FunctionName: naukribaba-notify-error
 
@@ -310,12 +310,12 @@ Resources:
       CodeUri: lambdas/pipeline/
       Handler: notify_error.handler
       Runtime: python3.11
-      Timeout: 30
-      MemorySize: 128
+      Timeout: 60
+      MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
-            ParameterName: /naukribaba/*
+            ParameterName: naukribaba/*
 
   CheckExpiryFunction:
     Type: AWS::Serverless::Function
@@ -325,11 +325,11 @@ Resources:
       Handler: check_expiry.handler
       Runtime: python3.11
       Timeout: 120
-      MemorySize: 128
+      MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
-            ParameterName: /naukribaba/*
+            ParameterName: naukribaba/*
 
   # --- IAM Role for Step Functions ---
   StepFunctionsRole:
@@ -400,12 +400,12 @@ Resources:
                       "Type": "Task",
                       "Resource": "${ScrapeApifyFunction.Arn}",
                       "Parameters": {
-                        "actor_id": "hMvNSpz3JnHgl5jkh",
+                        "actor_id": "curious_coder/linkedin-jobs-scraper",
                         "source": "linkedin",
                         "normalizer": "linkedin",
                         "query_hash.$": "$.query_hash",
                         "run_input": {
-                          "searchUrl.$": "States.Format('https://www.linkedin.com/jobs/search/?keywords={}&location=Ireland', $.queries[0])",
+                          "urls.$": "States.Array(States.Format('https://www.linkedin.com/jobs/search/?keywords={}&location=Ireland', $.queries[0]))",
                           "maxItems": 50
                         }
                       },
@@ -444,33 +444,6 @@ Resources:
                     "IndeedFailed": {
                       "Type": "Pass",
                       "Result": {"count": 0, "source": "indeed", "error": "scraper_failed"},
-                      "End": true
-                    }
-                  }
-                },
-                {
-                  "StartAt": "ScrapeGlassdoor",
-                  "States": {
-                    "ScrapeGlassdoor": {
-                      "Type": "Task",
-                      "Resource": "${ScrapeApifyFunction.Arn}",
-                      "Parameters": {
-                        "actor_id": "bebity/glassdoor-scraper",
-                        "source": "glassdoor",
-                        "normalizer": "glassdoor",
-                        "query_hash.$": "$.query_hash",
-                        "run_input": {
-                          "searchUrl.$": "States.Format('https://www.glassdoor.com/Job/ireland-{}-jobs-SRCH_IL.0,7_IN104_KO8,25.htm', $.queries[0])",
-                          "maxItems": 50
-                        }
-                      },
-                      "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 2, "BackoffRate": 2}],
-                      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "GlassdoorFailed"}],
-                      "End": true
-                    },
-                    "GlassdoorFailed": {
-                      "Type": "Pass",
-                      "Result": {"count": 0, "source": "glassdoor", "error": "scraper_failed"},
                       "End": true
                     }
                   }

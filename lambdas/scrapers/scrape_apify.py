@@ -80,6 +80,15 @@ def handler(event, context):
             logger.warning(f"[{source}] 0 valid jobs after normalization")
             return {"count": 0, "source": source, "error": "no_valid_jobs"}
 
+        # Deduplicate by job_hash within batch (Supabase upsert fails on intra-batch dupes)
+        seen_hashes = set()
+        unique_jobs = []
+        for job in valid_jobs:
+            if job["job_hash"] not in seen_hashes:
+                seen_hashes.add(job["job_hash"])
+                unique_jobs.append(job)
+        valid_jobs = unique_jobs
+
         # Write to jobs_raw (bulk upsert)
         now = datetime.utcnow().isoformat()
         for job in valid_jobs:
