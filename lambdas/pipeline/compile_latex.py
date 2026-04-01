@@ -8,11 +8,8 @@ import boto3
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# NOTE: tectonic is only available when this Lambda runs in the Docker-based image
-# (PackageType: Image with Dockerfile.lambda). In a plain zip-based Lambda, tectonic
-# will not be found and the handler falls back to returning the tex_s3_key without
-# a compiled PDF so the pipeline can still proceed.
-# TODO: switch CompileLatexFunction to PackageType: Image to enable tectonic.
+# tectonic is provided via the TectonicLayer Lambda Layer, which extracts to /opt/.
+# The binary is at /opt/bin/tectonic. We fall back to bare "tectonic" for local runs.
 
 
 def handler(event, context):
@@ -34,10 +31,12 @@ def handler(event, context):
         with open(tex_path, "w") as f:
             f.write(tex_content)
 
-        # Try tectonic (available in Docker-based Lambda image)
+        # Resolve tectonic binary: Lambda Layer extracts to /opt/bin/tectonic
+        tectonic_path = "/opt/bin/tectonic" if os.path.exists("/opt/bin/tectonic") else "tectonic"
+
         try:
             result = subprocess.run(
-                ["tectonic", "-X", "compile", tex_path],
+                [tectonic_path, "-X", "compile", tex_path],
                 capture_output=True, text=True, timeout=45,
             )
             if result.returncode != 0:

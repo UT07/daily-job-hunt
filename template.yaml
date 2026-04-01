@@ -71,6 +71,15 @@ Resources:
     Metadata:
       BuildMethod: python3.11
 
+  # --- Lambda Layer (Tectonic static binary for PDF compilation) ---
+  TectonicLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: naukribaba-tectonic
+      ContentUri: layer-tectonic/
+      CompatibleRuntimes:
+        - python3.11
+
   # --- Scraper Lambda Functions ---
   ScrapeApifyFunction:
     Type: AWS::Serverless::Function
@@ -196,7 +205,7 @@ Resources:
       Runtime: python3.11
       Timeout: 60
       MemorySize: 512
-      Layers: [!Ref SharedDepsLayer]
+      Layers: [!Ref SharedDepsLayer, !Ref TectonicLayer]
       Policies:
         - S3CrudPolicy:
             BucketName: utkarsh-job-hunt
