@@ -1068,6 +1068,52 @@ def pipeline_execution_status(execution_name: str, user: AuthUser = Depends(get_
     }
 
 
+@app.post("/api/pipeline/re-tailor/{job_id}", status_code=202)
+def re_tailor_job(job_id: str, user: AuthUser = Depends(get_current_user)):
+    """Re-tailor a job with the latest resume version via Step Functions."""
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+
+    single_arn = os.environ.get("SINGLE_JOB_PIPELINE_ARN")
+    if not single_arn:
+        raise HTTPException(500, "Pipeline not configured")
+
+    # Get the job
+    job = _db.client.table("jobs").select("*").eq("job_id", job_id).eq("user_id", user.id).execute()
+    if not job.data:
+        raise HTTPException(404, "Job not found")
+    job = job.data[0]
+
+    # Get current resume version
+    resumes = _db.get_resumes(user.id)
+    current_version = len(resumes) if resumes else 0
+
+    sfn = _get_sfn()
+    execution = sfn.start_execution(
+        stateMachineArn=single_arn,
+        input=json.dumps({
+            "user_id": user.id,
+            "job_description": job.get("description", ""),
+            "job_title": job.get("title", ""),
+            "company": job.get("company", ""),
+            "resume_type": "default",
+            "re_tailor": True,
+            "job_id": job_id,
+        }),
+    )
+
+    # Increment resume_version on the job
+    _db.client.table("jobs").update({
+        "resume_version": (job.get("resume_version") or 0) + 1,
+    }).eq("job_id", job_id).execute()
+
+    return {
+        "executionArn": execution["executionArn"],
+        "pollUrl": f"/api/pipeline/status/{execution['executionArn'].split(':')[-1]}",
+        "resume_version": (job.get("resume_version") or 0) + 1,
+    }
+
+
 class CompileLatexRequest(BaseModel):
     tex_source: str = Field(..., min_length=10)
 
