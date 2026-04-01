@@ -1,0 +1,4 @@
+scrapling>=0.4
+supabase>=2.0.0
+httpx>=0.27.0
+boto3>=1.34.0

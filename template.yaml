@@ -360,6 +360,112 @@ Resources:
         - SSMParameterReadPolicy:
             ParameterName: naukribaba/*
 
+  # --- ECS Cluster for Playwright Scrapers (Fargate Spot) ---
+  ScraperCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: naukribaba-scrapers
+      CapacityProviders:
+        - FARGATE_SPOT
+        - FARGATE
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 1
+        - CapacityProvider: FARGATE
+          Weight: 0
+          Base: 0
+
+  ScraperLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/naukribaba-scrapers
+      RetentionInDays: 14
+
+  ScraperSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Fargate scraper tasks - all outbound
+      VpcId: vpc-0bfb7f8052eb3968b
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  FargateExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: naukribaba-fargate-execution
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  FargateTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: naukribaba-fargate-task
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SSMReadOnly
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/naukribaba/*"
+        - PolicyName: S3Access
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                Resource: "arn:aws:s3:::utkarsh-job-hunt/*"
+
+  PlaywrightTaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: naukribaba-playwright
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: '512'
+      Memory: '2048'
+      ExecutionRoleArn: !GetAtt FargateExecutionRole.Arn
+      TaskRoleArn: !GetAtt FargateTaskRole.Arn
+      ContainerDefinitions:
+        - Name: scraper
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/naukribaba-playwright:latest"
+          Essential: true
+          Environment:
+            - Name: SCRAPER_SOURCE
+              Value: linkedin
+            - Name: SUPABASE_URL
+              Value: !Sub "{{resolve:ssm:/naukribaba/SUPABASE_URL}}"
+            - Name: SUPABASE_SERVICE_KEY
+              Value: !Sub "{{resolve:ssm:/naukribaba/SUPABASE_SERVICE_KEY}}"
+            - Name: PROXY_URL
+              Value: !Sub "{{resolve:ssm:/naukribaba/PROXY_URL}}"
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref ScraperLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: scraper
+
   # --- IAM Role for Step Functions ---
   StepFunctionsRole:
     Type: AWS::IAM::Role
