@@ -22,10 +22,28 @@ def get_supabase():
 
 
 def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096) -> str:
-    """Call AI provider with failover: Groq -> DeepSeek -> OpenRouter."""
+    """Call AI provider with 5-provider failover chain.
+
+    Order: Groq (fastest) → NVIDIA NIM (free credits, many models) → DeepSeek
+    → OpenRouter (free tier) → Qwen. Each provider is tried once; on failure
+    (rate limit, timeout, error), the next provider is attempted.
+    """
     providers = [
         {"name": "groq", "url": "https://api.groq.com/openai/v1/chat/completions",
-         "key_param": "/naukribaba/GROQ_API_KEY", "model": "llama-3.3-70b-versatile"},
+         "key_param": "/naukribaba/GROQ_API_KEY", "model": "llama-3.3-70b-versatile",
+         "timeout": 60},
+        {"name": "nvidia", "url": "https://integrate.api.nvidia.com/v1/chat/completions",
+         "key_param": "/naukribaba/NVIDIA_API_KEY", "model": "meta/llama-3.3-70b-instruct",
+         "timeout": 120},
+        {"name": "deepseek", "url": "https://api.deepseek.com/v1/chat/completions",
+         "key_param": "/naukribaba/DEEPSEEK_API_KEY", "model": "deepseek-chat",
+         "timeout": 120},
+        {"name": "openrouter", "url": "https://openrouter.ai/api/v1/chat/completions",
+         "key_param": "/naukribaba/OPENROUTER_API_KEY", "model": "google/gemini-2.0-flash-exp:free",
+         "timeout": 90, "extra_headers": {"HTTP-Referer": "https://github.com/UT07/daily-job-hunt"}},
+        {"name": "qwen", "url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+         "key_param": "/naukribaba/QWEN_API_KEY", "model": "qwen-plus",
+         "timeout": 90},
     ]
 
     messages = []
@@ -33,22 +51,37 @@ def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096) -> str:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
 
+    last_error = None
     for provider in providers:
         try:
             api_key = get_param(provider["key_param"])
+            if not api_key or api_key == "mock-value":
+                continue  # Skip providers without keys configured
+
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            if "extra_headers" in provider:
+                headers.update(provider["extra_headers"])
+
             resp = httpx.post(
                 provider["url"],
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json={"model": provider["model"], "messages": messages, "max_tokens": max_tokens, "temperature": 0.3},
-                timeout=60,
+                headers=headers,
+                json={"model": provider["model"], "messages": messages,
+                      "max_tokens": max_tokens, "temperature": 0.3},
+                timeout=provider.get("timeout", 60),
             )
             if resp.status_code == 200:
-                return resp.json()["choices"][0]["message"]["content"]
-            logger.warning(f"[ai] {provider['name']} returned {resp.status_code}")
+                content = resp.json()["choices"][0]["message"]["content"]
+                logger.info(f"[ai] {provider['name']}/{provider['model']} succeeded")
+                return content
+            elif resp.status_code == 429:
+                logger.warning(f"[ai] {provider['name']} rate limited, trying next")
+            else:
+                logger.warning(f"[ai] {provider['name']} returned {resp.status_code}")
         except Exception as e:
+            last_error = e
             logger.warning(f"[ai] {provider['name']} failed: {e}")
 
-    raise RuntimeError("All AI providers failed")
+    raise RuntimeError(f"All {len(providers)} AI providers failed. Last error: {last_error}")
 
 
 def ai_complete_cached(prompt: str, system: str = "", cache_hours: int = 72) -> str:

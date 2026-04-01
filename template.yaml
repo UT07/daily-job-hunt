@@ -287,6 +287,9 @@ Resources:
       Timeout: 120
       MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
+      Environment:
+        Variables:
+          NOTIFY_ERROR_FUNCTION: !Ref NotifyErrorFunction
       Policies:
         - SSMParameterReadPolicy:
             ParameterName: /naukribaba/*
