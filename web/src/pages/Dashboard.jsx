@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
 import { apiGet } from '../api';
@@ -142,18 +142,23 @@ export default function Dashboard() {
   // Track filter version to avoid redundant fetches
   const [filterVersion, setFilterVersion] = useState(0);
 
+  // Use refs for filter values so fetchJobs stays stable across filter changes
+  const filtersRef = useRef({ statusFilter, sourceFilter, minScore, companySearch, tailoredOnly });
+  filtersRef.current = { statusFilter, sourceFilter, minScore, companySearch, tailoredOnly };
+
   const fetchJobs = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
+      const f = filtersRef.current;
       const params = new URLSearchParams();
       params.set('page', String(page));
       params.set('per_page', String(perPage));
-      if (statusFilter !== 'All') params.set('status', statusFilter);
-      if (sourceFilter !== 'All') params.set('source', sourceFilter);
-      if (minScore > 0) params.set('min_score', String(minScore));
-      if (companySearch.trim()) params.set('company', companySearch.trim());
-      if (tailoredOnly) params.set('tailored', 'true');
+      if (f.statusFilter !== 'All') params.set('status', f.statusFilter);
+      if (f.sourceFilter !== 'All') params.set('source', f.sourceFilter);
+      if (f.minScore > 0) params.set('min_score', String(f.minScore));
+      if (f.companySearch.trim()) params.set('company', f.companySearch.trim());
+      if (f.tailoredOnly) params.set('tailored', 'true');
 
       const data = await apiGet(`/api/dashboard/jobs?${params.toString()}`);
       setJobs(data.jobs || []);
@@ -163,7 +168,7 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, [filterVersion, page, statusFilter, sourceFilter, minScore, companySearch, tailoredOnly]);
+  }, [filterVersion, page, perPage]);
 
   const fetchStats = useCallback(async () => {
     try {
@@ -253,7 +258,7 @@ export default function Dashboard() {
           <Select
             label="Status"
             value={statusFilter}
-            onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
+            onChange={(e) => setStatusFilter(e.target.value)}
             className="w-36"
           >
             {STATUS_OPTIONS.map((s) => (
@@ -264,7 +269,7 @@ export default function Dashboard() {
           <Select
             label="Source"
             value={sourceFilter}
-            onChange={(e) => { setSourceFilter(e.target.value); setPage(1); }}
+            onChange={(e) => setSourceFilter(e.target.value)}
             className="w-36"
           >
             {SOURCES.map((s) => (
@@ -281,7 +286,7 @@ export default function Dashboard() {
               min={0}
               max={100}
               value={minScore}
-              onChange={(e) => { setMinScore(Number(e.target.value)); setPage(1); }}
+              onChange={(e) => setMinScore(Number(e.target.value))}
               className="w-32 accent-black"
             />
           </div>
@@ -291,7 +296,7 @@ export default function Dashboard() {
             <input
               value={companySearch}
               onChange={(e) => setCompanySearch(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') { setPage(1); } }}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleFilterApply(); }}
               placeholder="Search company..."
               className="bg-white border-2 border-black px-4 py-2.5 font-body text-sm text-black
                 placeholder:text-stone-400 focus:outline-none focus:shadow-brutal-yellow
@@ -302,7 +307,7 @@ export default function Dashboard() {
           <div className="flex items-center gap-2">
             <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider">Tailored</label>
             <button
-              onClick={() => { setTailoredOnly((v) => !v); setPage(1); }}
+              onClick={() => setTailoredOnly((v) => !v)}
               className={`relative inline-flex h-6 w-11 items-center border-2 border-black transition-colors cursor-pointer ${
                 tailoredOnly ? 'bg-black' : 'bg-white'
               }`}

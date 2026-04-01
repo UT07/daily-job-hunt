@@ -174,10 +174,8 @@ export default function JobWorkspace() {
   useEffect(() => {
     async function load() {
       try {
-        // Fetch job data from dashboard endpoint and find this job
-        const data = await apiGet(`/api/dashboard/jobs?per_page=200`);
-        const found = data.jobs?.find((j) => j.job_id === jobId);
-        setJob(found || null);
+        const data = await apiGet(`/api/dashboard/jobs/${jobId}`);
+        setJob(data || null);
       } catch (err) {
         console.error('Failed to load job:', err);
       } finally {
@@ -391,6 +389,41 @@ export default function JobWorkspace() {
                 </div>
               )}
             </div>
+            {/* Match Analysis */}
+            {(job.key_matches?.length > 0 || job.gaps?.length > 0 || job.match_reasoning) && (
+              <div className="mb-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {job.key_matches?.length > 0 && (
+                  <div className="border-2 border-success bg-success-light p-4">
+                    <h3 className="text-[10px] font-bold text-success uppercase tracking-wider mb-2">Key Matches</h3>
+                    <div className="flex flex-wrap gap-1.5">
+                      {job.key_matches.map((m, i) => (
+                        <span key={i} className="text-xs font-mono bg-white border border-success text-success px-2 py-0.5">
+                          {m}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {job.gaps?.length > 0 && (
+                  <div className="border-2 border-yellow-dark bg-yellow-light p-4">
+                    <h3 className="text-[10px] font-bold text-yellow-dark uppercase tracking-wider mb-2">Gaps</h3>
+                    <div className="flex flex-wrap gap-1.5">
+                      {job.gaps.map((g, i) => (
+                        <span key={i} className="text-xs font-mono bg-white border border-yellow-dark text-stone-600 px-2 py-0.5">
+                          {g}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {job.match_reasoning && (
+                  <div className="sm:col-span-2 border-2 border-stone-300 bg-stone-50 p-4">
+                    <h3 className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-1">AI Analysis</h3>
+                    <p className="text-xs text-stone-600 leading-relaxed">{job.match_reasoning}</p>
+                  </div>
+                )}
+              </div>
+            )}
             {job.description && (
               <div>
                 <h3 className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">Job Description</h3>

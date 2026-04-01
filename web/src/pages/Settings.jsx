@@ -696,9 +696,15 @@ export default function Settings() {
           ...prev,
           name: data.full_name ?? prev.name,
           email: data.email ?? user.email ?? prev.email,
-          linkedin_url: data.linkedin_url ?? prev.linkedin_url,
-          github_url: data.github_url ?? prev.github_url,
           phone: data.phone ?? prev.phone,
+          location: data.location ?? prev.location,
+          github_url: data.github_url ?? prev.github_url,
+          linkedin_url: data.linkedin_url ?? prev.linkedin_url,
+          website: data.website ?? prev.website,
+          visa_status: data.visa_status ?? prev.visa_status,
+          work_authorizations: data.work_authorizations
+            ? Object.entries(data.work_authorizations).map(([country, status]) => ({ country, status }))
+            : prev.work_authorizations,
         }))
       })
       .catch((e) => console.warn('Failed to load profile:', e))

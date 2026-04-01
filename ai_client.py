@@ -1003,11 +1003,13 @@ class AIClient:
         # Check cache first
         council_cache_extra = f"council:{n_generators}x{n_critics}|{cache_extra}"
         if not skip_cache and self.cache:
-            cached = self.cache.get(prompt, system, cache_extra=council_cache_extra)
+            cached = self.cache.get_with_info(prompt, system, cache_extra=council_cache_extra)
             if cached:
                 self._stats["cache_hits"] += 1
                 logger.debug("[Council] Cache hit — returning cached council result")
-                return cached
+                self.last_council_provider = cached.get("provider", "council")
+                self.last_council_model = cached.get("model", "consensus")
+                return cached["response"]
 
         self._stats["cache_misses"] += 1
 
@@ -1021,6 +1023,8 @@ class AIClient:
         if len(candidates) == 1:
             logger.info("[Council] Only 1 candidate — skipping critique round")
             best = candidates[0]["response"]
+            self.last_council_provider = candidates[0]["provider"]
+            self.last_council_model = candidates[0]["model"]
             if self.cache and not skip_cache:
                 self.cache.put(prompt, best, provider=candidates[0]["provider"],
                                model=candidates[0]["model"], system=system,
@@ -1039,6 +1043,8 @@ class AIClient:
         result = self.council_critique(candidates, desc, n_critics=n_critics, temperature=0.2)
 
         best = result["best_response"]
+        self.last_council_provider = result["best_provider"]
+        self.last_council_model = result["best_model"]
 
         # Cache the winning response
         if self.cache and not skip_cache:

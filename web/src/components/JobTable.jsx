@@ -338,6 +338,15 @@ export default function JobTable({ jobs, onStatusChange, onDelete }) {
               <div>
                 <p className={`font-heading font-bold text-black ${getTitleStyle(job)}`}>{decodeHtml(job.title)}</p>
                 <p className="text-xs text-stone-500 mt-0.5">{decodeHtml(job.company)} · {job.location || 'Remote'}</p>
+                {job.key_matches?.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {job.key_matches.slice(0, 3).map((m, i) => (
+                      <span key={i} className="text-[9px] font-mono text-success bg-success-light border border-success px-1 py-0">
+                        {m}
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
               <ScoreBadge score={job.match_score} className="text-lg" />
             </div>
@@ -412,20 +421,29 @@ export default function JobTable({ jobs, onStatusChange, onDelete }) {
                   <ScoreBadge score={job.match_score} />
                 </td>
 
-                {/* Title */}
+                {/* Title + key matches */}
                 <td
-                  className={`px-3 py-2.5 font-heading font-bold text-black max-w-[220px] truncate cursor-pointer hover:underline ${getTitleStyle(job)}`}
+                  className={`px-3 py-2.5 max-w-[260px] cursor-pointer hover:underline ${getTitleStyle(job)}`}
                   title={decodeHtml(job.title)}
                   onClick={() => navigate(`/jobs/${job.job_id}`)}
                 >
-                  <span className="flex items-center gap-1.5">
+                  <div className="font-heading font-bold text-black truncate flex items-center gap-1.5">
                     {job.is_expired && (
                       <span className="inline-flex items-center px-1.5 py-0 font-mono text-[9px] font-bold uppercase tracking-wider border border-stone-400 bg-stone-200 text-stone-600 shrink-0">
                         EXPIRED
                       </span>
                     )}
                     {decodeHtml(job.title) || '--'}
-                  </span>
+                  </div>
+                  {job.key_matches?.length > 0 && (
+                    <div className="flex flex-wrap gap-1 mt-0.5">
+                      {job.key_matches.slice(0, 3).map((m, i) => (
+                        <span key={i} className="text-[9px] font-mono text-success bg-success-light border border-success px-1 py-0">
+                          {m}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </td>
 
                 {/* Company */}

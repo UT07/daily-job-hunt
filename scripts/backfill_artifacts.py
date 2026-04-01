@@ -152,7 +152,7 @@ for i, jd in enumerate(all_jobs):
         # Step 5: Update Supabase immediately (save progress per job)
         update = {
             "resume_s3_url": s3_url,
-            "tailoring_model": getattr(job, "tailoring_model", "council:consensus") or "council:consensus",
+            "tailoring_model": f"{getattr(job, 'tailoring_provider', 'council')}:{getattr(job, 'tailoring_model', 'consensus')}",
             "matched_resume": rtype,
         }
         if cl_s3:

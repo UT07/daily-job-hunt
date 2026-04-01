@@ -176,8 +176,8 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
                 temperature=0.3,
                 cache_extra=resume_hash,
             )
-            job.tailoring_provider = "council"
-            job.tailoring_model = "consensus"
+            job.tailoring_provider = getattr(ai_client, "last_council_provider", "council")
+            job.tailoring_model = getattr(ai_client, "last_council_model", "consensus")
         else:
             info = ai_client.complete_with_info(
                 prompt=user_prompt,
@@ -366,8 +366,8 @@ Return ONLY valid JSON with the same keys. No markdown, no explanation."""
                 temperature=0.3,
                 cache_extra=sections_hash,
             )
-            job.tailoring_provider = "council"
-            job.tailoring_model = "consensus"
+            job.tailoring_provider = getattr(ai_client, "last_council_provider", "council")
+            job.tailoring_model = getattr(ai_client, "last_council_model", "consensus")
         else:
             info = ai_client.complete_with_info(
                 prompt=user_prompt,

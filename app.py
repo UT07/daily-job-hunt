@@ -222,6 +222,14 @@ class ProfileResponse(BaseModel):
     id: str
     email: str
     full_name: Optional[str] = None
+    phone: Optional[str] = None
+    location: Optional[str] = None
+    github_url: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    website: Optional[str] = None
+    visa_status: Optional[str] = None
+    work_authorizations: Optional[dict] = None
+    candidate_context: Optional[str] = None
     plan: str = "free"
     created_at: Optional[str] = None
 
@@ -490,14 +498,15 @@ def _dispatch_task(task_type: str, payload: dict, user_id: str = "") -> dict:
         resume_type = payload.get("resume_type", "sre_devops")
         base_tex = _resumes.get(resume_type, "")
         result = _do_tailor(job, base_tex, resume_type, payload.get("company", "Unknown"), payload.get("job_title", "Software Engineer"))
-        # Save artifacts to dashboard job
+        # Save artifacts to dashboard job — use actual model that won the council vote
+        tailoring_model = f"{getattr(job, 'tailoring_provider', 'council')}:{getattr(job, 'tailoring_model', 'consensus')}"
         _update_job_artifacts(job_id, {
             "resume_s3_url": result.get("pdf_url", ""),
             "ats_score": result.get("ats_score", 0),
             "hiring_manager_score": result.get("hiring_manager_score", 0),
             "tech_recruiter_score": result.get("tech_recruiter_score", 0),
             "match_score": result.get("avg_score", 0),
-            "tailoring_model": "council:consensus",
+            "tailoring_model": tailoring_model,
             "matched_resume": resume_type,
         })
         result["job_id"] = job_id
@@ -701,6 +710,14 @@ def get_profile(user: AuthUser = Depends(get_current_user)):
         id=row["id"],
         email=row["email"],
         full_name=row.get("name"),
+        phone=row.get("phone"),
+        location=row.get("location"),
+        github_url=row.get("github"),
+        linkedin_url=row.get("linkedin"),
+        website=row.get("website"),
+        visa_status=row.get("visa_status"),
+        work_authorizations=row.get("work_authorizations"),
+        candidate_context=row.get("candidate_context"),
         plan=row.get("plan", "free"),
         created_at=row.get("created_at"),
     )
@@ -742,6 +759,14 @@ def update_profile(
         id=row["id"],
         email=row["email"],
         full_name=row.get("name"),
+        phone=row.get("phone"),
+        location=row.get("location"),
+        github_url=row.get("github"),
+        linkedin_url=row.get("linkedin"),
+        website=row.get("website"),
+        visa_status=row.get("visa_status"),
+        work_authorizations=row.get("work_authorizations"),
+        candidate_context=row.get("candidate_context"),
         plan=row.get("plan", "free"),
         created_at=row.get("created_at"),
     )
@@ -880,6 +905,27 @@ def delete_job(
     except ValueError:
         raise HTTPException(404, "Job not found")
     return {"ok": True}
+
+
+@app.get("/api/dashboard/jobs/{job_id}")
+def get_single_job(
+    job_id: str,
+    user: AuthUser = Depends(get_current_user),
+):
+    """Get a single job by ID."""
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+    result = (
+        _db.client.table("jobs")
+        .select("*")
+        .eq("job_id", job_id)
+        .eq("user_id", user.id)
+        .maybe_single()
+        .execute()
+    )
+    if not result or not result.data:
+        raise HTTPException(404, "Job not found")
+    return result.data
 
 
 @app.get("/api/dashboard/stats")
