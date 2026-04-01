@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install ruff
-      - run: ruff check lambdas/ tests/ --select E,F,W
+      - run: ruff check lambdas/ tests/ app.py
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
