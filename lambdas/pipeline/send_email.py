@@ -47,7 +47,7 @@ def handler(event, context):
         return {"sent": False, "reason": "no_jobs_today"}
 
     # Format HTML email
-    html = format_email_html(jobs.data, user_name)
+    email_body = format_email_html(jobs.data, user_name)
 
     # Send via Gmail SMTP
     gmail_user = get_param("/naukribaba/GMAIL_USER")
@@ -57,7 +57,7 @@ def handler(event, context):
     msg["Subject"] = f"NaukriBaba: {len(jobs.data)} new job matches"
     msg["From"] = gmail_user
     msg["To"] = user_email
-    msg.attach(MIMEText(html, "html"))
+    msg.attach(MIMEText(email_body, "html"))
 
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
         server.login(gmail_user, gmail_pass)
