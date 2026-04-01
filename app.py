@@ -1130,7 +1130,49 @@ async def upload_resume(
     }
 
     result = _db.upsert_resume(user.id, resume_data)
-    return {"resume_id": result.get("id"), "sections": sections}
+
+    # Auto-extract profile from resume (best-effort, don't block upload)
+    extracted_profile = {}
+    if _ai_client and text:
+        try:
+            import json as _json
+            profile_prompt = f"""Extract a professional profile from this resume text. Return ONLY valid JSON:
+{{
+    "full_name": "...",
+    "location": "...",
+    "skills": ["skill1", "skill2", ...],
+    "experience_summary": "1-2 sentence summary",
+    "years_experience": <number or null>,
+    "current_title": "..."
+}}
+
+Resume:
+{text[:3000]}"""
+            profile_resp = _ai_client.generate(profile_prompt, system="Extract structured data. Return only valid JSON.")
+            profile_text = profile_resp.strip()
+            if profile_text.startswith("```"):
+                profile_text = profile_text.split("```")[1]
+                if profile_text.startswith("json"):
+                    profile_text = profile_text[4:]
+            extracted_profile = _json.loads(profile_text.strip())
+
+            # Update user profile with extracted data (merge, don't overwrite)
+            profile_update = {}
+            if extracted_profile.get("full_name"):
+                profile_update["full_name"] = extracted_profile["full_name"]
+            if extracted_profile.get("location"):
+                profile_update["location"] = extracted_profile["location"]
+            if extracted_profile.get("skills"):
+                profile_update["skills"] = extracted_profile["skills"]
+            if extracted_profile.get("experience_summary"):
+                profile_update["experience_summary"] = extracted_profile["experience_summary"]
+            if profile_update:
+                _db.update_profile(user.id, profile_update)
+                logger.info("Auto-extracted profile from resume: %s", list(profile_update.keys()))
+        except Exception as e:
+            logger.warning("Profile extraction failed (non-blocking): %s", e)
+
+    return {"resume_id": result.get("id"), "sections": sections, "extracted_profile": extracted_profile}
 
 
 @app.get("/api/resumes")
