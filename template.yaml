@@ -68,8 +68,6 @@ Resources:
       ContentUri: layer/
       CompatibleRuntimes:
         - python3.11
-    Metadata:
-      BuildMethod: python3.11
 
   # --- Lambda Layer (Tectonic static binary for PDF compilation) ---
   TectonicLayer:
