@@ -8,7 +8,6 @@ Run: .venv/bin/python tests/e2e_test.py
 import json
 import os
 import sys
-import time
 import requests
 from pathlib import Path
 
@@ -75,7 +74,7 @@ def get_auth_token():
     # Let's try signing in via the REST API
 
     # Actually, let's use the anon key approach - sign in with email
-    anon_key = os.environ.get("SUPABASE_JWT_SECRET", "")
+    os.environ.get("SUPABASE_JWT_SECRET", "")
 
     # For E2E tests, we'll test unauthenticated endpoints and note auth issues
     return user_id, email
@@ -317,7 +316,7 @@ print()
 # -----------------------------------------------------------
 print("[8] QUALITY LOGGER")
 try:
-    from quality_logger import log_quality, read_quality_log, get_model_stats
+    from quality_logger import log_quality, read_quality_log
 
     log_quality(task="test", provider="test_provider", model="test_model",
                 job_id="test123", scores={"ats_score": 85})
@@ -376,7 +375,7 @@ print()
 # -----------------------------------------------------------
 print("[10] GDPR MODULE")
 try:
-    from gdpr import export_user_data, record_consent, request_deletion
+    from gdpr import export_user_data
 
     db = SupabaseClient.from_env()
     user_id = auth_users[0]["id"] if auth_users else None
@@ -385,7 +384,8 @@ try:
         zip_bytes = export_user_data(db, user_id)
         test("Data export produces ZIP", len(zip_bytes) > 0, f"got {len(zip_bytes)} bytes")
 
-        import zipfile, io
+        import zipfile
+        import io
         zf = zipfile.ZipFile(io.BytesIO(zip_bytes))
         files_in_zip = zf.namelist()
         test("ZIP contains profile.json", "profile.json" in files_in_zip)

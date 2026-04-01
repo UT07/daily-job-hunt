@@ -1,8 +1,6 @@
 """Lightweight AI helper for Lambda functions. Calls AI providers via httpx."""
 import hashlib
-import json
 import logging
-import os
 from datetime import datetime, timedelta
 
 import boto3

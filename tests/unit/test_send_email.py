@@ -1,6 +1,5 @@
 """Unit tests for send_email Lambda."""
-import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 
 def _make_supabase(user_data=None, jobs_data=None):

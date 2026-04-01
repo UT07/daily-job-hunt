@@ -23,7 +23,7 @@ def parse_hn_comment(text: str) -> dict:
     import html as html_mod
     text = html_mod.unescape(text)
     text = re.sub(r'<[^>]+>', '\n', text).strip()
-    lines = [l.strip() for l in text.split('\n') if l.strip()]
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
     if not lines:
         return None
 
@@ -73,7 +73,7 @@ def handler(event, context):
     thread_id = hits[0]["objectID"]
 
     # Fetch comments
-    comments_url = f"https://hn.algolia.com/api/v1/search"
+    comments_url = "https://hn.algolia.com/api/v1/search"
     params = {"tags": f"comment,story_{thread_id}", "hitsPerPage": 200}
     resp = httpx.get(comments_url, params=params, timeout=30)
     if resp.status_code != 200:

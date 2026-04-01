@@ -1,6 +1,5 @@
 """Unit tests for lambdas/scrapers/normalizers.py."""
 import hashlib
-import pytest
 
 from normalizers import (
     normalize_adzuna,

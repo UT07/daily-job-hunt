@@ -1,5 +1,4 @@
 """Generic Apify scraper Lambda. Called with actor_id and run_input as params."""
-import json
 import logging
 import os
 from datetime import datetime, timedelta

@@ -5,7 +5,6 @@ Verifies that:
 - Concurrent pipeline limit (1 at a time) is enforced
 """
 
-import pytest
 from unittest.mock import patch, MagicMock
 
 
@@ -216,7 +215,7 @@ def test_yesterday_runs_dont_count(client, auth_headers, mock_db):
     """Runs from yesterday should not count toward today's 5-run limit."""
     from datetime import datetime, timezone, timedelta
 
-    today = datetime.now(timezone.utc).date().isoformat()
+    datetime.now(timezone.utc).date().isoformat()
     yesterday = (datetime.now(timezone.utc).date() - timedelta(days=1)).isoformat()
 
     # 5 runs yesterday, 0 today

@@ -4,12 +4,11 @@ import smtplib
 from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 
+import boto3
 from ai_helper import get_supabase
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-
-import boto3
 ssm = boto3.client("ssm")
 
 def get_param(name):

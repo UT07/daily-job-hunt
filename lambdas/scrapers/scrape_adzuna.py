@@ -1,6 +1,5 @@
 """Adzuna REST API scraper."""
 import logging
-import os
 from datetime import datetime, timedelta
 
 import boto3

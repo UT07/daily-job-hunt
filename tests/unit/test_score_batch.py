@@ -1,7 +1,6 @@
 """Unit tests for score_batch Lambda."""
 import json
-import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 
 SAMPLE_RESUME_TEX = r"""\documentclass[11pt]{article}

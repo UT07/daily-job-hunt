@@ -1,12 +1,11 @@
 """Unit tests for lambdas/pipeline/ai_helper.py."""
 import hashlib
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-import ai_helper
 from ai_helper import ai_complete, ai_complete_cached
 
 
@@ -230,7 +229,6 @@ class TestAiCompleteCached:
     def test_cache_key_includes_system_prompt(self):
         """Two calls with different system prompts produce different cache keys."""
         keys_used = []
-        call_index = [0]
 
         mock_db = MagicMock()
         mock_table = MagicMock()

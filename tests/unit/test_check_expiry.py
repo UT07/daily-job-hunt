@@ -1,5 +1,4 @@
 """Unit tests for check_expiry Lambda."""
-import pytest
 import respx
 import httpx
 from unittest.mock import patch, MagicMock

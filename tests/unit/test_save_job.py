@@ -1,6 +1,5 @@
 """Unit tests for save_job Lambda."""
-import pytest
-from unittest.mock import patch, MagicMock, call
+from unittest.mock import patch, MagicMock
 
 
 def _make_s3_mock(presigned_url="https://s3.example.com/presigned"):

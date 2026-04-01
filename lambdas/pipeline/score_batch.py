@@ -3,7 +3,6 @@ import logging
 import uuid
 from datetime import datetime
 
-import boto3
 
 from ai_helper import ai_complete_cached, get_supabase
 

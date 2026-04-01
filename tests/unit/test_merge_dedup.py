@@ -1,5 +1,4 @@
 """Unit tests for merge_dedup Lambda."""
-import pytest
 from unittest.mock import patch, MagicMock
 
 

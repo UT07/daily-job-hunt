@@ -8,7 +8,7 @@ Verifies that:
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 
 # ── XSS payloads ─────────────────────────────────────────────────────────────

@@ -1,8 +1,6 @@
 """Unit tests for scrape_apify Lambda."""
-import os
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 
 # ---------------------------------------------------------------------------
