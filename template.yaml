@@ -135,6 +135,78 @@ Resources:
         - SSMParameterReadPolicy:
             ParameterName: naukribaba/*
 
+  # --- New Web Unlocker scrapers (Phase 2.5) ---
+
+  ScrapeLinkedInFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-scrape-linkedin
+      CodeUri: lambdas/scrapers/
+      Handler: scrape_linkedin.handler
+      Runtime: python3.11
+      Timeout: 300
+      MemorySize: 256
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: naukribaba/*
+
+  ScrapeIndeedFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-scrape-indeed
+      CodeUri: lambdas/scrapers/
+      Handler: scrape_indeed.handler
+      Runtime: python3.11
+      Timeout: 300
+      MemorySize: 256
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: naukribaba/*
+
+  ScrapeGlassdoorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-scrape-glassdoor
+      CodeUri: lambdas/scrapers/
+      Handler: scrape_glassdoor.handler
+      Runtime: python3.11
+      Timeout: 300
+      MemorySize: 256
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: naukribaba/*
+
+  ScrapeIrishFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-scrape-irish
+      CodeUri: lambdas/scrapers/
+      Handler: scrape_irish.handler
+      Runtime: python3.11
+      Timeout: 300
+      MemorySize: 256
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: naukribaba/*
+
+  ScrapeContactsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-scrape-contacts
+      CodeUri: lambdas/scrapers/
+      Handler: scrape_contacts.handler
+      Runtime: python3.11
+      Timeout: 300
+      MemorySize: 256
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: naukribaba/*
+
   # --- Pipeline Lambda Functions ---
   LoadConfigFunction:
     Type: AWS::Serverless::Function
