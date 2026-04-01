@@ -63,6 +63,16 @@ def handler(event, context):
         else:
             logger.warning(f"[adzuna] Query '{query}' ({country}): HTTP {resp.status_code} - {resp.text[:200]}")
 
+    # Deduplicate by job_hash within batch (multiple queries may return the same job,
+    # and Supabase upsert fails on intra-batch duplicates)
+    seen_hashes = set()
+    unique_jobs = []
+    for job in all_jobs:
+        if job["job_hash"] not in seen_hashes:
+            seen_hashes.add(job["job_hash"])
+            unique_jobs.append(job)
+    all_jobs = unique_jobs
+
     # Write to jobs_raw (bulk upsert)
     if all_jobs:
         now = datetime.utcnow().isoformat()
