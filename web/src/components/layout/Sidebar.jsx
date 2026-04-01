@@ -12,6 +12,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { useUIStore } from '../../stores/uiStore';
+import NotificationBell from '../NotificationBell';
 
 const NAV_ITEMS = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
@@ -92,6 +93,7 @@ export default function Sidebar() {
         ))}
 
         <SectionLabel collapsed={sidebarCollapsed}>Account</SectionLabel>
+        <NotificationBell collapsed={sidebarCollapsed} />
         {ACCOUNT_ITEMS.map((item) => (
           <NavItem key={item.to} {...item} collapsed={sidebarCollapsed} />
         ))}
