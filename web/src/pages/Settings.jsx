@@ -557,6 +557,113 @@ function PreferencesSection({ prefs, setPrefs }) {
   )
 }
 
+const JOB_SOURCES = [
+  { id: 'linkedin', label: 'LinkedIn' },
+  { id: 'indeed', label: 'Indeed' },
+  { id: 'glassdoor', label: 'Glassdoor' },
+  { id: 'adzuna', label: 'Adzuna' },
+  { id: 'hn', label: 'HN Hiring' },
+  { id: 'yc', label: 'YC / WATS' },
+]
+
+function JobSourcesSection() {
+  const [enabledSources, setEnabledSources] = useState(
+    JOB_SOURCES.map((s) => s.id)
+  )
+  const [saving, setSaving] = useState(false)
+  const [status, setStatus] = useState(null)
+  const [loadedOnce, setLoadedOnce] = useState(false)
+
+  useEffect(() => {
+    apiGet('/api/search-config')
+      .then((data) => {
+        if (data.enabled_sources && Array.isArray(data.enabled_sources)) {
+          setEnabledSources(data.enabled_sources)
+        }
+        setLoadedOnce(true)
+      })
+      .catch(() => setLoadedOnce(true))
+  }, [])
+
+  function toggleSource(sourceId) {
+    setEnabledSources((prev) =>
+      prev.includes(sourceId)
+        ? prev.filter((s) => s !== sourceId)
+        : [...prev, sourceId]
+    )
+  }
+
+  async function handleSave() {
+    setSaving(true)
+    setStatus(null)
+    try {
+      await apiPut('/api/search-config', { enabled_sources: enabledSources })
+      setStatus({ type: 'success', message: 'Job sources saved.' })
+    } catch (e) {
+      if (e.message.includes('404') || e.message.includes('Not Found')) {
+        setStatus({ type: 'info', message: 'Source config API coming soon. Changes saved locally.' })
+      } else {
+        setStatus({ type: 'error', message: `Save failed: ${e.message}` })
+      }
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <div>
+          <h3 className="text-base font-heading font-bold text-black">Job Sources</h3>
+          <p className="text-sm text-stone-500 mt-0.5">Toggle which job boards the pipeline scrapes.</p>
+        </div>
+      </CardHeader>
+      <CardBody>
+        <div className="space-y-3">
+          {JOB_SOURCES.map((source) => {
+            const active = enabledSources.includes(source.id)
+            return (
+              <div
+                key={source.id}
+                className={`flex items-center justify-between px-4 py-3 border-2 transition-colors ${
+                  active ? 'border-black bg-white' : 'border-stone-300 bg-stone-50'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <span className={`w-2 h-2 ${active ? 'bg-success' : 'bg-stone-300'}`} />
+                  <span className={`text-sm font-bold ${active ? 'text-black' : 'text-stone-400'}`}>
+                    {source.label}
+                  </span>
+                </div>
+                <button
+                  onClick={() => toggleSource(source.id)}
+                  className={`relative inline-flex h-6 w-11 items-center border-2 border-black transition-colors cursor-pointer ${
+                    active ? 'bg-black' : 'bg-white'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform transition-transform ${
+                      active ? 'translate-x-[22px] bg-yellow' : 'translate-x-[2px] bg-stone-300'
+                    }`}
+                  />
+                </button>
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="mt-5 flex items-center gap-3">
+          <Button onClick={handleSave} disabled={saving}>
+            {saving && <span className="spinner" />}
+            Save Sources
+          </Button>
+          <StatusMessage status={status} />
+        </div>
+      </CardBody>
+    </Card>
+  )
+}
+
 export default function Settings() {
   const { user, loading } = useAuth()
 
@@ -629,6 +736,7 @@ export default function Settings() {
       <div className="space-y-6">
         <ProfileSection profile={profile} setProfile={setProfile} />
         <ResumeSection />
+        <JobSourcesSection />
         <PreferencesSection prefs={prefs} setPrefs={setPrefs} />
       </div>
     </div>
