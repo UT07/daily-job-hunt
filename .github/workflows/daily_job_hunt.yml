@@ -1,8 +1,8 @@
 name: Daily Job Hunt
 
 on:
-  schedule:
-    - cron: "0 7 * * 1-5"
+  # schedule:
+  #   - cron: "0 7 * * 1-5"  # DISABLED — replaced by Step Functions EventBridge schedule
   workflow_dispatch:
     inputs:
       mode:

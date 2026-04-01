@@ -70,8 +70,18 @@ def handler(event, context):
         try:
             db.table("jobs").insert(job_record).execute()
         except Exception as e:
-            logger.warning(f"[score_batch] Insert failed for {job['job_hash']}: {e}")
-            continue
+            # Retry without optional columns if they don't exist yet
+            if "column" in str(e) and "does not exist" in str(e):
+                for col in ("key_matches", "gaps", "match_reasoning"):
+                    job_record.pop(col, None)
+                try:
+                    db.table("jobs").insert(job_record).execute()
+                except Exception as e2:
+                    logger.warning(f"[score_batch] Insert retry failed for {job['job_hash']}: {e2}")
+                    continue
+            else:
+                logger.warning(f"[score_batch] Insert failed for {job['job_hash']}: {e}")
+                continue
 
         light_touch = match_score >= 85
         matched_items.append({

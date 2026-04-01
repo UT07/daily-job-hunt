@@ -93,6 +93,15 @@ def handler(event, context):
 
     jobs = normalize_hn(parsed, query_hash)
 
+    # Deduplicate by job_hash within batch
+    seen = set()
+    unique = []
+    for j in jobs:
+        if j["job_hash"] not in seen:
+            seen.add(j["job_hash"])
+            unique.append(j)
+    jobs = unique
+
     if jobs:
         now = datetime.utcnow().isoformat()
         for job in jobs:

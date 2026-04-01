@@ -99,6 +99,16 @@ def handler(event, context):
             logger.warning(f"[yc] Query '{query}' failed: {e}")
 
     jobs = normalize_generic_web(all_raw, "yc", query_hash)
+
+    # Deduplicate by job_hash within batch
+    seen = set()
+    unique = []
+    for j in jobs:
+        if j["job_hash"] not in seen:
+            seen.add(j["job_hash"])
+            unique.append(j)
+    jobs = unique
+
     if jobs:
         now = datetime.utcnow().isoformat()
         for job in jobs:
