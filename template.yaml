@@ -576,6 +576,11 @@ Resources:
                   - !GetAtt ScrapeAdzunaFunction.Arn
                   - !GetAtt ScrapeHNFunction.Arn
                   - !GetAtt ScrapeYCFunction.Arn
+                  - !GetAtt ScrapeLinkedInFunction.Arn
+                  - !GetAtt ScrapeIndeedFunction.Arn
+                  - !GetAtt ScrapeGlassdoorFunction.Arn
+                  - !GetAtt ScrapeIrishFunction.Arn
+                  - !GetAtt ScrapeContactsFunction.Arn
                   - !GetAtt MergeDedupFunction.Arn
                   - !GetAtt ScoreBatchFunction.Arn
                   - !GetAtt TailorResumeFunction.Arn
@@ -620,16 +625,12 @@ Resources:
                   "States": {
                     "ScrapeLinkedIn": {
                       "Type": "Task",
-                      "Resource": "${ScrapeApifyFunction.Arn}",
+                      "Resource": "${ScrapeLinkedInFunction.Arn}",
                       "Parameters": {
-                        "actor_id": "curious_coder/linkedin-jobs-scraper",
-                        "source": "linkedin",
-                        "normalizer": "linkedin",
+                        "queries.$": "$.queries",
+                        "location": "Ireland",
                         "query_hash.$": "$.query_hash",
-                        "run_input": {
-                          "urls.$": "States.Array(States.Format('https://www.linkedin.com/jobs/search/?keywords={}&location=Ireland', $.queries[0]))",
-                          "maxItems": 50
-                        }
+                        "max_jobs": 50
                       },
                       "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 2, "BackoffRate": 2}],
                       "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "LinkedInFailed"}],
@@ -647,17 +648,12 @@ Resources:
                   "States": {
                     "ScrapeIndeed": {
                       "Type": "Task",
-                      "Resource": "${ScrapeApifyFunction.Arn}",
+                      "Resource": "${ScrapeIndeedFunction.Arn}",
                       "Parameters": {
-                        "actor_id": "misceres/indeed-scraper",
-                        "source": "indeed",
-                        "normalizer": "indeed",
+                        "queries.$": "$.queries",
+                        "location": "Ireland",
                         "query_hash.$": "$.query_hash",
-                        "run_input": {
-                          "position.$": "$.queries[0]",
-                          "country": "IE",
-                          "maxItems": 50
-                        }
+                        "max_jobs": 50
                       },
                       "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 2, "BackoffRate": 2}],
                       "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "IndeedFailed"}],
@@ -737,18 +733,12 @@ Resources:
                   "States": {
                     "ScrapeGlassdoor": {
                       "Type": "Task",
-                      "Resource": "${ScrapeApifyFunction.Arn}",
+                      "Resource": "${ScrapeGlassdoorFunction.Arn}",
                       "Parameters": {
-                        "actor_id": "cheap_scraper/glassdoor-jobs-scraper-remove-duplicate-jobs",
-                        "source": "glassdoor",
-                        "normalizer": "glassdoor",
+                        "queries.$": "$.queries",
+                        "location": "Ireland",
                         "query_hash.$": "$.query_hash",
-                        "run_input": {
-                          "keywords.$": "States.Array($.queries[0])",
-                          "location": "Dublin",
-                          "country": "Ireland",
-                          "maxItems": 50
-                        }
+                        "max_jobs": 30
                       },
                       "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 2, "BackoffRate": 2}],
                       "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "GlassdoorFailed"}],
@@ -757,6 +747,27 @@ Resources:
                     "GlassdoorFailed": {
                       "Type": "Pass",
                       "Result": {"count": 0, "source": "glassdoor", "error": "scraper_failed"},
+                      "End": true
+                    }
+                  }
+                },
+                {
+                  "StartAt": "ScrapeIrish",
+                  "States": {
+                    "ScrapeIrish": {
+                      "Type": "Task",
+                      "Resource": "${ScrapeIrishFunction.Arn}",
+                      "Parameters": {
+                        "queries.$": "$.queries",
+                        "query_hash.$": "$.query_hash"
+                      },
+                      "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 10, "MaxAttempts": 2, "BackoffRate": 2}],
+                      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "IrishFailed"}],
+                      "End": true
+                    },
+                    "IrishFailed": {
+                      "Type": "Pass",
+                      "Result": {"count": 0, "source": "irish_portals", "error": "scraper_failed"},
                       "End": true
                     }
                   }
