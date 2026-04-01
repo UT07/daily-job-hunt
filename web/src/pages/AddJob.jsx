@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { apiCall } from '../api';
+import { useState, useRef, useCallback } from 'react';
+import { apiCall, pollPipeline } from '../api';
 import Button from '../components/ui/Button';
 import Input, { Textarea, Select } from '../components/ui/Input';
 import ScoreCard from '../components/ScoreCard';
@@ -8,48 +8,44 @@ import CoverLetterCard from '../components/CoverLetterCard';
 import ContactsCard from '../components/ContactsCard';
 import ErrorBanner from '../components/ErrorBanner';
 
-const PROGRESS_STEPS = {
+// Step Functions pipeline progress steps
+const PIPELINE_STEPS = [
+  { key: 'STARTING',   label: 'Starting pipeline...' },
+  { key: 'RUNNING',    label: 'Processing job...' },
+  { key: 'SUCCEEDED',  label: 'Done!' },
+];
+
+// Legacy progress steps for non-pipeline actions (score, contacts)
+const LEGACY_PROGRESS_STEPS = {
   score: [
-    { key: 'scoring',  label: 'Scoring job match...' },
-    { key: 'done',     label: 'Done!' },
-  ],
-  tailor: [
-    { key: 'scoring',       label: 'Scoring job match...' },
-    { key: 'tailoring',     label: 'Tailoring resume...' },
-    { key: 'done',          label: 'Done!' },
-  ],
-  'cover-letter': [
-    { key: 'scoring',       label: 'Scoring job match...' },
-    { key: 'cover_letter',  label: 'Generating cover letter...' },
-    { key: 'done',          label: 'Done!' },
+    { key: 'scoring', label: 'Scoring job match...' },
+    { key: 'done',    label: 'Done!' },
   ],
   contacts: [
-    { key: 'finding',   label: 'Finding contacts...' },
-    { key: 'done',      label: 'Done!' },
+    { key: 'finding', label: 'Finding contacts...' },
+    { key: 'done',    label: 'Done!' },
   ],
 };
 
-// Map raw task status strings to step keys
+// Map raw task status strings to step keys (for legacy actions)
 function statusToStepKey(rawStatus) {
   if (!rawStatus) return null;
   const s = rawStatus.toLowerCase();
   if (s.includes('scor')) return 'scoring';
-  if (s.includes('tailor')) return 'tailoring';
-  if (s.includes('cover')) return 'cover_letter';
   if (s.includes('contact') || s.includes('find')) return 'finding';
   if (s === 'done') return 'done';
   return null;
 }
 
-function ProgressIndicator({ steps, currentStatus }) {
-  const currentKey = statusToStepKey(currentStatus) || steps[0]?.key;
+function ProgressIndicator({ steps, currentKey }) {
   const currentIdx = steps.findIndex((s) => s.key === currentKey);
+  const doneKey = steps[steps.length - 1]?.key;
 
   return (
     <div className="flex items-center gap-2 flex-wrap">
       {steps.map((step, i) => {
-        const isDone = i < currentIdx || currentKey === 'done';
-        const isActive = step.key === currentKey && currentKey !== 'done';
+        const isDone = i < currentIdx || currentKey === doneKey;
+        const isActive = step.key === currentKey && currentKey !== doneKey;
         return (
           <div key={step.key} className="flex items-center gap-2">
             <div className={`flex items-center gap-1.5 px-2.5 py-1 border-2 font-mono text-[11px] font-bold
@@ -59,11 +55,11 @@ function ProgressIndicator({ steps, currentStatus }) {
                   ? 'border-yellow-dark bg-yellow-light text-yellow-dark animate-pulse'
                   : 'border-stone-300 bg-stone-100 text-stone-400'
               }`}>
-              {isDone ? '✓' : isActive ? '⏳' : '○'}
+              {isDone ? '\u2713' : isActive ? '\u23F3' : '\u25CB'}
               <span>{step.label}</span>
             </div>
             {i < steps.length - 1 && (
-              <span className="text-stone-300 font-mono text-xs">→</span>
+              <span className="text-stone-300 font-mono text-xs">\u2192</span>
             )}
           </div>
         );
@@ -81,8 +77,10 @@ export default function AddJob() {
   const [resumeType, setResumeType] = useState('sre_devops');
   const [results, setResults] = useState([]);
   const [actionLoading, setActionLoading] = useState({});
-  const [actionProgress, setActionProgress] = useState({});
+  const [progressKey, setProgressKey] = useState(null);   // current step key for progress indicator
+  const [progressSteps, setProgressSteps] = useState([]);  // which step list is active
   const [errors, setErrors] = useState([]);
+  const abortRef = useRef(null);
 
   const jdTooShort = jd.trim().length > 0 && jd.trim().length < 100;
 
@@ -101,33 +99,87 @@ export default function AddJob() {
     setResults((prev) => [{ type, data, company }, ...prev]);
   }
 
-  async function run(endpoint, key) {
+  // Run the full pipeline via Step Functions (tailor + cover letter)
+  const runPipeline = useCallback(async (action) => {
     if (!jd.trim()) return;
-    // Clear previous errors for this action
     setErrors([]);
-    setActionLoading((prev) => ({ ...prev, [key]: true }));
-    setActionProgress((prev) => ({ ...prev, [key]: null }));
+    setActionLoading((prev) => ({ ...prev, [action]: true }));
+    setProgressSteps(PIPELINE_STEPS);
+    setProgressKey('STARTING');
+
     try {
       const payload = getPayload();
-      const steps = PROGRESS_STEPS[key] || [];
-      const data = await apiCall(endpoint, payload, {
-        onProgress: (status) => {
-          setActionProgress((prev) => ({ ...prev, [key]: status }));
+
+      // POST to Step Functions endpoint
+      const res = await apiCall('/api/pipeline/run-single', payload);
+      const { pollUrl } = res;
+      if (!pollUrl) throw new Error('No pollUrl returned from pipeline');
+
+      setProgressKey('RUNNING');
+
+      // Poll until terminal state
+      const output = await pollPipeline(pollUrl, {
+        intervalMs: 5000,
+        maxWaitMs: 300000,
+        onStatus: (data) => {
+          if (data.status === 'SUCCEEDED') {
+            setProgressKey('SUCCEEDED');
+          }
+          // stay on RUNNING for any non-terminal status
         },
       });
+
+      setProgressKey('SUCCEEDED');
+
+      // The pipeline output contains the full results.
+      // Determine what to show based on the action and what's in the output.
+      if (action === 'tailor') {
+        addResult('tailor', output);
+      } else if (action === 'cover-letter') {
+        addResult('cover-letter', output);
+      } else {
+        // Generic: show whatever came back
+        addResult(action, output);
+      }
+    } catch (err) {
+      setErrors((prev) => [...prev, err.message]);
+    } finally {
+      setActionLoading((prev) => ({ ...prev, [action]: false }));
+      setProgressKey(null);
+      setProgressSteps([]);
+    }
+  }, [jd, jobTitle, company, location, applyUrl, resumeType]);
+
+  // Run legacy (non-pipeline) actions like score and contacts
+  const runLegacy = useCallback(async (endpoint, key) => {
+    if (!jd.trim()) return;
+    setErrors([]);
+    setActionLoading((prev) => ({ ...prev, [key]: true }));
+    const steps = LEGACY_PROGRESS_STEPS[key] || [];
+    setProgressSteps(steps);
+    setProgressKey(steps[0]?.key || null);
+
+    try {
+      const payload = getPayload();
+      const data = await apiCall(endpoint, payload, {
+        onProgress: (status) => {
+          const mapped = statusToStepKey(status);
+          if (mapped) setProgressKey(mapped);
+        },
+      });
+      setProgressKey('done');
       addResult(key, data);
     } catch (err) {
       setErrors((prev) => [...prev, err.message]);
     } finally {
       setActionLoading((prev) => ({ ...prev, [key]: false }));
-      setActionProgress((prev) => ({ ...prev, [key]: null }));
+      setProgressKey(null);
+      setProgressSteps([]);
     }
-  }
+  }, [jd, jobTitle, company, location, applyUrl, resumeType]);
 
   // Which action is currently in progress (if any)
   const activeKey = Object.keys(actionLoading).find((k) => actionLoading[k]);
-  const activeSteps = activeKey ? PROGRESS_STEPS[activeKey] || [] : [];
-  const activeProgress = activeKey ? actionProgress[activeKey] : null;
 
   return (
     <div>
@@ -155,7 +207,7 @@ export default function AddJob() {
         {/* JD length warning */}
         {jdTooShort && (
           <div className="mb-4 mt-2 flex items-start gap-2 border-2 border-yellow-dark bg-yellow-light px-3 py-2">
-            <span className="text-yellow-dark font-bold text-sm mt-0.5">⚠</span>
+            <span className="text-yellow-dark font-bold text-sm mt-0.5">{'\u26A0'}</span>
             <p className="text-xs font-bold text-yellow-dark leading-relaxed">
               Job description seems too short. AI matching works best with a detailed JD
               (responsibilities, requirements, tech stack).
@@ -211,13 +263,13 @@ export default function AddJob() {
         </div>
 
         {/* Progress indicator (shown while any action is running) */}
-        {activeKey && activeSteps.length > 0 && (
+        {activeKey && progressSteps.length > 0 && (
           <div className="mb-4 p-3 border-2 border-black bg-stone-50">
-            <ProgressIndicator steps={activeSteps} currentStatus={activeProgress} />
+            <ProgressIndicator steps={progressSteps} currentKey={progressKey} />
           </div>
         )}
 
-        {/* Errors (single consolidated area, replaces stacking cards) */}
+        {/* Errors (single consolidated area) */}
         {errors.length > 0 && (
           <div className="mb-4 space-y-2">
             {errors.map((msg, i) => (
@@ -232,7 +284,7 @@ export default function AddJob() {
             variant="secondary"
             loading={actionLoading.score}
             disabled={!jd.trim() || !!activeKey}
-            onClick={() => run('/api/score', 'score')}
+            onClick={() => runLegacy('/api/score', 'score')}
           >
             Score Resume
           </Button>
@@ -240,7 +292,7 @@ export default function AddJob() {
             variant="accent"
             loading={actionLoading.tailor}
             disabled={!jd.trim() || !!activeKey}
-            onClick={() => run('/api/tailor', 'tailor')}
+            onClick={() => runPipeline('tailor')}
           >
             Tailor Resume
           </Button>
@@ -248,7 +300,7 @@ export default function AddJob() {
             variant="secondary"
             loading={actionLoading['cover-letter']}
             disabled={!jd.trim() || !!activeKey}
-            onClick={() => run('/api/cover-letter', 'cover-letter')}
+            onClick={() => runPipeline('cover-letter')}
           >
             Cover Letter
           </Button>
@@ -256,7 +308,7 @@ export default function AddJob() {
             variant="secondary"
             loading={actionLoading.contacts}
             disabled={!jd.trim() || !!activeKey}
-            onClick={() => run('/api/contacts', 'contacts')}
+            onClick={() => runLegacy('/api/contacts', 'contacts')}
           >
             Find Contacts
           </Button>

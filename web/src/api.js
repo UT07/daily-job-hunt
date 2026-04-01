@@ -46,6 +46,47 @@ async function pollTask(pollUrl, { intervalMs = 2000, maxWaitMs = 240000, onProg
   throw new Error('Task timed out — please try again');
 }
 
+/**
+ * Poll a Step Functions pipeline execution until terminal state.
+ * @param {string} pollUrl - e.g. '/api/pipeline/status/exec-name'
+ * @param {object} options
+ * @param {number} options.intervalMs - poll interval (default 5000)
+ * @param {number} options.maxWaitMs - timeout (default 300000 = 5 min)
+ * @param {function} options.onStatus - called with { status, output } on each poll
+ * @returns {object} the parsed output on SUCCEEDED
+ */
+export async function pollPipeline(pollUrl, { intervalMs = 5000, maxWaitMs = 300000, onStatus } = {}) {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, intervalMs));
+    const headers = await authHeaders();
+    const res = await fetch(`${API_BASE}${pollUrl}`, { method: 'GET', headers });
+    if (!res.ok) throw new Error(`Poll failed: HTTP ${res.status}`);
+    const data = await res.json();
+    if (onStatus) onStatus(data);
+
+    switch (data.status) {
+      case 'SUCCEEDED': {
+        // output may be a JSON string or already parsed
+        if (typeof data.output === 'string') {
+          try { return JSON.parse(data.output); } catch { return data.output; }
+        }
+        return data.output;
+      }
+      case 'FAILED':
+        throw new Error(data.error || data.cause || 'Pipeline execution failed');
+      case 'TIMED_OUT':
+        throw new Error('Pipeline execution timed out on the server');
+      case 'ABORTED':
+        throw new Error('Pipeline execution was aborted');
+      // RUNNING or PENDING — keep polling
+      default:
+        break;
+    }
+  }
+  throw new Error('Pipeline poll timed out — please check status later');
+}
+
 export async function apiGet(endpoint) {
   const headers = await authHeaders()
   const res = await fetch(`${API_BASE}${endpoint}`, {
