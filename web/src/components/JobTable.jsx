@@ -262,6 +262,17 @@ function DeleteButton({ jobId, onDelete }) {
   );
 }
 
+function getRowDimming(job) {
+  if (job.application_status === 'Rejected') return 'opacity-40';
+  if (job.is_expired) return 'opacity-50';
+  return '';
+}
+
+function getTitleStyle(job) {
+  if (job.application_status === 'Rejected') return 'line-through';
+  return '';
+}
+
 export default function JobTable({ jobs, onStatusChange, onDelete }) {
   const navigate = useNavigate();
   const [sortKey, setSortKey] = useState('first_seen');
@@ -320,12 +331,12 @@ export default function JobTable({ jobs, onStatusChange, onDelete }) {
         {sorted.map((job) => (
           <div
             key={job.job_id}
-            className="bg-white border-2 border-black shadow-brutal-sm p-4 cursor-pointer hover:bg-yellow-light transition-colors"
+            className={`bg-white border-2 border-black shadow-brutal-sm p-4 cursor-pointer hover:bg-yellow-light transition-colors ${getRowDimming(job)}`}
             onClick={() => navigate(`/jobs/${job.job_id}`)}
           >
             <div className="flex justify-between items-start">
               <div>
-                <p className="font-heading font-bold text-black">{decodeHtml(job.title)}</p>
+                <p className={`font-heading font-bold text-black ${getTitleStyle(job)}`}>{decodeHtml(job.title)}</p>
                 <p className="text-xs text-stone-500 mt-0.5">{decodeHtml(job.company)} · {job.location || 'Remote'}</p>
               </div>
               <ScoreBadge score={job.match_score} className="text-lg" />
@@ -335,6 +346,11 @@ export default function JobTable({ jobs, onStatusChange, onDelete }) {
             </div>
             <div className="flex items-center justify-between mt-3">
               <div className="flex items-center gap-2">
+                {job.is_expired && (
+                  <span className="inline-flex items-center px-2.5 py-0.5 font-mono text-[11px] font-bold uppercase tracking-wider border-2 bg-stone-200 text-stone-600 border-stone-400">
+                    EXPIRED
+                  </span>
+                )}
                 <Badge status={job.application_status || 'New'} />
                 <ModelBadge model={job.tailoring_model} />
               </div>
@@ -384,7 +400,7 @@ export default function JobTable({ jobs, onStatusChange, onDelete }) {
             {sorted.map((job) => (
               <tr
                 key={job.job_id}
-                className="bg-white border-b border-stone-200 hover:bg-yellow-light transition-colors"
+                className={`bg-white border-b border-stone-200 hover:bg-yellow-light transition-colors ${getRowDimming(job)}`}
               >
                 {/* Date */}
                 <td className="px-3 py-2.5 text-stone-400 whitespace-nowrap text-xs font-mono">
@@ -398,11 +414,18 @@ export default function JobTable({ jobs, onStatusChange, onDelete }) {
 
                 {/* Title */}
                 <td
-                  className="px-3 py-2.5 font-heading font-bold text-black max-w-[220px] truncate cursor-pointer hover:underline"
+                  className={`px-3 py-2.5 font-heading font-bold text-black max-w-[220px] truncate cursor-pointer hover:underline ${getTitleStyle(job)}`}
                   title={decodeHtml(job.title)}
                   onClick={() => navigate(`/jobs/${job.job_id}`)}
                 >
-                  {decodeHtml(job.title) || '--'}
+                  <span className="flex items-center gap-1.5">
+                    {job.is_expired && (
+                      <span className="inline-flex items-center px-1.5 py-0 font-mono text-[9px] font-bold uppercase tracking-wider border border-stone-400 bg-stone-200 text-stone-600 shrink-0">
+                        EXPIRED
+                      </span>
+                    )}
+                    {decodeHtml(job.title) || '--'}
+                  </span>
                 </td>
 
                 {/* Company */}

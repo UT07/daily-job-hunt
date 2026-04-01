@@ -13,7 +13,7 @@ import Button from '../components/ui/Button';
 import { Select } from '../components/ui/Input';
 
 const SOURCES = ['All', 'adzuna', 'linkedin', 'irishjobs', 'jobs_ie', 'gradireland', 'yc', 'hn', 'web'];
-const STATUS_OPTIONS = ['All', 'New', 'Applied', 'Interview', 'Offer', 'Rejected', 'Withdrawn'];
+const STATUS_OPTIONS = ['All', 'New', 'Applied', 'Interview', 'Offer', 'Rejected', 'Withdrawn', 'Expired'];
 
 function getViewPreference() {
   try { return localStorage.getItem('naukribaba_view') || 'list'; } catch { return 'list'; }
@@ -41,19 +41,23 @@ function CardView({ jobs, onStatusChange, onDelete }) {
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {jobs.map((job) => (
+      {jobs.map((job) => {
+        const isDimmed = job.application_status === 'Rejected' || job.is_expired;
+        const dimClass = job.application_status === 'Rejected' ? 'opacity-40' : job.is_expired ? 'opacity-50' : '';
+        const titleStrike = job.application_status === 'Rejected' ? 'line-through' : '';
+        return (
         <div
           key={job.job_id}
-          className="bg-white border-2 border-black shadow-brutal cursor-pointer
+          className={`bg-white border-2 border-black shadow-brutal cursor-pointer
             hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-brutal-sm
-            transition-all"
+            transition-all ${dimClass}`}
           onClick={() => navigate(`/jobs/${job.job_id}`)}
         >
           {/* Card header */}
           <div className="p-4 border-b border-stone-200">
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
-                <p className="font-heading font-bold text-black text-sm truncate">
+                <p className={`font-heading font-bold text-black text-sm truncate ${titleStrike}`}>
                   {decodeHtml(job.title)}
                 </p>
                 <p className="text-xs text-stone-500 mt-0.5 truncate">
@@ -72,6 +76,11 @@ function CardView({ jobs, onStatusChange, onDelete }) {
             {/* Bottom row: status, source, model */}
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2 flex-wrap">
+                {job.is_expired && (
+                  <span className="inline-flex items-center px-2.5 py-0.5 font-mono text-[11px] font-bold uppercase tracking-wider border-2 bg-stone-200 text-stone-600 border-stone-400">
+                    EXPIRED
+                  </span>
+                )}
                 <Badge status={job.application_status || 'New'} />
                 <span className="border border-stone-300 text-stone-500 font-mono text-[10px] font-bold px-1.5 py-0.5">
                   {job.source || '--'}
@@ -93,7 +102,8 @@ function CardView({ jobs, onStatusChange, onDelete }) {
             </div>
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
