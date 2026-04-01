@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../auth/useAuth';
 import { apiGet } from '../api';
+import PipelineStatus from '../components/PipelineStatus';
 import StatsBar from '../components/StatsBar';
 import JobTable from '../components/JobTable';
 import Button from '../components/ui/Button';
@@ -134,13 +135,8 @@ export default function Dashboard() {
         </Button>
       </div>
 
-      {/* Pipeline status bar */}
-      <div className="bg-success-light border-2 border-success px-4 py-2.5 mb-6 flex items-center gap-2">
-        <span className="inline-block w-2 h-2 bg-success rounded-full animate-pulse" />
-        <span className="text-sm font-medium text-success">
-          Pipeline active — runs daily at 7:00 UTC
-        </span>
-      </div>
+      {/* Pipeline status + Run button */}
+      <PipelineStatus onComplete={() => { fetchJobs(); fetchStats(); }} />
 
       {/* KPI Stats */}
       <StatsBar stats={stats} />
