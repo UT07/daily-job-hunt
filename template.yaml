@@ -523,10 +523,10 @@ Resources:
                         "source": "glassdoor",
                         "normalizer": "glassdoor",
                         "query_hash.$": "$.query_hash",
+                        "max_items": 50,
                         "run_input": {
                           "keyword.$": "$.queries[0]",
-                          "location": "Ireland",
-                          "maxItems": 50
+                          "location": "Ireland"
                         }
                       },
                       "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 2, "BackoffRate": 2}],
@@ -874,6 +874,10 @@ Resources:
             QueueName: !GetAtt TaskQueue.QueueName
         - S3CrudPolicy:
             BucketName: utkarsh-job-hunt
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: !GetAtt DailyPipelineStateMachine.Name
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: !GetAtt SingleJobPipelineStateMachine.Name
       Environment:
         Variables:
           GROQ_API_KEY: !Ref GroqApiKey
@@ -887,6 +891,8 @@ Resources:
           SERPER_API_KEY: !Ref SerperApiKey
           APIFY_API_KEY: !Ref ApifyApiKey
           TASK_QUEUE_URL: !Ref TaskQueue
+          DAILY_PIPELINE_ARN: !GetAtt DailyPipelineStateMachine.Arn
+          SINGLE_JOB_PIPELINE_ARN: !GetAtt SingleJobPipelineStateMachine.Arn
       Events:
         ApiGateway:
           Type: HttpApi

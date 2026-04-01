@@ -53,7 +53,12 @@ def handler(event, context):
         apify_key = get_param("/naukribaba/APIFY_API_KEY")
         client = ApifyClient(apify_key)
         logger.info(f"[{source}] Running actor {actor_id}")
-        run = client.actor(actor_id).call(run_input=run_input, timeout_secs=240)
+        # max_items is required at call level for pay-per-result actors (e.g. Glassdoor)
+        call_kwargs = {"run_input": run_input, "timeout_secs": 240}
+        max_items = event.get("max_items")
+        if max_items:
+            call_kwargs["max_items"] = int(max_items)
+        run = client.actor(actor_id).call(**call_kwargs)
         items = client.dataset(run["defaultDatasetId"]).list_items().items
         logger.info(f"[{source}] Got {len(items)} raw items")
 
