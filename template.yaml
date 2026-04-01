@@ -331,6 +331,35 @@ Resources:
         - SSMParameterReadPolicy:
             ParameterName: naukribaba/*
 
+  # --- Stale Nudge + Follow-Up Reminder Lambdas ---
+  StaleNudgeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-stale-nudges
+      CodeUri: lambdas/pipeline/
+      Handler: send_stale_nudges.handler
+      Runtime: python3.11
+      Timeout: 60
+      MemorySize: 256
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: naukribaba/*
+
+  FollowUpReminderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-followup-reminders
+      CodeUri: lambdas/pipeline/
+      Handler: send_followup_reminders.handler
+      Runtime: python3.11
+      Timeout: 60
+      MemorySize: 256
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: naukribaba/*
+
   # --- IAM Role for Step Functions ---
   StepFunctionsRole:
     Type: AWS::IAM::Role
@@ -861,6 +890,44 @@ Resources:
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt ExpiryCheckSchedule.Arn
+
+  StaleNudgeSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: naukribaba-stale-nudge
+      Description: Weekly stale job nudges (Monday 9:00 UTC)
+      ScheduleExpression: "cron(0 9 ? * MON *)"
+      State: DISABLED
+      Targets:
+        - Arn: !GetAtt StaleNudgeFunction.Arn
+          Id: StaleNudgeTarget
+
+  StaleNudgePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref StaleNudgeFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt StaleNudgeSchedule.Arn
+
+  FollowUpSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: naukribaba-followup-reminder
+      Description: Daily follow-up reminders (10:00 UTC weekdays)
+      ScheduleExpression: "cron(0 10 ? * MON-FRI *)"
+      State: DISABLED
+      Targets:
+        - Arn: !GetAtt FollowUpReminderFunction.Arn
+          Id: FollowUpTarget
+
+  FollowUpPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref FollowUpReminderFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt FollowUpSchedule.Arn
 
   # --- Lambda Function (Docker container with tectonic) ---
   JobHuntApi:
