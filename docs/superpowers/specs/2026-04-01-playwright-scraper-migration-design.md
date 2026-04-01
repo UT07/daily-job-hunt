@@ -45,13 +45,13 @@ Step Functions (daily trigger, Mon-Fri 7:00 UTC)
 
 ### Key Architecture Decisions
 
-1. **Scrapling over raw Patchright** — Scrapling wraps Patchright as its `StealthyFetcher` engine and adds tiered fetching (basic HTTP → stealth browser). One library handles all sources with automatic escalation. Research shows Scrapling handles LinkedIn and Reddit while passing bot detection where vanilla Playwright fails.
+1. **Scrapling over raw Patchright** — Scrapling's `StealthyFetcher` uses a modified Chromium engine (v0.4+ moved from Camoufox/Firefox to a lighter, faster Chromium approach) and adds tiered fetching (basic HTTP → stealth browser). One library handles all sources with automatic escalation. Research shows Scrapling handles LinkedIn and Reddit while passing bot detection where vanilla Playwright fails.
 
 2. **Residential proxy for hard sources only** — LinkedIn, Indeed, Glassdoor route through Bright Data (or IPRoyal) residential proxy. Irish portals and API sources go direct. AWS Fargate IPs are permanently blacklisted by LinkedIn/Indeed/Glassdoor (confirmed by research).
 
 3. **Parallel Fargate Spot tasks** — Each hard source gets its own Fargate task (own IP, own fingerprint, independent failure). Irish portals grouped into one task. If LinkedIn gets blocked, Indeed/Glassdoor still succeed.
 
-4. **Shared Docker image** — Single `naukribaba-playwright` image with Scrapling + Xvfb + normalizers. Different entrypoints per source via environment variables.
+4. **Shared Docker image** — Single `naukribaba-playwright` image based on Scrapling's official Docker image + normalizers. Different entrypoints per source via environment variables.
 
 5. **Supabase as integration point** — All scrapers write to `jobs_raw` (no user_id). Per-user scoring pipeline reads from `jobs_raw`. This scales to multi-tenant without changing scrapers.
 
@@ -353,7 +353,7 @@ PlaywrightTaskDef:
     NetworkMode: awsvpc
     RequiresCompatibilities: [FARGATE]
     Cpu: 512        # 0.5 vCPU
-    Memory: 2048     # 2 GB (minimum for Chromium + Xvfb)
+    Memory: 2048     # 2 GB (minimum for Chromium)
     ExecutionRoleArn: !GetAtt FargateExecutionRole.Arn
     TaskRoleArn: !GetAtt FargateTaskRole.Arn
     ContainerDefinitions:
@@ -399,22 +399,7 @@ Fargate tasks invoked via `arn:aws:states:::ecs:runTask.sync` with:
 
 ### Docker Image
 
-```dockerfile
-FROM mcr.microsoft.com/playwright/python:v1.50.0-noble
-
-# Stealth scraping engine
-RUN pip install scrapling patchright supabase httpx boto3
-
-# Virtual display for headless=False anti-detection
-RUN apt-get update && apt-get install -y xvfb && rm -rf /var/lib/apt/lists/*
-
-# Scraper code
-COPY scrapers/playwright/ /app/
-COPY lambdas/scrapers/normalizers.py /app/
-
-WORKDIR /app
-ENTRYPOINT ["xvfb-run", "--auto-servernum", "python3", "main.py"]
-```
+Uses Scrapling's official Docker image as base (see Docker Setup section above).
 
 **Estimated image size:** ~500MB-1GB (Chromium + Python deps)
 **ECR:** Same repo (`385017713886.dkr.ecr.eu-west-1.amazonaws.com`)
@@ -474,7 +459,7 @@ Pre-filter reads from user's `user_search_configs` and `users` table:
 
 ### Tier 1 (Week 1): Playwright Foundation + LinkedIn
 
-- [ ] `Dockerfile.playwright` with Scrapling + Xvfb
+- [ ] `Dockerfile.playwright` based on Scrapling official image + project deps
 - [ ] ECS Cluster + Fargate task definition in `template.yaml`
 - [ ] Security group (all outbound, no inbound)
 - [ ] Bright Data account + proxy credentials in SSM
@@ -534,9 +519,10 @@ OpenClaw runs as a separate service (self-hosted daemon or Docker container). It
 2. **Fargate Spot interruption during scrape** — Mitigation: retry 2× on Spot, fallback to on-demand Fargate.
 3. **Bright Data pricing changes** — Mitigation: proxy config is in SSM, swap provider without code changes. IPRoyal is a backup at similar pricing.
 4. **Cloudflare Turnstile hang (Scrapling issue #100)** — StealthyFetcher can hang indefinitely on embedded Turnstile. Mitigation: 30-second timeout on all fetches, catch and skip on timeout. Indeed is the most likely source to trigger this.
-4. **Scrapling library abandoned** — Mitigation: Scrapling wraps Patchright. If Scrapling dies, we drop to raw Patchright with minimal code changes.
-5. **Indeed/Glassdoor change HTML structure** — Mitigation: Scrapling's adaptive element tracking handles minor changes. Major redesigns require selector updates.
-6. **Proxy cost exceeds estimate** — Mitigation: monitor bandwidth in Bright Data dashboard. At current volume (~1-2 GB/month), even 3× growth stays under $25/month.
+5. **Scrapling library abandoned** — Mitigation: Scrapling uses Patchright/Chromium under the hood. If Scrapling dies, we drop to raw Patchright with minimal code changes.
+6. **Indeed/Glassdoor change HTML structure** — Mitigation: Scrapling's adaptive element tracking handles minor changes. Major redesigns require selector updates.
+7. **Proxy cost exceeds estimate** — Mitigation: monitor bandwidth in Bright Data dashboard. At current volume (~1-2 GB/month), even 3× growth stays under $25/month.
+8. **Fargate /dev/shm limit** — Fargate caps `/dev/shm` at 64MB (not configurable). Chromium crashes without `--disable-dev-shm-usage`. Mitigation: mandatory browser arg in all scraper code, enforced in shared base class.
 
 ## References
 
