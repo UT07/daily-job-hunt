@@ -62,6 +62,9 @@ def handler(event, context):
             "ats_score": score_result.get("ats_score", 0),
             "hiring_manager_score": score_result.get("hiring_manager_score", 0),
             "tech_recruiter_score": score_result.get("tech_recruiter_score", 0),
+            "key_matches": score_result.get("key_matches", []),
+            "gaps": score_result.get("gaps", []),
+            "match_reasoning": score_result.get("reasoning", ""),
             "first_seen": datetime.utcnow().isoformat(),
         }
         try:
@@ -81,28 +84,61 @@ def handler(event, context):
     return {"matched_items": matched_items, "matched_count": len(matched_items)}
 
 
+SCORE_SYSTEM_PROMPT = """You are an expert job-candidate evaluator. Score how well a candidate's resume matches a job listing from THREE distinct perspectives.
+
+SCORING PERSPECTIVES (each 0-100):
+
+1. **ATS Score** — keyword match, formatting, section structure, title alignment
+2. **Hiring Manager Score** — relevant impact, experience narrative, culture fit, growth potential
+3. **Technical Recruiter Score** — required/preferred skills coverage, experience level, red flags
+
+Be honest and strict.
+
+SCORING GUIDANCE FOR JUNIOR/GRADUATE ROLES:
+- For roles marked as "Junior", "Graduate", "Entry Level", or "Associate": be MORE lenient with experience requirements.
+- A strong portfolio and relevant coursework/projects can compensate for fewer years of experience.
+- Do NOT penalize junior roles for listing technologies the candidate hasn't used.
+
+Return ONLY valid JSON (no markdown, no code fences):
+{
+    "ats_score": <0-100>,
+    "hiring_manager_score": <0-100>,
+    "tech_recruiter_score": <0-100>,
+    "match_score": <0-100 average>,
+    "reasoning": "<2-3 sentences>",
+    "key_matches": ["<skill1>", ...],
+    "gaps": ["<gap1>", ...]
+}"""
+
+
 def score_single_job(job: dict, resume_tex: str) -> dict | None:
-    """Score a single job against the user's resume using AI. Returns parsed dict or None."""
+    """Score a single job against the user's resume using 3-perspective AI scoring.
+    Uses the same prompt template as matcher.py for consistency."""
     prompt = f"""Score this job against the candidate's resume.
 
 Job: {job['title']} at {job['company']}
 Description: {job.get('description', '')[:2000]}
 
-Resume (LaTeX): {resume_tex[:3000]}
-
-Return JSON with: match_score (0-100), ats_score (0-100), hiring_manager_score (0-100), tech_recruiter_score (0-100), reasoning (string).
-"""
-    system = "You are a job matching AI. Return only valid JSON."
+Resume (LaTeX): {resume_tex[:3000]}"""
 
     try:
-        response = ai_complete_cached(prompt, system=system)
+        response = ai_complete_cached(prompt, system=SCORE_SYSTEM_PROMPT)
         # Strip markdown fences if present
         text = response.strip()
         if text.startswith("```"):
             text = text.split("```")[1]
             if text.startswith("json"):
                 text = text[4:]
-        return json.loads(text.strip())
+        result = json.loads(text.strip())
+
+        # Ensure match_score is computed consistently
+        if "match_score" not in result:
+            ats = result.get("ats_score", 0)
+            hm = result.get("hiring_manager_score", 0)
+            tr = result.get("tech_recruiter_score", 0)
+            result["match_score"] = round((ats + hm + tr) / 3)
+
+        return result
     except json.JSONDecodeError as e:
         logger.error(f"[score_batch] JSON parse error for {job['job_hash']}: {e}")
         return None
