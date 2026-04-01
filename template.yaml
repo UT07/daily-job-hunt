@@ -519,14 +519,15 @@ Resources:
                       "Type": "Task",
                       "Resource": "${ScrapeApifyFunction.Arn}",
                       "Parameters": {
-                        "actor_id": "orgupdate/glassdoor-jobs-scraper",
+                        "actor_id": "cheap_scraper/glassdoor-jobs-scraper-remove-duplicate-jobs",
                         "source": "glassdoor",
                         "normalizer": "glassdoor",
                         "query_hash.$": "$.query_hash",
-                        "max_items": 50,
                         "run_input": {
-                          "keyword.$": "$.queries[0]",
-                          "location": "Ireland"
+                          "keywords.$": "States.Array($.queries[0])",
+                          "location": "Dublin",
+                          "country": "Ireland",
+                          "maxItems": 50
                         }
                       },
                       "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 2, "BackoffRate": 2}],

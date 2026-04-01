@@ -95,18 +95,23 @@ def normalize_hn(items: list, query_hash: str) -> list:
 
 
 def normalize_glassdoor(items: list, query_hash: str) -> list:
-    """Normalize orgupdate/glassdoor-jobs-scraper output.
+    """Normalize cheap_scraper/glassdoor-jobs-scraper-remove-duplicate-jobs output.
 
-    Actor returns: job_title, company_name, location, salary, date, URL, description
+    Actor returns: title, company{companyName}, description_text, location_country,
+    location_city, jobUrl, applyUrl, attributes, jobTypes, etc.
     """
     jobs = []
     for item in items:
+        company = item.get("company", {})
+        company_name = company.get("companyName") if isinstance(company, dict) else str(company)
+        location_parts = [item.get("location_city"), item.get("location_state"), item.get("location_country")]
+        location = ", ".join(p for p in location_parts if p)
         job = normalize_job({
-            "title": item.get("job_title"),
-            "company": item.get("company_name"),
-            "description": item.get("description"),
-            "location": item.get("location"),
-            "url": item.get("URL"),
+            "title": item.get("title"),
+            "company": company_name,
+            "description": item.get("description_text") or item.get("description_html"),
+            "location": location,
+            "url": item.get("jobUrl") or item.get("applyUrl"),
         }, source="glassdoor", query_hash=query_hash)
         if job:
             jobs.append(job)
