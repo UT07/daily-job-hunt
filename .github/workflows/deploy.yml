@@ -73,6 +73,7 @@ jobs:
             --region eu-west-1 \
             --capabilities CAPABILITY_IAM \
             --image-repository 385017713886.dkr.ecr.eu-west-1.amazonaws.com/job-hunt-api \
+            --resolve-s3 \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
             --parameter-overrides \
