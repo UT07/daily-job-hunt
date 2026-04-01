@@ -39,13 +39,19 @@ def handler(event, context):
     from normalizers import normalize_adzuna
     all_jobs = []
 
+    # NOTE: Ireland ("ie") is NOT a supported Adzuna country.
+    # Supported: at, au, be, br, ca, ch, de, es, fr, gb, in, it, mx, nl, nz, pl, sg, us, za.
+    # We use "gb" (UK) as the closest market for Ireland-based searches.
+    country = event.get("country", "gb")
+    max_days_old = event.get("max_days_old", 7)
+
     for query in queries:
-        url = f"https://api.adzuna.com/v1/api/jobs/ie/search/1"
+        url = f"https://api.adzuna.com/v1/api/jobs/{country}/search/1"
         params = {
             "app_id": app_id,
             "app_key": app_key,
             "what": query,
-            "max_days_old": 3,
+            "max_days_old": max_days_old,
             "results_per_page": 50,
         }
         resp = httpx.get(url, params=params, timeout=20)
@@ -53,9 +59,9 @@ def handler(event, context):
             results = resp.json().get("results", [])
             jobs = normalize_adzuna(results, query_hash)
             all_jobs.extend(jobs)
-            logger.info(f"[adzuna] Query '{query}': {len(jobs)} jobs")
+            logger.info(f"[adzuna] Query '{query}' ({country}): {len(jobs)} jobs")
         else:
-            logger.warning(f"[adzuna] Query '{query}': HTTP {resp.status_code}")
+            logger.warning(f"[adzuna] Query '{query}' ({country}): HTTP {resp.status_code} - {resp.text[:200]}")
 
     # Write to jobs_raw (bulk upsert)
     if all_jobs:
