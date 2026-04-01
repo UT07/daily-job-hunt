@@ -535,11 +535,10 @@ Resources:
           Environment:
             - Name: SCRAPER_SOURCE
               Value: linkedin
-            - Name: SUPABASE_URL
-              Value: !Sub "{{resolve:ssm:/naukribaba/SUPABASE_URL}}"
-            # PIPELINE_RUN_ID is injected at runtime via Step Functions
-            # ContainerOverrides — not set statically here
+            # PIPELINE_RUN_ID injected at runtime via Step Functions ContainerOverrides
           Secrets:
+            - Name: SUPABASE_URL
+              ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/naukribaba/SUPABASE_URL"
             - Name: SUPABASE_SERVICE_KEY
               ValueFrom: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/naukribaba/SUPABASE_SERVICE_KEY"
             - Name: PROXY_URL
