@@ -104,3 +104,7 @@ are complete. Phase 3 items 3.1 (logging) and 3.4 (retry backoff) are done. Item
 - AI responses are cached in SQLite (`output/.ai_cache.db`) — delete to force fresh calls
 - `seen_jobs.json` tracks processed jobs across runs — don't delete unless you want full re-processing
 - Service account is from GCP project `job-automation-490716` (owned by utkarsh45689@gmail.com), shares files with 254utkarsh@gmail.com
+
+## Backlog
+
+- **Playwright Fargate Integration**: The Step Functions pipeline currently invokes the Web Unlocker Lambda scrapers (e.g. `ScrapeLinkedInFunction`). We need to update `template.yaml` to run the actual ECS Playwright tasks (`PlaywrightTaskDef`) using `ecs:runTask.sync` and build/push `Dockerfile.playwright` to ECR via `.github/workflows/deploy.yml`. This was added to the backlog to avoid breaking the existing pipeline while the Fargate scaffolding is being completed.
