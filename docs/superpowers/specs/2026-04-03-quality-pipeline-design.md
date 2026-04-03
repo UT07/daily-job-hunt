@@ -49,6 +49,14 @@ md5(normalize(company) + "|" + normalize(title) + "|" + normalize_whitespace(des
 - `normalize_whitespace()` = collapse whitespace runs to single space, strip leading/trailing
 - Full description — no truncation anywhere (hash, scoring, display, storage)
 - Location and source **excluded** — same job from Indeed vs LinkedIn should match
+- **Trade-off**: same company posts identical title in Dublin and London with near-identical JDs → may hash the same and merge. Acceptable — fuzzy tier 2 catches most, and identical JDs genuinely are the same role. If descriptions differ meaningfully, hashes diverge naturally.
+
+**Files that compute hashes (all must migrate to canonical hash)**:
+- `lambdas/scrapers/normalizers.py:18-20` — current: `md5(company|title|description[:500])`
+- `scrapers/base.py:76-78` — current: `md5(title|company|location|source)`
+- `scrapers/base.py:98-106` — `BaseScraper.dedup()` uses title+company key, needs canonical hash
+- `lambdas/pipeline/merge_dedup.py` — consumes hash from normalizers, verify it uses canonical
+- Any scraper that computes `job_hash` before calling normalizer
 
 **Three-tier dedup** (extend existing `merge_dedup.py`):
 1. **Exact hash** — identical canonical hash → keep version with longest description (exists)
@@ -85,8 +93,10 @@ feel inaccurate.
 
 **Score determinism**:
 - `temperature=0` for all scoring calls (currently 0.3 in matcher, 0.5 in resume_scorer)
-- **Multi-call median**: Score each job 3 times, take median of each perspective (ATS, HM, TR). Dampens provider variance. Cached after first full scoring.
+- **Multi-call median**: Score each job 3 times (each call returns all 3 perspectives), take median of each perspective (ATS, HM, TR). Dampens provider variance. Result cached after first full scoring — subsequent runs hit cache, so 3x cost only applies to first scoring of each job.
 - If only 1 provider available (others dead), fall back to single call with `temperature=0`
+- **Cost impact**: 3x AI calls for initial scoring. With 123 new jobs/run and Groq rate limit (30 RPM), scoring takes ~12 min vs ~4 min. Acceptable for daily batch. Caching ensures no 3x cost on re-runs.
+- **Post-tailoring scoring**: Also uses 3-call median for consistency. This means the before/after delta is comparing two stable medians, not two noisy single calls.
 
 **Before/after score comparison (NEW)**:
 - **Step 1**: Score base resume against JD → `base_ats`, `base_hm`, `base_tr`
@@ -150,15 +160,23 @@ mistakes. Improvement prompt is vague (21 lines). Cover letter validation is pos
 - **No fabrication** — keep existing guardrails (fabrication detection, -20 ATS penalty)
 
 **Dynamic tailoring depth** (replaces binary light-touch):
-- Base score 85+: light touch (surgical keyword additions, description tweaks)
-- Base score 70-84: moderate rewrite (restructure bullets, rewrite summary, reorder skills)
-- Base score <70: heavy rewrite (full project description rewrites, summary overhaul, skills reprioritization)
+- Base score 85+: light touch (surgical keyword additions, description tweaks) — **1 improvement round max**
+- Base score 70-84: moderate rewrite (restructure bullets, rewrite summary, reorder skills) — **2 improvement rounds max**
+- Base score <70: heavy rewrite (full project description rewrites, summary overhaul, skills reprioritization) — **3 improvement rounds max**
+- Replaces the current fixed 3-round limit with adaptive rounds tied to tailoring depth.
 - **Fallbacks**: If base score is missing (`score_status: 'insufficient_data'`), don't tailor — job lacks enough data. If resume is new with no previous tailoring, "base score" = first score of unmodified base resume against the JD. If scoring fails entirely (all providers down), skip tailoring and queue for next run.
 
 **Cover letter improvements**:
 - Same keyword analysis as resume — cover letter references the same top keywords
 - **Early validation**: word count (280-380), banned phrase check, dash check all happen at generation time
 - Max 2 retries if validation fails, then accept best attempt and flag for review
+
+**Resume length management**:
+- Prompt includes concrete guidance: "Target 850-1000 words of content across all sections for exactly 2 pages"
+- Section-level word budgets in prompt: Summary (40-60 words), Skills (50-80), each Experience entry (80-120), each Project (60-90), Education (30-50), Certifications (20-30)
+- If compiled PDF is 1 page: retry with instruction "expand experience bullet points with more detail and metrics"
+- If compiled PDF is 3+ pages: retry with instruction "condense — reduce to top 3 bullets per role, shorten project descriptions"
+- Max 1 length-correction retry after initial compilation
 
 **LaTeX quality gates** (before compilation):
 - Brace balance check becomes a **hard gate** — unbalanced → don't compile, retry generation
@@ -229,9 +247,11 @@ CREATE TABLE pipeline_adjustments (
 | Medium | Yes + notify | Adjust score threshold if >80% below 50. Update keyword weights from JD analysis. Blacklist >50% error rate model. | Email + dashboard "undo" |
 | High | Awaits approval | Prompt version changes. Scoring criteria mods. Tailoring depth threshold changes. New scraper activation. | Dashboard "Pending Adjustments" card |
 
+**Self-improve Lambda placement**: Last step in the Step Functions state machine, after all jobs are saved. Runs even on partial pipeline failure (e.g., scoring succeeded but 2 of 8 scrapers failed) — partial data is still useful for scraper health detection. If the pipeline fails before scoring, self_improve is skipped (no meaningful data to analyze). Configured as a Catch-all terminal state in Step Functions.
+
 **Feedback loop wiring**:
 ```
-Pipeline Run N completes
+Pipeline Run N completes (all save_job steps done)
   → self_improve Lambda analyzes:
     - scraper yield rates
     - score distribution + drift from baseline
@@ -240,12 +260,14 @@ Pipeline Run N completes
     - model performance comparison
     - artifact quality (PDF validation, cover letter checks)
   → writes adjustments to pipeline_adjustments table
+  → writes run metrics to pipeline_runs table
 
 Pipeline Run N+1 starts:
-  → load_config reads pending adjustments
-  → applies low + medium (auto-applied)
-  → skips high (awaiting_approval)
-  → logs which adjustments were active
+  → load_config reads base config from config.yaml / SSM
+  → queries pipeline_adjustments for status='auto_applied' or 'approved'
+  → merges adjustments INTO config (adjustments override base config values)
+  → precedence: user manual override > approved adjustment > auto-applied > config.yaml default
+  → logs which adjustments were active for this run (stored in pipeline_runs.active_adjustments)
 
 Run N+1 results compared to Run N:
   → metrics improved → adjustment confirmed
@@ -314,6 +336,12 @@ CREATE TABLE pipeline_runs (
 );
 ```
 
+**RLS policies for new tables**:
+- `pipeline_adjustments`: `user_id = auth.uid()` on SELECT/INSERT/UPDATE. Service role can read/write all.
+- `prompt_versions`: `user_id = auth.uid()` on SELECT/INSERT/UPDATE. Service role can read/write all.
+- `pipeline_runs`: `user_id = auth.uid()` on SELECT. Service role can INSERT/UPDATE (Lambda writes metrics).
+- `seen_jobs` (from Section 1): `user_id = auth.uid()` on SELECT/INSERT/UPDATE. Service role can read/write all.
+
 **Model A/B testing**:
 - When multiple providers available, randomly assign 20% of jobs to alternate model
 - Compare scores. Best model gets promoted (low-risk auto-apply).
@@ -331,6 +359,16 @@ CREATE TABLE pipeline_runs (
 Tests are written **incrementally alongside features**, not as a batch after. As each piece of 2.6 or 2.7 lands, its corresponding test(s) are added to the appropriate tier. Phase 2.8 runs in parallel with 2.6/2.7 — the "QA Foundation" is the test infrastructure (CI config, fixtures, golden dataset), while individual tests are added as their features are implemented.
 
 Tier 4d (self-improvement tests) validates Phase 2.9 and is written during/after 2.9 implementation.
+
+### Prerequisites
+
+**Golden dataset creation** (manual task, must happen before Tier 4b score determinism and Tier 4c writing quality tests):
+- Select 25 JD+resume pairs from existing 177 dashboard jobs
+- User (Utkarsh) manually labels each into: strong_match (5), good_match (8), weak_match (7), no_match (5)
+- Save to `tests/quality/golden_dataset.json`
+- This is a one-time effort (~1-2 hours) that unlocks all AI quality testing
+
+**Test fixtures**: Synthetic test data for dedup (5 duplicate pairs, 3 near-miss pairs), description edge cases (empty, 100-char boundary, 5000-char), and self-improvement scenarios (3-day zero scraper, conflicting adjustments). Created as part of 2.8 implementation.
 
 ### Design
 
