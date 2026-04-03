@@ -45,25 +45,22 @@ def _parse_search_page(html_text):
     """Extract job cards from LinkedIn search results HTML."""
     jobs = []
 
-    # LinkedIn search results use base-card or job-card patterns
-    card_pattern = re.compile(
-        r'<div[^>]*class="[^"]*base-card[^"]*"[^>]*>.*?</div>\s*</div>\s*</div>',
-        re.DOTALL
+    # Job IDs from data-entity-urn (most reliable on LinkedIn public pages)
+    job_ids = re.findall(r'urn:li:jobPosting:(\d+)', html_text)
+    # Titles from the h3.base-search-card__title element
+    titles = re.findall(
+        r'<h3[^>]*class="[^"]*base-search-card__title[^"]*"[^>]*>\s*(.*?)\s*</h3>',
+        html_text, re.DOTALL
     )
-
-    # Simpler: extract individual fields via targeted patterns
-    # Job IDs from data-entity-urn or href
-    job_ids = re.findall(r'jobs/view/(\d+)', html_text)
-    titles = re.findall(r'<span class="sr-only">([^<]+)</span>', html_text)
-    # Company names in specific spans
+    # Company names from h4.base-search-card__subtitle > a
     company_matches = re.findall(
-        r'<h4[^>]*class="[^"]*base-search-card__subtitle[^"]*"[^>]*>\s*<a[^>]*>([^<]+)</a>',
-        html_text
+        r'<h4[^>]*class="[^"]*base-search-card__subtitle[^"]*"[^>]*>\s*(?:<a[^>]*>)?\s*(.*?)\s*(?:</a>)?\s*</h4>',
+        html_text, re.DOTALL
     )
     # Locations
     location_matches = re.findall(
-        r'<span class="[^"]*job-search-card__location[^"]*">([^<]+)</span>',
-        html_text
+        r'<span class="[^"]*job-search-card__location[^"]*">\s*(.*?)\s*</span>',
+        html_text, re.DOTALL
     )
 
     # Match up the parallel arrays
@@ -89,9 +86,16 @@ def _parse_search_page(html_text):
 
 def _fetch_job_detail(job_id, proxy_url):
     """Fetch full job description from LinkedIn detail page."""
-    url = f"https://www.linkedin.com/jobs/view/{job_id}"
+    # First try the lightweight guest API endpoint
+    url = f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}"
     try:
         resp = httpx.get(url, proxy=proxy_url, timeout=30, follow_redirects=True, verify=False)
+        
+        # If blocked or failed, fallback to standard web view
+        if resp.status_code != 200:
+            url = f"https://www.linkedin.com/jobs/view/{job_id}"
+            resp = httpx.get(url, proxy=proxy_url, timeout=30, follow_redirects=True, verify=False)
+            
         if resp.status_code != 200:
             return None
 
@@ -106,8 +110,20 @@ def _fetch_job_detail(job_id, proxy_url):
                 r'<div class="[^"]*show-more-less-html__markup[^"]*"[^>]*>(.*?)</div>',
                 text, re.DOTALL
             )
+        if not desc_match:
+            # Fallback specifically for the jobs-guest fragment HTML wrapper
+            desc_match = re.search(
+                r'<div class="[^"]*description__text[^"]*"[^>]*>(.*?)$',
+                text, re.DOTALL
+            )
+            
         if desc_match:
             return _clean_html(desc_match.group(1))
+            
+        # If it's a small fragment (like the jobs-guest response), return it all
+        if "description__text" in text and len(text) < 15000:
+            return _clean_html(text)
+            
     except Exception as e:
         logger.warning(f"[linkedin] Detail fetch failed for {job_id}: {e}")
     return None
@@ -186,6 +202,7 @@ def handler(event, context):
         now = datetime.now(timezone.utc).isoformat()
         for job in all_jobs:
             job["scraped_at"] = now
+            job.pop("description_quality", None)  # not in DB schema yet
         db.table("jobs_raw").upsert(all_jobs, on_conflict="job_hash").execute()
 
     logger.info(f"[linkedin] {len(all_jobs)} jobs saved")

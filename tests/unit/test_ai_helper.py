@@ -39,7 +39,7 @@ class TestAiComplete:
              patch("httpx.post", return_value=_make_ok_response("Hello!")):
             result = ai_complete("Say hello")
 
-        assert result == "Hello!"
+        assert result == {"content": "Hello!", "provider": "groq", "model": "llama-3.3-70b-versatile"}
 
     def test_tries_next_provider_when_first_fails_with_exception(self):
         """When the first provider raises an exception, the second provider is tried."""
@@ -58,7 +58,8 @@ class TestAiComplete:
              patch("httpx.post", side_effect=post_side_effect):
             result = ai_complete("prompt")
 
-        assert result == "From provider 2"
+        assert result["content"] == "From provider 2"
+        assert result["provider"] == "nvidia"
         assert call_count == 2
 
     def test_tries_next_provider_when_first_rate_limited(self):
@@ -70,7 +71,7 @@ class TestAiComplete:
              patch("httpx.post", side_effect=[rate_limit_resp, ok_resp]):
             result = ai_complete("prompt")
 
-        assert result == "From provider 2"
+        assert result["content"] == "From provider 2"
 
     def test_tries_next_provider_when_first_returns_500(self):
         """When the first provider returns a 5xx error, the second provider is tried."""
@@ -81,7 +82,7 @@ class TestAiComplete:
              patch("httpx.post", side_effect=[error_resp, ok_resp]):
             result = ai_complete("prompt")
 
-        assert result == "Recovered"
+        assert result["content"] == "Recovered"
 
     def test_raises_runtime_error_when_all_providers_fail(self):
         """When every provider fails, a RuntimeError is raised."""
@@ -175,7 +176,7 @@ class TestAiCompleteCached:
         mock_table.eq.return_value = mock_table
         mock_table.gte.return_value = mock_table
         mock_table.execute.return_value = MagicMock(
-            data=[{"response": "cached answer"}]
+            data=[{"response": "cached answer", "provider": "cache", "model": "cache"}]
         )
         mock_db.table.return_value = mock_table
 
@@ -183,7 +184,7 @@ class TestAiCompleteCached:
              patch("ai_helper.ai_complete") as mock_ai:
             result = ai_complete_cached("hello", system="sys")
 
-        assert result == "cached answer"
+        assert result == {"content": "cached answer", "provider": "cache", "model": "cache"}
         mock_ai.assert_not_called()
 
     def test_calls_ai_on_cache_miss(self):
@@ -198,10 +199,10 @@ class TestAiCompleteCached:
         mock_db.table.return_value = mock_table
 
         with patch("ai_helper.get_supabase", return_value=mock_db), \
-             patch("ai_helper.ai_complete", return_value="fresh answer") as mock_ai:
+             patch("ai_helper.ai_complete", return_value={"content": "fresh answer", "provider": "p1", "model": "m1"}) as mock_ai:
             result = ai_complete_cached("hello", system="sys")
 
-        assert result == "fresh answer"
+        assert result == {"content": "fresh answer", "provider": "p1", "model": "m1"}
         mock_ai.assert_called_once_with("hello", "sys")
 
     def test_writes_to_cache_on_miss(self):
@@ -216,7 +217,7 @@ class TestAiCompleteCached:
         mock_db.table.return_value = mock_table
 
         with patch("ai_helper.get_supabase", return_value=mock_db), \
-             patch("ai_helper.ai_complete", return_value="new response"):
+             patch("ai_helper.ai_complete", return_value={"content": "new response", "provider": "p1", "model": "m1"}):
             ai_complete_cached("my prompt", system="my system", cache_hours=24)
 
         # Verify upsert was called with the right cache key and response
@@ -246,7 +247,7 @@ class TestAiCompleteCached:
         mock_db.table.return_value = mock_table
 
         with patch("ai_helper.get_supabase", return_value=mock_db), \
-             patch("ai_helper.ai_complete", return_value="response"):
+             patch("ai_helper.ai_complete", return_value={"content": "response", "provider": "p1", "model": "m1"}):
             ai_complete_cached("same prompt", system="system A")
             ai_complete_cached("same prompt", system="system B")
 
@@ -265,7 +266,7 @@ class TestAiCompleteCached:
         mock_db.table.return_value = mock_table
 
         with patch("ai_helper.get_supabase", return_value=mock_db), \
-             patch("ai_helper.ai_complete", return_value="r"):
+             patch("ai_helper.ai_complete", return_value={"content": "r", "provider": "p1", "model": "m1"}):
             before = datetime.utcnow()
             ai_complete_cached("prompt", cache_hours=48)
             after = datetime.utcnow()

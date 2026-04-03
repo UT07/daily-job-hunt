@@ -40,7 +40,8 @@ tailored resumes on demand.
 | `s3_uploader.py` | S3 upload with 30-day presigned URLs |
 | `email_notifier.py` | Gmail HTML notification with top 15 jobs table |
 | `self_improver.py` | Post-run analysis: scores, keywords, scraper health |
-| `scrapers/` | 7 job scrapers (Adzuna, LinkedIn, IrishJobs, Jobs.ie, GradIreland, YC, HN) |
+| `scrapers/` | Lambda scrapers: LinkedIn, Indeed, Glassdoor (blocked), Irish (Jobs.ie+IrishJobs+GradIreland), Adzuna, YC, HN. Uses httpx + Bright Data Web Unlocker proxy. |
+| `scrapers/playwright/` | DORMANT — Scrapling/Fargate scrapers, superseded by Web Unlocker. Kept as fallback for JS-heavy sites like Glassdoor. |
 
 ## Config
 
@@ -90,6 +91,8 @@ See `docs/superpowers/specs/2026-03-19-google-docs-landing-page-plan.md` for the
 | 4. React frontend | ✅ Complete |
 | 5. AWS SAM template | ✅ Complete (deploy = user action) |
 | 6. Testing + self-improvement | ✅ Self-improver done, E2E = user action |
+| 2.5 Web Unlocker scrapers | ✅ Complete — LinkedIn, Indeed, Irish portals working. Glassdoor needs Fargate (backlog). |
+| 2.6 Resume quality (planned) | Backlog — improve AI writing quality in tailoring + cover letters |
 
 ## Previous Design Spec
 
@@ -107,4 +110,6 @@ are complete. Phase 3 items 3.1 (logging) and 3.4 (retry backoff) are done. Item
 
 ## Backlog
 
-- **Playwright Fargate Integration**: The Step Functions pipeline currently invokes the Web Unlocker Lambda scrapers (e.g. `ScrapeLinkedInFunction`). We need to update `template.yaml` to run the actual ECS Playwright tasks (`PlaywrightTaskDef`) using `ecs:runTask.sync` and build/push `Dockerfile.playwright` to ECR via `.github/workflows/deploy.yml`. This was added to the backlog to avoid breaking the existing pipeline while the Fargate scaffolding is being completed.
+- **Glassdoor Scraper (Fargate/Playwright)**: Glassdoor requires JavaScript rendering — its job data is loaded client-side behind a login wall. This is the genuine use case for the dormant Fargate/Playwright infrastructure in `scrapers/playwright/` and `Dockerfile.playwright`. When needed: build/push the Docker image to ECR, wire `PlaywrightTaskDef` into Step Functions via `ecs:runTask.sync`.
+
+- **Resume & Cover Letter Quality (Phase 2.6)**: Current AI-generated resumes need better writing quality — more impactful language, stronger action verbs, better tailoring depth. Design a quality improvement loop: (1) score existing outputs for writing quality, (2) build exemplar prompts with high-quality samples, (3) integrate quality checks into `self_improve.py` to detect and flag weak outputs, (4) iterative prompt refinement based on scoring feedback. This should be a dedicated phase, not a quick fix.

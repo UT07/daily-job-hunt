@@ -65,8 +65,8 @@ Return JSON with adjustments:
 - keyword_emphasis: {{"keywords": [list]}}
 """
         try:
-            response = ai_complete(prompt, system="You are a job search optimization AI. Return only valid JSON.")
-            adjustments = json.loads(response)
+            result = ai_complete(prompt, system="You are a job search optimization AI. Return only valid JSON.")
+            adjustments = json.loads(result["content"])
 
             for config_type, config_data in adjustments.items():
                 db.table("self_improvement_config").upsert({

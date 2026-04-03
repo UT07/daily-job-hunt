@@ -19,7 +19,7 @@ def get_supabase():
     return create_client(get_param("/naukribaba/SUPABASE_URL"), get_param("/naukribaba/SUPABASE_SERVICE_KEY"))
 
 
-def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096) -> str:
+def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096) -> dict:
     """Call AI provider with 5-provider failover chain.
 
     Order: Groq (fastest) → NVIDIA NIM (free credits, many models) → DeepSeek
@@ -70,7 +70,7 @@ def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096) -> str:
             if resp.status_code == 200:
                 content = resp.json()["choices"][0]["message"]["content"]
                 logger.info(f"[ai] {provider['name']}/{provider['model']} succeeded")
-                return content
+                return {"content": content, "provider": provider["name"], "model": provider["model"]}
             elif resp.status_code == 429:
                 logger.warning(f"[ai] {provider['name']} rate limited, trying next")
             else:
@@ -82,28 +82,32 @@ def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096) -> str:
     raise RuntimeError(f"All {len(providers)} AI providers failed. Last error: {last_error}")
 
 
-def ai_complete_cached(prompt: str, system: str = "", cache_hours: int = 72) -> str:
-    """AI complete with Supabase cache."""
+def ai_complete_cached(prompt: str, system: str = "", cache_hours: int = 72) -> dict:
+    """AI complete with Supabase cache. Returns dict with content, provider, model."""
     cache_key = hashlib.md5(f"{system}|{prompt}".encode()).hexdigest()
     db = get_supabase()
 
     # Check cache
-    cached = db.table("ai_cache").select("response") \
+    cached = db.table("ai_cache").select("response, provider, model") \
         .eq("cache_key", cache_key) \
         .gte("expires_at", datetime.utcnow().isoformat()).execute()
     if cached.data:
-        return cached.data[0]["response"]
+        return {
+            "content": cached.data[0]["response"],
+            "provider": cached.data[0].get("provider", "cache"),
+            "model": cached.data[0].get("model", "cache")
+        }
 
     # Call AI
-    response = ai_complete(prompt, system)
+    result = ai_complete(prompt, system)
 
     # Cache result
     db.table("ai_cache").upsert({
         "cache_key": cache_key,
-        "response": response,
-        "provider": "groq",
-        "model": "auto",
+        "response": result["content"],
+        "provider": result["provider"],
+        "model": result["model"],
         "expires_at": (datetime.utcnow() + timedelta(hours=cache_hours)).isoformat(),
     }, on_conflict="cache_key").execute()
 
-    return response
+    return result

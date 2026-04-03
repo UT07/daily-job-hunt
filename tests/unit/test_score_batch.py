@@ -82,7 +82,7 @@ def test_happy_path_returns_matched_items_with_light_touch():
     )
 
     with patch("score_batch.get_supabase", return_value=db), \
-         patch("score_batch.ai_complete_cached", return_value=json.dumps(VALID_AI_SCORE)):
+         patch("score_batch.ai_complete_cached", return_value={"content": json.dumps(VALID_AI_SCORE), "provider": "groq", "model": "llama"}):
         import score_batch
         result = score_batch.handler(
             {"user_id": "user-1", "new_job_hashes": ["hash-001"], "min_match_score": 60},
@@ -121,7 +121,7 @@ def test_malformed_ai_response_markdown_wrapped_is_handled():
     )
 
     with patch("score_batch.get_supabase", return_value=db), \
-         patch("score_batch.ai_complete_cached", return_value=markdown_response):
+         patch("score_batch.ai_complete_cached", return_value={"content": markdown_response, "provider": "groq", "model": "llama"}):
         import score_batch
         result = score_batch.handler(
             {"user_id": "user-1", "new_job_hashes": ["hash-001"], "min_match_score": 60},
@@ -141,7 +141,7 @@ def test_below_min_score_is_filtered_out():
     )
 
     with patch("score_batch.get_supabase", return_value=db), \
-         patch("score_batch.ai_complete_cached", return_value=json.dumps(low_score)):
+         patch("score_batch.ai_complete_cached", return_value={"content": json.dumps(low_score), "provider": "groq", "model": "llama"}):
         import score_batch
         result = score_batch.handler(
             {"user_id": "user-1", "new_job_hashes": ["hash-001"], "min_match_score": 60},

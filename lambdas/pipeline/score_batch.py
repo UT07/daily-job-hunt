@@ -64,6 +64,7 @@ def handler(event, context):
             "key_matches": score_result.get("key_matches", []),
             "gaps": score_result.get("gaps", []),
             "match_reasoning": score_result.get("reasoning", ""),
+            "tailoring_model": f"{score_result.get('provider', 'council')}:{score_result.get('model', 'consensus')}",
             "first_seen": datetime.utcnow().isoformat(),
         }
         try:
@@ -131,14 +132,17 @@ Description: {job.get('description', '')[:2000]}
 Resume (LaTeX): {resume_tex[:3000]}"""
 
     try:
-        response = ai_complete_cached(prompt, system=SCORE_SYSTEM_PROMPT)
-        # Strip markdown fences if present
-        text = response.strip()
+        response_dict = ai_complete_cached(prompt, system=SCORE_SYSTEM_PROMPT)
+        text = response_dict["content"].strip()
         if text.startswith("```"):
             text = text.split("```")[1]
             if text.startswith("json"):
                 text = text[4:]
         result = json.loads(text.strip())
+
+        # Include model info so we can save it to DB
+        result["provider"] = response_dict.get("provider", "council")
+        result["model"] = response_dict.get("model", "auto")
 
         # Ensure match_score is computed consistently
         if "match_score" not in result:

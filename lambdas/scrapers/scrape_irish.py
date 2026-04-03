@@ -1,7 +1,8 @@
 """Irish job portal scraper — Jobs.ie, IrishJobs, GradIreland.
 
-Simple HTML sites, no anti-bot. Uses httpx directly (no proxy needed).
-Web Unlocker would work but is a waste of money for these sites.
+Jobs.ie and IrishJobs migrated to a StepStone React platform (2025+).
+Uses data-testid attributes and h2 > a patterns for extraction.
+No proxy needed — simple HTML sites with no anti-bot.
 """
 import hashlib
 import html
@@ -21,33 +22,6 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-}
-
-SITES = {
-    "jobs_ie": {
-        "search_url": "https://www.jobs.ie/SearchResults.aspx?Keywords={query}&Location=0&Category=&Recruiter=",
-        "card_patterns": [r'class="[^"]*job-result[^"]*"', r'class="[^"]*listing[^"]*"'],
-        "title_pattern": r'<a[^>]*class="[^"]*job-title[^"]*"[^>]*>([^<]+)</a>',
-        "company_pattern": r'<span[^>]*class="[^"]*company[^"]*"[^>]*>([^<]+)</span>',
-        "location_pattern": r'<span[^>]*class="[^"]*location[^"]*"[^>]*>([^<]+)</span>',
-        "link_pattern": r'<a[^>]*class="[^"]*job-title[^"]*"[^>]*href="([^"]+)"',
-    },
-    "irishjobs": {
-        "search_url": "https://www.irishjobs.ie/ShowResults.aspx?Keywords={query}&Location=100&Category=&Recruiter=",
-        "card_patterns": [r'class="[^"]*job-result[^"]*"', r'class="[^"]*search-result[^"]*"'],
-        "title_pattern": r'<a[^>]*class="[^"]*job-result-title[^"]*"[^>]*>([^<]+)</a>',
-        "company_pattern": r'<h3[^>]*class="[^"]*job-result-company[^"]*"[^>]*>\s*<a[^>]*>([^<]+)</a>',
-        "location_pattern": r'<li[^>]*class="[^"]*location[^"]*"[^>]*>([^<]+)</li>',
-        "link_pattern": r'<a[^>]*class="[^"]*job-result-title[^"]*"[^>]*href="([^"]+)"',
-    },
-    "gradireland": {
-        "search_url": "https://gradireland.com/graduate-jobs?keyword={query}",
-        "card_patterns": [r'class="[^"]*views-row[^"]*"', r'class="[^"]*job-teaser[^"]*"'],
-        "title_pattern": r'<h\d[^>]*class="[^"]*field--name-title[^"]*"[^>]*>\s*<a[^>]*>([^<]+)</a>',
-        "company_pattern": r'<div[^>]*class="[^"]*field--name-field-company[^"]*"[^>]*>([^<]+)</div>',
-        "location_pattern": r'<div[^>]*class="[^"]*field--name-field-location[^"]*"[^>]*>([^<]+)</div>',
-        "link_pattern": r'<h\d[^>]*class="[^"]*field--name-title[^"]*"[^>]*>\s*<a[^>]*href="([^"]+)"',
-    },
 }
 
 
@@ -71,11 +45,12 @@ def _make_hash(company, title, desc):
     return hashlib.md5(key.encode()).hexdigest()
 
 
-def _scrape_site(site_key, config, queries, client):
-    """Scrape one Irish portal. Returns list of job dicts."""
+def _scrape_stepstone_site(site_key, base_url, queries, client):
+    """Scrape Jobs.ie or IrishJobs (StepStone platform). Returns list of job dicts."""
     jobs = []
     for query in queries:
-        url = config["search_url"].format(query=query.replace(" ", "+"))
+        slug = query.lower().replace(" ", "-")
+        url = f"{base_url}/jobs/{slug}"
         try:
             resp = client.get(url, headers=HEADERS, timeout=20, follow_redirects=True)
             if resp.status_code != 200:
@@ -83,56 +58,109 @@ def _scrape_site(site_key, config, queries, client):
                 continue
 
             page = resp.text
-            titles = [_clean(m) for m in re.findall(config["title_pattern"], page)]
-            companies = [_clean(m) for m in re.findall(config["company_pattern"], page)]
-            locations = [_clean(m) for m in re.findall(config["location_pattern"], page)]
-            links = re.findall(config["link_pattern"], page)
+            # Strip style tags for cleaner parsing
+            clean_page = re.sub(r'<style[^>]*>.*?</style>', '', page, flags=re.DOTALL)
 
-            for i in range(min(len(titles), 50)):
-                title = titles[i] if i < len(titles) else ""
-                company = companies[i] if i < len(companies) else ""
-                location = locations[i] if i < len(locations) else "Ireland"
-                link = links[i] if i < len(links) else ""
+            # Extract parallel arrays from StepStone card structure
+            job_ids = re.findall(r'id="job-item-(\d+)"', clean_page)
+            companies = re.findall(r'COMPANY_LOGO_IMAGE" alt="([^"]+)"', clean_page)
+            # Titles from h2 > a[href="/job/..."]
+            title_links = re.findall(
+                r'<h2[^>]*>\s*<a[^>]*href="(/job/[^"]+)"[^>]*>(.*?)</a>',
+                clean_page, re.DOTALL
+            )
 
-                if not title:
+            for i in range(min(len(job_ids), len(title_links), 50)):
+                href, inner_html = title_links[i]
+                title = _clean(inner_html)
+                company = _clean(companies[i]) if i < len(companies) else ""
+                link = f"{base_url}{href}"
+
+                if not title or not company:
                     continue
 
-                # Make absolute URL
-                if link and not link.startswith("http"):
-                    base = config["search_url"].split("/")[0:3]
-                    link = "/".join(base) + link
-
-                # Try to fetch detail page for full description
+                # Fetch detail page for description
                 description = ""
-                desc_quality = "snippet"
-                if link:
-                    try:
-                        detail = client.get(link, headers=HEADERS, timeout=15, follow_redirects=True)
-                        if detail.status_code == 200:
-                            # Extract main content
-                            for selector in [r'class="[^"]*job-description[^"]*"', r'class="[^"]*description[^"]*"', r'<article[^>]*>']:
-                                match = re.search(selector + r'(.*?)</(?:div|article|section)>', detail.text, re.DOTALL)
-                                if match:
-                                    description = _clean(match.group(1) if '>' not in match.group(0)[:50] else match.group(0))
-                                    if len(description) > 100:
-                                        desc_quality = "full"
-                                        break
-                    except Exception:
-                        pass
+                try:
+                    detail = client.get(link, headers=HEADERS, timeout=15, follow_redirects=True)
+                    if detail.status_code == 200:
+                        detail_clean = re.sub(r'<style[^>]*>.*?</style>', '', detail.text, flags=re.DOTALL)
+                        # StepStone uses data-testid="vacancy-description" or similar
+                        for pattern in [
+                            r'data-testid="vacancy-description"[^>]*>(.*?)</div>\s*</div>',
+                            r'data-testid="job-description"[^>]*>(.*?)</div>\s*</div>',
+                            r'class="[^"]*job-description[^"]*"[^>]*>(.*?)</div>',
+                        ]:
+                            match = re.search(pattern, detail_clean, re.DOTALL)
+                            if match and len(match.group(1)) > 100:
+                                description = _clean(match.group(1))
+                                break
+                except Exception:
+                    pass
 
                 jobs.append({
                     "title": title[:500],
-                    "company": (company or site_key)[:200],
+                    "company": company[:200],
                     "description": description[:10000],
-                    "location": location[:200],
-                    "apply_url": (link or "")[:1000],
+                    "location": "Ireland",
+                    "apply_url": link[:1000],
                     "source": site_key,
-                    "description_quality": desc_quality,
                 })
 
-            logger.info(f"[{site_key}] Query '{query}': {len(titles)} jobs found")
+            logger.info(f"[{site_key}] Query '{query}': {len(job_ids)} jobs found")
         except Exception as e:
             logger.error(f"[{site_key}] Query '{query}' failed: {e}")
+
+    return jobs
+
+
+def _scrape_gradireland(queries, client):
+    """Scrape GradIreland (Drupal/views-based)."""
+    jobs = []
+    for query in queries:
+        url = f"https://gradireland.com/graduate-jobs?keyword={query.replace(' ', '+')}"
+        try:
+            resp = client.get(url, headers=HEADERS, timeout=20, follow_redirects=True)
+            if resp.status_code != 200:
+                logger.warning(f"[gradireland] HTTP {resp.status_code} for {query}")
+                continue
+
+            page = resp.text
+            titles = [_clean(m) for m in re.findall(
+                r'<h\d[^>]*class="[^"]*field--name-title[^"]*"[^>]*>\s*<a[^>]*>([^<]+)</a>', page
+            )]
+            companies = [_clean(m) for m in re.findall(
+                r'<div[^>]*class="[^"]*field--name-field-company[^"]*"[^>]*>([^<]+)</div>', page
+            )]
+            locations = [_clean(m) for m in re.findall(
+                r'<div[^>]*class="[^"]*field--name-field-location[^"]*"[^>]*>([^<]+)</div>', page
+            )]
+            links = re.findall(
+                r'<h\d[^>]*class="[^"]*field--name-title[^"]*"[^>]*>\s*<a[^>]*href="([^"]+)"', page
+            )
+
+            for i in range(min(len(titles), 50)):
+                title = titles[i]
+                if not title:
+                    continue
+                company = companies[i] if i < len(companies) else ""
+                location = locations[i] if i < len(locations) else "Ireland"
+                link = links[i] if i < len(links) else ""
+                if link and not link.startswith("http"):
+                    link = f"https://gradireland.com{link}"
+
+                jobs.append({
+                    "title": title[:500],
+                    "company": (company or "gradireland")[:200],
+                    "description": "",
+                    "location": location[:200],
+                    "apply_url": link[:1000],
+                    "source": "gradireland",
+                })
+
+            logger.info(f"[gradireland] Query '{query}': {len(titles)} jobs found")
+        except Exception as e:
+            logger.error(f"[gradireland] Query '{query}' failed: {e}")
 
     return jobs
 
@@ -156,9 +184,10 @@ def handler(event, context):
     all_jobs = []
     client = httpx.Client()
 
-    for site_key, config in SITES.items():
-        site_jobs = _scrape_site(site_key, config, queries, client)
-        all_jobs.extend(site_jobs)
+    # Jobs.ie and IrishJobs use the same StepStone platform
+    all_jobs.extend(_scrape_stepstone_site("jobs_ie", "https://www.jobs.ie", queries, client))
+    all_jobs.extend(_scrape_stepstone_site("irishjobs", "https://www.irishjobs.ie", queries, client))
+    all_jobs.extend(_scrape_gradireland(queries, client))
 
     client.close()
 
@@ -178,7 +207,6 @@ def handler(event, context):
         now = datetime.now(timezone.utc).isoformat()
         for job in all_jobs:
             job["scraped_at"] = now
-        # Batch upsert in chunks (Supabase has row limits)
         for i in range(0, len(all_jobs), 50):
             chunk = all_jobs[i:i+50]
             db.table("jobs_raw").upsert(chunk, on_conflict="job_hash").execute()

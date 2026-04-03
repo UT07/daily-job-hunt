@@ -375,15 +375,19 @@ class TestScoreBatchJobRecords:
 
     SAMPLE_RESUME = {"tex_content": r"\documentclass{article}\begin{document}Skills: Python\end{document}"}
 
-    VALID_AI_RESPONSE = json.dumps({
-        "match_score": 85,
-        "ats_score": 82,
-        "hiring_manager_score": 86,
-        "tech_recruiter_score": 87,
-        "reasoning": "Good Python match.",
-        "key_matches": ["Python", "API"],
-        "gaps": ["AWS experience"],
-    })
+    VALID_AI_RESPONSE = {
+        "content": json.dumps({
+            "match_score": 85,
+            "ats_score": 82,
+            "hiring_manager_score": 86,
+            "tech_recruiter_score": 87,
+            "reasoning": "Good Python match.",
+            "key_matches": ["Python", "API"],
+            "gaps": ["AWS experience"],
+        }),
+        "provider": "groq",
+        "model": "llama-3.3-70b-versatile",
+    }
 
     @pytest.mark.integration
     def test_insert_payload_has_all_required_fields(self):

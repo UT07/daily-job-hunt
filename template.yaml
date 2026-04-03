@@ -447,6 +447,26 @@ Resources:
           Weight: 0
           Base: 0
 
+  # ─────────────────────────────────────────────────────────────────────
+  # DORMANT: Fargate / Playwright / Scrapling infrastructure
+  #
+  # Originally built for Phase 2.5 to run browser-based scrapers in ECS
+  # Fargate containers using Scrapling (headless Chromium).
+  #
+  # SUPERSEDED by Bright Data Web Unlocker (Apr 1, 2026):
+  #   - Web Unlocker handles all anti-bot (CAPTCHAs, fingerprints, sessions)
+  #   - Plain httpx + Web Unlocker proxy on Lambda is sufficient
+  #   - LinkedIn returned 180 job cards with zero blocks — no browser needed
+  #   - Cost: ~$1.50/1k requests vs Fargate compute + ECR storage
+  #
+  # Kept as fallback if Web Unlocker ever becomes insufficient.
+  # The active scrapers are the ScrapeLinkedIn/Indeed/Glassdoor/Irish
+  # Lambda functions above, using httpx + Web Unlocker proxy.
+  #
+  # Related code: scrapers/playwright/, Dockerfile.playwright,
+  #               requirements-playwright.txt
+  # ─────────────────────────────────────────────────────────────────────
+
   ScraperLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
