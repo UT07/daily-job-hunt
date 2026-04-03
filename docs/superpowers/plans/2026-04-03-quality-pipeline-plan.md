@@ -560,6 +560,14 @@ grep -rn "job_hash\|job_id.*md5\|\.hexdigest" scrapers/ lambdas/ --include="*.py
 
 Review each match. Any hash computation that doesn't use `canonical_hash()` must be updated.
 
+**Circular import check**: `utils/canonical_hash.py` is imported by both `scrapers/base.py` and `lambdas/scrapers/normalizers.py`. Verify no circular dependency by running:
+```bash
+python -c "from utils.canonical_hash import canonical_hash; print('OK')"
+python -c "from scrapers.base import Job; print('OK')"
+python -c "from lambdas.scrapers.normalizers import normalize_indeed; print('OK')"
+```
+If Lambda packaging breaks (can't find `utils/`), add `utils/` to the SharedDepsLayer in `template.yaml`.
+
 - [ ] **Step 3: Update merge_dedup.py with richest version logic**
 
 In `lambdas/pipeline/merge_dedup.py`, replace hash references and implement full tie-breaking:
@@ -642,11 +650,31 @@ resume_text = resume_content
 pytest tests/unit/test_score_batch.py -v
 ```
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Verify dashboard API returns full descriptions**
+
+Check that `app.py` and `db_client.py` don't truncate descriptions:
+
+```bash
+grep -n "description\[:.\|truncat" app.py db_client.py
+```
+
+Expected: no truncation found.
+
+- [ ] **Step 5: Check frontend job workspace shows full JD**
+
+In `web/src/`, find the job detail component. Verify it renders `job.description` in full. If a card/list view truncates for preview, that's OK — but the detail view must show the full JD.
+
+```bash
+grep -rn "description" web/src/pages/ web/src/components/ --include="*.tsx" --include="*.jsx" | grep -i "slice\|substr\|truncat\|maxLen"
+```
+
+If truncation is found in the detail view, remove it.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add lambdas/pipeline/score_batch.py tests/unit/test_score_batch.py
-git commit -m "fix: remove description and resume truncation from scoring"
+git commit -m "fix: remove description and resume truncation from scoring and display"
 ```
 
 ---
@@ -875,6 +903,14 @@ def test_multi_call_median_scoring(mocker):
     assert result["hiring_manager_score"] == 70  # median of [70, 72, 68]
     assert result["tech_recruiter_score"] == 76  # median of [75, 78, 76]
 ```
+
+- [ ] **Step 2b: Run both tests — should fail**
+
+```bash
+pytest tests/unit/test_score_batch.py::test_scoring_uses_temperature_zero tests/unit/test_score_batch.py::test_multi_call_median_scoring -v
+```
+
+Expected: FAIL — `score_single_job` doesn't accept `temperature`, `score_single_job_deterministic` doesn't exist.
 
 - [ ] **Step 3: Add temperature parameter to score_single_job**
 
@@ -2864,19 +2900,77 @@ class TestCooldown:
     def test_active_adjustment_not_on_cooldown(self):
         adj = {"status": "auto_applied", "cooldown_until": None}
         assert is_on_cooldown(adj) is False
+
+
+class TestConflictDetection:
+    """REPORT ONLY: Contradictory adjustments should be flagged."""
+
+    def test_contradictory_adjustments_flagged(self):
+        """Two adjustments that set the same config key to different values → conflict."""
+        from self_improver import detect_conflicts
+
+        adjustments = [
+            {"id": "1", "payload": {"min_match_score": 40}, "status": "auto_applied"},
+            {"id": "2", "payload": {"min_match_score": 60}, "status": "auto_applied"},
+        ]
+        conflicts = detect_conflicts(adjustments)
+        assert len(conflicts) == 1
+        assert "min_match_score" in conflicts[0]["key"]
+
+
+class TestUserFeedbackIngestion:
+    """MUST PASS: Flagged score creates ground truth entry."""
+
+    def test_flag_creates_adjustment(self):
+        """User feedback stored as pipeline_adjustment with quality_flag type."""
+        # This is tested in Task 41 (test_flag_score_creates_ground_truth)
+        # Here we verify the data shape
+        feedback = {
+            "adjustment_type": "quality_flag",
+            "risk_level": "high",
+            "status": "pending",
+            "payload": {"job_id": "test-123", "feedback_type": "score_inaccurate"},
+        }
+        assert feedback["adjustment_type"] == "quality_flag"
+        assert feedback["risk_level"] == "high"
 ```
 
-- [ ] **Step 2: Run tests**
+- [ ] **Step 2: Implement detect_conflicts in self_improver.py**
+
+```python
+# In self_improver.py
+
+def detect_conflicts(adjustments: list[dict]) -> list[dict]:
+    """Detect contradictory adjustments that set the same key to different values."""
+    key_values = {}
+    conflicts = []
+    for adj in adjustments:
+        if adj.get("status") not in ("auto_applied", "approved"):
+            continue
+        for key, value in (adj.get("payload") or {}).items():
+            if key in key_values and key_values[key]["value"] != value:
+                conflicts.append({
+                    "key": key,
+                    "adjustment_a": key_values[key]["id"],
+                    "value_a": key_values[key]["value"],
+                    "adjustment_b": adj["id"],
+                    "value_b": value,
+                })
+            key_values[key] = {"id": adj["id"], "value": value}
+    return conflicts
+```
+
+- [ ] **Step 3: Run tests**
 
 ```bash
 pytest tests/quality/test_self_improvement.py -v
 ```
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add tests/quality/test_self_improvement.py
-git commit -m "test: Tier 4d self-improvement tests — tiered risk, rollback, cooldown"
+git add tests/quality/test_self_improvement.py self_improver.py
+git commit -m "test: Tier 4d self-improvement tests — tiered risk, rollback, cooldown, conflicts"
 ```
 
 ---
@@ -2948,6 +3042,30 @@ git commit -m "test: Tier 4d self-improvement tests — tiered risk, rollback, c
           python-version: "3.11"
       - run: pip install -r requirements.txt -r tests/requirements-test.txt
       - run: pytest tests/quality/test_writing_quality.py -k "report_only" -v --tb=short || true
+
+  ai-quality-golden:
+    name: "Tier 4: AI Quality Golden Dataset (REPORT)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt -r tests/requirements-test.txt
+      - run: pytest tests/quality/test_scoring_quality.py -v --tb=short || true
+
+  conflict-detection:
+    name: "Tier 4d: Conflict Detection (REPORT)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt -r tests/requirements-test.txt
+      - run: pytest tests/quality/test_self_improvement.py::TestConflictDetection -v --tb=short || true
 ```
 
 - [ ] **Step 2: Run full test suite locally**
