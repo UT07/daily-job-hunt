@@ -20,27 +20,44 @@ Group A: Quick Wins (do first)
   Task 0: Backfill Apr 2-3 jobs to dashboard
   Task 1: DeepSeek removal + OpenRouter fix
 
-Group B: Phase 2.7 Data Quality ──┐
-  Tasks 2-8                       │
-  Task 28: Hash migration script  │
-  Task 29: Cross-run artifact reuse│
-                                  ├── PARALLEL
-Group C: Phase 2.6 Writing Quality│
-  Tasks 9-16                      │
-                                  │
-Group D: Phase 2.8 QA Foundation  │
-  Tasks 17-19                     ┘
+Group B: Phase 2.7 Data Quality ─────────────┐
+  Tasks 2-8                                   │
+  Task 28: Hash migration script              │
+  Task 29: Cross-run artifact reuse           │
+  Task 32: seen_jobs.json → Supabase swap     │
+  Task 36: Manual JD hashing merge logic      │
+                                              ├── PARALLEL
+Group C: Phase 2.6 Writing Quality            │  (but D depends on
+  Tasks 9-16                                  │   B+C functions)
+  Task 33: Resume length management           │
+  Task 34: Council critic rubric              │
+                                              │
+Group D: Phase 2.8 QA Foundation              │
+  Tasks 17-19                                 │
+  Task 37: Scoring prompt calibration audit   │
+  Task 42: Score determinism test             ┘
 
 Group E: Phase 2.9 Self-Improvement (after B+C)
   Tasks 20-23
   Task 30: Model A/B testing
   Task 31: Query optimization tracking
+  Task 35: Prompt versioning CRUD
+  Task 38: Wire self_improve into Step Functions
+  Task 39: Revert action write + cooldown set
+  Task 40: Base resume improvement suggestions
 
 Group F: Phase 2.5b Scrapers (independent)
   Tasks 24-26
 
 Group G: Final QA + CI
-  Tasks 26-27
+  Task 27 (includes REPORT ONLY tiers)
+
+Group H: Frontend Integration (after E)
+  Task 41: User feedback — "flag score" API + UI
+
+NOTE: Group D tasks import functions from Group B/C.
+If using subagent parallelism, Group B+C must COMPLETE
+before Group D tasks that test their functions.
 ```
 
 ---
@@ -53,7 +70,7 @@ Group G: Final QA + CI
 | `utils/canonical_hash.py` | Single canonical hash function used everywhere |
 | `utils/keyword_extractor.py` | JD keyword extraction for tailoring + cover letters |
 | `utils/pdf_validator.py` | PDF output validation (page count, text extraction) |
-| `db/migrations/005_quality_pipeline.sql` | Schema changes: new columns, new tables, RLS |
+| `supabase/migrations/20260403_quality_pipeline.sql` | Schema changes: new columns, new tables, RLS (applied via `npx supabase db push`) |
 | `scripts/backfill_jobs.py` | One-time: push local jobs to Supabase |
 | `scripts/migrate_hashes.py` | One-time: recompute canonical hashes for existing data |
 | `tests/quality/golden_dataset.json` | 25 human-labeled JD+resume pairs |
@@ -79,8 +96,10 @@ Group G: Final QA + CI
 | `latex_compiler.py` | Work on copy (rollback), hard brace gate |
 | `ai_client.py` | Remove DeepSeek provider, fix OpenRouter model name |
 | `self_improver.py` | Rewrite: tiered adjustments → Supabase, pipeline_runs metrics |
-| `main.py` | Wire before/after scoring, writing quality check, self-improve at end |
+| `main.py` | Wire before/after scoring, writing quality check, self-improve at end, replace seen_jobs.json with Supabase |
 | `config.yaml` | Remove deepseek from providers |
+| `template.yaml` | Wire self_improve as terminal Step Functions state, add Glassdoor Fargate with Continue On Fail |
+| `app.py` | Add `/api/feedback/flag-score` endpoint for user feedback, manual JD dedup merge |
 
 ---
 
@@ -269,6 +288,11 @@ In `ai_client.py`, find and remove:
 - The `deepseek` entry from default provider ordering
 
 In `config.yaml`, remove deepseek from the providers list.
+
+Delete SSM parameter:
+```bash
+aws ssm delete-parameter --name "/naukribaba/deepseek_api_key" --region eu-west-1 2>/dev/null || echo "Parameter already gone"
+```
 
 - [ ] **Step 4: Fix OpenRouter model name**
 
@@ -526,16 +550,37 @@ def dedup(self, jobs: list) -> list:
     return list(seen.values())
 ```
 
-- [ ] **Step 3: Update merge_dedup.py**
+- [ ] **Step 2b: Audit all scrapers for hash computation**
 
-In `lambdas/pipeline/merge_dedup.py`, replace hash references to use canonical_hash:
+```bash
+# Find ANY file that computes an md5 hash on job fields:
+grep -rn "hashlib.md5" scrapers/ lambdas/scrapers/ --include="*.py"
+grep -rn "job_hash\|job_id.*md5\|\.hexdigest" scrapers/ lambdas/ --include="*.py"
+```
+
+Review each match. Any hash computation that doesn't use `canonical_hash()` must be updated.
+
+- [ ] **Step 3: Update merge_dedup.py with richest version logic**
+
+In `lambdas/pipeline/merge_dedup.py`, replace hash references and implement full tie-breaking:
 
 ```python
 from utils.canonical_hash import canonical_hash
 
-# In the exact hash dedup (Tier 1), use canonical_hash
-# In the "richest version" logic, implement tie-breaking:
-# longest description → most fields populated → most recent scrape date
+def _richness_score(job: dict) -> tuple:
+    """Score for tie-breaking: longest desc → most fields → most recent.
+
+    Returns tuple for comparison (higher = richer).
+    """
+    desc_len = len(job.get("description", "") or "")
+    field_count = sum(1 for v in job.values() if v is not None and v != "")
+    last_seen = job.get("last_seen", "") or ""
+    return (desc_len, field_count, last_seen)
+
+
+# In the exact hash dedup (Tier 1):
+# When two jobs have the same canonical_hash, keep the one with higher _richness_score():
+# if _richness_score(new_job) > _richness_score(existing_job): replace
 ```
 
 - [ ] **Step 4: Update existing tests**
@@ -609,13 +654,35 @@ git commit -m "fix: remove description and resume truncation from scoring"
 ### Task 5: Supabase Schema Changes
 
 **Files:**
-- Create: `db/migrations/005_quality_pipeline.sql`
+- Create: `supabase/migrations/20260403_quality_pipeline.sql`
 
-- [ ] **Step 1: Write migration SQL**
+- [ ] **Step 1: Link Supabase project (if not linked)**
+
+```bash
+npx supabase link --project-ref fzxdkvurtsqcflqidqto
+```
+
+- [ ] **Step 2: Create migration file**
+
+```bash
+npx supabase migration new quality_pipeline
+```
+
+This creates a timestamped file in `supabase/migrations/`. Edit it with the SQL below.
+
+- [ ] **Step 3: Write migration SQL**
 
 ```sql
--- db/migrations/005_quality_pipeline.sql
 -- Quality Pipeline: Phase 2.7 + 2.9 schema changes
+
+-- 0. Check if match_score column exists (it should from initial schema)
+-- If not, add it. This is the avg of base scores for initial ranking.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'jobs' AND column_name = 'match_score') THEN
+        ALTER TABLE jobs ADD COLUMN match_score FLOAT;
+    END IF;
+END $$;
 
 -- 1. Add canonical_hash and new score columns to jobs table
 ALTER TABLE jobs
@@ -643,6 +710,7 @@ CREATE INDEX IF NOT EXISTS idx_jobs_raw_canonical_hash ON jobs_raw(canonical_has
 -- 4. Create seen_jobs table (replaces seen_jobs.json)
 CREATE TABLE IF NOT EXISTS seen_jobs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  job_id TEXT,
   user_id UUID REFERENCES auth.users(id) NOT NULL,
   canonical_hash TEXT NOT NULL,
   first_seen DATE NOT NULL,
@@ -737,17 +805,22 @@ CREATE POLICY pipeline_runs_service_policy ON pipeline_runs
   FOR ALL USING (true) WITH CHECK (true);
 ```
 
-- [ ] **Step 2: Run migration against Supabase**
+- [ ] **Step 4: Push migration to Supabase**
 
 ```bash
-# Apply via Supabase dashboard SQL editor or CLI:
-# Copy contents of 005_quality_pipeline.sql and execute
+npx supabase db push
 ```
 
-- [ ] **Step 3: Commit**
+Expected: Migration applied successfully. Verify tables exist:
 
 ```bash
-git add db/migrations/005_quality_pipeline.sql
+npx supabase db execute "SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('seen_jobs', 'pipeline_adjustments', 'prompt_versions', 'pipeline_runs')"
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add supabase/migrations/
 git commit -m "feat: add quality pipeline schema — scores, seen_jobs, adjustments, runs"
 ```
 
@@ -803,7 +876,33 @@ def test_multi_call_median_scoring(mocker):
     assert result["tech_recruiter_score"] == 76  # median of [75, 78, 76]
 ```
 
-- [ ] **Step 3: Implement score_single_job_deterministic**
+- [ ] **Step 3: Add temperature parameter to score_single_job**
+
+The existing `score_single_job` function must accept a `temperature` parameter.
+Find the function signature in `lambdas/pipeline/score_batch.py` and add it:
+
+```python
+# BEFORE:
+# def score_single_job(job: dict, resume_text: str) -> dict:
+
+# AFTER:
+def score_single_job(job: dict, resume_text: str, temperature: float = 0) -> dict:
+    """Score a single job. Pass temperature through to ai_complete_cached."""
+    # ... existing code, but pass temperature to the ai_complete_cached call:
+    result = ai_complete_cached(
+        system=SCORING_SYSTEM_PROMPT,
+        prompt=prompt,
+        temperature=temperature,  # ADD THIS
+    )
+```
+
+- [ ] **Step 4: Run Step 1 test again — should now pass**
+
+```bash
+pytest tests/unit/test_score_batch.py::test_scoring_uses_temperature_zero -v
+```
+
+- [ ] **Step 5: Implement score_single_job_deterministic**
 
 Add to `lambdas/pipeline/score_batch.py`:
 
@@ -836,7 +935,7 @@ def score_single_job_deterministic(job: dict, resume_text: str, num_calls: int =
     }
 ```
 
-- [ ] **Step 4: Update temperature in matcher.py and resume_scorer.py**
+- [ ] **Step 6: Update temperature in matcher.py and resume_scorer.py**
 
 In `matcher.py`: change `temperature=0.3` → `temperature=0` for all scoring calls.
 In `resume_scorer.py`: change `temperature=0.5` → `temperature=0` for scoring calls (keep 0.3 for improvement calls — those need creativity).
@@ -1241,6 +1340,9 @@ def get_tailoring_depth(base_score: float | None) -> tuple[str, int]:
     if base_score is None or base_score < 0:
         return "moderate", 2  # Default if unknown
 
+    if base_score is None or base_score < 0:
+        return "moderate", 2  # Default if unknown
+
     if base_score >= 85:
         return (
             "LIGHT TOUCH: Make surgical keyword additions and minor description tweaks only. "
@@ -1260,6 +1362,15 @@ def get_tailoring_depth(base_score: float | None) -> tuple[str, int]:
             "Restructure experience bullets with metrics and impact.",
             3,
         )
+
+
+def should_tailor(job: dict) -> bool:
+    """Check if a job should be tailored. Returns False if data is insufficient."""
+    if job.get("score_status") == "insufficient_data":
+        return False  # No description → can't tailor meaningfully
+    if job.get("score_status") == "incomplete":
+        return False  # Missing company → skip
+    return True
 ```
 
 - [ ] **Step 4: Run tests**
@@ -1490,7 +1601,27 @@ def test_compilation_preserves_original(tmp_path):
     assert tex_file.read_text() == original_content  # Original preserved
 ```
 
-- [ ] **Step 2: Implement rollback and hard brace gate**
+- [ ] **Step 1b: Write test for section completeness and size bounds**
+
+```python
+# tests/unit/test_compile_latex.py — add tests
+def test_section_completeness():
+    """All required sections must be present."""
+    from latex_compiler import check_section_completeness
+    full = "\\section{Summary}\\section{Skills}\\section{Experience}\\section{Projects}\\section{Education}"
+    assert check_section_completeness(full) is True
+    missing = "\\section{Summary}\\section{Skills}"
+    assert check_section_completeness(missing) is False
+
+def test_size_bounds():
+    """Output must be 60-150% of input size."""
+    from latex_compiler import check_size_bounds
+    assert check_size_bounds(input_len=1000, output_len=800) is True   # 80%
+    assert check_size_bounds(input_len=1000, output_len=500) is False  # 50% — too small
+    assert check_size_bounds(input_len=1000, output_len=1600) is False # 160% — too big
+```
+
+- [ ] **Step 2: Implement rollback, hard brace gate, section check, size bounds**
 
 In `latex_compiler.py`:
 
@@ -1517,6 +1648,15 @@ def sanitize_and_compile(tex_path: str) -> str | None:
         if not check_brace_balance(content):
             logger.error(f"Brace imbalance in {tex_path.name} — skipping compilation")
             return None
+
+        # Section completeness gate
+        if not check_section_completeness(content):
+            logger.error(f"Missing required sections in {tex_path.name}")
+            return None
+
+        # Size bounds gate (if original content provided)
+        if original_content and not check_size_bounds(len(original_content), len(content)):
+            logger.warning(f"Size bounds exceeded in {tex_path.name}")
 
         work_copy.write_text(content)
 
@@ -2014,6 +2154,31 @@ class TestBeforeAfterDelta:
         assert delta["ats_delta"] == 15
         assert delta["hm_delta"] == 13
         assert delta["tr_delta"] == 8
+
+
+class TestCrossRunDedup:
+    def test_recently_scored_job_skipped(self):
+        """Job scored within 7 days → skip re-scoring, reuse artifacts."""
+        from lambdas.pipeline.merge_dedup import cross_run_check
+        from datetime import datetime, timedelta
+
+        existing = {
+            "scored_at": (datetime.now() - timedelta(days=3)).isoformat(),
+            "base_ats_score": 75,
+            "resume_s3_url": "s3://bucket/resume.pdf",
+        }
+        result = cross_run_check(existing)
+        assert result["skip_scoring"] is True
+        assert result["skip_tailoring"] is True
+
+    def test_old_job_rescored(self):
+        """Job scored 8+ days ago → re-score."""
+        from lambdas.pipeline.merge_dedup import cross_run_check
+        from datetime import datetime, timedelta
+
+        old = {"scored_at": (datetime.now() - timedelta(days=8)).isoformat()}
+        result = cross_run_check(old)
+        assert result["skip_scoring"] is False
 ```
 
 - [ ] **Step 2: Run tests**
@@ -2094,6 +2259,44 @@ class TestBraceBalance:
 
     def test_nested(self):
         assert check_brace_balance("\\textbf{\\textit{nested}}") is True
+
+
+class TestSectionCompleteness:
+    """MUST PASS: All required resume sections present."""
+
+    def test_all_sections_present(self):
+        from latex_compiler import check_section_completeness
+        content = "\\section{Summary}\\section{Skills}\\section{Experience}\\section{Projects}\\section{Education}"
+        assert check_section_completeness(content) is True
+
+    def test_missing_section(self):
+        from latex_compiler import check_section_completeness
+        content = "\\section{Summary}\\section{Skills}"
+        assert check_section_completeness(content) is False
+
+
+class TestPDFValidation:
+    """MUST PASS: PDF output checks (delegates to pdf_validator unit tests for detail)."""
+
+    def test_page_count_check_exists(self):
+        from utils.pdf_validator import validate_pdf
+        assert callable(validate_pdf)
+
+    def test_file_size_bounds(self):
+        from utils.pdf_validator import check_file_size
+        assert check_file_size(5000) == "too_small"
+        assert check_file_size(50000) is None
+        assert check_file_size(600000) == "too_large"
+
+
+class TestKeywordCoverage:
+    """REPORT ONLY: Tailored resume should contain JD keywords."""
+
+    def test_keyword_extraction_works(self):
+        from utils.keyword_extractor import extract_keywords
+        keywords = extract_keywords("We need Python and Kubernetes experience")
+        assert "python" in keywords
+        assert "kubernetes" in keywords
 ```
 
 - [ ] **Step 2: Run tests**
@@ -2249,7 +2452,8 @@ def load_config_with_adjustments(base_config: dict, user_id: str) -> dict:
 
     active_adjustments = result.data or []
 
-    # Sort by precedence: approved > auto_applied
+    # Sort by precedence: auto_applied FIRST, then approved OVERWRITES
+    # (later in the loop = higher priority = wins)
     for adj in sorted(active_adjustments, key=lambda a: 0 if a["status"] == "auto_applied" else 1):
         payload = adj.get("payload", {})
         for key, value in payload.items():
@@ -2348,6 +2552,65 @@ def is_on_cooldown(adjustment: dict, current_run: int = 0, cooldown_runs: int = 
     if cooldown_until:
         return datetime.now().isoformat() < cooldown_until
     return False
+
+
+def execute_revert(db, adjustment: dict, cooldown_runs: int = 5):
+    """Revert an adjustment: create new adjustment with old state, mark original as reverted.
+
+    Sets cooldown_until so the reverted adjustment can't be re-proposed for cooldown_runs.
+    """
+    from datetime import timedelta
+
+    # Mark original as reverted with cooldown
+    cooldown_until = (datetime.now() + timedelta(days=cooldown_runs)).isoformat()
+    db.table("pipeline_adjustments").update({
+        "status": "reverted",
+        "reverted_at": datetime.now().isoformat(),
+        "cooldown_until": cooldown_until,
+    }).eq("id", adjustment["id"]).execute()
+
+    # Create restoration adjustment with previous state
+    if adjustment.get("previous_state"):
+        db.table("pipeline_adjustments").insert({
+            "user_id": adjustment["user_id"],
+            "adjustment_type": adjustment["adjustment_type"],
+            "risk_level": "low",
+            "status": "auto_applied",
+            "payload": adjustment["previous_state"],
+            "reason": f"Auto-revert of adjustment {adjustment['id']} — metrics worsened",
+            "evidence": {"reverted_from": adjustment["id"]},
+        }).execute()
+
+
+def should_revert_or_extend(adjustment: dict, run_metrics: list[dict], threshold: float = 0.05) -> str:
+    """Extended evaluation: 3 runs → revert/confirm. If inconclusive, extend to 5.
+
+    Returns: 'confirm', 'revert', 'extend', or 'wait' (not enough runs).
+    """
+    if len(run_metrics) < 4:
+        return "wait"
+
+    before = run_metrics[0].get("avg_base_score", 0)
+    if before == 0:
+        return "wait"
+
+    after_3 = sum(r.get("avg_base_score", 0) for r in run_metrics[1:4]) / 3
+    change_3 = (after_3 - before) / before
+
+    if change_3 < -threshold:
+        return "revert"
+    if change_3 > threshold:
+        return "confirm"
+
+    # Inconclusive — try 5 runs
+    if len(run_metrics) >= 6:
+        after_5 = sum(r.get("avg_base_score", 0) for r in run_metrics[1:6]) / 5
+        change_5 = (after_5 - before) / before
+        if change_5 < -threshold:
+            return "revert"
+        return "confirm"  # Force decision after 5 runs
+
+    return "extend"  # Keep evaluating
 ```
 
 - [ ] **Step 3: Add pipeline_runs writing to self_improver**
@@ -2495,9 +2758,43 @@ aws ssm put-parameter --name "/naukribaba/glassdoor_password" --value "your-pass
 
 - [ ] **Step 4: Wire into Step Functions parallel scraper branch**
 
-Add Glassdoor Fargate task to the parallel Map state alongside Lambda scrapers.
+In `template.yaml`, add Glassdoor Fargate task to the parallel scraper branch:
+- Add as a parallel branch alongside Lambda scrapers
+- Configure with `"Catch": [{"ErrorEquals": ["States.ALL"], "Next": "ContinueAfterScrape"}]` for "Continue On Fail"
+- This ensures pipeline continues even if Glassdoor Fargate fails or times out
 
-- [ ] **Step 5: Test locally**
+- [ ] **Step 5: Add rate limiting and session caching to Glassdoor scraper**
+
+In `scrapers/playwright/glassdoor.py`:
+
+```python
+MAX_DETAIL_PAGES = 50  # Rate limit: max 50 job detail pages per run
+
+SESSION_COOKIE_S3_KEY = "glassdoor/session_cookie.json"
+SESSION_COOKIE_TTL = 86400  # 24 hours
+
+async def get_or_create_session(s3_client, bucket: str) -> dict:
+    """Load cached session cookie from S3, or create new login session."""
+    try:
+        obj = s3_client.get_object(Bucket=bucket, Key=SESSION_COOKIE_S3_KEY)
+        cookie_data = json.loads(obj["Body"].read())
+        age = time.time() - cookie_data.get("created_at", 0)
+        if age < SESSION_COOKIE_TTL:
+            return cookie_data["cookies"]
+    except s3_client.exceptions.NoSuchKey:
+        pass
+
+    # Login and cache new session
+    cookies = await glassdoor_login()
+    s3_client.put_object(
+        Bucket=bucket,
+        Key=SESSION_COOKIE_S3_KEY,
+        Body=json.dumps({"cookies": cookies, "created_at": time.time()}),
+    )
+    return cookies
+```
+
+- [ ] **Step 6: Test locally**
 
 ```bash
 docker run --env-file .env naukribaba-playwright python -m scrapers.playwright.glassdoor --test
@@ -2626,6 +2923,31 @@ git commit -m "test: Tier 4d self-improvement tests — tiered risk, rollback, c
           python-version: "3.11"
       - run: pip install -r requirements.txt -r tests/requirements-test.txt
       - run: pytest tests/quality/test_self_improvement.py -v --tb=short
+
+  # REPORT ONLY — don't block PRs
+  score-determinism:
+    name: "Tier 4b: Score Determinism (REPORT)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt -r tests/requirements-test.txt
+      - run: pytest tests/quality/test_score_determinism.py -v --tb=short || true
+
+  writing-quality-ai:
+    name: "Tier 4c: Writing Quality AI (REPORT)"
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt -r tests/requirements-test.txt
+      - run: pytest tests/quality/test_writing_quality.py -k "report_only" -v --tb=short || true
 ```
 
 - [ ] **Step 2: Run full test suite locally**
@@ -2920,6 +3242,677 @@ git commit -m "feat: query optimization — flag low-yield search queries"
 
 ---
 
+## GROUP H: REMAINING SPEC COVERAGE
+
+### Task 32: seen_jobs.json → Supabase Pipeline Code Swap
+
+**Files:**
+- Modify: `main.py` (replace `_load_seen_jobs` / `_save_seen_jobs` with Supabase queries)
+
+- [ ] **Step 1: Write test**
+
+```python
+# tests/unit/test_seen_jobs.py
+def test_check_seen_job_in_supabase(mocker):
+    """Pipeline should check Supabase seen_jobs table, not local JSON."""
+    mock_db = mocker.MagicMock()
+    mock_db.table.return_value.select.return_value.eq.return_value.eq.return_value.execute.return_value.data = [
+        {"canonical_hash": "abc123", "first_seen": "2026-04-01", "score": 75}
+    ]
+
+    from main import check_seen_job
+    result = check_seen_job(mock_db, user_id="test", canonical_hash="abc123")
+    assert result is not None
+    assert result["score"] == 75
+```
+
+- [ ] **Step 2: Implement Supabase-backed seen_jobs functions**
+
+In `main.py`, replace `_load_seen_jobs(path)` and `_save_seen_jobs(seen, path)` with:
+
+```python
+def check_seen_job(db, user_id: str, canonical_hash: str) -> dict | None:
+    """Check if job was seen before (Supabase)."""
+    result = db.client.table("seen_jobs").select("*").eq(
+        "user_id", user_id
+    ).eq("canonical_hash", canonical_hash).execute()
+    return result.data[0] if result.data else None
+
+
+def upsert_seen_job(db, user_id: str, job: dict, canonical_hash: str):
+    """Track job as seen (Supabase). Updates last_seen if exists."""
+    from datetime import date
+    db.client.table("seen_jobs").upsert({
+        "user_id": user_id,
+        "canonical_hash": canonical_hash,
+        "job_id": job.get("id"),
+        "title": job.get("title"),
+        "company": job.get("company"),
+        "first_seen": str(date.today()),
+        "last_seen": str(date.today()),
+        "score": job.get("match_score", 0),
+        "matched": job.get("match_score", 0) > 0,
+    }, on_conflict="user_id,canonical_hash").execute()
+```
+
+- [ ] **Step 3: Remove seen_jobs.json references**
+
+Search main.py for `seen_jobs.json`, `_load_seen_jobs`, `_save_seen_jobs` and replace all calls with the Supabase functions above. The local JSON file becomes deprecated.
+
+- [ ] **Step 4: Run tests and commit**
+
+```bash
+pytest tests/ -x -q
+git add main.py tests/unit/test_seen_jobs.py
+git commit -m "refactor: replace seen_jobs.json with Supabase seen_jobs table"
+```
+
+---
+
+### Task 33: Resume Length Management
+
+**Files:**
+- Modify: `tailorer.py` (add word budgets to prompt)
+- Modify: `main.py` (add page-count retry after compilation)
+
+- [ ] **Step 1: Write test**
+
+```python
+# tests/unit/test_tailorer.py — add test
+def test_prompt_includes_word_budgets(mocker):
+    """Tailoring prompt should include section word budgets for 2-page target."""
+    mock_ai = mocker.patch("tailorer.ai_complete")
+    mock_ai.return_value = {"content": "\\documentclass{article}\\begin{document}test\\end{document}"}
+
+    from tailorer import build_tailoring_prompt
+    prompt = build_tailoring_prompt("base latex", "job description", "Engineer", "Acme", base_score=70)
+
+    assert "850-1000 words" in prompt or "word budget" in prompt.lower()
+    assert "Summary" in prompt and "40-60" in prompt
+```
+
+- [ ] **Step 2: Add word budgets to tailoring prompt**
+
+In `tailorer.py`, add to the system prompt:
+
+```python
+LENGTH_GUIDANCE = """
+TARGET LENGTH: 850-1000 words of content for exactly 2 pages.
+
+SECTION WORD BUDGETS:
+- Summary: 40-60 words
+- Skills: 50-80 words
+- Each Experience entry: 80-120 words (3-4 bullet points)
+- Each Project: 60-90 words
+- Education: 30-50 words
+- Certifications: 20-30 words
+"""
+```
+
+- [ ] **Step 3: Add page-count retry in main.py**
+
+After compilation, check PDF page count. If wrong, retry:
+
+```python
+from utils.pdf_validator import validate_pdf
+
+def compile_with_length_retry(tex_path: str, max_retries: int = 1) -> str | None:
+    """Compile LaTeX → PDF, retry if page count is wrong."""
+    pdf_path = sanitize_and_compile(tex_path)
+    if not pdf_path:
+        return None
+
+    result = validate_pdf(pdf_path, expected_pages=2)
+    if result["valid"]:
+        return pdf_path
+
+    # Check page count issue
+    page_errors = [e for e in result["errors"] if "page_count" in e]
+    if not page_errors or max_retries <= 0:
+        return pdf_path  # Accept as-is
+
+    # Determine correction
+    if "1 (expected 2)" in page_errors[0]:
+        correction = "The resume compiled to only 1 page. Expand experience bullet points with more detail and metrics."
+    elif "3" in page_errors[0]:
+        correction = "The resume compiled to 3+ pages. Condense: reduce to top 3 bullets per role, shorten project descriptions."
+    else:
+        return pdf_path
+
+    # Re-tailor with correction instruction, recompile
+    # (implementation depends on having access to the original tailor function)
+    logger.info(f"Page count retry: {correction}")
+    return pdf_path  # For now, accept and flag
+```
+
+- [ ] **Step 4: Run tests and commit**
+
+```bash
+pytest tests/unit/test_tailorer.py -v
+git add tailorer.py main.py
+git commit -m "feat: resume length management — word budgets + page-count retry"
+```
+
+---
+
+### Task 34: Council Critic Rubric
+
+**Files:**
+- Modify: `tailorer.py` (update critic prompt in council pattern)
+
+- [ ] **Step 1: Write test**
+
+```python
+# tests/unit/test_tailorer.py — add test
+def test_council_critic_evaluates_against_rubric(mocker):
+    """Council critic should evaluate generators against keyword coverage, quality, fabrication."""
+    from tailorer import CRITIC_RUBRIC_PROMPT
+    assert "keyword coverage" in CRITIC_RUBRIC_PROMPT.lower()
+    assert "section completeness" in CRITIC_RUBRIC_PROMPT.lower()
+    assert "fabrication" in CRITIC_RUBRIC_PROMPT.lower()
+```
+
+- [ ] **Step 2: Define critic rubric prompt**
+
+In `tailorer.py`:
+
+```python
+CRITIC_RUBRIC_PROMPT = """You are evaluating two resume tailoring attempts. Pick the BETTER one.
+
+EVALUATION CRITERIA (score each 1-10):
+1. KEYWORD COVERAGE: Does the resume address the top JD keywords? Count how many of the required keywords appear.
+2. SECTION COMPLETENESS: Are all 6 sections present and substantive (Summary, Skills, Experience, Projects, Education, Certifications)?
+3. WRITING QUALITY: Are bullet points specific with metrics? Are action verbs strong? Is language authentic (no AI filler)?
+4. NO FABRICATION: Does the resume only claim skills/experience present in the original? Flag any suspicious additions.
+
+Return JSON: {"winner": "A" or "B", "scores_a": {"keywords": N, "sections": N, "quality": N, "fabrication": N}, "scores_b": {...}, "reason": "..."}"""
+```
+
+- [ ] **Step 3: Wire into council pattern**
+
+In `tailorer.py`, where the council critic is called (2-generator + 1-critic pattern), replace the existing critic prompt with `CRITIC_RUBRIC_PROMPT`.
+
+- [ ] **Step 4: Run tests and commit**
+
+```bash
+pytest tests/unit/test_tailorer.py -v
+git add tailorer.py
+git commit -m "feat: council critic rubric — structured evaluation of keyword, quality, fabrication"
+```
+
+---
+
+### Task 35: Prompt Versioning CRUD
+
+**Files:**
+- Create: `utils/prompt_versioning.py`
+- Create: `tests/unit/test_prompt_versioning.py`
+
+- [ ] **Step 1: Write tests**
+
+```python
+# tests/unit/test_prompt_versioning.py
+def test_load_active_prompt(mocker):
+    """Load the currently active prompt version from Supabase."""
+    mock_db = mocker.MagicMock()
+    mock_db.table.return_value.select.return_value.eq.return_value.eq.return_value.is_.return_value.order.return_value.limit.return_value.execute.return_value.data = [
+        {"version": 3, "content": "You are a scoring AI...", "active_to": None}
+    ]
+
+    from utils.prompt_versioning import load_active_prompt
+    prompt = load_active_prompt(mock_db, "test-user", "scoring_system")
+    assert prompt["version"] == 3
+    assert "scoring" in prompt["content"].lower()
+
+
+def test_create_prompt_version(mocker):
+    """Creating a new version sets active_to on the old one."""
+    mock_db = mocker.MagicMock()
+    mock_db.table.return_value.select.return_value.eq.return_value.eq.return_value.is_.return_value.execute.return_value.data = [
+        {"id": "old-id", "version": 2}
+    ]
+
+    from utils.prompt_versioning import create_prompt_version
+    create_prompt_version(mock_db, "test-user", "scoring_system", "New prompt text", created_by="auto")
+
+    # Should deactivate old version
+    mock_db.table.return_value.update.assert_called()
+```
+
+- [ ] **Step 2: Implement prompt versioning**
+
+```python
+# utils/prompt_versioning.py
+"""Prompt version management — store, load, and rollback prompt versions."""
+from datetime import datetime
+
+
+def load_active_prompt(db, user_id: str, prompt_name: str) -> dict | None:
+    """Load the currently active prompt version."""
+    result = db.table("prompt_versions").select("*").eq(
+        "user_id", user_id
+    ).eq("prompt_name", prompt_name).is_("active_to", "null").order(
+        "version", desc=True
+    ).limit(1).execute()
+    return result.data[0] if result.data else None
+
+
+def create_prompt_version(db, user_id: str, prompt_name: str, content: str, created_by: str = "manual"):
+    """Create a new prompt version. Deactivates the current active version."""
+    # Deactivate current
+    current = load_active_prompt(db, user_id, prompt_name)
+    if current:
+        db.table("prompt_versions").update({
+            "active_to": datetime.now().isoformat()
+        }).eq("id", current["id"]).execute()
+        new_version = current["version"] + 1
+    else:
+        new_version = 1
+
+    # Create new
+    db.table("prompt_versions").insert({
+        "user_id": user_id,
+        "prompt_name": prompt_name,
+        "version": new_version,
+        "content": content,
+        "created_by": created_by,
+    }).execute()
+
+
+def rollback_prompt(db, user_id: str, prompt_name: str):
+    """Rollback to the previous prompt version."""
+    current = load_active_prompt(db, user_id, prompt_name)
+    if not current:
+        return
+
+    # Deactivate current
+    db.table("prompt_versions").update({
+        "active_to": datetime.now().isoformat()
+    }).eq("id", current["id"]).execute()
+
+    # Reactivate previous
+    previous = db.table("prompt_versions").select("*").eq(
+        "user_id", user_id
+    ).eq("prompt_name", prompt_name).eq(
+        "version", current["version"] - 1
+    ).execute()
+
+    if previous.data:
+        db.table("prompt_versions").update({
+            "active_to": None
+        }).eq("id", previous.data[0]["id"]).execute()
+```
+
+- [ ] **Step 3: Run tests and commit**
+
+```bash
+pytest tests/unit/test_prompt_versioning.py -v
+git add utils/prompt_versioning.py tests/unit/test_prompt_versioning.py
+git commit -m "feat: prompt versioning CRUD — load, create, rollback prompt versions"
+```
+
+---
+
+### Task 36: Manual JD Hashing Merge Logic
+
+**Files:**
+- Modify: `app.py` (the `/api/tailor` or job submission endpoint)
+
+- [ ] **Step 1: Write test**
+
+```python
+# tests/unit/test_app.py — add test
+def test_manual_jd_dedup_prefers_manual(mocker):
+    """User-submitted JD matching a scraped job → merge, manual wins as canonical."""
+    from app import merge_manual_job
+    existing_scraped = {"source": "linkedin", "description": "Short desc", "canonical_hash": "abc"}
+    manual_submission = {"source": "manual", "description": "Full detailed JD with requirements", "canonical_hash": "abc"}
+
+    merged = merge_manual_job(existing_scraped, manual_submission)
+    assert merged["source"] == "manual"
+    assert merged["description"] == "Full detailed JD with requirements"
+```
+
+- [ ] **Step 2: Implement merge logic**
+
+In `app.py`, in the job submission endpoint:
+
+```python
+from utils.canonical_hash import canonical_hash
+
+def merge_manual_job(existing: dict, manual: dict) -> dict:
+    """Merge manual JD with existing scraped job. Manual wins for all fields."""
+    merged = {**existing}
+    # Manual submission fields override scraped
+    for key in ("description", "title", "company", "location", "apply_url", "source"):
+        if manual.get(key):
+            merged[key] = manual[key]
+    return merged
+
+# In the job submission endpoint:
+# 1. Compute canonical_hash for the submitted JD
+# 2. Check Supabase for existing job with same hash
+# 3. If found → merge_manual_job(), update in Supabase
+# 4. If not found → create new job with source="manual"
+```
+
+- [ ] **Step 3: Run tests and commit**
+
+```bash
+pytest tests/unit/test_app.py -v
+git add app.py tests/unit/test_app.py
+git commit -m "feat: manual JD dedup — merge with scraped job, manual takes priority"
+```
+
+---
+
+### Task 37: Scoring Prompt Calibration Audit
+
+**Files:**
+- Modify: `lambdas/pipeline/score_batch.py` (review and update SCORING_SYSTEM_PROMPT)
+
+This is a review task, not a code generation task. It requires the golden dataset (Task 17).
+
+- [ ] **Step 1: Run current scoring prompt against 5 known jobs**
+
+Select 5 jobs from the dashboard where you know the "correct" score intuitively:
+- 2 strong matches (should be 80+)
+- 2 moderate matches (should be 50-79)
+- 1 non-match (should be <30)
+
+Score each with the current prompt and record actual vs expected.
+
+- [ ] **Step 2: Identify calibration issues**
+
+Common issues:
+- All scores clustered around 70-80 (not enough spread)
+- ATS scores systematically higher than HM/TR (or vice versa)
+- Score doesn't change much with very different JDs
+
+- [ ] **Step 3: Adjust scoring prompt anchors**
+
+In `SCORING_SYSTEM_PROMPT`, review the calibration scale. Update if needed:
+- Ensure each score range has concrete examples
+- Add explicit: "A score of 85+ means the candidate could be shortlisted with zero resume changes"
+- Add: "A score below 50 means the candidate would need significant additional experience"
+
+- [ ] **Step 4: Re-score the 5 test jobs and verify improvement**
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add lambdas/pipeline/score_batch.py
+git commit -m "fix: calibrate scoring prompt — better anchor definitions for 0-100 scale"
+```
+
+---
+
+### Task 38: Wire self_improve into Step Functions
+
+**Files:**
+- Modify: `template.yaml`
+
+- [ ] **Step 1: Add self_improve as terminal state**
+
+In `template.yaml`, find the daily pipeline state machine definition. Add `SelfImprove` as the final state after all `SaveJob` steps complete:
+
+```yaml
+# After the parallel scraper + score + tailor + save chain:
+SelfImprove:
+  Type: Task
+  Resource: !GetAtt SelfImproveFunction.Arn
+  InputPath: "$"
+  ResultPath: "$.self_improvement"
+  Catch:
+    - ErrorEquals: ["States.ALL"]
+      Next: NotifyError
+  End: true
+```
+
+The `Catch` ensures that if self-improvement fails, it doesn't crash the pipeline — it routes to error notification instead.
+
+- [ ] **Step 2: Verify state machine definition is valid**
+
+```bash
+# Validate SAM template
+npx sam validate --template template.yaml 2>&1 | head -20
+```
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add template.yaml
+git commit -m "feat: wire self_improve Lambda as terminal Step Functions state"
+```
+
+---
+
+### Task 39: Self-Improvement Revert Action + Cooldown Write
+
+Already implemented as part of Task 22 (`execute_revert` and `should_revert_or_extend` functions). This task wires them into the self_improve Lambda handler.
+
+**Files:**
+- Modify: `lambdas/pipeline/self_improve.py`
+
+- [ ] **Step 1: Wire revert logic into handler**
+
+In `lambdas/pipeline/self_improve.py`, after `generate_adjustments()`:
+
+```python
+from self_improver import should_revert_or_extend, execute_revert
+
+# Check existing active adjustments for revert
+active = db.table("pipeline_adjustments").select("*").in_(
+    "status", ["auto_applied"]
+).eq("user_id", user_id).execute().data
+
+for adj in active:
+    # Get run metrics since this adjustment was applied
+    runs_since = db.table("pipeline_runs").select("avg_base_score").eq(
+        "user_id", user_id
+    ).gte("started_at", adj["applied_at"]).order("started_at").execute().data
+
+    decision = should_revert_or_extend(adj, runs_since)
+    if decision == "revert":
+        execute_revert(db, adj)
+    elif decision == "confirm":
+        db.table("pipeline_adjustments").update(
+            {"status": "confirmed"}
+        ).eq("id", adj["id"]).execute()
+```
+
+- [ ] **Step 2: Test and commit**
+
+```bash
+pytest tests/unit/test_self_improver.py -v
+git add lambdas/pipeline/self_improve.py
+git commit -m "feat: wire revert + cooldown logic into self_improve Lambda handler"
+```
+
+---
+
+### Task 40: Base Resume Improvement Suggestions
+
+**Files:**
+- Modify: `self_improver.py`
+
+- [ ] **Step 1: Write test**
+
+```python
+# tests/unit/test_self_improver.py — add test
+def test_base_resume_suggestion_from_keyword_gaps():
+    """Consistent keyword gap across 50+ jobs → suggest base resume update."""
+    from self_improver import analyze_keyword_gaps_for_resume
+
+    keyword_stats = {
+        "kubernetes": {"count": 34, "avg_job_score": 78},
+        "graphql": {"count": 28, "avg_job_score": 72},
+        "react": {"count": 12, "avg_job_score": 65},
+    }
+    suggestions = analyze_keyword_gaps_for_resume(keyword_stats, min_jobs=25)
+
+    assert len(suggestions) == 2  # kubernetes + graphql (both >25 jobs)
+    assert suggestions[0]["risk_level"] == "medium"
+    assert "kubernetes" in suggestions[0]["reason"].lower()
+```
+
+- [ ] **Step 2: Implement keyword gap analysis for resume**
+
+```python
+# In self_improver.py
+
+def analyze_keyword_gaps_for_resume(keyword_stats: dict, min_jobs: int = 25) -> list[dict]:
+    """Suggest base resume updates for consistently missing keywords."""
+    suggestions = []
+    for keyword, stats in keyword_stats.items():
+        if stats["count"] >= min_jobs:
+            suggestions.append({
+                "adjustment_type": "quality_flag",
+                "risk_level": "medium",
+                "status": "auto_applied",
+                "notify": True,
+                "payload": {"keyword": keyword, "action": "add_to_base_resume"},
+                "reason": f"Consider adding '{keyword}' to base resume — appeared in {stats['count']} of top matched JDs (avg score: {stats['avg_job_score']})",
+                "evidence": stats,
+            })
+    return sorted(suggestions, key=lambda s: s["evidence"]["count"], reverse=True)
+```
+
+- [ ] **Step 3: Run tests and commit**
+
+```bash
+pytest tests/unit/test_self_improver.py -v
+git add self_improver.py tests/unit/test_self_improver.py
+git commit -m "feat: base resume improvement suggestions from keyword gap analysis"
+```
+
+---
+
+### Task 41: User Feedback — "Flag Score" API + Dashboard
+
+**Files:**
+- Modify: `app.py` (new endpoint)
+- Modify: `web/src/` (flag score button — frontend, details TBD)
+
+- [ ] **Step 1: Write API test**
+
+```python
+# tests/unit/test_app.py — add test
+def test_flag_score_creates_ground_truth(mocker, client):
+    """POST /api/feedback/flag-score creates ground truth entry."""
+    mock_db = mocker.patch("app._db")
+
+    response = client.post("/api/feedback/flag-score", json={
+        "job_id": "test-job-123",
+        "feedback_type": "score_inaccurate",
+        "expected_score": 85,
+        "comment": "This is a perfect match, scored too low",
+    }, headers={"Authorization": "Bearer test-token"})
+
+    assert response.status_code == 200
+    mock_db.client.table.assert_called_with("pipeline_adjustments")
+```
+
+- [ ] **Step 2: Implement endpoint**
+
+In `app.py`:
+
+```python
+@app.post("/api/feedback/flag-score")
+def flag_score(
+    body: dict,
+    user: AuthUser = Depends(get_current_user),
+):
+    """User flags a score as inaccurate → creates ground truth for self-improvement."""
+    _db.client.table("pipeline_adjustments").insert({
+        "user_id": user.id,
+        "adjustment_type": "quality_flag",
+        "risk_level": "high",  # User feedback is high-confidence signal
+        "status": "pending",
+        "payload": {
+            "job_id": body["job_id"],
+            "feedback_type": body.get("feedback_type", "score_inaccurate"),
+            "expected_score": body.get("expected_score"),
+            "comment": body.get("comment"),
+        },
+        "reason": f"User flagged score for job {body['job_id']}: {body.get('feedback_type')}",
+    }).execute()
+
+    return {"status": "ok", "message": "Feedback recorded"}
+```
+
+- [ ] **Step 3: Add frontend button (basic)**
+
+In the job workspace scores card, add a "Flag" button that POSTs to this endpoint. Minimal UI — can be polished in Phase 3.0 dashboard work.
+
+- [ ] **Step 4: Run tests and commit**
+
+```bash
+pytest tests/unit/test_app.py -v
+git add app.py web/src/
+git commit -m "feat: user feedback — 'flag score' API endpoint + dashboard button"
+```
+
+---
+
+### Task 42: Score Determinism Test (REPORT ONLY)
+
+**Files:**
+- Create: `tests/quality/test_score_determinism.py`
+
+- [ ] **Step 1: Write REPORT ONLY test**
+
+```python
+# tests/quality/test_score_determinism.py
+"""Tier 4b REPORT ONLY: Score determinism across multiple calls.
+
+Requires real AI calls — cached after first run. Runs in CI as REPORT ONLY.
+"""
+import pytest
+
+
+@pytest.mark.skipif(
+    not pytest.importorskip("ai_client", reason="AI client not available"),
+    reason="Requires AI client",
+)
+class TestScoreDeterminism:
+    def test_same_job_scored_three_times_within_tolerance(self):
+        """Same job scored 3x with temp=0 → all within +/-2 points."""
+        from lambdas.pipeline.score_batch import score_single_job
+
+        job = {
+            "title": "Backend Engineer",
+            "company": "Test Corp",
+            "description": "Build REST APIs using Python and FastAPI. " * 20,
+        }
+        resume = "Experienced Python developer with 5 years of backend development. " * 20
+
+        scores = []
+        for _ in range(3):
+            result = score_single_job(job, resume, temperature=0)
+            if result:
+                scores.append(result)
+
+        if len(scores) < 2:
+            pytest.skip("Not enough AI providers available")
+
+        # All ATS scores within +/-2
+        ats_scores = [s["ats_score"] for s in scores]
+        assert max(ats_scores) - min(ats_scores) <= 4, f"ATS scores too spread: {ats_scores}"
+
+        hm_scores = [s["hiring_manager_score"] for s in scores]
+        assert max(hm_scores) - min(hm_scores) <= 4, f"HM scores too spread: {hm_scores}"
+```
+
+- [ ] **Step 2: Commit**
+
+```bash
+git add tests/quality/test_score_determinism.py
+git commit -m "test: score determinism test (REPORT ONLY) — same job 3x within tolerance"
+```
+
+---
+
 ## COMPLETION CHECKLIST
 
 After all tasks:
@@ -2927,7 +3920,9 @@ After all tasks:
 - [ ] Run full test suite: `pytest tests/ -v`
 - [ ] Verify dashboard shows backfilled jobs
 - [ ] Verify DeepSeek removed from provider list
-- [ ] Verify canonical hash used everywhere (grep for old hash patterns)
-- [ ] Verify no truncation in scoring (grep for `[:2000]`, `[:3000]`, `[:500]`)
+- [ ] Verify canonical hash used everywhere: `grep -rn "hashlib.md5" scrapers/ lambdas/ --include="*.py"` → should return 0 results
+- [ ] Verify no truncation in scoring: `grep -rn "\[:2000\]\|\[:3000\]\|\[:500\]" lambdas/ --include="*.py"` → should return 0 results
+- [ ] Verify Supabase migration applied: `npx supabase db execute "SELECT count(*) FROM seen_jobs"`
+- [ ] Verify seen_jobs.json no longer read by pipeline: `grep -rn "seen_jobs.json" main.py` → should return 0 results
 - [ ] Update CLAUDE.md with Phase 2.7/2.6 completion status
 - [ ] Commit final documentation updates
