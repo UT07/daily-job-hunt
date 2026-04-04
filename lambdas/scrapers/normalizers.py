@@ -22,7 +22,7 @@ def normalize_job(raw: dict, source: str, query_hash: str = "") -> dict:
         "job_hash": job_hash,
         "title": title[:500],
         "company": company[:200],
-        "description": description[:10000],
+        "description": description,
         "location": location[:200],
         "apply_url": apply_url[:1000],
         "source": source,

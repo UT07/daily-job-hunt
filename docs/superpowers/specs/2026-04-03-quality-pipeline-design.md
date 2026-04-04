@@ -42,8 +42,10 @@ with different scores.
 
 **Single canonical hash**:
 ```
-md5(normalize(company) + "|" + normalize(title) + "|" + normalize_whitespace(description).lower())
+md5(normalize(company) + "\0" + normalize_whitespace(title).lower() + "\0" + normalize_whitespace(description).lower())
 ```
+
+Note: separator is `\0` (null byte) not `|` to prevent collisions when company/title contains literal pipe characters (e.g., "Senior Engineer | Platform Team"). Title also passes through whitespace normalization for consistency.
 
 - `normalize()` = lowercase, strip whitespace, strip legal suffixes (Ltd, Inc, GmbH, LLC)
 - `normalize_whitespace()` = collapse whitespace runs to single space, strip leading/trailing

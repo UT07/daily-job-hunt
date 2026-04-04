@@ -67,7 +67,7 @@ def handler(event, context):
             skipped_count += 1
             continue
 
-        score_result = score_single_job(job, resume_tex)
+        score_result = score_single_job_deterministic(job, resume_tex)
 
         if score_result is None:
             continue
@@ -238,7 +238,11 @@ def score_single_job_deterministic(
     if len(all_scores) == 1:
         return all_scores[0]
 
-    return {
+    # Use first result as base for non-numeric fields (reasoning, key_matches,
+    # gaps, provider, model), then overwrite numeric fields with medians so the
+    # result dict keeps the same shape as ``score_single_job``.
+    merged = dict(all_scores[0])
+    merged.update({
         "ats_score": int(statistics.median([s["ats_score"] for s in all_scores])),
         "hiring_manager_score": int(
             statistics.median([s["hiring_manager_score"] for s in all_scores])
@@ -249,7 +253,8 @@ def score_single_job_deterministic(
         "match_score": round(
             statistics.median([s.get("match_score", 0) for s in all_scores]), 1
         ),
-    }
+    })
+    return merged
 
 
 def compute_base_scores(job: dict, base_resume: str) -> dict:

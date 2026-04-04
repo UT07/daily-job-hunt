@@ -367,7 +367,7 @@ class TestScoreBatchJobRecords:
         "job_hash": "abc123",
         "title": "Python Developer",
         "company": "TestCorp",
-        "description": "Build Python APIs.",
+        "description": "Build Python APIs using FastAPI and PostgreSQL. 3+ years of backend experience required. Experience with AWS Lambda and Step Functions a plus.",
         "location": "Dublin",
         "apply_url": "https://testcorp.com/jobs/1",
         "source": "linkedin",
