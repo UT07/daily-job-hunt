@@ -5,7 +5,7 @@ Used everywhere a job hash is computed:
 - scrapers/base.py
 - lambdas/pipeline/merge_dedup.py
 
-Formula: md5(normalize(company) | normalize(title) | normalize_ws(description))
+Formula: md5(normalize(company) \0 normalize(title) \0 normalize_ws(description))
 """
 import hashlib
 import re
@@ -34,9 +34,12 @@ def canonical_hash(company: str, title: str, description: str) -> str:
     Deterministic: same (company, title, description) always produces the same hash
     regardless of whitespace differences, casing, or legal suffixes on company name.
     """
-    parts = "|".join([
+    company = company or ""
+    title = title or ""
+    description = description or ""
+    parts = "\0".join([
         normalize_company(company),
-        title.strip().lower(),
+        normalize_whitespace(title).lower(),
         normalize_whitespace(description).lower(),
     ])
     return hashlib.md5(parts.encode()).hexdigest()[:12]

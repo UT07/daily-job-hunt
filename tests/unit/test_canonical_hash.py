@@ -70,3 +70,12 @@ class TestCanonicalHash:
         h1 = canonical_hash("Acme", "Engineer", "Build APIs")
         h2 = canonical_hash("Acme", "Engineer", "Build APIs")
         assert h1 == h2
+
+    def test_handles_none_inputs(self):
+        h = canonical_hash(None, None, None)
+        assert len(h) == 12
+
+    def test_title_whitespace_normalization(self):
+        h1 = canonical_hash("Acme", "Backend  Engineer", "desc")
+        h2 = canonical_hash("Acme", "Backend Engineer", "desc")
+        assert h1 == h2
