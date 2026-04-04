@@ -23,6 +23,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+CRITIC_RUBRIC_PROMPT = """You are evaluating two resume tailoring attempts. Pick the BETTER one.
+
+EVALUATION CRITERIA (score each 1-10):
+1. KEYWORD COVERAGE: Does the resume address the top JD keywords? Count how many of the required keywords appear.
+2. SECTION COMPLETENESS: Are all 6 sections present and substantive (Summary, Skills, Experience, Projects, Education, Certifications)?
+3. WRITING QUALITY: Are bullet points specific with metrics? Are action verbs strong? Is language authentic (no AI filler)?
+4. NO FABRICATION: Does the resume only claim skills/experience present in the original? Flag any suspicious additions.
+
+Return JSON: {"winner": "A" or "B", "scores_a": {"keywords": N, "sections": N, "quality": N, "fabrication": N}, "scores_b": {...}, "reason": "..."}"""
+
 LENGTH_GUIDANCE = """
 TARGET LENGTH: 850-1000 words of content for exactly 2 pages.
 
@@ -240,7 +250,7 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
                 system=system_prompt,
                 n_generators=2,
                 n_critics=1,
-                task_description=f"Tailor LaTeX resume for {job.title} at {job.company}",
+                task_description=CRITIC_RUBRIC_PROMPT,
                 temperature=0.3,
                 cache_extra=resume_hash,
             )
@@ -430,7 +440,7 @@ Return ONLY valid JSON with the same keys. No markdown, no explanation."""
                 system=TAILOR_TEXT_SYSTEM_PROMPT,
                 n_generators=2,
                 n_critics=1,
-                task_description=f"Tailor resume sections (JSON) for {job.title} at {job.company}",
+                task_description=CRITIC_RUBRIC_PROMPT,
                 temperature=0.3,
                 cache_extra=sections_hash,
             )

@@ -20,6 +20,7 @@ Endpoints:
 - POST /api/resumes/upload          — upload PDF resume
 - GET  /api/resumes                 — list resumes
 - DELETE /api/resumes/{id}          — delete resume
+- POST /api/feedback/flag-score     — flag a score as inaccurate
 - POST /api/gdpr/consent            — record GDPR consent
 - GET  /api/gdpr/export             — export user data (Article 15)
 - DELETE /api/gdpr/delete           — request deletion
@@ -70,6 +71,7 @@ from s3_uploader import upload_file as s3_upload_file
 from matcher import match_jobs
 from resume_scorer import score_and_improve
 from tailorer import tailor_resume
+from utils.canonical_hash import canonical_hash
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +218,13 @@ class Contact(BaseModel):
 
 class ContactsResponse(BaseModel):
     contacts: list[Contact]
+
+
+class FlagScoreRequest(BaseModel):
+    job_id: str = Field(..., min_length=1, description="ID of the job whose score is being flagged")
+    feedback_type: str = Field("score_inaccurate", description="Type of feedback")
+    expected_score: Optional[int] = Field(None, ge=0, le=100, description="What the user thinks the score should be")
+    comment: Optional[str] = Field(None, max_length=1000, description="Free-text explanation")
 
 
 class ProfileResponse(BaseModel):
@@ -427,41 +436,67 @@ def get_task(task_id: str, user: AuthUser = Depends(get_current_user)):
 # SQS task dispatch + processing
 # ---------------------------------------------------------------------------
 
+def merge_manual_job(existing: dict, manual: dict) -> dict:
+    """Merge manual JD with existing scraped job. Manual wins for all fields."""
+    merged = {**existing}
+    for key in ("description", "title", "company", "location", "apply_url", "source"):
+        if manual.get(key):
+            merged[key] = manual[key]
+    return merged
+
+
 def _find_or_create_job(user_id: str, payload: dict) -> str:
-    """Check if job exists in Supabase by company+title. Create if not. Return job_id."""
+    """Check if job exists in Supabase by canonical hash. Merge if found, create if not. Return job_id."""
     if not _db:
         return ""
     company = payload.get("company", "Unknown")
     title = payload.get("job_title", "Software Engineer")
     description = payload.get("job_description", "")
-    # Check for existing job with same company+title for this user
-    try:
-        result = _db.client.table("jobs").select("job_id,description").eq("user_id", user_id).ilike("company", company).ilike("title", title).execute()
-        if result.data:
-            # Compare descriptions — same company+title but different JD = different job
-            from difflib import SequenceMatcher
-            for existing in result.data:
-                existing_desc = existing.get("description") or ""
-                if not existing_desc or not description:
-                    # If either has no description, match on company+title alone
-                    return existing["job_id"]
-                similarity = SequenceMatcher(None, description[:500], existing_desc[:500]).ratio()
-                if similarity > 0.6:
-                    return existing["job_id"]
-            # All matches had different JDs — this is a new job
-    except Exception as e:
-        logger.warning(f"Job lookup failed: {e}")
 
-    # Create new job entry
+    # Compute canonical hash for dedup
+    chash = canonical_hash(company, title, description)
+
+    # Look up by canonical_hash for this user
+    try:
+        result = (
+            _db.client.table("jobs")
+            .select("*")
+            .eq("user_id", user_id)
+            .eq("canonical_hash", chash)
+            .maybe_single()
+            .execute()
+        )
+        if result and result.data:
+            # Found existing job — merge manual data (manual wins)
+            existing = result.data
+            manual_data = {
+                "description": description,
+                "title": title,
+                "company": company,
+                "source": "manual",
+            }
+            merged = merge_manual_job(existing, manual_data)
+            # Update the existing row with merged data
+            _db.client.table("jobs").update({
+                "description": merged["description"],
+                "title": merged["title"],
+                "company": merged["company"],
+                "source": merged["source"],
+            }).eq("job_id", existing["job_id"]).execute()
+            logger.info("Merged manual JD into existing job %s (hash=%s)", existing["job_id"], chash)
+            return existing["job_id"]
+    except Exception as e:
+        logger.warning("Job lookup by canonical_hash failed: %s", e)
+
+    # No match — create new job entry
     import datetime
-    import hashlib
-    job_id = hashlib.md5(f"{company}:{title}:{user_id}".encode()).hexdigest()[:12]
     row = {
-        "job_id": job_id,
+        "job_id": chash,
         "user_id": user_id,
+        "canonical_hash": chash,
         "title": title,
         "company": company,
-        "description": payload.get("job_description", ""),
+        "description": description,
         "source": "manual",
         "application_status": "New",
         "first_seen": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -469,8 +504,8 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
     try:
         _db.client.table("jobs").insert(row).execute()
     except Exception as e:
-        logger.warning(f"Job creation failed: {e}")
-    return job_id
+        logger.warning("Job creation failed: %s", e)
+    return chash
 
 
 def _update_job_artifacts(job_id: str, updates: dict):
@@ -1256,6 +1291,36 @@ def delete_resume(resume_id: str, user: AuthUser = Depends(get_current_user)):
     except ValueError:
         raise HTTPException(404, "Resume not found")
     return {"status": "deleted"}
+
+
+# ---------------------------------------------------------------------------
+# Feedback endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/feedback/flag-score")
+def flag_score(req: FlagScoreRequest, user: AuthUser = Depends(get_current_user)):
+    """User flags a score as inaccurate -- creates ground truth for self-improvement."""
+    if not _db:
+        raise HTTPException(503, "Database not configured")
+    try:
+        _db.client.table("pipeline_adjustments").insert({
+            "user_id": user.id,
+            "adjustment_type": "quality_flag",
+            "risk_level": "high",
+            "status": "pending",
+            "payload": {
+                "job_id": req.job_id,
+                "feedback_type": req.feedback_type,
+                "expected_score": req.expected_score,
+                "comment": req.comment,
+            },
+            "reason": f"User flagged score for job {req.job_id}: {req.feedback_type}",
+        }).execute()
+    except Exception as e:
+        logger.error("Failed to record score feedback: %s", e)
+        raise HTTPException(500, "Failed to record feedback")
+    return {"status": "ok", "message": "Feedback recorded"}
 
 
 # ---------------------------------------------------------------------------

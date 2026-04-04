@@ -584,20 +584,22 @@ def upsert_seen_job(db, user_id: str, job: dict, canonical_hash: str):
     db.client.table("seen_jobs").upsert({
         "user_id": user_id,
         "canonical_hash": canonical_hash,
-        "job_id": job.get("id", job.get("job_id")),
+        "job_id": job.get("id", job.get("job_id", "")),
         "title": job.get("title"),
         "company": job.get("company"),
         "first_seen": str(date.today()),
         "last_seen": str(date.today()),
         "score": job.get("match_score", 0),
-        "matched": job.get("match_score", 0) > 0,
+        "matched": (job.get("match_score", 0) or 0) > 0,
     }, on_conflict="user_id,canonical_hash").execute()
 
 
 def _load_seen_jobs(path: Path) -> dict:
     """Load seen_jobs.json — {job_id: {first_seen, last_seen, score}}.
 
-    Legacy fallback used when Supabase is not available.
+    .. deprecated::
+        Legacy fallback used when Supabase is not available.
+        Prefer ``check_seen_job()`` / ``upsert_seen_job()`` with Supabase.
     """
     if path.exists():
         try:
@@ -609,7 +611,11 @@ def _load_seen_jobs(path: Path) -> dict:
 
 
 def _save_seen_jobs(seen: dict, path: Path):
-    """Save seen_jobs.json. Legacy fallback."""
+    """Save seen_jobs.json.
+
+    .. deprecated::
+        Legacy fallback. Prefer ``upsert_seen_job()`` with Supabase.
+    """
     with open(path, "w") as f:
         json.dump(seen, f, indent=2)
 
@@ -939,10 +945,16 @@ def _run_pipeline_body(context, config, run_date, run_record, dry_run, scrape_on
     logger.info(f"Unique jobs: {len(unique_jobs)} (removed {len(raw_jobs) - len(unique_jobs)} dupes)")
 
     # --- Step 3b: Filter already-seen jobs ---
-    seen_path = base_dir / "seen_jobs.json"
-    seen_jobs = _load_seen_jobs(seen_path)
-    new_jobs = _filter_new_jobs(unique_jobs, seen_jobs, run_date)
-    _save_seen_jobs(seen_jobs, seen_path)
+    if context.db and context.user:
+        # Supabase path — single source of truth
+        new_jobs = _filter_new_jobs_supabase(unique_jobs, context.db, context.user.id, run_date)
+        seen_jobs = None  # not used in Supabase path
+    else:
+        # Legacy JSON fallback
+        seen_path = base_dir / "seen_jobs.json"
+        seen_jobs = _load_seen_jobs(seen_path)
+        new_jobs = _filter_new_jobs(unique_jobs, seen_jobs, run_date)
+        _save_seen_jobs(seen_jobs, seen_path)
     logger.info(f"New jobs: {len(new_jobs)} (already seen: {len(unique_jobs) - len(new_jobs)})")
 
     if scrape_only:
@@ -988,11 +1000,20 @@ def _run_pipeline_body(context, config, run_date, run_record, dry_run, scrape_on
     logger.info(f"Matched jobs (avg >= {min_score}): {len(matched_jobs)}")
 
     # Update seen_jobs with match scores
-    for job in matched_jobs:
-        if job.job_id in seen_jobs:
-            seen_jobs[job.job_id]["score"] = job.match_score
-            seen_jobs[job.job_id]["matched"] = True
-    _save_seen_jobs(seen_jobs, seen_path)
+    if context.db and context.user:
+        # Supabase path — upsert each matched job's score
+        for job in matched_jobs:
+            try:
+                upsert_seen_job(context.db, context.user.id, job.to_dict(), job.job_id)
+            except Exception as e:
+                logger.warning(f"[DB] Failed to update seen_job score for {job.job_id}: {e}")
+    elif seen_jobs is not None:
+        # Legacy JSON fallback
+        for job in matched_jobs:
+            if job.job_id in seen_jobs:
+                seen_jobs[job.job_id]["score"] = job.match_score
+                seen_jobs[job.job_id]["matched"] = True
+        _save_seen_jobs(seen_jobs, base_dir / "seen_jobs.json")
 
     # --- Step 4b: Upsert matched jobs to Supabase ---
     if context.db and matched_jobs:

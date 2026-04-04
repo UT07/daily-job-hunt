@@ -71,3 +71,16 @@ class TestShouldTailor:
 
     def test_allows_no_score_status(self):
         assert should_tailor({"title": "SRE", "company": "Acme"}) is True
+
+
+class TestCriticRubricPrompt:
+    def test_critic_rubric_prompt_exists(self):
+        from tailorer import CRITIC_RUBRIC_PROMPT
+        assert "keyword coverage" in CRITIC_RUBRIC_PROMPT.lower()
+        assert "section completeness" in CRITIC_RUBRIC_PROMPT.lower()
+        assert "fabrication" in CRITIC_RUBRIC_PROMPT.lower()
+
+    def test_critic_rubric_expects_json(self):
+        from tailorer import CRITIC_RUBRIC_PROMPT
+        assert "winner" in CRITIC_RUBRIC_PROMPT
+        assert "scores_a" in CRITIC_RUBRIC_PROMPT

@@ -76,20 +76,88 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
 
-  ai-quality:
+  # === Quality Pipeline: MUST PASS jobs ===
+  data-quality-tests:
+    name: "Tier 4b: Data Quality"
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r tests/requirements-test.txt
-      - run: pytest tests/quality/ -v --tb=short -m quality || true
-        env:
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      - run: pip install -r requirements.txt -r tests/requirements-test.txt
+      - run: pytest tests/quality/test_data_quality.py -v --tb=short
+
+  writing-quality-tests:
+    name: "Tier 4c: Writing Quality (structural)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt -r tests/requirements-test.txt
+      - run: pytest tests/quality/test_writing_quality.py -v --tb=short
+
+  self-improvement-tests:
+    name: "Tier 4d: Self-Improvement"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt -r tests/requirements-test.txt
+      - run: pytest tests/quality/test_self_improvement.py -v --tb=short
+
+  # === Quality Pipeline: REPORT ONLY jobs (don't block PRs) ===
+  score-determinism:
+    name: "Score Determinism (REPORT)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt -r tests/requirements-test.txt
+      - run: pytest tests/quality/test_score_determinism.py -v --tb=short || true
+
+  ai-quality-golden:
+    name: "AI Quality Golden Dataset (REPORT)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt -r tests/requirements-test.txt
+      - run: pytest tests/quality/test_scoring_quality.py -v --tb=short || true
+
+  conflict-detection:
+    name: "Conflict Detection (REPORT)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt -r tests/requirements-test.txt
+      - run: pytest tests/quality/test_self_improvement.py::TestConflictDetection -v --tb=short || true
 
   e2e-tests:
     runs-on: ubuntu-latest
