@@ -612,6 +612,35 @@ Resources:
                   - !GetAtt SelfImproveFunction.Arn
                   - !GetAtt NotifyErrorFunction.Arn
                   - !GetAtt CheckExpiryFunction.Arn
+        - PolicyName: RunFargateTasks
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecs:RunTask
+                Resource: !Ref PlaywrightTaskDef
+              - Effect: Allow
+                Action: ecs:StopTask
+                Resource: !Sub "arn:aws:ecs:${AWS::Region}:${AWS::AccountId}:task/naukribaba-scrapers/*"
+              - Effect: Allow
+                Action:
+                  - ecs:DescribeTasks
+                  - ecs:StopTask
+                Resource: "*"
+                Condition:
+                  ArnEquals:
+                    ecs:cluster: !GetAtt ScraperCluster.Arn
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !GetAtt FargateExecutionRole.Arn
+                  - !GetAtt FargateTaskRole.Arn
+              - Effect: Allow
+                Action:
+                  - events:PutTargets
+                  - events:PutRule
+                  - events:DescribeRule
+                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForECSTaskRule"
 
   # --- Daily Pipeline State Machine ---
   # NOTE (2026-04-01): Jobs.ie, IrishJobs, and GradIreland have NO existing Apify actors.
@@ -748,24 +777,43 @@ Resources:
                   }
                 },
                 {
-                  "StartAt": "ScrapeGlassdoor",
+                  "Comment": "Glassdoor requires JS rendering — runs on Fargate with Scrapling/Playwright",
+                  "StartAt": "ScrapeGlassdoorFargate",
                   "States": {
-                    "ScrapeGlassdoor": {
+                    "ScrapeGlassdoorFargate": {
                       "Type": "Task",
-                      "Resource": "${ScrapeGlassdoorFunction.Arn}",
+                      "Resource": "arn:aws:states:::ecs:runTask.sync",
                       "Parameters": {
-                        "queries.$": "$.queries",
-                        "location": "Ireland",
-                        "query_hash.$": "$.query_hash",
-                        "max_jobs": 30
+                        "LaunchType": "FARGATE",
+                        "Cluster": "${ScraperCluster.Arn}",
+                        "TaskDefinition": "${PlaywrightTaskDef}",
+                        "NetworkConfiguration": {
+                          "AwsvpcConfiguration": {
+                            "Subnets": ["subnet-0a1b2c3d4e5f6a7b8"],
+                            "SecurityGroups": ["${ScraperSecurityGroup.GroupId}"],
+                            "AssignPublicIp": "ENABLED"
+                          }
+                        },
+                        "Overrides": {
+                          "ContainerOverrides": [{
+                            "Name": "scraper",
+                            "Environment": [
+                              {"Name": "SCRAPER_SOURCE", "Value": "glassdoor"},
+                              {"Name": "SCRAPE_LOCATION", "Value": "Ireland"},
+                              {"Name": "PIPELINE_RUN_ID", "Value.$": "$.pipeline_run_id"},
+                              {"Name": "QUERY_HASH", "Value.$": "$.query_hash"}
+                            ]
+                          }]
+                        }
                       },
-                      "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 2, "BackoffRate": 2}],
+                      "TimeoutSeconds": 600,
+                      "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 60, "MaxAttempts": 1, "BackoffRate": 2}],
                       "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "GlassdoorFailed"}],
                       "End": true
                     },
                     "GlassdoorFailed": {
                       "Type": "Pass",
-                      "Result": {"count": 0, "source": "glassdoor", "error": "scraper_failed"},
+                      "Result": {"count": 0, "source": "glassdoor", "error": "fargate_task_failed"},
                       "End": true
                     }
                   }
