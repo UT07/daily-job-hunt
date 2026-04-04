@@ -1,4 +1,5 @@
 """Unit tests for merge_dedup Lambda."""
+from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
 
 
@@ -178,3 +179,119 @@ def test_prefilter_rejects_short_descriptions():
 
     assert result["total_new"] == 0
     assert result["filtered_out"] == 1
+
+
+# ── should_skip_cross_run tests ──
+
+
+def test_should_skip_cross_run_recent_job():
+    """Job scored 3 days ago should be skipped (within 7-day window)."""
+    import merge_dedup
+    scored_at = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    existing = {"scored_at": scored_at}
+    assert merge_dedup.should_skip_cross_run(existing) is True
+
+
+def test_should_skip_cross_run_old_job():
+    """Job scored 8 days ago should NOT be skipped (outside 7-day window)."""
+    import merge_dedup
+    scored_at = (datetime.now(timezone.utc) - timedelta(days=8)).isoformat()
+    existing = {"scored_at": scored_at}
+    assert merge_dedup.should_skip_cross_run(existing) is False
+
+
+def test_should_skip_cross_run_no_existing():
+    """No existing job returns False."""
+    import merge_dedup
+    assert merge_dedup.should_skip_cross_run(None) is False
+
+
+def test_should_skip_cross_run_no_scored_at():
+    """Existing job with no scored_at returns False."""
+    import merge_dedup
+    existing = {"title": "Engineer"}
+    assert merge_dedup.should_skip_cross_run(existing) is False
+
+
+def test_should_skip_cross_run_z_suffix():
+    """scored_at with Z suffix is parsed correctly."""
+    import merge_dedup
+    scored_at = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    existing = {"scored_at": scored_at}
+    assert merge_dedup.should_skip_cross_run(existing) is True
+
+
+def test_should_skip_cross_run_custom_max_age():
+    """Custom max_age_days is respected."""
+    import merge_dedup
+    scored_at = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    existing = {"scored_at": scored_at}
+    # 3 days old, max_age=2 -> should NOT skip
+    assert merge_dedup.should_skip_cross_run(existing, max_age_days=2) is False
+    # 3 days old, max_age=5 -> should skip
+    assert merge_dedup.should_skip_cross_run(existing, max_age_days=5) is True
+
+
+# ── cross_run_check tests ──
+
+
+def test_cross_run_check_reuses_artifacts_for_recent_job():
+    """Recent job returns skip_scoring=True with all artifact fields populated."""
+    import merge_dedup
+    scored_at = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+    existing = {
+        "scored_at": scored_at,
+        "base_ats_score": 85,
+        "base_hm_score": 80,
+        "base_tr_score": 78,
+        "tailored_ats_score": 92,
+        "tailored_hm_score": 88,
+        "tailored_tr_score": 90,
+        "resume_s3_url": "s3://bucket/resume.pdf",
+        "cover_letter_s3_url": "s3://bucket/cover.pdf",
+        "writing_quality_score": 87,
+    }
+    result = merge_dedup.cross_run_check(existing)
+    assert result["skip_scoring"] is True
+    assert result["skip_tailoring"] is True
+    assert result["reuse_artifacts"]["base_ats_score"] == 85
+    assert result["reuse_artifacts"]["tailored_ats_score"] == 92
+    assert result["reuse_artifacts"]["resume_s3_url"] == "s3://bucket/resume.pdf"
+    assert result["reuse_artifacts"]["cover_letter_s3_url"] == "s3://bucket/cover.pdf"
+    assert result["reuse_artifacts"]["writing_quality_score"] == 87
+
+
+def test_cross_run_check_does_not_skip_old_job():
+    """Old job (>7 days) returns skip_scoring=False with empty artifacts."""
+    import merge_dedup
+    scored_at = (datetime.now(timezone.utc) - timedelta(days=10)).isoformat()
+    existing = {
+        "scored_at": scored_at,
+        "base_ats_score": 85,
+        "resume_s3_url": "s3://bucket/resume.pdf",
+    }
+    result = merge_dedup.cross_run_check(existing)
+    assert result["skip_scoring"] is False
+    assert result["skip_tailoring"] is False
+    assert result["reuse_artifacts"] == {}
+
+
+def test_cross_run_check_no_existing_job():
+    """None existing job returns skip_scoring=False."""
+    import merge_dedup
+    result = merge_dedup.cross_run_check(None)
+    assert result["skip_scoring"] is False
+    assert result["skip_tailoring"] is False
+    assert result["reuse_artifacts"] == {}
+
+
+def test_cross_run_check_missing_artifact_fields():
+    """Recent job with missing artifact fields returns None for those keys."""
+    import merge_dedup
+    scored_at = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+    existing = {"scored_at": scored_at, "base_ats_score": 75}
+    result = merge_dedup.cross_run_check(existing)
+    assert result["skip_scoring"] is True
+    assert result["reuse_artifacts"]["base_ats_score"] == 75
+    assert result["reuse_artifacts"]["resume_s3_url"] is None
+    assert result["reuse_artifacts"]["writing_quality_score"] is None

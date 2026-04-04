@@ -6,7 +6,7 @@ pre-filter before passing job hashes to score_batch.
 """
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 
 import boto3
@@ -84,6 +84,38 @@ def _richness_score(job: dict) -> tuple:
     field_count = sum(1 for v in job.values() if v is not None and v != "")
     last_seen = job.get("last_seen", "") or job.get("scraped_at", "") or ""
     return (desc_len, field_count, last_seen)
+
+
+def should_skip_cross_run(existing_job: dict | None, max_age_days: int = 7) -> bool:
+    """Check if job was scored recently enough to skip re-scoring."""
+    if not existing_job:
+        return False
+    scored_at = existing_job.get("scored_at")
+    if not scored_at:
+        return False
+    scored_dt = datetime.fromisoformat(scored_at.replace("Z", "+00:00"))
+    return (datetime.now(scored_dt.tzinfo) - scored_dt) < timedelta(days=max_age_days)
+
+
+def cross_run_check(existing_job: dict | None, max_age_days: int = 7) -> dict:
+    """Check if job was recently processed. Returns reuse instructions."""
+    if not existing_job or not should_skip_cross_run(existing_job, max_age_days):
+        return {"skip_scoring": False, "skip_tailoring": False, "reuse_artifacts": {}}
+    return {
+        "skip_scoring": True,
+        "skip_tailoring": True,
+        "reuse_artifacts": {
+            "base_ats_score": existing_job.get("base_ats_score"),
+            "base_hm_score": existing_job.get("base_hm_score"),
+            "base_tr_score": existing_job.get("base_tr_score"),
+            "tailored_ats_score": existing_job.get("tailored_ats_score"),
+            "tailored_hm_score": existing_job.get("tailored_hm_score"),
+            "tailored_tr_score": existing_job.get("tailored_tr_score"),
+            "resume_s3_url": existing_job.get("resume_s3_url"),
+            "cover_letter_s3_url": existing_job.get("cover_letter_s3_url"),
+            "writing_quality_score": existing_job.get("writing_quality_score"),
+        },
+    }
 
 
 def _prefilter_job(job: dict, user_skills: set) -> tuple[bool, str]:

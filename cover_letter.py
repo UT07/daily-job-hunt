@@ -8,16 +8,48 @@ import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional, TYPE_CHECKING
+from typing import Dict, List, Optional, TYPE_CHECKING
 from scrapers.base import Job
 from ai_client import AIClient
 import google_docs_client
 from quality_logger import log_quality
+from utils.keyword_extractor import extract_keywords
 
 if TYPE_CHECKING:
     from user_profile import UserProfile
 
 logger = logging.getLogger(__name__)
+
+
+# ── Cover letter validation ────────────────────────────────────────────
+
+BANNED_PHRASES = [
+    "i am excited", "leverage", "passionate", "synergy", "aligns with",
+    "keen to", "eager to", "i am writing to", "thrilled", "delighted",
+    "dynamic team",
+]
+
+DASH_PATTERN = re.compile(r"[–—]|--")
+
+
+def validate_cover_letter(text: str) -> dict:
+    """Validate cover letter content. Returns {valid: bool, errors: list, word_count: int}."""
+    errors: List[str] = []
+    words = text.split()
+    word_count = len(words)
+
+    if word_count < 280 or word_count > 380:
+        errors.append(f"word_count: {word_count} (expected 280-380)")
+
+    text_lower = text.lower()
+    for phrase in BANNED_PHRASES:
+        if phrase in text_lower:
+            errors.append(f"banned_phrase: '{phrase}'")
+
+    if DASH_PATTERN.search(text):
+        errors.append("dashes: em-dash, en-dash, or double hyphen found")
+
+    return {"valid": len(errors) == 0, "errors": errors, "word_count": word_count}
 
 
 COVER_LETTER_SYSTEM_PROMPT = r"""You are writing a cover letter as a real person. Not an AI. A human engineer who gets straight to the point.
@@ -242,6 +274,15 @@ def generate_cover_letter(
         cl_template = COVER_LETTER_TEMPLATE
         name_prefix = "Utkarsh_Singh"
 
+    # Extract top keywords from JD so the cover letter references key requirements
+    jd_keywords = extract_keywords(job.description, max_keywords=8)
+    keyword_hint = ""
+    if jd_keywords:
+        keyword_hint = (
+            "\n\nKEY JD REQUIREMENTS (naturally weave these into the letter where relevant, "
+            "do NOT list them):\n" + ", ".join(jd_keywords)
+        )
+
     user_prompt = f"""Write a cover letter for this job application:
 
 JOB LISTING:
@@ -257,7 +298,7 @@ CANDIDATE'S RESUME (for reference — use real details only):
 {resume_tex[:4000]}
 
 CANDIDATE INFO:
-{candidate_info}
+{candidate_info}{keyword_hint}
 
 Write ONLY the body paragraphs of the cover letter (3-4 paragraphs).
 Do NOT include the header, date, salutation, or closing — I'll add those from my template.
@@ -266,29 +307,78 @@ Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
     try:
         # Use council if available (3 models generate, 2 critique, best wins)
         use_council = hasattr(ai_client, 'council_complete') and len(getattr(ai_client, 'providers', [])) >= 3
-        if use_council:
-            logger.info(f"[COVER LETTER] Using council for {job.company}")
-            body_text = ai_client.council_complete(
-                prompt=user_prompt,
-                system=COVER_LETTER_SYSTEM_PROMPT,
-                n_generators=2,
-                n_critics=1,
-                task_description=f"Write cover letter body for {job.title} at {job.company}",
-                temperature=0.7,
-                skip_cache=True,
+
+        def _generate_body(prompt: str) -> str:
+            """Generate cover letter body text via AI, returns raw text."""
+            if use_council:
+                logger.info(f"[COVER LETTER] Using council for {job.company}")
+                text = ai_client.council_complete(
+                    prompt=prompt,
+                    system=COVER_LETTER_SYSTEM_PROMPT,
+                    n_generators=2,
+                    n_critics=1,
+                    task_description=f"Write cover letter body for {job.title} at {job.company}",
+                    temperature=0.7,
+                    skip_cache=True,
+                )
+                job.cover_letter_provider = "council"
+                job.cover_letter_model = "consensus"
+            else:
+                info = ai_client.complete_with_info(
+                    prompt=prompt,
+                    system=COVER_LETTER_SYSTEM_PROMPT,
+                    temperature=0.7,
+                    skip_cache=True,
+                )
+                text = info["response"].strip()
+                job.cover_letter_provider = info["provider"]
+                job.cover_letter_model = info["model"]
+            return text
+
+        # Generate with validation + retry (max 2 retries)
+        body_text = _generate_body(user_prompt)
+        best_body = body_text
+        best_errors: List[str] = []
+
+        validation = validate_cover_letter(body_text)
+        if not validation["valid"]:
+            best_errors = validation["errors"]
+            logger.warning(
+                f"[COVER LETTER] Validation failed for {job.company}: {validation['errors']}"
             )
-            job.cover_letter_provider = "council"
-            job.cover_letter_model = "consensus"
-        else:
-            info = ai_client.complete_with_info(
-                prompt=user_prompt,
-                system=COVER_LETTER_SYSTEM_PROMPT,
-                temperature=0.7,
-                skip_cache=True,
+            for retry in range(2):
+                correction_lines = "\n".join(f"- FIX: {e}" for e in validation["errors"])
+                retry_prompt = (
+                    user_prompt
+                    + f"\n\nYour previous attempt had these problems:\n{correction_lines}"
+                    + "\nPlease fix ALL of them in this attempt. Return ONLY the corrected body paragraphs."
+                )
+                body_text = _generate_body(retry_prompt)
+                validation = validate_cover_letter(body_text)
+
+                if validation["valid"]:
+                    best_body = body_text
+                    best_errors = []
+                    logger.info(
+                        f"[COVER LETTER] Validation passed on retry {retry + 1} for {job.company}"
+                    )
+                    break
+                else:
+                    # Keep the attempt with fewer errors
+                    if len(validation["errors"]) < len(best_errors):
+                        best_body = body_text
+                        best_errors = validation["errors"]
+                    logger.warning(
+                        f"[COVER LETTER] Retry {retry + 1} still invalid for {job.company}: "
+                        f"{validation['errors']}"
+                    )
+
+        if best_errors:
+            logger.warning(
+                f"[COVER LETTER] Accepting best attempt for {job.company} with issues: {best_errors}"
             )
-            body_text = info["response"].strip()
-            job.cover_letter_provider = info["provider"]
-            job.cover_letter_model = info["model"]
+
+        body_text = best_body
 
         # Escape LaTeX special characters in the body text
         body_text = body_text.replace("&", r"\&")

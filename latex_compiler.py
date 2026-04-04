@@ -10,6 +10,38 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+#  LaTeX command whitelist — known-good commands for resume/cover-letter PDFs
+# ---------------------------------------------------------------------------
+
+KNOWN_COMMANDS = {
+    "documentclass", "begin", "end", "usepackage", "newcommand", "renewcommand",
+    "textbf", "textit", "emph", "underline", "textsc", "textrm", "textsf", "texttt",
+    "section", "subsection", "subsubsection", "paragraph",
+    "item", "hfill", "vspace", "hspace", "noindent", "centering",
+    "small", "footnotesize", "large", "Large", "huge", "Huge",
+    "href", "url", "color", "textcolor",
+    "includegraphics", "input", "include",
+    "setlength", "addtolength", "emergencystretch",
+    "pagestyle", "thispagestyle", "fancyhf", "fancyhead", "fancyfoot",
+    "geometry", "setmainfont", "setsansfont", "setmonofont",
+    "faIcon", "faLinkedin", "faGithub", "faEnvelope", "faPhone", "faMapMarker",
+    "raisebox", "makebox", "mbox", "parbox", "minipage",
+    "tabularx", "multicolumn", "cline", "hline", "toprule", "midrule", "bottomrule",
+    "newpage", "clearpage", "pagebreak",
+}
+
+
+def validate_latex_commands(content: str) -> list[str]:
+    """Check for LaTeX commands not in the whitelist. Returns list of warnings."""
+    commands = re.findall(r"\\([a-zA-Z]+)", content)
+    unknown = set()
+    for cmd in commands:
+        if cmd not in KNOWN_COMMANDS:
+            unknown.add(cmd)
+    return [f"Unknown LaTeX command: \\{cmd}" for cmd in sorted(unknown)]
+
+
 # LaTeX table environments where & is a legitimate column separator
 _TABLE_ENVS = {"tabular", "tabularx", "longtable"}
 
@@ -154,37 +186,68 @@ def _split_comment(line: str) -> tuple[str, str | None]:
     return line, None
 
 
-def _check_brace_balance(tex: str, filename: str = "") -> bool:
-    """Check that braces are balanced in LaTeX source.
+def check_brace_balance(content: str) -> bool:
+    """Hard gate: return False if braces are unbalanced.
 
-    Logs a warning and returns False if unbalanced. Ignores escaped braces (\\{ \\}).
+    Skips escaped braces (\\{ and \\}).
     """
     depth = 0
     i = 0
-    while i < len(tex):
-        ch = tex[i]
-        if ch == '\\':
-            i += 2  # skip the escaped character
+    while i < len(content):
+        if content[i] == '\\' and i + 1 < len(content) and content[i + 1] in '{}':
+            i += 2  # Skip escaped braces
             continue
-        if ch == '{':
+        if content[i] == '{':
             depth += 1
-        elif ch == '}':
+        elif content[i] == '}':
             depth -= 1
-        if depth < 0:
-            line_num = tex[:i].count('\n') + 1
-            logger.warning(f"[BRACE CHECK] Extra '}}' at line {line_num} in {filename}")
-            return False
+            if depth < 0:
+                return False
         i += 1
-    if depth != 0:
-        logger.warning(f"[BRACE CHECK] {depth} unclosed '{{' in {filename}")
-        return False
+    return depth == 0
+
+
+# Required resume sections for the completeness gate
+REQUIRED_SECTIONS = ["summary", "skills", "experience", "projects", "education"]
+
+
+def check_section_completeness(content: str) -> bool:
+    """Check all required resume sections are present.
+
+    Accepts both \\section{Name} and \\section*{Name} forms.
+    """
+    content_lower = content.lower()
+    for section in REQUIRED_SECTIONS:
+        if (f"\\section{{{section}}}" not in content_lower
+                and f"\\section*{{{section}}}" not in content_lower):
+            return False
     return True
 
 
-def compile_tex_to_pdf(tex_path: str, output_dir: str = None) -> str:
-    """Compile a .tex file to PDF.
+def check_size_bounds(
+    input_len: int,
+    output_len: int,
+    min_ratio: float = 0.6,
+    max_ratio: float = 1.5,
+) -> bool:
+    """Output must be 60-150% of input size.
 
-    Compiler preference: tectonic (fast, self-contained) → pdflatex (fallback).
+    Returns True if within bounds, False otherwise. Used as a WARNING gate only.
+    """
+    if input_len == 0:
+        return output_len == 0
+    ratio = output_len / input_len
+    return min_ratio <= ratio <= max_ratio
+
+
+def compile_tex_to_pdf(tex_path: str, output_dir: str = None) -> str:
+    """Compile a .tex file to PDF with quality gates and rollback.
+
+    Works on a copy of the .tex file to preserve the original.
+    Applies hard gates (brace balance, section completeness) that block
+    compilation on failure, and soft gates (size bounds) that warn only.
+
+    Compiler preference: tectonic (fast, self-contained) -> pdflatex (fallback).
     Returns the path to the generated PDF, or empty string on failure.
     """
     tex_path = Path(tex_path)
@@ -197,34 +260,94 @@ def compile_tex_to_pdf(tex_path: str, output_dir: str = None) -> str:
     else:
         out_dir = tex_path.parent
 
-    # Sanitize the LaTeX source in-place before compiling
+    # Work on a copy to preserve the original file
+    work_copy = tex_path.with_suffix(".work.tex")
+    shutil.copy2(tex_path, work_copy)
     try:
-        raw_tex = tex_path.read_text(encoding="utf-8")
+        raw_tex = work_copy.read_text(encoding="utf-8")
         sanitized = _sanitize_latex(raw_tex)
-        if sanitized != raw_tex:
-            tex_path.write_text(sanitized, encoding="utf-8")
-            logger.info(f"[SANITIZE] Escaped problematic chars in {tex_path.name}")
-        # Check brace balance — warn but don't block compilation (tectonic will
-        # give the real error). This helps with debugging.
-        _check_brace_balance(sanitized, tex_path.name)
-    except Exception as e:
-        logger.warning(f"LaTeX sanitization skipped for {tex_path.name}: {e}")
 
+        # --- Hard gate: brace balance ---
+        if not check_brace_balance(sanitized):
+            logger.error(f"[HARD GATE] Brace imbalance in {tex_path.name} — compilation blocked")
+            return ""
+
+        # --- Hard gate: section completeness ---
+        if not check_section_completeness(sanitized):
+            missing = [
+                s for s in REQUIRED_SECTIONS
+                if f"\\section{{{s}}}" not in sanitized.lower()
+                and f"\\section*{{{s}}}" not in sanitized.lower()
+            ]
+            logger.error(
+                f"[HARD GATE] Missing required sections in {tex_path.name}: "
+                f"{', '.join(missing)} — compilation blocked"
+            )
+            return ""
+
+        # --- Soft gate: size bounds (warning only) ---
+        if not check_size_bounds(len(raw_tex), len(sanitized)):
+            ratio = len(sanitized) / len(raw_tex) if len(raw_tex) > 0 else 0
+            logger.warning(
+                f"[SIZE CHECK] Output/input ratio {ratio:.2f} out of bounds "
+                f"(0.60-1.50) in {tex_path.name}"
+            )
+
+        # --- Soft gate: command whitelist (warning only) ---
+        cmd_warnings = validate_latex_commands(sanitized)
+        for w in cmd_warnings:
+            logger.warning(f"[COMMAND CHECK] {w} in {tex_path.name}")
+
+        # Write sanitized content to the work copy
+        if sanitized != raw_tex:
+            work_copy.write_text(sanitized, encoding="utf-8")
+            logger.info(f"[SANITIZE] Escaped problematic chars in {tex_path.name}")
+
+        # Compile the work copy
+        pdf_path = _compile_work_copy(work_copy, tex_path, out_dir)
+        return pdf_path
+
+    except Exception as e:
+        logger.error(f"Compilation failed for {tex_path.name}: {e}")
+        return ""
+    finally:
+        # Always clean up the work copy
+        if work_copy.exists():
+            work_copy.unlink()
+
+
+def _compile_work_copy(work_copy: Path, original_path: Path, out_dir: Path) -> str:
+    """Try tectonic then pdflatex on the work copy. Returns PDF path or empty string."""
     # Try tectonic first (fast, single binary, no texlive needed)
     tectonic = shutil.which("tectonic")
     if tectonic:
-        result = _compile_with_tectonic(tex_path, out_dir)
+        result = _compile_with_tectonic(work_copy, out_dir)
         if result:
-            return result
-        logger.warning(f"tectonic failed for {tex_path.name}, trying pdflatex...")
+            # Rename the PDF from work copy stem to original stem
+            return _rename_pdf(result, original_path.stem, out_dir)
+        logger.warning(f"tectonic failed for {original_path.name}, trying pdflatex...")
 
     # Fallback to pdflatex
     pdflatex = shutil.which("pdflatex")
     if pdflatex:
-        return _compile_with_pdflatex(tex_path, out_dir)
+        result = _compile_with_pdflatex(work_copy, out_dir)
+        if result:
+            return _rename_pdf(result, original_path.stem, out_dir)
+        return ""
 
     logger.error("Neither tectonic nor pdflatex found. Install tectonic (recommended) or texlive.")
     return ""
+
+
+def _rename_pdf(pdf_path: str, target_stem: str, out_dir: Path) -> str:
+    """Rename a compiled PDF from work copy name to the original file's name."""
+    pdf = Path(pdf_path)
+    expected_name = target_stem + ".pdf"
+    if pdf.name != expected_name:
+        final = out_dir / expected_name
+        shutil.move(str(pdf), str(final))
+        return str(final)
+    return pdf_path
 
 
 def _compile_with_tectonic(tex_path: Path, out_dir: Path) -> str:

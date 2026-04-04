@@ -1,5 +1,7 @@
 import json
 import logging
+import random
+import statistics
 import uuid
 from datetime import datetime
 
@@ -8,6 +10,26 @@ from ai_helper import ai_complete_cached, get_supabase
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+
+def should_skip_scoring(job: dict) -> str | None:
+    """Check if job should be skipped for scoring. Returns score_status or None."""
+    desc = job.get("description", "") or ""
+    if len(desc) < 100:
+        return "insufficient_data"
+    company = job.get("company", "") or ""
+    if not company.strip():
+        return "incomplete"
+    return None
+
+
+def assign_model_for_ab_test(available_providers: list[str], ab_ratio: float = 0.2) -> str:
+    """Assign a model for A/B testing. 80% primary, 20% alternate."""
+    if len(available_providers) < 2:
+        return available_providers[0] if available_providers else None
+    if random.random() < ab_ratio:
+        return available_providers[1]  # Alternate
+    return available_providers[0]  # Primary
 
 
 def handler(event, context):
@@ -37,7 +59,14 @@ def handler(event, context):
         return {"matched_items": [], "matched_count": 0, "error": "no_resume"}
 
     matched_items = []
+    skipped_count = 0
     for job in jobs:
+        skip_status = should_skip_scoring(job)
+        if skip_status:
+            logger.info(f"[score_batch] Skipping {job['job_hash']}: {skip_status}")
+            skipped_count += 1
+            continue
+
         score_result = score_single_job(job, resume_tex)
 
         if score_result is None:
@@ -90,8 +119,8 @@ def handler(event, context):
             "light_touch": light_touch,
         })
 
-    logger.info(f"[score_batch] {len(jobs)} scored -> {len(matched_items)} matched (min_score={min_score})")
-    return {"matched_items": matched_items, "matched_count": len(matched_items)}
+    logger.info(f"[score_batch] {len(jobs)} fetched, {skipped_count} skipped, {len(matched_items)} matched (min_score={min_score})")
+    return {"matched_items": matched_items, "matched_count": len(matched_items), "skipped_count": skipped_count}
 
 
 SCORE_SYSTEM_PROMPT = """You are an expert job-candidate evaluator. Score how well a candidate's resume matches a job listing from THREE distinct perspectives.
@@ -121,18 +150,26 @@ Return ONLY valid JSON (no markdown, no code fences):
 }"""
 
 
-def score_single_job(job: dict, resume_tex: str) -> dict | None:
+def score_single_job(job: dict, resume_tex: str, temperature: float = 0) -> dict | None:
     """Score a single job against the user's resume using 3-perspective AI scoring.
-    Uses the same prompt template as matcher.py for consistency."""
+    Uses the same prompt template as matcher.py for consistency.
+
+    Parameters
+    ----------
+    temperature:
+        Sampling temperature for the AI call. Default 0 for deterministic scoring.
+    """
     prompt = f"""Score this job against the candidate's resume.
 
 Job: {job['title']} at {job['company']}
-Description: {job.get('description', '')[:2000]}
+Description: {job.get('description', '')}
 
-Resume (LaTeX): {resume_tex[:3000]}"""
+Resume (LaTeX): {resume_tex}"""
 
     try:
-        response_dict = ai_complete_cached(prompt, system=SCORE_SYSTEM_PROMPT)
+        response_dict = ai_complete_cached(
+            prompt, system=SCORE_SYSTEM_PROMPT, temperature=temperature
+        )
         text = response_dict["content"].strip()
         if text.startswith("```"):
             text = text.split("```")[1]
@@ -158,3 +195,98 @@ Resume (LaTeX): {resume_tex[:3000]}"""
     except Exception as e:
         logger.error(f"[score_batch] AI scoring failed for {job['job_hash']}: {e}")
         return None
+
+
+def score_single_job_deterministic(
+    job: dict, resume_tex: str, num_calls: int = 3
+) -> dict | None:
+    """Score a job multiple times with temp=0 and take the median of each perspective.
+
+    This dampens remaining provider variance by making ``num_calls`` independent
+    scoring calls and returning the median of each score dimension. The result is
+    *not* cached itself — individual ``score_single_job`` calls hit the cache as
+    usual, so callers should bust the cache (or use ``skip_cache``) if they want
+    truly independent calls.
+
+    Returns None only when *all* calls fail.
+    """
+    all_scores: list[dict] = []
+    for _ in range(num_calls):
+        result = score_single_job(job, resume_tex, temperature=0)
+        if result is not None:
+            all_scores.append(result)
+
+    if not all_scores:
+        return None
+    if len(all_scores) == 1:
+        return all_scores[0]
+
+    return {
+        "ats_score": int(statistics.median([s["ats_score"] for s in all_scores])),
+        "hiring_manager_score": int(
+            statistics.median([s["hiring_manager_score"] for s in all_scores])
+        ),
+        "tech_recruiter_score": int(
+            statistics.median([s["tech_recruiter_score"] for s in all_scores])
+        ),
+        "match_score": round(
+            statistics.median([s.get("match_score", 0) for s in all_scores]), 1
+        ),
+    }
+
+
+def compute_base_scores(job: dict, base_resume: str) -> dict:
+    """Score base (untailored) resume against JD. Returns base_* scores."""
+    scores = score_single_job_deterministic(job, base_resume)
+    if not scores:
+        return {}
+    return {
+        "base_ats_score": scores["ats_score"],
+        "base_hm_score": scores["hiring_manager_score"],
+        "base_tr_score": scores["tech_recruiter_score"],
+        "match_score": scores["match_score"],
+    }
+
+
+def compute_tailored_scores(job: dict, tailored_resume: str) -> dict:
+    """Score tailored resume against JD. Returns tailored_* scores."""
+    scores = score_single_job_deterministic(job, tailored_resume)
+    if not scores:
+        return {}
+    return {
+        "tailored_ats_score": scores["ats_score"],
+        "tailored_hm_score": scores["hiring_manager_score"],
+        "tailored_tr_score": scores["tech_recruiter_score"],
+        "final_score": scores["match_score"],
+    }
+
+
+WRITING_QUALITY_PROMPT = """Rate this resume on a scale of 1-10 for each dimension:
+- specificity: Does it use specific numbers, technologies, and outcomes instead of vague claims?
+- impact_language: Does it use strong action verbs and quantify achievements?
+- authenticity: Does it sound like a real person wrote it, free of AI filler and buzzwords?
+- readability: Is it clear, concise, and well-structured?
+
+Return JSON only: {"specificity": N, "impact_language": N, "authenticity": N, "readability": N}"""
+
+
+def score_writing_quality(resume_text: str) -> dict:
+    """Score resume writing quality using AI. Returns quality dimensions + average."""
+    import json as _json
+    result = ai_complete_cached(
+        prompt=resume_text,
+        system=WRITING_QUALITY_PROMPT,
+        temperature=0,
+    )
+    try:
+        content = result.get("content", "") if isinstance(result, dict) else result
+        # Handle markdown code fences
+        content = content.strip()
+        if content.startswith("```"):
+            content = content.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        scores = _json.loads(content)
+        avg = sum(scores.values()) / len(scores)
+        scores["writing_quality_score"] = round(avg, 1)
+        return scores
+    except (json.JSONDecodeError, KeyError, ZeroDivisionError, TypeError, ValueError):
+        return {"writing_quality_score": None}

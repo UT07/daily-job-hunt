@@ -275,7 +275,7 @@ Return a JSON array with {len(batch)} objects, one per job in order."""
         info = ai_client.complete_with_info(
             prompt=user_prompt,
             system=system_prompt,
-            temperature=0.3,
+            temperature=0,
         )
         result_text = info["response"]
 
@@ -362,7 +362,7 @@ CANDIDATE INFO:
         info = ai_client.complete_with_info(
             prompt=user_prompt,
             system=system_prompt,
-            temperature=0.3,
+            temperature=0,
         )
         result = extract_json(info["response"])
         # Record which model did the matching

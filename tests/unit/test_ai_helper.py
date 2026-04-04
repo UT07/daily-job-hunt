@@ -242,7 +242,7 @@ class TestAiCompleteCached:
             result = ai_complete_cached("hello", system="sys")
 
         assert result == {"content": "fresh answer", "provider": "p1", "model": "m1"}
-        mock_ai.assert_called_once_with("hello", "sys")
+        mock_ai.assert_called_once_with("hello", "sys", temperature=0.3)
 
     def test_writes_to_cache_on_miss(self):
         """After a cache miss + AI call, the result is upserted into the cache."""

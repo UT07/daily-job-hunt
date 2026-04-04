@@ -18,6 +18,36 @@ def get_supabase():
     return create_client(get_param("/naukribaba/SUPABASE_URL"), get_param("/naukribaba/SUPABASE_SERVICE_KEY"))
 
 
+def load_config_with_adjustments(base_config: dict, user_id: str) -> dict:
+    """Load base config and merge active pipeline adjustments.
+
+    Precedence: auto_applied FIRST, then approved OVERWRITES
+    (later in loop = higher priority = wins).
+    User manual overrides in base_config are preserved unless an
+    adjustment explicitly overrides them.
+    """
+    config = dict(base_config)
+
+    # Query active adjustments from Supabase
+    db = get_supabase()
+    result = db.table("pipeline_adjustments").select("*").in_(
+        "status", ["auto_applied", "approved"]
+    ).eq("user_id", user_id).execute()
+
+    active_adjustments = result.data or []
+
+    # Sort: auto_applied first (key=0), then approved overwrites (key=1)
+    for adj in sorted(active_adjustments, key=lambda a: 0 if a["status"] == "auto_applied" else 1):
+        payload = adj.get("payload", {})
+        for key, value in payload.items():
+            config[key] = value
+
+    # Store which adjustments are active (for pipeline_runs tracking)
+    config["_active_adjustments"] = [a["id"] for a in active_adjustments]
+
+    return config
+
+
 def handler(event, context):
     user_id = event["user_id"]
     db = get_supabase()
@@ -57,6 +87,9 @@ def handler(event, context):
             config["min_match_score"] = adj["config_data"].get("threshold", 60)
         elif adj["config_type"] == "keyword_emphasis":
             config["emphasis_keywords"] = adj["config_data"].get("keywords", [])
+
+    # Merge any active pipeline adjustments (auto_applied first, then approved overwrites)
+    config = load_config_with_adjustments(config, user_id)
 
     config["user_id"] = user_id
 

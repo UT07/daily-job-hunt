@@ -568,10 +568,37 @@ def global_deduplicate(jobs: List[Job]) -> List[Job]:
     return unique
 
 
-# ── Seen-Jobs Persistence ──────────────────────────────────────────────
+# ── Seen-Jobs Persistence (Supabase) ──────────────────────────────────
+
+def check_seen_job(db, user_id: str, canonical_hash: str) -> dict | None:
+    """Check if job was seen before (Supabase)."""
+    result = db.client.table("seen_jobs").select("*").eq(
+        "user_id", user_id
+    ).eq("canonical_hash", canonical_hash).execute()
+    return result.data[0] if result.data else None
+
+
+def upsert_seen_job(db, user_id: str, job: dict, canonical_hash: str):
+    """Track job as seen (Supabase). Updates last_seen if exists."""
+    from datetime import date
+    db.client.table("seen_jobs").upsert({
+        "user_id": user_id,
+        "canonical_hash": canonical_hash,
+        "job_id": job.get("id", job.get("job_id")),
+        "title": job.get("title"),
+        "company": job.get("company"),
+        "first_seen": str(date.today()),
+        "last_seen": str(date.today()),
+        "score": job.get("match_score", 0),
+        "matched": job.get("match_score", 0) > 0,
+    }, on_conflict="user_id,canonical_hash").execute()
+
 
 def _load_seen_jobs(path: Path) -> dict:
-    """Load seen_jobs.json — {job_id: {first_seen, last_seen, score}}."""
+    """Load seen_jobs.json — {job_id: {first_seen, last_seen, score}}.
+
+    Legacy fallback used when Supabase is not available.
+    """
     if path.exists():
         try:
             with open(path) as f:
@@ -582,14 +609,54 @@ def _load_seen_jobs(path: Path) -> dict:
 
 
 def _save_seen_jobs(seen: dict, path: Path):
-    """Save seen_jobs.json."""
+    """Save seen_jobs.json. Legacy fallback."""
     with open(path, "w") as f:
         json.dump(seen, f, indent=2)
 
 
+def _filter_new_jobs_supabase(jobs: List[Job], db, user_id: str,
+                               run_date: str,
+                               max_age_days: int = 7) -> List[Job]:
+    """Filter out recently-seen jobs using Supabase.
+
+    Jobs older than max_age_days are pruned from seen_jobs so they can
+    be re-evaluated after profile changes.
+    """
+    from datetime import datetime, timedelta
+    cutoff = (datetime.strptime(run_date, "%Y-%m-%d") - timedelta(days=max_age_days)).isoformat()[:10]
+
+    # Prune entries older than max_age_days
+    try:
+        pruned = db.client.table("seen_jobs").delete().eq(
+            "user_id", user_id
+        ).lt("first_seen", cutoff).execute()
+        if pruned.data:
+            logger.info(f"Pruned {len(pruned.data)} expired entries from seen_jobs (older than {max_age_days} days)")
+    except Exception as e:
+        logger.warning(f"[DB] Failed to prune seen_jobs: {e}")
+
+    new_jobs = []
+    for job in jobs:
+        existing = check_seen_job(db, user_id, job.job_id)
+        if existing is None:
+            upsert_seen_job(db, user_id, job.to_dict(), job.job_id)
+            new_jobs.append(job)
+        else:
+            # Update last_seen timestamp
+            try:
+                db.client.table("seen_jobs").update(
+                    {"last_seen": run_date}
+                ).eq("user_id", user_id).eq(
+                    "canonical_hash", job.job_id
+                ).execute()
+            except Exception as e:
+                logger.warning(f"[DB] Failed to update last_seen for {job.job_id}: {e}")
+    return new_jobs
+
+
 def _filter_new_jobs(jobs: List[Job], seen: dict, run_date: str,
                      max_age_days: int = 7) -> List[Job]:
-    """Filter out recently-seen jobs. Jobs older than max_age_days are re-evaluated.
+    """Filter out recently-seen jobs (legacy JSON fallback).
 
     This prevents the seen_jobs filter from permanently blocking jobs that
     didn't match on first encounter but might match after profile changes.

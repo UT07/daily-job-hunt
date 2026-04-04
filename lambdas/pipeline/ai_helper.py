@@ -19,7 +19,7 @@ def get_supabase():
     return create_client(get_param("/naukribaba/SUPABASE_URL"), get_param("/naukribaba/SUPABASE_SERVICE_KEY"))
 
 
-def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096) -> dict:
+def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096, temperature: float = 0.3) -> dict:
     """Call AI provider with 4-provider failover chain.
 
     Order: Groq (fastest) → NVIDIA NIM (free credits, many models)
@@ -64,7 +64,7 @@ def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096) -> dict:
                 provider["url"],
                 headers=headers,
                 json={"model": provider["model"], "messages": messages,
-                      "max_tokens": max_tokens, "temperature": 0.3},
+                      "max_tokens": max_tokens, "temperature": temperature},
                 timeout=provider.get("timeout", 60),
             )
             if resp.status_code == 200:
@@ -82,7 +82,7 @@ def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096) -> dict:
     raise RuntimeError(f"All {len(providers)} AI providers failed. Last error: {last_error}")
 
 
-def ai_complete_cached(prompt: str, system: str = "", cache_hours: int = 72) -> dict:
+def ai_complete_cached(prompt: str, system: str = "", cache_hours: int = 72, temperature: float = 0.3) -> dict:
     """AI complete with Supabase cache. Returns dict with content, provider, model."""
     cache_key = hashlib.md5(f"{system}|{prompt}".encode()).hexdigest()
     db = get_supabase()
@@ -99,7 +99,7 @@ def ai_complete_cached(prompt: str, system: str = "", cache_hours: int = 72) -> 
         }
 
     # Call AI
-    result = ai_complete(prompt, system)
+    result = ai_complete(prompt, system, temperature=temperature)
 
     # Cache result
     db.table("ai_cache").upsert({
