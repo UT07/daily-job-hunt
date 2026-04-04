@@ -1,7 +1,8 @@
 """Normalize scraper output to standard jobs_raw schema."""
-import hashlib
 import html
 import re
+
+from utils.canonical_hash import canonical_hash
 
 def normalize_job(raw: dict, source: str, query_hash: str = "") -> dict:
     """Normalize a raw job dict to jobs_raw schema."""
@@ -15,9 +16,7 @@ def normalize_job(raw: dict, source: str, query_hash: str = "") -> dict:
     if not title or not company:
         return None
 
-    job_hash = hashlib.md5(
-        f"{company.lower()}|{title.lower()}|{description[:500].lower()}".encode()
-    ).hexdigest()
+    job_hash = canonical_hash(company, title, description)
 
     return {
         "job_hash": job_hash,

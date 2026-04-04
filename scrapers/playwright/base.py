@@ -3,7 +3,6 @@
 Provides shared utilities: human-like delays, circuit breaker,
 proxy configuration, scrape_runs reporting, and normalization.
 """
-import hashlib
 import html
 import logging
 import os
@@ -12,6 +11,8 @@ import re
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+
+from utils.canonical_hash import canonical_hash
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +49,8 @@ def normalize_text(text: str) -> str:
 
 
 def make_job_hash(company: str, title: str, description: str) -> str:
-    """Generate a consistent hash for dedup."""
-    key = f"{company.lower().strip()}|{title.lower().strip()}|{description[:500].lower().strip()}"
-    return hashlib.md5(key.encode()).hexdigest()
+    """Generate a consistent hash for dedup using canonical_hash."""
+    return canonical_hash(company, title, description)
 
 
 class BaseScraper(ABC):

@@ -1,5 +1,5 @@
 """Unit tests for lambdas/scrapers/normalizers.py."""
-import hashlib
+from utils.canonical_hash import canonical_hash
 
 from normalizers import (
     normalize_adzuna,
@@ -107,12 +107,10 @@ class TestNormalizeJob:
         result2 = normalize_job(raw2, source="linkedin")
         assert result1["job_hash"] != result2["job_hash"]
 
-    def test_hash_is_md5_of_company_title_description(self):
+    def test_hash_uses_canonical_hash(self):
         raw = {"title": "Engineer", "company": "Corp", "description": "Work hard."}
         result = normalize_job(raw, source="linkedin")
-        expected_hash = hashlib.md5(
-            "corp|engineer|work hard.".encode()
-        ).hexdigest()
+        expected_hash = canonical_hash("Corp", "Engineer", "Work hard.")
         assert result["job_hash"] == expected_hash
 
     def test_alternative_field_positionName(self):

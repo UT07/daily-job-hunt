@@ -11,6 +11,8 @@ from difflib import SequenceMatcher
 
 import boto3
 
+from utils.canonical_hash import canonical_hash
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -69,6 +71,19 @@ def _extract_tech_keywords(text: str) -> set:
         if re.search(r'\b' + pattern + r'\b', text):
             found.add(pattern.replace("\\", "").replace(".?", ""))
     return found
+
+
+def _richness_score(job: dict) -> tuple:
+    """Score a job dict by data richness for tie-breaking during dedup.
+
+    Returns a tuple (desc_len, field_count, last_seen) so that max() picks
+    the version with the longest description, most populated fields, and
+    most recent scrape timestamp.
+    """
+    desc_len = len(job.get("description", "") or "")
+    field_count = sum(1 for v in job.values() if v is not None and v != "")
+    last_seen = job.get("last_seen", "") or job.get("scraped_at", "") or ""
+    return (desc_len, field_count, last_seen)
 
 
 def _prefilter_job(job: dict, user_skills: set) -> tuple[bool, str]:
@@ -139,7 +154,7 @@ def handler(event, context):
     for job in all_jobs:
         h = job["job_hash"]
         existing = by_hash.get(h)
-        if not existing or len(job.get("description") or "") > len(existing.get("description") or ""):
+        if not existing or _richness_score(job) > _richness_score(existing):
             by_hash[h] = job
 
     # --- Tier 2: Fuzzy title+company dedup ---
@@ -153,8 +168,8 @@ def handler(event, context):
         for existing_key, existing_job in seen_fuzzy.items():
             ex_company, ex_title = existing_key.split("|", 1)
             if _fuzzy_match(norm_company, ex_company, 0.8) and _fuzzy_match(norm_title, ex_title, 0.7):
-                # Keep the version with longer description
-                if len(job.get("description") or "") > len(existing_job.get("description") or ""):
+                # Keep the richest version
+                if _richness_score(job) > _richness_score(existing_job):
                     seen_fuzzy[existing_key] = job
                 matched = True
                 break

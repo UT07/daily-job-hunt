@@ -4,11 +4,12 @@ Jobs.ie and IrishJobs migrated to a StepStone React platform (2025+).
 Uses data-testid attributes and h2 > a patterns for extraction.
 No proxy needed — simple HTML sites with no anti-bot.
 """
-import hashlib
 import html
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+
+from utils.canonical_hash import canonical_hash
 
 import boto3
 import httpx
@@ -41,8 +42,7 @@ def _clean(text):
 
 
 def _make_hash(company, title, desc):
-    key = f"{company.lower().strip()}|{title.lower().strip()}|{desc[:500].lower().strip()}"
-    return hashlib.md5(key.encode()).hexdigest()
+    return canonical_hash(company, title, desc)
 
 
 def _scrape_stepstone_site(site_key, base_url, queries, client):

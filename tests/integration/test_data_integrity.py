@@ -328,8 +328,8 @@ class TestJobHashUniqueness:
         assert h1 != h2
 
     @pytest.mark.integration
-    def test_hash_is_md5_hex(self):
-        """job_hash should be a valid 32-char MD5 hex digest."""
+    def test_hash_is_12_char_hex(self):
+        """job_hash should be a valid 12-char hex digest (canonical_hash)."""
         from normalizers import normalize_job
 
         result = normalize_job(
@@ -337,7 +337,7 @@ class TestJobHashUniqueness:
             source="test",
         )
         h = result["job_hash"]
-        assert len(h) == 32
+        assert len(h) == 12
         assert all(c in "0123456789abcdef" for c in h)
 
     @pytest.mark.integration

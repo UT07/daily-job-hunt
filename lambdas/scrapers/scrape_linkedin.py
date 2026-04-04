@@ -4,11 +4,12 @@ Scrapes public LinkedIn job search pages via httpx + Web Unlocker proxy.
 Web Unlocker handles all anti-bot: CAPTCHAs, fingerprints, sessions.
 No browser needed — just HTTP requests.
 """
-import hashlib
 import html
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+
+from utils.canonical_hash import canonical_hash
 
 import boto3
 import httpx
@@ -37,8 +38,7 @@ def _clean_html(text):
 
 
 def _make_hash(company, title, desc):
-    key = f"{company.lower().strip()}|{title.lower().strip()}|{desc[:500].lower().strip()}"
-    return hashlib.md5(key.encode()).hexdigest()
+    return canonical_hash(company, title, desc)
 
 
 def _parse_search_page(html_text):
