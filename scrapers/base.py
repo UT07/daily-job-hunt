@@ -47,6 +47,15 @@ class Job:
     initial_hm_score: float = 0.0
     initial_tr_score: float = 0.0
 
+    # Base/tailored score tracking for before/after comparison
+    base_ats_score: float = 0.0
+    base_hm_score: float = 0.0
+    base_tr_score: float = 0.0
+    tailored_ats_score: float = 0.0
+    tailored_hm_score: float = 0.0
+    tailored_tr_score: float = 0.0
+    final_score: float = 0.0
+
     # S3 URLs for uploaded artifacts
     resume_s3_url: str = ""
     cover_letter_s3_url: str = ""

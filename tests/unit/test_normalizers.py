@@ -83,10 +83,12 @@ class TestNormalizeJob:
         result = normalize_job(raw, source="linkedin")
         assert len(result["company"]) == 200
 
-    def test_long_description_truncated_to_10000(self):
+    def test_long_description_not_truncated(self):
+        # Descriptions are stored in full — scoring accuracy depends on
+        # having the complete JD (spec requires no truncation).
         raw = {"title": "Engineer", "company": "Corp", "description": "C" * 12000}
         result = normalize_job(raw, source="linkedin")
-        assert len(result["description"]) == 10000
+        assert len(result["description"]) == 12000
 
     def test_unicode_title_and_company(self):
         raw = {"title": "Ingénieur Logiciel", "company": "Société Générale"}

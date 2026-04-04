@@ -97,7 +97,7 @@ class TestScraperOutputSchema:
 
     @pytest.mark.integration
     def test_normalize_job_truncates_long_fields(self):
-        """Fields should be truncated to schema limits."""
+        """Fields should be truncated to schema limits (except description)."""
         from normalizers import normalize_job
 
         raw = {
@@ -110,7 +110,9 @@ class TestScraperOutputSchema:
         result = normalize_job(raw, source="test")
         assert len(result["title"]) <= 500
         assert len(result["company"]) <= 200
-        assert len(result["description"]) <= 10000
+        # Description is stored in full — scoring accuracy depends on the
+        # complete JD (spec requires no truncation).
+        assert len(result["description"]) == 20000
         assert len(result["location"]) <= 200
         assert len(result["apply_url"]) <= 1000
 

@@ -379,8 +379,10 @@ def test_handler_skips_bad_data_jobs():
             None,
         )
 
-    # AI should only be called once (for the good job)
-    assert mock_ai.call_count == 1
+    # AI is only called for the good job (short job is skipped before scoring),
+    # but the handler uses deterministic 3-call median scoring so we expect 3
+    # AI calls for that single job.
+    assert mock_ai.call_count == 3
     assert result["skipped_count"] == 1
     assert result["matched_count"] == 1
 
