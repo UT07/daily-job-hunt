@@ -127,7 +127,6 @@ search:
 api_keys:
   # AI providers (need at least ONE — all free)
   groq: "${GROQ_API_KEY}"
-  deepseek: "${DEEPSEEK_API_KEY}"
   openrouter: "${OPENROUTER_API_KEY}"
   anthropic: "${ANTHROPIC_API_KEY}"
   qwen: "${QWEN_API_KEY}"
@@ -202,7 +201,6 @@ google_drive:
 # --- AI Provider Settings ---
 ai:
   groq_model: "llama-3.3-70b-versatile"
-  deepseek_model: "deepseek-chat"
   openrouter_model: "meta-llama/llama-3.3-70b-instruct:free"
   cache:
     path: "output/.ai_cache.db"

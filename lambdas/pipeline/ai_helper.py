@@ -20,11 +20,14 @@ def get_supabase():
 
 
 def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096) -> dict:
-    """Call AI provider with 5-provider failover chain.
+    """Call AI provider with 4-provider failover chain.
 
-    Order: Groq (fastest) → NVIDIA NIM (free credits, many models) → DeepSeek
+    Order: Groq (fastest) → NVIDIA NIM (free credits, many models)
     → OpenRouter (free tier) → Qwen. Each provider is tried once; on failure
     (rate limit, timeout, error), the next provider is attempted.
+
+    DeepSeek direct API removed — credits exhausted (402). DeepSeek models
+    are still accessible via NVIDIA NIM and OpenRouter.
     """
     providers = [
         {"name": "groq", "url": "https://api.groq.com/openai/v1/chat/completions",
@@ -32,9 +35,6 @@ def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096) -> dict:
          "timeout": 60},
         {"name": "nvidia", "url": "https://integrate.api.nvidia.com/v1/chat/completions",
          "key_param": "/naukribaba/NVIDIA_API_KEY", "model": "meta/llama-3.3-70b-instruct",
-         "timeout": 120},
-        {"name": "deepseek", "url": "https://api.deepseek.com/v1/chat/completions",
-         "key_param": "/naukribaba/DEEPSEEK_API_KEY", "model": "deepseek-chat",
          "timeout": 120},
         {"name": "openrouter", "url": "https://openrouter.ai/api/v1/chat/completions",
          "key_param": "/naukribaba/OPENROUTER_API_KEY", "model": "google/gemini-2.0-flash-exp:free",
