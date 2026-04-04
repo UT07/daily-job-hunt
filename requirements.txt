@@ -33,6 +33,9 @@ supabase>=2.0.0
 # JWT validation for Supabase auth tokens
 python-jose[cryptography]>=3.3.0
 
+# FastAPI form data support (required for test imports of app.py)
+python-multipart>=0.0.9
+
 # PDF text extraction (resume upload)
 pdfplumber>=0.10.0
 
