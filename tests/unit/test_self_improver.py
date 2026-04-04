@@ -1,8 +1,7 @@
 """Tests for self_improver: adjustments, conflicts, rollback, cooldown, pipeline runs."""
 
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
-import pytest
 
 from self_improver import (
     analyze_keyword_gaps_for_resume,

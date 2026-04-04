@@ -5,7 +5,6 @@ conflict detection, query optimization, and base resume keyword suggestions.
 
 Run: python -m pytest tests/quality/test_self_improvement.py -v
 """
-import pytest
 from self_improver import (
     generate_adjustments,
     detect_conflicts,

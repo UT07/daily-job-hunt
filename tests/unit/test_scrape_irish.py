@@ -9,7 +9,6 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import respx
-import pytest
 
 
 # ---------------------------------------------------------------------------

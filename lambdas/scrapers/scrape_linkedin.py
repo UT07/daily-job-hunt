@@ -90,12 +90,12 @@ def _fetch_job_detail(job_id, proxy_url):
     url = f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}"
     try:
         resp = httpx.get(url, proxy=proxy_url, timeout=30, follow_redirects=True, verify=False)
-        
+
         # If blocked or failed, fallback to standard web view
         if resp.status_code != 200:
             url = f"https://www.linkedin.com/jobs/view/{job_id}"
             resp = httpx.get(url, proxy=proxy_url, timeout=30, follow_redirects=True, verify=False)
-            
+
         if resp.status_code != 200:
             return None
 
@@ -116,14 +116,14 @@ def _fetch_job_detail(job_id, proxy_url):
                 r'<div class="[^"]*description__text[^"]*"[^>]*>(.*?)$',
                 text, re.DOTALL
             )
-            
+
         if desc_match:
             return _clean_html(desc_match.group(1))
-            
+
         # If it's a small fragment (like the jobs-guest response), return it all
         if "description__text" in text and len(text) < 15000:
             return _clean_html(text)
-            
+
     except Exception as e:
         logger.warning(f"[linkedin] Detail fetch failed for {job_id}: {e}")
     return None

@@ -1,5 +1,4 @@
 """Tests for merge_manual_job and canonical-hash-based dedup in app.py."""
-import pytest
 from app import merge_manual_job
 
 

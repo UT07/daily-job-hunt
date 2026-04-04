@@ -11,7 +11,6 @@ from difflib import SequenceMatcher
 
 import boto3
 
-from utils.canonical_hash import canonical_hash
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)

@@ -8,10 +8,8 @@ Tests the handler's integration of:
 """
 
 import json
-import sys
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
-import pytest
 
 
 def _make_mock_db(

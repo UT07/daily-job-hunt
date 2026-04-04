@@ -123,7 +123,7 @@ export default function Privacy() {
               can reach us at:
             </p>
             <ul className="list-none space-y-1 ml-2">
-              <li><strong className="text-black">Email:</strong> privacy@jobhunt.dev</li>
+              <li><strong className="text-black">Email:</strong> <a href="mailto:254utkarsh@gmail.com" className="underline hover:no-underline">254utkarsh@gmail.com</a></li>
               <li><strong className="text-black">Data Controller:</strong> NaukriBaba (operated by Utkarsh Singh)</li>
               <li><strong className="text-black">Location:</strong> Dublin, Ireland</li>
             </ul>

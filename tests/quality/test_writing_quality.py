@@ -1,5 +1,4 @@
 """Tier 4c: Writing quality tests. Structural checks = MUST PASS, AI checks = REPORT ONLY."""
-import pytest
 from cover_letter import validate_cover_letter
 from latex_compiler import check_brace_balance, check_section_completeness
 

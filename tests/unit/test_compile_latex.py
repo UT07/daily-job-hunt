@@ -3,7 +3,6 @@ import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
-import pytest
 
 # Ensure the project root is importable
 PROJECT_ROOT = Path(__file__).parent.parent.parent

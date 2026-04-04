@@ -1,16 +1,48 @@
-# React + Vite
+# NaukriBaba Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React + Vite + Tailwind. Deployed to Netlify.
 
-Currently, two official plugins are available:
+## Local Development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+```bash
+# 1. Copy env template and fill in Supabase values
+cp .env.example .env.local
+# Leave VITE_API_URL empty (Vite proxy handles /api → localhost:8000)
 
-## React Compiler
+# 2. Install deps
+npm install
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+# 3. Start dev server (serves source, reads .env.local)
+npx vite
+# → http://localhost:5173
+```
 
-## Expanding the ESLint configuration
+**Important: use `npx vite` (dev server), NOT `npx vite preview`.**
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+`vite preview` serves the built bundle from `.env.production`, which hardcodes
+the production API Gateway URL. This makes localhost hit the production
+backend, which is usually not what you want.
+
+## Run Backend Too
+
+```bash
+# In another terminal, from project root:
+uvicorn app:app --reload --port 8000
+```
+
+The Vite dev server proxies `/api/*` to `http://localhost:8000`.
+
+## Build for Production
+
+```bash
+npm run build  # Uses .env.production
+```
+
+## Tech Stack
+
+- React 19
+- Vite
+- Tailwind CSS v4
+- Zustand (state)
+- React Router v7
+- Supabase JS client

@@ -2,10 +2,8 @@
 
 Tests each parsing strategy independently and the URL path fallback logic.
 """
-import json
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
-import pytest
 import requests
 
 

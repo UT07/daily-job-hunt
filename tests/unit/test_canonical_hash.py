@@ -1,4 +1,3 @@
-import pytest
 from utils.canonical_hash import canonical_hash, normalize_company, normalize_whitespace
 
 

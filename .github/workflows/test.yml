@@ -39,7 +39,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r tests/requirements-test.txt
+      - run: pip install -r requirements.txt -r tests/requirements-test.txt
       - run: pytest tests/unit/ tests/contract/ -v --tb=short -x
         env:
           AWS_DEFAULT_REGION: eu-west-1
@@ -54,9 +54,10 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r tests/requirements-test.txt
+      - run: pip install -r requirements.txt -r tests/requirements-test.txt
       - run: pytest tests/security/ -v --tb=short -m security
         env:
+          AWS_DEFAULT_REGION: eu-west-1
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
 
@@ -70,9 +71,10 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r tests/requirements-test.txt
+      - run: pip install -r requirements.txt -r tests/requirements-test.txt
       - run: pytest tests/integration/ -v --tb=short -m integration || true
         env:
+          AWS_DEFAULT_REGION: eu-west-1
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
 
@@ -89,6 +91,8 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt -r tests/requirements-test.txt
       - run: pytest tests/quality/test_data_quality.py -v --tb=short
+        env:
+          AWS_DEFAULT_REGION: eu-west-1
 
   writing-quality-tests:
     name: "Tier 4c: Writing Quality (structural)"
@@ -102,6 +106,8 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt -r tests/requirements-test.txt
       - run: pytest tests/quality/test_writing_quality.py -v --tb=short
+        env:
+          AWS_DEFAULT_REGION: eu-west-1
 
   self-improvement-tests:
     name: "Tier 4d: Self-Improvement"
@@ -115,6 +121,8 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt -r tests/requirements-test.txt
       - run: pytest tests/quality/test_self_improvement.py -v --tb=short
+        env:
+          AWS_DEFAULT_REGION: eu-west-1
 
   # === Quality Pipeline: REPORT ONLY jobs (don't block PRs) ===
   score-determinism:

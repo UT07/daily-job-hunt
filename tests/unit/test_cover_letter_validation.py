@@ -1,5 +1,5 @@
 """Unit tests for cover letter validation."""
-from cover_letter import validate_cover_letter, BANNED_PHRASES, DASH_PATTERN
+from cover_letter import validate_cover_letter, BANNED_PHRASES
 
 
 def test_valid_cover_letter():
