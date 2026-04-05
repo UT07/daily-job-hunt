@@ -12,6 +12,25 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
+def score_to_tier(score: float | None) -> str:
+    """Map match_score (0-100) to tier letter (S/A/B/C/D).
+
+    Thresholds from unified grand plan (Phase 2.10):
+      S 90+, A 80-89, B 70-79, C 60-69, D <60.
+    """
+    if score is None:
+        return "D"
+    if score >= 90:
+        return "S"
+    if score >= 80:
+        return "A"
+    if score >= 70:
+        return "B"
+    if score >= 60:
+        return "C"
+    return "D"
+
+
 def should_skip_scoring(job: dict) -> str | None:
     """Check if job should be skipped for scoring. Returns score_status or None."""
     desc = job.get("description", "") or ""
@@ -87,6 +106,7 @@ def handler(event, context):
             "apply_url": job.get("apply_url"),
             "source": job["source"],
             "match_score": match_score,
+            "score_tier": score_to_tier(match_score),
             "ats_score": score_result.get("ats_score", 0),
             "hiring_manager_score": score_result.get("hiring_manager_score", 0),
             "tech_recruiter_score": score_result.get("tech_recruiter_score", 0),
@@ -101,7 +121,7 @@ def handler(event, context):
         except Exception as e:
             # Retry without optional columns if they don't exist yet
             if "column" in str(e) and "does not exist" in str(e):
-                for col in ("key_matches", "gaps", "match_reasoning"):
+                for col in ("key_matches", "gaps", "match_reasoning", "score_tier"):
                     job_record.pop(col, None)
                 try:
                     db.table("jobs").insert(job_record).execute()

@@ -30,21 +30,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "lambdas" / "pipeline"))
 os.environ.setdefault("AWS_DEFAULT_REGION", "eu-west-1")
 
 from db_client import SupabaseClient
-
-
-def score_to_tier(score: float | None) -> str:
-    """Map match_score to tier (S/A/B/C/D)."""
-    if score is None:
-        return "D"
-    if score >= 90:
-        return "S"
-    if score >= 80:
-        return "A"
-    if score >= 70:
-        return "B"
-    if score >= 60:
-        return "C"
-    return "D"
+from score_batch import score_to_tier
 
 
 def main(batch_size: int, delay: int, max_jobs: int | None):
@@ -102,6 +88,7 @@ def main(batch_size: int, delay: int, max_jobs: int | None):
                 "base_hm_score": scores["hiring_manager_score"],
                 "base_tr_score": scores["tech_recruiter_score"],
                 "match_score": scores["match_score"],
+                "score_tier": tier,
                 "score_version": 2,
                 "score_status": "scored",
                 "scored_at": datetime.now(timezone.utc).isoformat(),
