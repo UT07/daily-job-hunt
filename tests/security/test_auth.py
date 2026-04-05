@@ -43,6 +43,7 @@ PROTECTED_ENDPOINTS = [
     ("GET", "/api/quality-stats", None),
     ("POST", "/api/resumes/upload", None),
     ("GET", "/api/resumes", None),
+    ("POST", "/api/feedback/flag-score", {"job_id": "job-abc123"}),
 ]
 
 

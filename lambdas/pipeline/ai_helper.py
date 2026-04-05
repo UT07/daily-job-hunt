@@ -19,12 +19,15 @@ def get_supabase():
     return create_client(get_param("/naukribaba/SUPABASE_URL"), get_param("/naukribaba/SUPABASE_SERVICE_KEY"))
 
 
-def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096) -> str:
-    """Call AI provider with 5-provider failover chain.
+def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096, temperature: float = 0.3) -> dict:
+    """Call AI provider with 4-provider failover chain.
 
-    Order: Groq (fastest) → NVIDIA NIM (free credits, many models) → DeepSeek
+    Order: Groq (fastest) → NVIDIA NIM (free credits, many models)
     → OpenRouter (free tier) → Qwen. Each provider is tried once; on failure
     (rate limit, timeout, error), the next provider is attempted.
+
+    DeepSeek direct API removed — credits exhausted (402). DeepSeek models
+    are still accessible via NVIDIA NIM and OpenRouter.
     """
     providers = [
         {"name": "groq", "url": "https://api.groq.com/openai/v1/chat/completions",
@@ -32,9 +35,6 @@ def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096) -> str:
          "timeout": 60},
         {"name": "nvidia", "url": "https://integrate.api.nvidia.com/v1/chat/completions",
          "key_param": "/naukribaba/NVIDIA_API_KEY", "model": "meta/llama-3.3-70b-instruct",
-         "timeout": 120},
-        {"name": "deepseek", "url": "https://api.deepseek.com/v1/chat/completions",
-         "key_param": "/naukribaba/DEEPSEEK_API_KEY", "model": "deepseek-chat",
          "timeout": 120},
         {"name": "openrouter", "url": "https://openrouter.ai/api/v1/chat/completions",
          "key_param": "/naukribaba/OPENROUTER_API_KEY", "model": "google/gemini-2.0-flash-exp:free",
@@ -64,13 +64,13 @@ def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096) -> str:
                 provider["url"],
                 headers=headers,
                 json={"model": provider["model"], "messages": messages,
-                      "max_tokens": max_tokens, "temperature": 0.3},
+                      "max_tokens": max_tokens, "temperature": temperature},
                 timeout=provider.get("timeout", 60),
             )
             if resp.status_code == 200:
                 content = resp.json()["choices"][0]["message"]["content"]
                 logger.info(f"[ai] {provider['name']}/{provider['model']} succeeded")
-                return content
+                return {"content": content, "provider": provider["name"], "model": provider["model"]}
             elif resp.status_code == 429:
                 logger.warning(f"[ai] {provider['name']} rate limited, trying next")
             else:
@@ -82,28 +82,32 @@ def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096) -> str:
     raise RuntimeError(f"All {len(providers)} AI providers failed. Last error: {last_error}")
 
 
-def ai_complete_cached(prompt: str, system: str = "", cache_hours: int = 72) -> str:
-    """AI complete with Supabase cache."""
+def ai_complete_cached(prompt: str, system: str = "", cache_hours: int = 72, temperature: float = 0.3) -> dict:
+    """AI complete with Supabase cache. Returns dict with content, provider, model."""
     cache_key = hashlib.md5(f"{system}|{prompt}".encode()).hexdigest()
     db = get_supabase()
 
     # Check cache
-    cached = db.table("ai_cache").select("response") \
+    cached = db.table("ai_cache").select("response, provider, model") \
         .eq("cache_key", cache_key) \
         .gte("expires_at", datetime.utcnow().isoformat()).execute()
     if cached.data:
-        return cached.data[0]["response"]
+        return {
+            "content": cached.data[0]["response"],
+            "provider": cached.data[0].get("provider", "cache"),
+            "model": cached.data[0].get("model", "cache")
+        }
 
     # Call AI
-    response = ai_complete(prompt, system)
+    result = ai_complete(prompt, system, temperature=temperature)
 
     # Cache result
     db.table("ai_cache").upsert({
         "cache_key": cache_key,
-        "response": response,
-        "provider": "groq",
-        "model": "auto",
+        "response": result["content"],
+        "provider": result["provider"],
+        "model": result["model"],
         "expires_at": (datetime.utcnow() + timedelta(hours=cache_hours)).isoformat(),
     }, on_conflict="cache_key").execute()
 
-    return response
+    return result

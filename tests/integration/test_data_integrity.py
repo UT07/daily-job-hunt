@@ -97,7 +97,7 @@ class TestScraperOutputSchema:
 
     @pytest.mark.integration
     def test_normalize_job_truncates_long_fields(self):
-        """Fields should be truncated to schema limits."""
+        """Fields should be truncated to schema limits (except description)."""
         from normalizers import normalize_job
 
         raw = {
@@ -110,7 +110,9 @@ class TestScraperOutputSchema:
         result = normalize_job(raw, source="test")
         assert len(result["title"]) <= 500
         assert len(result["company"]) <= 200
-        assert len(result["description"]) <= 10000
+        # Description is stored in full — scoring accuracy depends on the
+        # complete JD (spec requires no truncation).
+        assert len(result["description"]) == 20000
         assert len(result["location"]) <= 200
         assert len(result["apply_url"]) <= 1000
 
@@ -328,8 +330,8 @@ class TestJobHashUniqueness:
         assert h1 != h2
 
     @pytest.mark.integration
-    def test_hash_is_md5_hex(self):
-        """job_hash should be a valid 32-char MD5 hex digest."""
+    def test_hash_is_12_char_hex(self):
+        """job_hash should be a valid 12-char hex digest (canonical_hash)."""
         from normalizers import normalize_job
 
         result = normalize_job(
@@ -337,7 +339,7 @@ class TestJobHashUniqueness:
             source="test",
         )
         h = result["job_hash"]
-        assert len(h) == 32
+        assert len(h) == 12
         assert all(c in "0123456789abcdef" for c in h)
 
     @pytest.mark.integration
@@ -367,7 +369,7 @@ class TestScoreBatchJobRecords:
         "job_hash": "abc123",
         "title": "Python Developer",
         "company": "TestCorp",
-        "description": "Build Python APIs.",
+        "description": "Build Python APIs using FastAPI and PostgreSQL. 3+ years of backend experience required. Experience with AWS Lambda and Step Functions a plus.",
         "location": "Dublin",
         "apply_url": "https://testcorp.com/jobs/1",
         "source": "linkedin",
@@ -375,15 +377,19 @@ class TestScoreBatchJobRecords:
 
     SAMPLE_RESUME = {"tex_content": r"\documentclass{article}\begin{document}Skills: Python\end{document}"}
 
-    VALID_AI_RESPONSE = json.dumps({
-        "match_score": 85,
-        "ats_score": 82,
-        "hiring_manager_score": 86,
-        "tech_recruiter_score": 87,
-        "reasoning": "Good Python match.",
-        "key_matches": ["Python", "API"],
-        "gaps": ["AWS experience"],
-    })
+    VALID_AI_RESPONSE = {
+        "content": json.dumps({
+            "match_score": 85,
+            "ats_score": 82,
+            "hiring_manager_score": 86,
+            "tech_recruiter_score": 87,
+            "reasoning": "Good Python match.",
+            "key_matches": ["Python", "API"],
+            "gaps": ["AWS experience"],
+        }),
+        "provider": "groq",
+        "model": "llama-3.3-70b-versatile",
+    }
 
     @pytest.mark.integration
     def test_insert_payload_has_all_required_fields(self):

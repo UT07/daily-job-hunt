@@ -47,7 +47,8 @@ Resume LaTeX:
 
 Return ONLY the tailored LaTeX document. No explanation."""
 
-    tailored_tex = ai_complete(prompt, system=system_prompt)
+    response_dict = ai_complete(prompt, system=system_prompt)
+    tailored_tex = response_dict["content"]
 
     # Write to S3
     tex_key = f"users/{user_id}/resumes/{job_hash}_tailored.tex"
@@ -56,6 +57,7 @@ Return ONLY the tailored LaTeX document. No explanation."""
     # Update job record (only columns that exist)
     db.table("jobs").update({
         "resume_version": 1,
+        "tailoring_model": f"{response_dict.get('provider', 'council')}:{response_dict.get('model', 'consensus')}",
     }).eq("user_id", user_id).eq("job_hash", job_hash).execute()
 
     logger.info(f"[tailor] {'Light' if light_touch else 'Full'} tailor for {job_hash}")

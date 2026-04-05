@@ -300,6 +300,7 @@ def handler(event, context):
         now = datetime.now(timezone.utc).isoformat()
         for job in all_jobs:
             job["scraped_at"] = now
+            job.pop("description_quality", None)  # not in DB schema yet
         db.table("jobs_raw").upsert(all_jobs, on_conflict="job_hash").execute()
 
     logger.info(f"[indeed] {len(all_jobs)} jobs saved")

@@ -10,11 +10,10 @@ Supports two modes:
 
 Supported providers (all have free tiers):
   1. Groq (Llama 3.3 70B + others) — 30 RPM, 14,400 RPD (fastest)
-  2. DeepSeek (DeepSeek V3)         — 60 RPM, ~500K tokens/day (structured output)
-  3. OpenRouter (free models)       — aggregator with many free models
-  4. NVIDIA NIM                     — free credits, DeepSeek/Kimi/Qwen/Mistral
-  5. Qwen (DashScope)               — free tier, strong quality
-  6. Anthropic Claude               — paid, premium fallback only
+  2. OpenRouter (free models)       — aggregator with many free models
+  3. NVIDIA NIM                     — free credits, DeepSeek/Kimi/Qwen/Mistral
+  4. Qwen (DashScope)               — free tier, strong quality
+  5. Anthropic Claude               — paid, premium fallback only
 
 The client tries providers in order and fails over automatically.
 Responses are cached in SQLite to avoid burning quota on repeated requests.
@@ -365,52 +364,6 @@ class OpenRouterProvider(AIProvider):
             },
             json={"model": self.model, "messages": messages, "temperature": temp, "max_tokens": self.max_tokens},
             timeout=90,
-        )
-
-        if resp.status_code == 429:
-            raise RateLimitError(f"[{self.name}] HTTP 429 — rate limited")
-        resp.raise_for_status()
-
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
-
-
-class DeepSeekProvider(AIProvider):
-    """DeepSeek API — free tier, very capable for structured tasks.
-
-    DeepSeek V3 is competitive with GPT-4o and Claude Sonnet on coding
-    and structured output tasks. The API is OpenAI-compatible.
-    Free tier: ~500K tokens/day, 60 RPM.
-    Sign up: https://platform.deepseek.com/
-    """
-
-    def __init__(self, api_key: str, model: str = "deepseek-chat", **kwargs):
-        super().__init__(
-            name="deepseek",
-            model=model,
-            api_key=api_key,
-            rate_limiter=RateLimiter(requests_per_minute=60, requests_per_day=5000),
-            base_url="https://api.deepseek.com/v1",
-            **kwargs,
-        )
-
-    def complete(self, prompt: str, system: str = "", temperature: float = None) -> str:
-        import requests
-
-        if not self.rate_limiter.acquire():
-            raise RateLimitError(f"[{self.name}] Rate limit exceeded")
-
-        temp = temperature if temperature is not None else self.temperature
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
-
-        resp = requests.post(
-            f"{self.base_url}/chat/completions",
-            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
-            json={"model": self.model, "messages": messages, "temperature": temp, "max_tokens": self.max_tokens},
-            timeout=120,  # DeepSeek can be slower than Groq
         )
 
         if resp.status_code == 429:
@@ -1198,8 +1151,9 @@ class AIClient:
         """Build client from config.yaml settings.
 
         Initializes providers based on available API keys.
-        Priority order: Qwen → Groq → NVIDIA NIM → OpenRouter → DeepSeek
-        (Gemini intentionally excluded — user reserves it for other purposes.)
+        Priority order: Qwen → Groq → NVIDIA NIM → OpenRouter
+        (Gemini intentionally excluded — user reserves it for other purposes.
+        DeepSeek removed — credits exhausted, accessible via NVIDIA NIM + OpenRouter.)
         """
         providers = []
         ai_cfg = config.get("ai", {})
@@ -1214,8 +1168,9 @@ class AIClient:
 
         # ── LLM Council: all free models, ordered by preference ──
         # Strategy: Qwen (preferred) → Groq (fastest) → NVIDIA NIM (deep catalog)
-        # → OpenRouter (many free models) → DeepSeek (if credits remain).
-        # DeepSeek is accessed via NVIDIA NIM + OpenRouter too (free there).
+        # → OpenRouter (many free models).
+        # DeepSeek direct API removed (credits exhausted, 402 errors).
+        # DeepSeek models still accessible via NVIDIA NIM + OpenRouter (free there).
         # No paid providers (Anthropic removed).
 
         # 1. Qwen (Alibaba DashScope — user preferred, free tier)
@@ -1277,19 +1232,13 @@ class AIClient:
                 providers.append(OpenRouterProvider(api_key=or_key, model=model))
             logger.info(f"[AI] OpenRouter council: {len(or_models)} free models")
 
-        # 5. DeepSeek direct API — DISABLED (credits exhausted, 402 errors)
-        # ds_key = get_key("deepseek", "DEEPSEEK_API_KEY")
-        # if ds_key:
-        #     providers.append(DeepSeekProvider(api_key=ds_key, model="deepseek-chat"))
-        #     logger.info("[AI] DeepSeek direct: deepseek-chat")
-
         if not providers:
             raise ProviderError(
                 "No AI providers configured. Set at least one API key:\n"
                 "  GROQ_API_KEY       — https://console.groq.com/keys (free, recommended)\n"
                 "  OPENROUTER_API_KEY — https://openrouter.ai/keys (free models)\n"
-                "  DEEPSEEK_API_KEY   — https://platform.deepseek.com/ (free)\n"
-                "  ANTHROPIC_API_KEY  — https://console.anthropic.com/ (paid)"
+                "  NVIDIA_API_KEY     — https://build.nvidia.com (free credits)\n"
+                "  QWEN_API_KEY       — https://dashscope.console.aliyun.com (free tier)"
             )
 
         logger.info(f"[AI] Total providers in council: {len(providers)}")

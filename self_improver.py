@@ -622,6 +622,302 @@ def run_self_improvement(output_dir: str = "output", config_path: str = "config.
     return report
 
 
+def generate_adjustments(
+    scraper_stats: dict = None,
+    score_stats: dict = None,
+    quality_stats: dict = None,
+    model_stats: dict = None,
+    keyword_stats: dict = None,
+) -> list[dict]:
+    """Analyze pipeline metrics and generate tiered adjustments.
+
+    Returns a list of adjustment dicts, each with:
+    - adjustment_type: what kind of change (scraper_config, score_threshold, prompt_change, ...)
+    - risk_level: "low" | "medium" | "high"
+    - status: "auto_applied" (low/medium) or "pending" (high, needs human review)
+    - payload: the concrete change to apply
+    - reason: human-readable explanation
+    - evidence: raw data that triggered this adjustment
+    """
+    adjustments = []
+
+    # Low-risk: disable broken scrapers (3-day zero yield)
+    if scraper_stats:
+        for name, stats in scraper_stats.items():
+            yields = stats.get("yields", [])
+            if len(yields) >= 3 and all(y == 0 for y in yields[-3:]):
+                adjustments.append({
+                    "adjustment_type": "scraper_config",
+                    "risk_level": "low",
+                    "status": "auto_applied",
+                    "payload": {"scraper": name, "action": "disable"},
+                    "reason": f"Scraper '{name}' returned 0 jobs for 3 consecutive runs",
+                    "evidence": {"yields": yields},
+                })
+
+    # Medium-risk: score threshold adjustment
+    if score_stats:
+        if score_stats.get("pct_below_50", 0) > 0.8:
+            adjustments.append({
+                "adjustment_type": "score_threshold",
+                "risk_level": "medium",
+                "status": "auto_applied",
+                "notify": True,
+                "payload": {"min_match_score": max(30, score_stats.get("avg_score", 50) - 10)},
+                "previous_state": {"min_match_score": 50},
+                "reason": (
+                    f"{score_stats['pct_below_50']*100:.0f}% of jobs scored below 50"
+                    " — possible query-resume misalignment"
+                ),
+                "evidence": score_stats,
+            })
+
+    # High-risk: prompt change suggestion (writing quality declining)
+    if quality_stats:
+        if quality_stats.get("trend") == "declining":
+            avg_last = quality_stats.get("avg_last_3", 0)
+            avg_prev = quality_stats.get("avg_prev_3", 0)
+            if avg_prev > 0 and (avg_prev - avg_last) / avg_prev > 0.1:
+                adjustments.append({
+                    "adjustment_type": "prompt_change",
+                    "risk_level": "high",
+                    "status": "pending",
+                    "payload": {"target": "tailoring_prompt", "action": "review_and_update"},
+                    "reason": (
+                        f"Writing quality declining: avg {avg_last:.1f} (last 3 runs)"
+                        f" vs {avg_prev:.1f} (previous 3)"
+                    ),
+                    "evidence": quality_stats,
+                })
+
+    return adjustments
+
+
+def detect_conflicts(adjustments: list[dict]) -> list[dict]:
+    """Detect contradictory adjustments that set the same key to different values.
+
+    Only considers adjustments with status "auto_applied" or "approved".
+    Returns a list of conflict dicts with the conflicting key, both adjustment IDs,
+    and their respective values.
+    """
+    key_values = {}
+    conflicts = []
+    for adj in adjustments:
+        if adj.get("status") not in ("auto_applied", "approved"):
+            continue
+        for key, value in (adj.get("payload") or {}).items():
+            if key in key_values and key_values[key]["value"] != value:
+                conflicts.append({
+                    "key": key,
+                    "adjustment_a": key_values[key]["id"],
+                    "value_a": key_values[key]["value"],
+                    "adjustment_b": adj.get("id", "new"),
+                    "value_b": value,
+                })
+            key_values[key] = {"id": adj.get("id", "new"), "value": value}
+    return conflicts
+
+
+def analyze_query_effectiveness(query_stats: dict, threshold: float = 0.05, min_runs: int = 3) -> list[dict]:
+    """Flag search queries with consistently low match rates."""
+    suggestions = []
+    for query, stats in query_stats.items():
+        rates = stats.get("match_rates", [])
+        if len(rates) >= min_runs and all(r < threshold for r in rates[-min_runs:]):
+            suggestions.append({
+                "adjustment_type": "keyword_weight",
+                "risk_level": "medium",
+                "status": "auto_applied",
+                "notify": True,
+                "payload": {"query": query, "action": "suggest_modification"},
+                "reason": f"Query '{query}' has <{threshold*100:.0f}% match rate for {min_runs}+ consecutive runs",
+                "evidence": {"match_rates": rates},
+            })
+    return sorted(suggestions, key=lambda s: min(s["evidence"]["match_rates"]))
+
+
+def analyze_keyword_gaps_for_resume(keyword_stats: dict, min_jobs: int = 25) -> list[dict]:
+    """Suggest base resume updates for consistently missing keywords.
+
+    When keyword gap analysis across many matched JDs shows a skill appearing
+    in ``min_jobs`` or more descriptions, it likely belongs on the base resume.
+    Each suggestion is a medium-risk quality flag that the user reviews on the
+    dashboard before approving changes to their base resume.
+
+    Args:
+        keyword_stats: Mapping of keyword -> {"count": int, "avg_job_score": float}.
+        min_jobs: Minimum number of JD appearances to trigger a suggestion.
+
+    Returns:
+        List of adjustment dicts sorted by count descending.
+    """
+    suggestions = []
+    for keyword, stats in keyword_stats.items():
+        if stats["count"] >= min_jobs:
+            suggestions.append({
+                "adjustment_type": "quality_flag",
+                "risk_level": "medium",
+                "status": "auto_applied",
+                "notify": True,
+                "payload": {"keyword": keyword, "action": "add_to_base_resume"},
+                "reason": f"Consider adding '{keyword}' to base resume — appeared in {stats['count']} of top matched JDs (avg score: {stats['avg_job_score']})",
+                "evidence": stats,
+            })
+    return sorted(suggestions, key=lambda s: s["evidence"]["count"], reverse=True)
+
+
+def should_revert_adjustment(adjustment: dict, run_metrics: list[dict], threshold: float = 0.05) -> bool:
+    """Check if an adjustment worsened metrics over 3+ runs.
+
+    Compares the average base score from the 3 runs after the adjustment was applied
+    against the baseline (run before the adjustment). If the average dropped by more
+    than ``threshold`` (as a fraction of the baseline), returns True.
+
+    Args:
+        adjustment: The adjustment dict (unused but kept for interface consistency).
+        run_metrics: List of run metric dicts ordered chronologically. Index 0 is
+            the baseline (before adjustment), indices 1-3 are post-adjustment runs.
+        threshold: Fractional decline that triggers a revert (default 5%).
+
+    Returns:
+        True if the adjustment should be reverted.
+    """
+    if len(run_metrics) < 4:
+        return False
+    before = run_metrics[0].get("avg_base_score", 0)
+    after_avg = sum(r.get("avg_base_score", 0) for r in run_metrics[1:4]) / 3
+    if before == 0:
+        return False
+    change = (after_avg - before) / before
+    return change < -threshold
+
+
+def should_revert_or_extend(adjustment: dict, run_metrics: list[dict], threshold: float = 0.05) -> str:
+    """Extended evaluation: 3 runs -> revert/confirm. Inconclusive -> extend to 5.
+
+    Decision logic:
+    - Fewer than 4 data points: "wait" (not enough data).
+    - 3-run average dropped > threshold: "revert".
+    - 3-run average improved > threshold: "confirm".
+    - Inconclusive (change within +/- threshold):
+        - If 6+ data points available, evaluate 5-run average. Drop -> "revert", else "confirm".
+        - Otherwise: "extend" (need more runs).
+
+    Args:
+        adjustment: The adjustment dict (unused but kept for interface consistency).
+        run_metrics: Chronological list of run metric dicts. Index 0 = baseline.
+        threshold: Fractional change threshold (default 5%).
+
+    Returns:
+        One of "wait", "revert", "confirm", or "extend".
+    """
+    if len(run_metrics) < 4:
+        return "wait"
+    before = run_metrics[0].get("avg_base_score", 0)
+    if before == 0:
+        return "wait"
+
+    after_3 = sum(r.get("avg_base_score", 0) for r in run_metrics[1:4]) / 3
+    change_3 = (after_3 - before) / before
+
+    if change_3 < -threshold:
+        return "revert"
+    if change_3 > threshold:
+        return "confirm"
+
+    # Inconclusive at 3 runs — try 5 if available
+    if len(run_metrics) >= 6:
+        after_5 = sum(r.get("avg_base_score", 0) for r in run_metrics[1:6]) / 5
+        change_5 = (after_5 - before) / before
+        if change_5 < -threshold:
+            return "revert"
+        return "confirm"
+
+    return "extend"
+
+
+def is_on_cooldown(adjustment: dict) -> bool:
+    """Check if a reverted adjustment is still in its cooldown period.
+
+    Only reverted adjustments can be on cooldown. Compares the current time
+    against the ``cooldown_until`` ISO timestamp stored on the adjustment.
+
+    Args:
+        adjustment: Adjustment dict with at least "status" and optionally
+            "cooldown_until" fields.
+
+    Returns:
+        True if the adjustment is reverted and the cooldown has not expired.
+    """
+    if adjustment.get("status") != "reverted":
+        return False
+    cooldown_until = adjustment.get("cooldown_until")
+    if cooldown_until:
+        return datetime.now().isoformat() < cooldown_until
+    return False
+
+
+def execute_revert(db, adjustment: dict, cooldown_runs: int = 5):
+    """Revert an adjustment and set a cooldown period.
+
+    Marks the adjustment as "reverted" in the database and, if the adjustment
+    stored its ``previous_state``, inserts a new auto-applied adjustment that
+    restores the prior configuration.
+
+    Args:
+        db: Supabase client instance.
+        adjustment: The adjustment dict to revert (must have "id" and "user_id").
+        cooldown_runs: Number of days for the cooldown period (default 5).
+    """
+    cooldown_until = (datetime.now() + timedelta(days=cooldown_runs)).isoformat()
+    db.table("pipeline_adjustments").update({
+        "status": "reverted",
+        "reverted_at": datetime.now().isoformat(),
+        "cooldown_until": cooldown_until,
+    }).eq("id", adjustment["id"]).execute()
+
+    if adjustment.get("previous_state"):
+        db.table("pipeline_adjustments").insert({
+            "user_id": adjustment["user_id"],
+            "adjustment_type": adjustment["adjustment_type"],
+            "risk_level": "low",
+            "status": "auto_applied",
+            "payload": adjustment["previous_state"],
+            "reason": f"Auto-revert of adjustment {adjustment['id']}",
+            "evidence": {"reverted_from": adjustment["id"]},
+        }).execute()
+
+
+def save_pipeline_run(db, user_id: str, run_data: dict):
+    """Save pipeline run metrics to Supabase.
+
+    Inserts a row into the ``pipeline_runs`` table with timing information,
+    job counts, score averages, and per-scraper/model statistics.
+
+    Args:
+        db: Supabase client instance.
+        user_id: The user who owns this pipeline run.
+        run_data: Dict with run metrics (jobs_scraped, avg_base_score, etc.).
+    """
+    db.table("pipeline_runs").insert({
+        "user_id": user_id,
+        "started_at": run_data.get("started_at"),
+        "completed_at": datetime.now().isoformat(),
+        "jobs_scraped": run_data.get("jobs_scraped", 0),
+        "jobs_new": run_data.get("jobs_new", 0),
+        "jobs_scored": run_data.get("jobs_scored", 0),
+        "jobs_matched": run_data.get("jobs_matched", 0),
+        "jobs_tailored": run_data.get("jobs_tailored", 0),
+        "avg_base_score": run_data.get("avg_base_score"),
+        "avg_final_score": run_data.get("avg_final_score"),
+        "avg_writing_quality": run_data.get("avg_writing_quality"),
+        "active_adjustments": run_data.get("active_adjustments"),
+        "scraper_stats": run_data.get("scraper_stats"),
+        "model_stats": run_data.get("model_stats"),
+        "status": "completed",
+    }).execute()
+
+
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     report = run_self_improvement()

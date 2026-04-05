@@ -109,6 +109,7 @@ from s3_uploader import upload_artifacts, upload_tracker
 from drive_uploader import upload_artifacts as drive_upload_artifacts, upload_tracker as drive_upload_tracker
 from email_notifier import send_summary_email
 from pipeline_context import PipelineContext
+from lambdas.pipeline.merge_dedup import cross_run_check
 
 
 def _job_to_supabase_row(job: Job) -> dict:
@@ -568,10 +569,58 @@ def global_deduplicate(jobs: List[Job]) -> List[Job]:
     return unique
 
 
-# ── Seen-Jobs Persistence ──────────────────────────────────────────────
+# ── Seen-Jobs Persistence (Supabase) ──────────────────────────────────
+
+def check_seen_job(db, user_id: str, canonical_hash: str) -> dict | None:
+    """Check if job was seen before (Supabase)."""
+    result = db.client.table("seen_jobs").select("*").eq(
+        "user_id", user_id
+    ).eq("canonical_hash", canonical_hash).execute()
+    return result.data[0] if result.data else None
+
+
+def fetch_existing_job_record(db, user_id: str, job_hash: str) -> dict | None:
+    """Fetch an existing scored job row from the ``jobs`` table (if any).
+
+    Used for cross-run reuse: if the same job was scored recently we can skip
+    re-scoring and re-tailoring and reuse cached artifacts. Returns None when
+    no row exists or the query fails.
+    """
+    if not db or not user_id or not job_hash:
+        return None
+    try:
+        result = db.client.table("jobs").select("*").eq(
+            "user_id", user_id
+        ).eq("job_hash", job_hash).limit(1).execute()
+        return result.data[0] if result.data else None
+    except Exception as e:
+        logger.debug(f"[cross-run] fetch_existing_job_record failed for {job_hash}: {e}")
+        return None
+
+
+def upsert_seen_job(db, user_id: str, job: dict, canonical_hash: str):
+    """Track job as seen (Supabase). Updates last_seen if exists."""
+    from datetime import date
+    db.client.table("seen_jobs").upsert({
+        "user_id": user_id,
+        "canonical_hash": canonical_hash,
+        "job_id": job.get("id", job.get("job_id", "")),
+        "title": job.get("title"),
+        "company": job.get("company"),
+        "first_seen": str(date.today()),
+        "last_seen": str(date.today()),
+        "score": job.get("match_score", 0),
+        "matched": (job.get("match_score", 0) or 0) > 0,
+    }, on_conflict="user_id,canonical_hash").execute()
+
 
 def _load_seen_jobs(path: Path) -> dict:
-    """Load seen_jobs.json — {job_id: {first_seen, last_seen, score}}."""
+    """Load seen_jobs.json — {job_id: {first_seen, last_seen, score}}.
+
+    .. deprecated::
+        Legacy fallback used when Supabase is not available.
+        Prefer ``check_seen_job()`` / ``upsert_seen_job()`` with Supabase.
+    """
     if path.exists():
         try:
             with open(path) as f:
@@ -582,14 +631,58 @@ def _load_seen_jobs(path: Path) -> dict:
 
 
 def _save_seen_jobs(seen: dict, path: Path):
-    """Save seen_jobs.json."""
+    """Save seen_jobs.json.
+
+    .. deprecated::
+        Legacy fallback. Prefer ``upsert_seen_job()`` with Supabase.
+    """
     with open(path, "w") as f:
         json.dump(seen, f, indent=2)
 
 
+def _filter_new_jobs_supabase(jobs: List[Job], db, user_id: str,
+                               run_date: str,
+                               max_age_days: int = 7) -> List[Job]:
+    """Filter out recently-seen jobs using Supabase.
+
+    Jobs older than max_age_days are pruned from seen_jobs so they can
+    be re-evaluated after profile changes.
+    """
+    from datetime import datetime, timedelta
+    cutoff = (datetime.strptime(run_date, "%Y-%m-%d") - timedelta(days=max_age_days)).isoformat()[:10]
+
+    # Prune entries older than max_age_days
+    try:
+        pruned = db.client.table("seen_jobs").delete().eq(
+            "user_id", user_id
+        ).lt("first_seen", cutoff).execute()
+        if pruned.data:
+            logger.info(f"Pruned {len(pruned.data)} expired entries from seen_jobs (older than {max_age_days} days)")
+    except Exception as e:
+        logger.warning(f"[DB] Failed to prune seen_jobs: {e}")
+
+    new_jobs = []
+    for job in jobs:
+        existing = check_seen_job(db, user_id, job.job_id)
+        if existing is None:
+            upsert_seen_job(db, user_id, job.to_dict(), job.job_id)
+            new_jobs.append(job)
+        else:
+            # Update last_seen timestamp
+            try:
+                db.client.table("seen_jobs").update(
+                    {"last_seen": run_date}
+                ).eq("user_id", user_id).eq(
+                    "canonical_hash", job.job_id
+                ).execute()
+            except Exception as e:
+                logger.warning(f"[DB] Failed to update last_seen for {job.job_id}: {e}")
+    return new_jobs
+
+
 def _filter_new_jobs(jobs: List[Job], seen: dict, run_date: str,
                      max_age_days: int = 7) -> List[Job]:
-    """Filter out recently-seen jobs. Jobs older than max_age_days are re-evaluated.
+    """Filter out recently-seen jobs (legacy JSON fallback).
 
     This prevents the seen_jobs filter from permanently blocking jobs that
     didn't match on first encounter but might match after profile changes.
@@ -872,10 +965,16 @@ def _run_pipeline_body(context, config, run_date, run_record, dry_run, scrape_on
     logger.info(f"Unique jobs: {len(unique_jobs)} (removed {len(raw_jobs) - len(unique_jobs)} dupes)")
 
     # --- Step 3b: Filter already-seen jobs ---
-    seen_path = base_dir / "seen_jobs.json"
-    seen_jobs = _load_seen_jobs(seen_path)
-    new_jobs = _filter_new_jobs(unique_jobs, seen_jobs, run_date)
-    _save_seen_jobs(seen_jobs, seen_path)
+    if context.db and context.user:
+        # Supabase path — single source of truth
+        new_jobs = _filter_new_jobs_supabase(unique_jobs, context.db, context.user.id, run_date)
+        seen_jobs = None  # not used in Supabase path
+    else:
+        # Legacy JSON fallback
+        seen_path = base_dir / "seen_jobs.json"
+        seen_jobs = _load_seen_jobs(seen_path)
+        new_jobs = _filter_new_jobs(unique_jobs, seen_jobs, run_date)
+        _save_seen_jobs(seen_jobs, seen_path)
     logger.info(f"New jobs: {len(new_jobs)} (already seen: {len(unique_jobs) - len(new_jobs)})")
 
     if scrape_only:
@@ -921,11 +1020,20 @@ def _run_pipeline_body(context, config, run_date, run_record, dry_run, scrape_on
     logger.info(f"Matched jobs (avg >= {min_score}): {len(matched_jobs)}")
 
     # Update seen_jobs with match scores
-    for job in matched_jobs:
-        if job.job_id in seen_jobs:
-            seen_jobs[job.job_id]["score"] = job.match_score
-            seen_jobs[job.job_id]["matched"] = True
-    _save_seen_jobs(seen_jobs, seen_path)
+    if context.db and context.user:
+        # Supabase path — upsert each matched job's score
+        for job in matched_jobs:
+            try:
+                upsert_seen_job(context.db, context.user.id, job.to_dict(), job.job_id)
+            except Exception as e:
+                logger.warning(f"[DB] Failed to update seen_job score for {job.job_id}: {e}")
+    elif seen_jobs is not None:
+        # Legacy JSON fallback
+        for job in matched_jobs:
+            if job.job_id in seen_jobs:
+                seen_jobs[job.job_id]["score"] = job.match_score
+                seen_jobs[job.job_id]["matched"] = True
+        _save_seen_jobs(seen_jobs, base_dir / "seen_jobs.json")
 
     # --- Step 4b: Upsert matched jobs to Supabase ---
     if context.db and matched_jobs:
@@ -983,6 +1091,45 @@ def _run_pipeline_body(context, config, run_date, run_record, dry_run, scrape_on
         job.initial_tr_score = job.tech_recruiter_score
         job.initial_match_score = job.match_score
 
+        # Store the match-time scores as base_* (untailored resume vs JD).
+        # These remain stable even after tailoring re-scores overwrite
+        # ats_score/hm_score/tr_score with the tailored resume's scores.
+        job.base_ats_score = job.ats_score
+        job.base_hm_score = job.hiring_manager_score
+        job.base_tr_score = job.tech_recruiter_score
+
+        # Cross-run check: if this exact job was scored recently for this
+        # user, reuse cached artifacts instead of re-scoring/tailoring.
+        if context.db and context.user:
+            existing = fetch_existing_job_record(context.db, context.user.id, job.job_id)
+            reuse = cross_run_check(existing)
+            if reuse.get("skip_scoring") and reuse.get("skip_tailoring"):
+                artifacts = reuse.get("reuse_artifacts", {}) or {}
+                logger.info(f"[cross-run] Reusing cached artifacts for {job.title} @ {job.company}")
+                for attr, key in (
+                    ("base_ats_score", "base_ats_score"),
+                    ("base_hm_score", "base_hm_score"),
+                    ("base_tr_score", "base_tr_score"),
+                    ("tailored_ats_score", "tailored_ats_score"),
+                    ("tailored_hm_score", "tailored_hm_score"),
+                    ("tailored_tr_score", "tailored_tr_score"),
+                    ("resume_s3_url", "resume_s3_url"),
+                    ("cover_letter_s3_url", "cover_letter_s3_url"),
+                ):
+                    val = artifacts.get(key)
+                    if val is not None:
+                        setattr(job, attr, val)
+                if job.tailored_ats_score or job.tailored_hm_score or job.tailored_tr_score:
+                    job.ats_score = job.tailored_ats_score or job.ats_score
+                    job.hiring_manager_score = job.tailored_hm_score or job.hiring_manager_score
+                    job.tech_recruiter_score = job.tailored_tr_score or job.tech_recruiter_score
+                    job.match_score = round(
+                        (job.ats_score + job.hiring_manager_score + job.tech_recruiter_score) / 3,
+                        1,
+                    )
+                    job.final_score = job.match_score
+                continue
+
         # Check if this resume type has a Google Doc template
         resume_cfg = config.get("resumes", {}).get(job.matched_resume, {})
         google_doc_id = resume_cfg.get("google_doc_id", "")
@@ -1018,6 +1165,12 @@ def _run_pipeline_body(context, config, run_date, run_record, dry_run, scrape_on
             job.hiring_manager_score = scores.get("hiring_manager_score", 0)
             job.tech_recruiter_score = scores.get("tech_recruiter_score", 0)
             job.match_score = round((job.ats_score + job.hiring_manager_score + job.tech_recruiter_score) / 3, 1)
+
+            # Capture tailored scores for before/after comparison
+            job.tailored_ats_score = job.ats_score
+            job.tailored_hm_score = job.hiring_manager_score
+            job.tailored_tr_score = job.tech_recruiter_score
+            job.final_score = job.match_score
 
             # 4. Create Google Doc from template + export PDF
             safe_title = "".join(c for c in job.title if c.isalnum() or c in " _-")[:30].strip()
@@ -1071,6 +1224,12 @@ def _run_pipeline_body(context, config, run_date, run_record, dry_run, scrape_on
                 job.hiring_manager_score = scores.get("hiring_manager_score", 0)
                 job.tech_recruiter_score = scores.get("tech_recruiter_score", 0)
                 job.match_score = round((job.ats_score + job.hiring_manager_score + job.tech_recruiter_score) / 3, 1)
+
+                # Capture tailored scores for before/after comparison
+                job.tailored_ats_score = job.ats_score
+                job.tailored_hm_score = job.hiring_manager_score
+                job.tailored_tr_score = job.tech_recruiter_score
+                job.final_score = job.match_score
 
                 # Save the improved version
                 if improved_tex != tailored_tex:

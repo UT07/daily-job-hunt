@@ -5,7 +5,9 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from abc import ABC, abstractmethod
 from typing import List, Optional
-import hashlib, json
+import json
+
+from utils.canonical_hash import canonical_hash
 
 
 @dataclass
@@ -45,6 +47,15 @@ class Job:
     initial_hm_score: float = 0.0
     initial_tr_score: float = 0.0
 
+    # Base/tailored score tracking for before/after comparison
+    base_ats_score: float = 0.0
+    base_hm_score: float = 0.0
+    base_tr_score: float = 0.0
+    tailored_ats_score: float = 0.0
+    tailored_hm_score: float = 0.0
+    tailored_tr_score: float = 0.0
+    final_score: float = 0.0
+
     # S3 URLs for uploaded artifacts
     resume_s3_url: str = ""
     cover_letter_s3_url: str = ""
@@ -74,8 +85,7 @@ class Job:
 
     def __post_init__(self):
         if not self.job_id:
-            raw = f"{self.title}|{self.company}|{self.location}|{self.source}"
-            self.job_id = hashlib.md5(raw.encode()).hexdigest()[:12]
+            self.job_id = canonical_hash(self.company, self.title, self.description or "")
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -96,11 +106,13 @@ class BaseScraper(ABC):
         ...
 
     def deduplicate(self, jobs: List[Job]) -> List[Job]:
-        seen = set()
-        unique = []
+        seen = {}
         for job in jobs:
-            key = f"{job.title.lower().strip()}|{job.company.lower().strip()}"
-            if key not in seen:
-                seen.add(key)
-                unique.append(job)
-        return unique
+            h = canonical_hash(job.company, job.title, job.description or "")
+            if h in seen:
+                # Keep the version with the longer description
+                if len(job.description or "") > len(seen[h].description or ""):
+                    seen[h] = job
+            else:
+                seen[h] = job
+        return list(seen.values())

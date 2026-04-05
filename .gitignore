@@ -83,5 +83,7 @@ htmlcov/
 # Local Netlify folder
 .netlify
 .mcp.json
-supabase/
+supabase/.branches
+supabase/.temp
+supabase/config.toml
 .superpowers/

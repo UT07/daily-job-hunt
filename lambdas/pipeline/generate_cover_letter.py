@@ -36,7 +36,8 @@ Candidate Resume (LaTeX): {resume_tex[:3000]}
 
 Return ONLY a LaTeX document for the cover letter. Professional format, one page."""
 
-    cover_letter_tex = ai_complete(prompt, system="You are a cover letter expert. Return only LaTeX.")
+    result = ai_complete(prompt, system="You are a cover letter expert. Return only LaTeX.")
+    cover_letter_tex = result["content"]
 
     tex_key = f"users/{user_id}/cover_letters/{job_hash}_cover.tex"
     s3.put_object(Bucket=bucket, Key=tex_key, Body=cover_letter_tex.encode("utf-8"))

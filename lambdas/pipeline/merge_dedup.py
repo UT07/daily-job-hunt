@@ -6,10 +6,11 @@ pre-filter before passing job hashes to score_batch.
 """
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 
 import boto3
+
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -69,6 +70,51 @@ def _extract_tech_keywords(text: str) -> set:
         if re.search(r'\b' + pattern + r'\b', text):
             found.add(pattern.replace("\\", "").replace(".?", ""))
     return found
+
+
+def _richness_score(job: dict) -> tuple:
+    """Score a job dict by data richness for tie-breaking during dedup.
+
+    Returns a tuple (desc_len, field_count, last_seen) so that max() picks
+    the version with the longest description, most populated fields, and
+    most recent scrape timestamp.
+    """
+    desc_len = len(job.get("description", "") or "")
+    field_count = sum(1 for v in job.values() if v is not None and v != "")
+    last_seen = job.get("last_seen", "") or job.get("scraped_at", "") or ""
+    return (desc_len, field_count, last_seen)
+
+
+def should_skip_cross_run(existing_job: dict | None, max_age_days: int = 7) -> bool:
+    """Check if job was scored recently enough to skip re-scoring."""
+    if not existing_job:
+        return False
+    scored_at = existing_job.get("scored_at")
+    if not scored_at:
+        return False
+    scored_dt = datetime.fromisoformat(scored_at.replace("Z", "+00:00"))
+    return (datetime.now(scored_dt.tzinfo) - scored_dt) < timedelta(days=max_age_days)
+
+
+def cross_run_check(existing_job: dict | None, max_age_days: int = 7) -> dict:
+    """Check if job was recently processed. Returns reuse instructions."""
+    if not existing_job or not should_skip_cross_run(existing_job, max_age_days):
+        return {"skip_scoring": False, "skip_tailoring": False, "reuse_artifacts": {}}
+    return {
+        "skip_scoring": True,
+        "skip_tailoring": True,
+        "reuse_artifacts": {
+            "base_ats_score": existing_job.get("base_ats_score"),
+            "base_hm_score": existing_job.get("base_hm_score"),
+            "base_tr_score": existing_job.get("base_tr_score"),
+            "tailored_ats_score": existing_job.get("tailored_ats_score"),
+            "tailored_hm_score": existing_job.get("tailored_hm_score"),
+            "tailored_tr_score": existing_job.get("tailored_tr_score"),
+            "resume_s3_url": existing_job.get("resume_s3_url"),
+            "cover_letter_s3_url": existing_job.get("cover_letter_s3_url"),
+            "writing_quality_score": existing_job.get("writing_quality_score"),
+        },
+    }
 
 
 def _prefilter_job(job: dict, user_skills: set) -> tuple[bool, str]:
@@ -139,7 +185,7 @@ def handler(event, context):
     for job in all_jobs:
         h = job["job_hash"]
         existing = by_hash.get(h)
-        if not existing or len(job.get("description") or "") > len(existing.get("description") or ""):
+        if not existing or _richness_score(job) > _richness_score(existing):
             by_hash[h] = job
 
     # --- Tier 2: Fuzzy title+company dedup ---
@@ -153,8 +199,8 @@ def handler(event, context):
         for existing_key, existing_job in seen_fuzzy.items():
             ex_company, ex_title = existing_key.split("|", 1)
             if _fuzzy_match(norm_company, ex_company, 0.8) and _fuzzy_match(norm_title, ex_title, 0.7):
-                # Keep the version with longer description
-                if len(job.get("description") or "") > len(existing_job.get("description") or ""):
+                # Keep the richest version
+                if _richness_score(job) > _richness_score(existing_job):
                     seen_fuzzy[existing_key] = job
                 matched = True
                 break

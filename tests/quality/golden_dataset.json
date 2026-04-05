@@ -1,0 +1,6 @@
+{
+  "_comment": "Golden dataset: 25 JD+resume pairs, human-labeled. Utkarsh must label these from dashboard jobs.",
+  "_instructions": "Select 25 jobs from the 177 in the dashboard. Label each as strong_match (5), good_match (8), weak_match (7), or no_match (5). Include the JD and base resume text.",
+  "_created": "2026-04-04",
+  "pairs": []
+}

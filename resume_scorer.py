@@ -149,6 +149,35 @@ For plain text JSON input: Return ONLY valid JSON with the same keys as the inpu
 {"SUMMARY": "improved text...", "SKILLS": "improved text...", "CLOVER_BULLETS": "improved text..."}"""
 
 
+def format_improvement_feedback(scores: dict, feedback: dict) -> str:
+    """Format scoring results into structured improvement instructions."""
+    lines = ["FEEDBACK FROM SCORING:"]
+
+    perspectives = [
+        ("ATS", "ats_score", "ats_feedback"),
+        ("Hiring Manager", "hiring_manager_score", "hm_feedback"),
+        ("Tech Recruiter", "tech_recruiter_score", "tr_feedback"),
+    ]
+
+    changes = []
+    for name, score_key, feedback_key in perspectives:
+        score = scores.get(score_key, 0)
+        fb = feedback.get(feedback_key, "No specific feedback")
+        lines.append(f"- {name} (score: {score}): {fb}")
+        if score < 85:
+            changes.append(fb)
+
+    lines.append("")
+    lines.append("APPLY THESE SPECIFIC CHANGES:")
+    for i, change in enumerate(changes, 1):
+        lines.append(f"{i}. {change}")
+
+    if not changes:
+        lines.append("All perspectives scored 85+. Make only minor polish edits.")
+
+    return "\n".join(lines)
+
+
 def score_resume(
     tailored_tex: str,
     job: Job,
@@ -177,7 +206,7 @@ Evaluate from all 3 perspectives (ATS, Hiring Manager, Technical Recruiter)."""
         info = ai_client.complete_with_info(
             prompt=prompt,
             system=SCORER_SYSTEM_PROMPT,
-            temperature=0.2,
+            temperature=0,
         )
         result_text = info["response"]
 
@@ -249,7 +278,7 @@ Evaluate from all 3 perspectives (ATS, Hiring Manager, Technical Recruiter)."""
         info = ai_client.complete_with_info(
             prompt=prompt,
             system=SCORER_SYSTEM_PROMPT,
-            temperature=0.2,
+            temperature=0,
         )
         result_text = info["response"]
 
@@ -291,13 +320,7 @@ def improve_resume(
 ) -> str:
     """Apply improvement suggestions to raise scores above 85."""
     improvements = scores.get("improvements", [])
-    feedback_parts = []
-    if scores.get("ats_score", 0) < 85:
-        feedback_parts.append(f"ATS ({scores['ats_score']}): {scores.get('ats_feedback', '')}")
-    if scores.get("hiring_manager_score", 0) < 85:
-        feedback_parts.append(f"Hiring Manager ({scores['hiring_manager_score']}): {scores.get('hm_feedback', '')}")
-    if scores.get("tech_recruiter_score", 0) < 85:
-        feedback_parts.append(f"Tech Recruiter ({scores['tech_recruiter_score']}): {scores.get('tr_feedback', '')}")
+    structured_feedback = format_improvement_feedback(scores, scores)
 
     prompt = f"""Improve this resume based on the scoring feedback:
 
@@ -307,8 +330,7 @@ JOB LISTING:
 - Description:
 {job.description[:3000]}
 
-SCORES & FEEDBACK (need all 85+):
-{chr(10).join(feedback_parts)}
+{structured_feedback}
 
 SPECIFIC IMPROVEMENTS TO MAKE:
 {chr(10).join(f'- {imp}' for imp in improvements)}
@@ -374,13 +396,7 @@ def improve_resume_text(
 ) -> Dict[str, str]:
     """Apply improvements to plain text sections. Returns updated sections dict."""
     improvements = scores.get("improvements", [])
-    feedback_parts = []
-    if scores.get("ats_score", 0) < 85:
-        feedback_parts.append(f"ATS ({scores['ats_score']}): {scores.get('ats_feedback', '')}")
-    if scores.get("hiring_manager_score", 0) < 85:
-        feedback_parts.append(f"Hiring Manager ({scores['hiring_manager_score']}): {scores.get('hm_feedback', '')}")
-    if scores.get("tech_recruiter_score", 0) < 85:
-        feedback_parts.append(f"Tech Recruiter ({scores['tech_recruiter_score']}): {scores.get('tr_feedback', '')}")
+    structured_feedback = format_improvement_feedback(scores, scores)
 
     sections_json = json.dumps(sections, indent=2)
 
@@ -392,8 +408,7 @@ JOB LISTING:
 - Description:
 {job.description[:3000]}
 
-SCORES & FEEDBACK (need all 85+):
-{chr(10).join(feedback_parts)}
+{structured_feedback}
 
 SPECIFIC IMPROVEMENTS TO MAKE:
 {chr(10).join(f'- {imp}' for imp in improvements)}

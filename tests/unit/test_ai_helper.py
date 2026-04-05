@@ -1,12 +1,51 @@
 """Unit tests for lambdas/pipeline/ai_helper.py."""
 import hashlib
+import sys
 from datetime import datetime, timedelta
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
 from ai_helper import ai_complete, ai_complete_cached
+
+# Also import ai_client from project root for provider-class tests
+_project_root = str(Path(__file__).parent.parent.parent)
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
+
+# ---------------------------------------------------------------------------
+# DeepSeek removal — the provider should not exist anywhere in the codebase
+# ---------------------------------------------------------------------------
+
+class TestDeepSeekRemoved:
+    """Verify DeepSeek has been fully removed from the provider chain."""
+
+    def test_deepseek_provider_class_not_in_ai_client(self):
+        """DeepSeekProvider class must not exist in ai_client module."""
+        import ai_client as mod
+        provider_classes = [
+            name for name in dir(mod)
+            if name.endswith("Provider") and name != "AIProvider"
+        ]
+        assert "DeepSeekProvider" not in provider_classes
+
+    def test_deepseek_not_in_lambda_ai_helper_providers(self):
+        """DeepSeek must not appear as a provider in the ai_helper failover chain."""
+        # Inspect the source of ai_complete — check that no provider dict
+        # has name="deepseek" or key_param referencing DEEPSEEK.
+        # Comments explaining the removal are allowed.
+        import inspect
+        source = inspect.getsource(ai_complete)
+        # Check for provider dict entries (the actual provider configuration)
+        assert '"name": "deepseek"' not in source, (
+            "ai_helper.ai_complete still has deepseek as a provider"
+        )
+        assert "DEEPSEEK_API_KEY" not in source, (
+            "ai_helper.ai_complete still references DEEPSEEK_API_KEY"
+        )
 
 
 def _make_ok_response(content: str) -> MagicMock:
@@ -39,7 +78,7 @@ class TestAiComplete:
              patch("httpx.post", return_value=_make_ok_response("Hello!")):
             result = ai_complete("Say hello")
 
-        assert result == "Hello!"
+        assert result == {"content": "Hello!", "provider": "groq", "model": "llama-3.3-70b-versatile"}
 
     def test_tries_next_provider_when_first_fails_with_exception(self):
         """When the first provider raises an exception, the second provider is tried."""
@@ -58,7 +97,8 @@ class TestAiComplete:
              patch("httpx.post", side_effect=post_side_effect):
             result = ai_complete("prompt")
 
-        assert result == "From provider 2"
+        assert result["content"] == "From provider 2"
+        assert result["provider"] == "nvidia"
         assert call_count == 2
 
     def test_tries_next_provider_when_first_rate_limited(self):
@@ -70,7 +110,7 @@ class TestAiComplete:
              patch("httpx.post", side_effect=[rate_limit_resp, ok_resp]):
             result = ai_complete("prompt")
 
-        assert result == "From provider 2"
+        assert result["content"] == "From provider 2"
 
     def test_tries_next_provider_when_first_returns_500(self):
         """When the first provider returns a 5xx error, the second provider is tried."""
@@ -81,13 +121,13 @@ class TestAiComplete:
              patch("httpx.post", side_effect=[error_resp, ok_resp]):
             result = ai_complete("prompt")
 
-        assert result == "Recovered"
+        assert result["content"] == "Recovered"
 
     def test_raises_runtime_error_when_all_providers_fail(self):
         """When every provider fails, a RuntimeError is raised."""
         with patch("ai_helper.get_param", return_value="real-api-key"), \
              patch("httpx.post", side_effect=httpx.ConnectError("All down")):
-            with pytest.raises(RuntimeError, match="All 5 AI providers failed"):
+            with pytest.raises(RuntimeError, match="All 4 AI providers failed"):
                 ai_complete("prompt")
 
     def test_raises_runtime_error_when_all_providers_rate_limited(self):
@@ -96,7 +136,7 @@ class TestAiComplete:
 
         with patch("ai_helper.get_param", return_value="real-api-key"), \
              patch("httpx.post", return_value=rate_limit_resp):
-            with pytest.raises(RuntimeError, match="All 5 AI providers failed"):
+            with pytest.raises(RuntimeError, match="All 4 AI providers failed"):
                 ai_complete("prompt")
 
     def test_skips_providers_with_mock_value_key(self):
@@ -175,7 +215,7 @@ class TestAiCompleteCached:
         mock_table.eq.return_value = mock_table
         mock_table.gte.return_value = mock_table
         mock_table.execute.return_value = MagicMock(
-            data=[{"response": "cached answer"}]
+            data=[{"response": "cached answer", "provider": "cache", "model": "cache"}]
         )
         mock_db.table.return_value = mock_table
 
@@ -183,7 +223,7 @@ class TestAiCompleteCached:
              patch("ai_helper.ai_complete") as mock_ai:
             result = ai_complete_cached("hello", system="sys")
 
-        assert result == "cached answer"
+        assert result == {"content": "cached answer", "provider": "cache", "model": "cache"}
         mock_ai.assert_not_called()
 
     def test_calls_ai_on_cache_miss(self):
@@ -198,11 +238,11 @@ class TestAiCompleteCached:
         mock_db.table.return_value = mock_table
 
         with patch("ai_helper.get_supabase", return_value=mock_db), \
-             patch("ai_helper.ai_complete", return_value="fresh answer") as mock_ai:
+             patch("ai_helper.ai_complete", return_value={"content": "fresh answer", "provider": "p1", "model": "m1"}) as mock_ai:
             result = ai_complete_cached("hello", system="sys")
 
-        assert result == "fresh answer"
-        mock_ai.assert_called_once_with("hello", "sys")
+        assert result == {"content": "fresh answer", "provider": "p1", "model": "m1"}
+        mock_ai.assert_called_once_with("hello", "sys", temperature=0.3)
 
     def test_writes_to_cache_on_miss(self):
         """After a cache miss + AI call, the result is upserted into the cache."""
@@ -216,7 +256,7 @@ class TestAiCompleteCached:
         mock_db.table.return_value = mock_table
 
         with patch("ai_helper.get_supabase", return_value=mock_db), \
-             patch("ai_helper.ai_complete", return_value="new response"):
+             patch("ai_helper.ai_complete", return_value={"content": "new response", "provider": "p1", "model": "m1"}):
             ai_complete_cached("my prompt", system="my system", cache_hours=24)
 
         # Verify upsert was called with the right cache key and response
@@ -246,7 +286,7 @@ class TestAiCompleteCached:
         mock_db.table.return_value = mock_table
 
         with patch("ai_helper.get_supabase", return_value=mock_db), \
-             patch("ai_helper.ai_complete", return_value="response"):
+             patch("ai_helper.ai_complete", return_value={"content": "response", "provider": "p1", "model": "m1"}):
             ai_complete_cached("same prompt", system="system A")
             ai_complete_cached("same prompt", system="system B")
 
@@ -265,7 +305,7 @@ class TestAiCompleteCached:
         mock_db.table.return_value = mock_table
 
         with patch("ai_helper.get_supabase", return_value=mock_db), \
-             patch("ai_helper.ai_complete", return_value="r"):
+             patch("ai_helper.ai_complete", return_value={"content": "r", "provider": "p1", "model": "m1"}):
             before = datetime.utcnow()
             ai_complete_cached("prompt", cache_hours=48)
             after = datetime.utcnow()

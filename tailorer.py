@@ -16,11 +16,69 @@ from scrapers.base import Job
 from ai_client import AIClient
 from latex_compiler import _sanitize_latex
 from quality_logger import log_quality
+from utils.keyword_extractor import extract_keywords
 
 if TYPE_CHECKING:
     from user_profile import UserProfile
 
 logger = logging.getLogger(__name__)
+
+CRITIC_RUBRIC_PROMPT = """You are evaluating two resume tailoring attempts. Pick the BETTER one.
+
+EVALUATION CRITERIA (score each 1-10):
+1. KEYWORD COVERAGE: Does the resume address the top JD keywords? Count how many of the required keywords appear.
+2. SECTION COMPLETENESS: Are all 6 sections present and substantive (Summary, Skills, Experience, Projects, Education, Certifications)?
+3. WRITING QUALITY: Are bullet points specific with metrics? Are action verbs strong? Is language authentic (no AI filler)?
+4. NO FABRICATION: Does the resume only claim skills/experience present in the original? Flag any suspicious additions.
+
+Return JSON: {"winner": "A" or "B", "scores_a": {"keywords": N, "sections": N, "quality": N, "fabrication": N}, "scores_b": {...}, "reason": "..."}"""
+
+LENGTH_GUIDANCE = """
+TARGET LENGTH: 850-1000 words of content for exactly 2 pages.
+
+SECTION WORD BUDGETS:
+- Summary: 40-60 words
+- Skills: 50-80 words
+- Each Experience entry: 80-120 words (3-4 bullet points)
+- Each Project: 60-90 words
+- Education: 30-50 words
+- Certifications: 20-30 words
+"""
+
+
+def get_tailoring_depth(base_score: float | None) -> tuple[str, int]:
+    """Determine tailoring depth and max improvement rounds from base score."""
+    if base_score is None or base_score < 0:
+        return "moderate", 2
+
+    if base_score >= 85:
+        return (
+            "LIGHT TOUCH: Make surgical keyword additions and minor description tweaks only. "
+            "Do not restructure sections or rewrite bullets.",
+            1,
+        )
+    elif base_score >= 70:
+        return (
+            "MODERATE REWRITE: Restructure bullet points to match JD priorities. "
+            "Rewrite summary section. Reorder skills to lead with JD-relevant ones.",
+            2,
+        )
+    else:
+        return (
+            "HEAVY REWRITE: Full project description rewrites emphasizing JD relevance. "
+            "Overhaul summary. Reprioritize entire skills section. "
+            "Restructure experience bullets with metrics and impact.",
+            3,
+        )
+
+
+def should_tailor(job: dict) -> bool:
+    """Check if a job should be tailored. Returns False if data is insufficient."""
+    if job.get("score_status") == "insufficient_data":
+        return False
+    if job.get("score_status") == "incomplete":
+        return False
+    return True
 
 
 TAILOR_SYSTEM_PROMPT = r"""You are an expert resume writer who tailors technical resumes for specific job listings. You work with LaTeX resumes.
@@ -33,7 +91,7 @@ RULES:
    - Summary: adjust emphasis for this role
    - Skills: reorder to put the most relevant first; add more relevant skills from the base if they match the JD
    - Experience bullets: reorder within each job; tweak wording to match the job listing's terminology
-   - Projects: ALWAYS KEEP "Purrrfect Keys" (it is the candidate's largest project and shows end-to-end ownership). Then SELECT 2 more from the remaining 4 projects (WhatsTheCraic, Genomic Benchmarking, Daily Job Hunt, UTWorld) based on relevance to this specific job. REMOVE the other 2 entirely.
+   - Projects: ALWAYS KEEP "Purrrfect Keys" (it is the candidate's largest project and shows end-to-end ownership). Then SELECT 2 more from the remaining 4 projects (WhatsTheCraic, Genomic Benchmarking, Daily Job Hunt, UTWorld) based on relevance to the KEY JD REQUIREMENTS below. REMOVE the other 2 entirely. Rewrite ALL project descriptions to emphasize aspects matching the JD — the same project should highlight different strengths for different jobs.
 5. The resume must remain truthful.
 6. PAGE LAYOUT (CRITICAL):
    - The resume MUST be exactly TWO PAGES. No more, no less.
@@ -128,6 +186,26 @@ def tailor_resume(
 
     Returns the path to the tailored .tex file.
     """
+    # Compute base score from initial match scores (average of ATS/HM/TR)
+    base_score = None
+    if job.match_score and job.match_score > 0:
+        base_score = job.match_score
+    elif job.ats_score and job.ats_score > 0:
+        scores_list = [s for s in [job.ats_score, job.hiring_manager_score, job.tech_recruiter_score] if s and s > 0]
+        base_score = sum(scores_list) / len(scores_list) if scores_list else None
+
+    depth_instruction, _max_rounds = get_tailoring_depth(base_score)
+    logger.info(f"[TAILOR] {job.company}: base_score={base_score}, depth={depth_instruction[:30]}...")
+
+    # Extract top keywords from JD for targeted tailoring
+    keywords = extract_keywords(job.description, max_keywords=10)
+    keyword_section = ""
+    if keywords:
+        keyword_section = f"\n\nKEY JD REQUIREMENTS: {', '.join(keywords)}\nEnsure each of these is addressed in the resume."
+
+    # Build dynamic system prompt with depth, length guidance, and keywords
+    system_prompt = f"TAILORING DEPTH: {depth_instruction}\n{LENGTH_GUIDANCE}\n{TAILOR_SYSTEM_PROMPT}{keyword_section}"
+
     # Get tailoring suggestions from the matching step if available
     suggestions = ""
     if hasattr(job, "_match_data") and job._match_data:
@@ -169,10 +247,10 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
             logger.info(f"[TAILOR] Using council for {job.company}")
             tailored_tex = ai_client.council_complete(
                 prompt=user_prompt,
-                system=TAILOR_SYSTEM_PROMPT,
+                system=system_prompt,
                 n_generators=2,
                 n_critics=1,
-                task_description=f"Tailor LaTeX resume for {job.title} at {job.company}",
+                task_description=CRITIC_RUBRIC_PROMPT,
                 temperature=0.3,
                 cache_extra=resume_hash,
             )
@@ -181,7 +259,7 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
         else:
             info = ai_client.complete_with_info(
                 prompt=user_prompt,
-                system=TAILOR_SYSTEM_PROMPT,
+                system=system_prompt,
                 temperature=0.3,
                 cache_extra=resume_hash,
             )
@@ -362,7 +440,7 @@ Return ONLY valid JSON with the same keys. No markdown, no explanation."""
                 system=TAILOR_TEXT_SYSTEM_PROMPT,
                 n_generators=2,
                 n_critics=1,
-                task_description=f"Tailor resume sections (JSON) for {job.title} at {job.company}",
+                task_description=CRITIC_RUBRIC_PROMPT,
                 temperature=0.3,
                 cache_extra=sections_hash,
             )

@@ -46,7 +46,6 @@ def mock_ssm(aws_credentials):
             "/naukribaba/ADZUNA_APP_KEY": "test-adzuna-key",
             "/naukribaba/GROQ_API_KEY": "test-groq-key",
             "/naukribaba/NVIDIA_API_KEY": "test-nvidia-key",
-            "/naukribaba/DEEPSEEK_API_KEY": "test-deepseek-key",
             "/naukribaba/OPENROUTER_API_KEY": "test-openrouter-key",
             "/naukribaba/QWEN_API_KEY": "test-qwen-key",
             "/naukribaba/GMAIL_USER": "test@gmail.com",

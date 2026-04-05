@@ -40,7 +40,8 @@ tailored resumes on demand.
 | `s3_uploader.py` | S3 upload with 30-day presigned URLs |
 | `email_notifier.py` | Gmail HTML notification with top 15 jobs table |
 | `self_improver.py` | Post-run analysis: scores, keywords, scraper health |
-| `scrapers/` | 7 job scrapers (Adzuna, LinkedIn, IrishJobs, Jobs.ie, GradIreland, YC, HN) |
+| `scrapers/` | Lambda scrapers: LinkedIn, Indeed, Glassdoor (blocked), Irish (Jobs.ie+IrishJobs+GradIreland), Adzuna, YC, HN. Uses httpx + Bright Data Web Unlocker proxy. |
+| `scrapers/playwright/` | DORMANT — Scrapling/Fargate scrapers, superseded by Web Unlocker. Kept as fallback for JS-heavy sites like Glassdoor. |
 
 ## Config
 
@@ -90,6 +91,8 @@ See `docs/superpowers/specs/2026-03-19-google-docs-landing-page-plan.md` for the
 | 4. React frontend | ✅ Complete |
 | 5. AWS SAM template | ✅ Complete (deploy = user action) |
 | 6. Testing + self-improvement | ✅ Self-improver done, E2E = user action |
+| 2.5 Web Unlocker scrapers | ✅ Complete — LinkedIn, Indeed, Irish portals working. Glassdoor needs Fargate (backlog). |
+| 2.6 Resume quality (planned) | Backlog — improve AI writing quality in tailoring + cover letters |
 
 ## Previous Design Spec
 
@@ -107,4 +110,23 @@ are complete. Phase 3 items 3.1 (logging) and 3.4 (retry backoff) are done. Item
 
 ## Backlog
 
-- **Playwright Fargate Integration**: The Step Functions pipeline currently invokes the Web Unlocker Lambda scrapers (e.g. `ScrapeLinkedInFunction`). We need to update `template.yaml` to run the actual ECS Playwright tasks (`PlaywrightTaskDef`) using `ecs:runTask.sync` and build/push `Dockerfile.playwright` to ECR via `.github/workflows/deploy.yml`. This was added to the backlog to avoid breaking the existing pipeline while the Fargate scaffolding is being completed.
+### Data Quality & Scoring Reliability (Phase 2.7 — Priority 1)
+Systematic issues found during Phase 2.5 testing (Apr 3, 2026):
+
+- **Duplicate jobs with different scores**: Same job scraped across queries gets different hashes → different AI scores (e.g. "Backend Software Engineer @ TREQS" scored 78 and 68). Need cross-query dedup using company+title similarity, not just hash equality.
+- **Missing descriptions**: 18 jobs (mostly IrishJobs) have 0-char descriptions — detail pages return 403. Jobs without descriptions get inaccurate scores. Either skip scoring for description-less jobs, or enrich descriptions from other sources.
+- **Score inconsistency**: Non-deterministic AI scoring — same job gets different scores across runs. Need multi-call averaging or deterministic prompting (temperature=0).
+- **No original vs tailored score**: Only one score at match time. Need before/after comparison: score base resume against JD, then score tailored resume, show delta.
+- **Score accuracy**: User reports scores feel inaccurate/low. Review scoring prompt quality, consider multi-perspective scoring (ATS + Hiring Manager + Tech Recruiter as in original pipeline).
+
+### Resume & Cover Letter Quality (Phase 2.6)
+- Current AI-generated resumes need better writing quality — more impactful language, stronger action verbs, better tailoring depth
+- Design a quality improvement loop: (1) score existing outputs for writing quality, (2) build exemplar prompts with high-quality samples, (3) integrate quality checks into `self_improve.py` to detect and flag weak outputs, (4) iterative prompt refinement based on scoring feedback
+- This should be a dedicated phase, not a quick fix
+
+### Infrastructure & Deployment
+- **SAM deploy blocked**: `sam build` needs Docker for `JobHuntApi` container image. Lambda functions build fine. Start Docker Desktop, then `sam build && sam deploy --guided`.
+- **Glassdoor Scraper (Fargate/Playwright)**: Glassdoor requires JavaScript rendering — login wall blocks httpx. Genuine use case for dormant `scrapers/playwright/` + `Dockerfile.playwright`. When needed: build/push Docker image to ECR, wire `PlaywrightTaskDef` into Step Functions.
+- **DeepSeek provider**: Returns 402 (empty balance). Either top up or remove from failover chain.
+- **OpenRouter provider**: Returns 404. Config issue — check API key and model name in SSM.
+- **GradIreland scraper**: Returns 0 jobs — Drupal template likely changed. Needs HTML inspection and pattern update.
