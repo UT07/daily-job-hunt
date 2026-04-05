@@ -112,6 +112,52 @@ All phases defined in: `2026-04-03-quality-pipeline-design.md`
 
 ---
 
+### Phase 2.10: Score-Based Job Tiering & Prioritization (NEW)
+
+**Status**: Designed 2026-04-05, partial implementation complete
+
+**Why**: After Phase 2.9 deterministic rescoring produced calibrated scores, we
+need to prioritize artifact generation (tailored resumes, cover letters) to avoid
+burning AI credits on low-value jobs. Not every job deserves a tailored resume.
+
+**Score Tiers**:
+
+| Tier | Score Range | Action | AI Cost |
+|------|------------|--------|---------|
+| S — Must Apply | 90-100 | Tailor resume, generate cover letter, find contacts, priority email | High (~10 calls/job) |
+| A — Strong Match | 80-89 | Tailor resume, generate cover letter | Medium (~7 calls/job) |
+| B — Worth Trying | 70-79 | Tailor resume only, no cover letter | Low (~4 calls/job) |
+| C — Long Shot | 60-69 | Score only, no artifacts | Minimal |
+| D — Skip | <60 | Score only, hide from default dashboard view | Minimal |
+
+**Tier thresholds are user-configurable** per-user via `user_profiles.score_tier_config` JSON column:
+```json
+{
+  "must_apply_min": 90,
+  "strong_match_min": 80,
+  "worth_trying_min": 70,
+  "long_shot_min": 60
+}
+```
+
+**Implementation**:
+
+- Add `score_tier` TEXT column to `jobs` table (values: S, A, B, C, D)
+- Compute tier from `match_score` at score time in `score_batch.py`
+- Dashboard filters by tier (default: show S + A + B, hide C + D unless "Show all" toggled)
+- `tailor_resume` Lambda checks tier before processing — skips if C or D
+- `generate_cover_letter` Lambda checks tier — only runs for S and A
+- `find_contacts` Lambda only runs for S
+
+**Self-improvement integration**: When thresholds shift (e.g., 80% of jobs below 70),
+Phase 2.9 generates a medium-risk adjustment to recalibrate tier thresholds.
+
+**Scripts** (already implemented):
+- `scripts/rescore_sample.py` — rescore N jobs with deterministic scoring
+- `scripts/dedup_canonical_hashes.py` — remove duplicate job rows by canonical_hash
+
+---
+
 ### Layer 3: Deploy — AFTER LAYER 2 (partial overlap OK)
 
 | Phase | Name | Status | What Needs to Happen |
