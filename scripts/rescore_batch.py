@@ -26,6 +26,7 @@ if env_path.exists():
         os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent / "lambdas" / "pipeline"))
 os.environ.setdefault("AWS_DEFAULT_REGION", "eu-west-1")
 
 from db_client import SupabaseClient
