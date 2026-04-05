@@ -1,8 +1,34 @@
 # NaukriBaba — Unified Grand Plan
 
-**Date**: 2026-04-03
+**Date**: 2026-04-03 (last updated 2026-04-05)
 **Status**: Approved
 **Supersedes**: Individual phase numbering from v2 design spec (2A-2G)
+
+---
+
+## Status Snapshot — 2026-04-05 evening
+
+### ✅ Done this week
+- **2.5b Scraper Fixes (partial)**: OpenRouter 404 fixed (dead Gemini model replaced with 5 verified free models); AI council expanded 18→32 providers; DeepSeek left disabled (accessible via NVIDIA NIM anyway).
+- **2.7 Data Quality**: Canonical hash dedup live (18 duplicates removed from 177→159 jobs); deterministic 3-call median scoring rolled out; `score_version=2` set on all 159 live jobs; `score_status` tracking.
+- **2.10 Score Tiering**: `score_tier` column + CHECK constraint + filter index shipped; all 159 jobs tiered from backfill SQL. Distribution: S=14 (8.8%), A=41 (25.8%), B=26 (16.4%), C=51 (32.1%), D=27 (17.0%).
+- **Council retry logic**: `council_generate()` now retries with fresh providers after dead ones are marked (was failing when top-2 were both Groq during IP block).
+- **Hard gate relaxed**: `check_section_completeness` now accepts substring matches ("Technical Skills" satisfies "skills") so AI-generated resumes with reasonable headings aren't rejected.
+
+### 🔴 Newly discovered this session (add to 2.6 Writing Quality)
+- **AI-generated LaTeX produces invalid output**: Tailoring outputs use undefined custom commands like `\projectentryurl` not in base template, and produce unbalanced `\begin{itemize}` / `\end{itemize}` blocks. `\iffalse` left unclosed at line 76 of one generated resume. Compilation blocked at hard gate; pdflatex fallback also fails.
+- **Tailoring prompt drops sections**: One A-tier job generated a resume with dropped `\section` entirely; hard gate (now relaxed) was the backstop.
+- **Groq API key appears IP-blocked**: 403 "Access denied. Please check your network settings" — not rate-limit, not auth. May require new API key or different egress IP.
+
+### ⏸️ Known blockers
+- **SAM deploy**: Docker Desktop daemon stuck/unresponsive. Need to restart Docker or run from a working docker host.
+- **Apify budget exhausted**: contact_finder.py old path no longer usable. Serper rejected as an alt (quality concerns). **Plan**: build Bright Data–based contact finder (reuse existing proxy infra from scrapers).
+
+### 🎯 Immediate next tasks
+1. **Fix tailoring prompt quality** (2.6): constrain AI to only use commands defined in base template; validate brace balance before output; reject outputs with undefined macros.
+2. **Bright Data contact finder** (3.4 prep): build new module that searches google.com for LinkedIn profiles via Web Unlocker proxy, add quality tests (profile accuracy, message personalisation).
+3. **Regenerate 60 artifacts** (blocked on #1): resumes + cover letters for all jobs with `match_score >= 75` (14 jobs at 90+, 40 at 85-89, 6 at 75-84). Skip the 99 jobs <75; they stay with user's default artifacts.
+4. **GradIreland scraper fix** (2.5b): Drupal template changed, 0 jobs returned. Needs fresh HTML inspection + selector update.
 
 ---
 
@@ -114,7 +140,7 @@ All phases defined in: `2026-04-03-quality-pipeline-design.md`
 
 ### Phase 2.10: Score-Based Job Tiering & Prioritization (NEW)
 
-**Status**: Designed 2026-04-05, partial implementation complete
+**Status**: ✅ Complete 2026-04-05 — column shipped, backfilled, score_batch+rescore_batch write tier. Tier-gating in downstream lambdas (tailor/cover/contacts) still TODO.
 
 **Why**: After Phase 2.9 deterministic rescoring produced calibrated scores, we
 need to prioritize artifact generation (tailored resumes, cover letters) to avoid

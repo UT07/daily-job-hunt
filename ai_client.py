@@ -791,7 +791,40 @@ class AIClient:
                 logger.warning(f"[Council] Overall timeout (120s) — collected {len(results)} of {len(generators)} results")
 
         if not results:
-            raise ProviderError("[Council] All generators failed — no candidates produced")
+            # All generators failed. If any got marked dead this round, retry
+            # once with fresh selection (now excluding the dead ones).
+            if self._dead_providers:
+                retry_generators = self._select_providers(n_generators)
+                if retry_generators and any(
+                    (p.name, p.model) not in {(g.name, g.model) for g in generators}
+                    for p in retry_generators
+                ):
+                    logger.info(f"[Council] Retrying with fresh providers after "
+                                f"{len(self._dead_providers)} marked dead: "
+                                f"{', '.join(f'{p.name}:{p.model}' for p in retry_generators)}")
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=len(retry_generators)) as executor:
+                        future_to_provider = {executor.submit(_generate_one, p): p for p in retry_generators}
+                        try:
+                            for future in concurrent.futures.as_completed(future_to_provider, timeout=120):
+                                provider = future_to_provider[future]
+                                try:
+                                    result = future.result(timeout=60)
+                                    results.append(result)
+                                    self._stats["provider_calls"][provider.name] = (
+                                        self._stats["provider_calls"].get(provider.name, 0) + 1
+                                    )
+                                    logger.info(f"[Council] {provider.name}:{provider.model} generated "
+                                                f"{len(result['response'])} chars")
+                                except Exception as e:
+                                    logger.warning(f"[Council] retry {provider.name}:{provider.model} failed: {e}")
+                                    if isinstance(e, _req.HTTPError):
+                                        status = e.response.status_code if hasattr(e, "response") and e.response else 0
+                                        if status in self._DEAD_CODES:
+                                            self._dead_providers.add((provider.name, provider.model))
+                        except concurrent.futures.TimeoutError:
+                            pass
+            if not results:
+                raise ProviderError("[Council] All generators failed — no candidates produced")
 
         return results
 

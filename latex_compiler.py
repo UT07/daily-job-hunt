@@ -214,12 +214,16 @@ REQUIRED_SECTIONS = ["summary", "skills", "experience", "projects", "education"]
 def check_section_completeness(content: str) -> bool:
     """Check all required resume sections are present.
 
-    Accepts both \\section{Name} and \\section*{Name} forms.
+    Accepts both \\section{Name} and \\section*{Name} forms, and matches the
+    required keyword as a substring so headings like "Technical Skills" or
+    "Work Experience" satisfy the "skills" / "experience" requirements.
     """
+    import re
     content_lower = content.lower()
+    # Capture the text inside every \section{...} / \section*{...}
+    heads = re.findall(r"\\section\*?\{([^}]*)\}", content_lower)
     for section in REQUIRED_SECTIONS:
-        if (f"\\section{{{section}}}" not in content_lower
-                and f"\\section*{{{section}}}" not in content_lower):
+        if not any(section in h for h in heads):
             return False
     return True
 
@@ -274,11 +278,9 @@ def compile_tex_to_pdf(tex_path: str, output_dir: str = None) -> str:
 
         # --- Hard gate: section completeness ---
         if not check_section_completeness(sanitized):
-            missing = [
-                s for s in REQUIRED_SECTIONS
-                if f"\\section{{{s}}}" not in sanitized.lower()
-                and f"\\section*{{{s}}}" not in sanitized.lower()
-            ]
+            import re as _re
+            _heads = _re.findall(r"\\section\*?\{([^}]*)\}", sanitized.lower())
+            missing = [s for s in REQUIRED_SECTIONS if not any(s in h for h in _heads)]
             logger.error(
                 f"[HARD GATE] Missing required sections in {tex_path.name}: "
                 f"{', '.join(missing)} — compilation blocked"
