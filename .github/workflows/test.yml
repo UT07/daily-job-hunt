@@ -55,7 +55,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt -r tests/requirements-test.txt
-      - run: pytest tests/security/ -v --tb=short -m security
+      - run: pytest tests/security/ -v --tb=short
         env:
           AWS_DEFAULT_REGION: eu-west-1
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
