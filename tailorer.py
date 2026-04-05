@@ -81,26 +81,56 @@ def should_tailor(job: dict) -> bool:
     return True
 
 
-TAILOR_SYSTEM_PROMPT = r"""You are an expert resume writer who tailors technical resumes for specific job listings. You work with LaTeX resumes.
+TAILOR_SYSTEM_PROMPT = r"""You are an expert resume writer who tailors technical resumes for specific job listings. You work with LaTeX resume BODIES (the content between \begin{document} and \end{document} only).
+
+CRITICAL OUTPUT RULE:
+You will receive ONLY the document body. Return ONLY the tailored body.
+- Do NOT emit \documentclass, \usepackage, \newcommand, \setlength, \titleformat, \geometry, or any preamble command.
+- Do NOT emit \begin{document} or \end{document}.
+- The base preamble (including the custom macros below) is managed outside of AI. Just return the body content.
+
+REQUIRED HEADER BLOCK (MUST appear at the very top of the body, with all contact details preserved — you MAY only change the \normalsize title line to emphasize tech relevant to the JD):
+  \begin{center}
+  {\Large \textbf{Utkarsh Singh}}\\[0.04em]
+  {\normalsize <role title with tech tags>}\\[0.08em]
+  Dublin, Ireland \textbar\ +353 892515620 \textbar\ \href{mailto:254utkarsh@gmail.com}{254utkarsh@gmail.com}\\[0.08em]
+  \href{https://github.com/UT07}{github.com/UT07} \textbar\ \href{https://www.linkedin.com/in/utkarshsingh2001/}{linkedin.com/in/utkarshsingh2001} \textbar\ \href{https://utworld.netlify.app}{utworld.netlify.app}
+  \end{center}
+
+REQUIRED SECTION HEADERS (your body output MUST contain ALL six, each on its own line, each followed by its content — do NOT drop any):
+  \section*{Summary}
+  \section*{Technical Skills}
+  \section*{Experience}
+  \section*{Featured Projects}
+  \section*{Education}
+  \section*{Certifications}
+
+CUSTOM MACROS (already defined — use with EXACT argument counts):
+- \jobentry{company}{location}{dates}{title}       — 4 args
+  Example: \jobentry{Clover IT Services}{New York, NY (Remote)}{Jun 2022 -- Jul 2024}{\textbf{\textit{Software Engineer}}}
+- \projectentry{name}{dates}{tech}                 — 3 args (no URL)
+  Example: \projectentry{WhatsTheCraic}{Apr 2025 -- Jul 2025}{Node.js, React, FastAPI, MySQL, Docker, AWS}
+- \projectentryurl{name}{dates}{url}{url-text}{tech} — 5 args (with clickable URL)
+  Example: \projectentryurl{Purrrfect Keys}{Jan 2026 -- Present}{https://expo.dev/accounts/ut254/projects/purrrfect-keys}{expo.dev/accounts/ut254/projects/purrrfect-keys}{React Native, TypeScript, Firebase}
+
+Each macro call MUST be followed by a \begin{itemize}...\end{itemize} block with \item bullets. Do NOT put \begin{itemize} inside the macro call.
 
 RULES:
 1. NEVER fabricate experience, skills, or accomplishments. Only reword, reorder, and emphasize what already exists.
-2. Keep the exact same LaTeX structure, commands, and formatting. NEVER modify \newcommand definitions. Keep all \jobentry, \projectentry, \projectentryurl macros EXACTLY as they are in the base resume.
-3. Make targeted, surgical edits. Do NOT rewrite the entire resume.
-4. Focus changes on:
+2. Make targeted, surgical edits. Do NOT rewrite the entire resume.
+3. Focus changes on:
    - Summary: adjust emphasis for this role
    - Skills: reorder to put the most relevant first; add more relevant skills from the base if they match the JD
    - Experience bullets: reorder within each job; tweak wording to match the job listing's terminology
-   - Projects: ALWAYS KEEP "Purrrfect Keys" (it is the candidate's largest project and shows end-to-end ownership). Then SELECT 2 more from the remaining 4 projects (WhatsTheCraic, Genomic Benchmarking, Daily Job Hunt, UTWorld) based on relevance to the KEY JD REQUIREMENTS below. REMOVE the other 2 entirely. Rewrite ALL project descriptions to emphasize aspects matching the JD — the same project should highlight different strengths for different jobs.
-5. The resume must remain truthful.
-6. PAGE LAYOUT (CRITICAL):
+   - Projects: ALWAYS KEEP "Purrrfect Keys" (it is the candidate's largest project and shows end-to-end ownership). Then SELECT 2 more from the remaining 4 projects (WhatsTheCraic, Genomic Benchmarking, NaukriBaba, UTWorld) based on relevance to the KEY JD REQUIREMENTS below. REMOVE the other 2 entirely. Rewrite ALL project descriptions to emphasize aspects matching the JD — the same project should highlight different strengths for different jobs.
+4. The resume must remain truthful.
+5. PAGE LAYOUT (CRITICAL):
    - The resume MUST be exactly TWO PAGES. No more, no less.
    - Page 1: Header, Summary, Technical Skills, Clover IT Services (7 bullets), and Seattle Kraken (3 bullets).
    - Page 2: 3 selected Projects (Purrrfect Keys always + 2 others), Education, Certifications.
    - If content overflows to page 3, CUT bullet points (trim Clover to 6, Kraken to 2).
-   - Projects MUST start on page 2. Do NOT let any project appear on page 1. The page break happens naturally after Seattle Kraken.
    - Do NOT add extra bullets to any section. Keep Clover at 7, Kraken at 3.
-7. Prominently place technologies the candidate has used that the job mentions.
+6. Prominently place technologies the candidate has used that the job mentions.
 
 WRITING STYLE (CRITICAL):
 - Do NOT use em-dashes (---, --, or the — character) as clause connectors. Use periods to end sentences.
@@ -110,7 +140,7 @@ WRITING STYLE (CRITICAL):
 - Quantify impact with numbers and percentages where they already exist.
 - Match job posting keywords by naturally weaving them into existing bullets, not by adding new sentences about them.
 
-Return ONLY the complete, modified LaTeX source code. No explanations, no markdown fences, just pure LaTeX starting with \documentclass."""
+Return ONLY the tailored body content. No explanations, no markdown fences, no preamble commands."""
 
 
 def _strip_code_fences(text: str) -> str:
@@ -129,6 +159,109 @@ def _strip_code_fences(text: str) -> str:
     return text
 
 
+def _split_tex(tex: str) -> tuple[str, str]:
+    """Split a LaTeX source into (preamble, body).
+
+    The preamble is everything before ``\\begin{document}`` (exclusive).
+    The body is everything between ``\\begin{document}`` and the LAST
+    ``\\end{document}`` (exclusive of both markers).
+
+    Using ``rfind`` for the end marker guards against AI output that
+    terminates early with ``\\end{document}`` and then rambles.
+
+    Returns ("", tex) if no ``\\begin{document}`` marker is present.
+    """
+    begin_marker = "\\begin{document}"
+    end_marker = "\\end{document}"
+    begin_idx = tex.find(begin_marker)
+    if begin_idx < 0:
+        return "", tex
+    preamble = tex[:begin_idx].rstrip()
+    end_idx = tex.rfind(end_marker)
+    if end_idx < 0 or end_idx <= begin_idx:
+        body = tex[begin_idx + len(begin_marker):].strip()
+    else:
+        body = tex[begin_idx + len(begin_marker):end_idx].strip()
+    return preamble, body
+
+
+def _splice_tex(preamble: str, body: str) -> str:
+    """Glue a preamble and body back into a complete LaTeX document."""
+    return f"{preamble}\n\\begin{{document}}\n{body}\n\\end{{document}}\n"
+
+
+def _count_macro_args(tex: str, start: int) -> int:
+    """Count the number of balanced ``{...}`` groups starting at ``start``.
+
+    Skips whitespace between groups. Respects backslash-escaped braces.
+    Used to validate that macro calls have the correct number of arguments.
+    """
+    i = start
+    count = 0
+    while i < len(tex):
+        # Skip whitespace between groups
+        while i < len(tex) and tex[i].isspace():
+            i += 1
+        if i >= len(tex) or tex[i] != "{":
+            break
+        # Walk balanced braces starting at i
+        depth = 0
+        j = i
+        closed = False
+        while j < len(tex):
+            ch = tex[j]
+            if ch == "\\" and j + 1 < len(tex):
+                j += 2
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    count += 1
+                    i = j + 1
+                    closed = True
+                    break
+            j += 1
+        if not closed:
+            break
+    return count
+
+
+# Arity of the custom macros defined in the base resume preamble.
+# Checked in the order listed so the longer name (\projectentryurl) is
+# matched before its prefix (\projectentry).
+_MACRO_ARITIES: dict[str, int] = {
+    "projectentryurl": 5,
+    "projectentry": 3,
+    "jobentry": 4,
+}
+
+
+def _validate_macro_arities(tex: str) -> list[str]:
+    """Return a list of arity-mismatch descriptions for known custom macros.
+
+    Empty list means every call site has the expected number of ``{}`` args.
+    Uses a word-boundary negative lookahead so ``\\projectentryurl`` is not
+    matched as ``\\projectentry`` (and double-counted).
+    """
+    issues: list[str] = []
+    for macro, expected in _MACRO_ARITIES.items():
+        pattern = re.compile(r"\\" + macro + r"(?![a-zA-Z])")
+        for match in pattern.finditer(tex):
+            # Skip definitions like \newcommand{\jobentry}[4]{...} where the
+            # macro name sits inside the \newcommand{...} wrapper.
+            backslash_pos = match.start()
+            if backslash_pos > 0 and tex[backslash_pos - 1] == "{":
+                continue
+            actual = _count_macro_args(tex, match.end())
+            if actual != expected:
+                issues.append(
+                    f"\\{macro} @ pos {match.start()} has {actual} args (expected {expected})"
+                )
+    return issues
+
+
 def _validate_latex_structure(tailored_tex: str, base_tex: str, company: str) -> str:
     """Validate that the AI-generated LaTeX preserves critical structural elements.
 
@@ -140,10 +273,19 @@ def _validate_latex_structure(tailored_tex: str, base_tex: str, company: str) ->
 
     Falls back to base_tex if critical structure is missing.
     """
-    required_sections = ["Experience", "Technical Skills", "Education"]
-    missing = [s for s in required_sections if f"\\section*{{{s}}}" not in tailored_tex]
+    # Substring match: accept "Work Experience", "Technical Skills", "Professional
+    # Experience", etc. Matches the compiler's check_section_completeness logic so
+    # we don't reject outputs the compiler would happily accept.
+    required_sections = ["experience", "skills", "education"]
+    section_heads = [
+        h.lower() for h in re.findall(r"\\section\*?\{([^}]*)\}", tailored_tex)
+    ]
+    missing = [s for s in required_sections if not any(s in h for h in section_heads)]
     if missing:
-        logger.warning(f"[TAILOR] {company}: tailored resume missing sections: {missing}. Using base.")
+        logger.warning(
+            f"[TAILOR] {company}: tailored resume missing sections: {missing} "
+            f"(saw: {section_heads}). Using base."
+        )
         return base_tex
 
     # Check that custom macros weren't destroyed
@@ -162,6 +304,29 @@ def _validate_latex_structure(tailored_tex: str, base_tex: str, company: str) ->
         logger.warning(
             f"[TAILOR] {company}: severe brace imbalance "
             f"(open={open_braces}, close={close_braces}). Using base."
+        )
+        return base_tex
+
+    # Custom macro arity check: catch AI mistakes like \projectentryurl{a}{b}{c}{d}
+    # (4 args) when the macro is defined as taking 5.
+    arity_issues = _validate_macro_arities(tailored_tex)
+    if arity_issues:
+        logger.warning(
+            f"[TAILOR] {company}: macro arity mismatch: "
+            f"{'; '.join(arity_issues[:3])}. Using base."
+        )
+        return base_tex
+
+    # Header-block check: AI sometimes drops the \begin{center}...contact
+    # details...\end{center} block because our "no preamble" instruction spills
+    # into overcorrection. The name + email MUST survive — recruiters can't
+    # reach the candidate otherwise.
+    _HEADER_MARKERS = ["Utkarsh Singh", "254utkarsh@gmail.com"]
+    missing_header = [m for m in _HEADER_MARKERS if m not in tailored_tex]
+    if missing_header:
+        logger.warning(
+            f"[TAILOR] {company}: header block dropped (missing: {missing_header}). "
+            f"Using base."
         )
         return base_tex
 
@@ -218,7 +383,14 @@ TAILORING CONTEXT FROM MATCHING ANALYSIS:
 - Gaps to address (de-emphasize or contextualize): {', '.join(gaps)}
 - Specific suggestions: {'; '.join(sugg_list)}"""
 
-    user_prompt = f"""Tailor this resume for the following job:
+    # Split base resume: AI only sees the body, never the preamble.
+    # Preamble (packages, \newcommand macros) is spliced back in after AI response.
+    base_preamble, base_body = _split_tex(base_tex)
+    if not base_preamble:
+        logger.error(f"[TAILOR] {job.company}: base resume missing \\begin{{document}}. Using base.")
+        return ""
+
+    user_prompt = f"""Tailor this resume body for the following job:
 
 JOB LISTING:
 - Title: {job.title}
@@ -230,10 +402,12 @@ JOB DESCRIPTION:
 {job.description[:4000]}
 {suggestions}
 
-BASE RESUME (LaTeX):
-{base_tex}
+BASE RESUME BODY (content between \\begin{{document}} and \\end{{document}} only):
+{base_body}
 
-Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end with \\end{{document}}."""
+Return ONLY the tailored body. Do not include \\documentclass, \\usepackage, \\newcommand, or \\begin{{document}}/\\end{{document}} — they are managed separately.
+
+Reminder: your output MUST contain all six section headers verbatim: \\section*{{Summary}}, \\section*{{Technical Skills}}, \\section*{{Experience}}, \\section*{{Featured Projects}}, \\section*{{Education}}, \\section*{{Certifications}}."""
 
     try:
         # Include a hash of the base resume in the cache key so that a changed
@@ -270,18 +444,22 @@ Return the COMPLETE tailored LaTeX source. Start with \\documentclass and end wi
         # Strip markdown code fences if present (handles ```latex, ```tex, etc.)
         tailored_tex = _strip_code_fences(tailored_tex)
 
-        # Sanity check: must start with \documentclass
-        if not tailored_tex.startswith("\\documentclass"):
-            start = tailored_tex.find("\\documentclass")
-            if start >= 0:
-                tailored_tex = tailored_tex[start:]
-            else:
-                logger.warning(f"Tailored resume for {job.company} doesn't look like LaTeX, using base")
-                tailored_tex = base_tex
+        # Extract the body: if AI returned a full document despite instructions,
+        # strip its preamble. Otherwise use the response as-is as body content.
+        if "\\begin{document}" in tailored_tex:
+            _ignored_preamble, ai_body = _split_tex(tailored_tex)
+        else:
+            # AI returned just a body (the expected case)
+            ai_body = tailored_tex.strip()
+            # Defensive: strip any trailing \end{document} the AI may have added
+            ai_body = ai_body.removesuffix("\\end{document}").strip()
 
-        # Ensure it ends with \end{document}
-        if "\\end{document}" not in tailored_tex:
-            tailored_tex += "\n\\end{document}"
+        if not ai_body:
+            logger.warning(f"[TAILOR] {job.company}: AI returned empty body. Using base.")
+            return ""
+
+        # Splice: base preamble (known good) + AI body + \end{document}
+        tailored_tex = _splice_tex(base_preamble, ai_body)
 
         # Validate structural integrity: check that key LaTeX structures survived
         tailored_tex = _validate_latex_structure(tailored_tex, base_tex, job.company)

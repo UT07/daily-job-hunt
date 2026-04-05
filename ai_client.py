@@ -652,6 +652,12 @@ class AIClient:
 
     # ── Council Methods ──────────────────────────────────────────────────
 
+    # Providers listed here are still registered in the council (so they can
+    # serve as last-resort fallback) but are picked LAST for generation. Used
+    # when a provider is reachable but unreliable from the current network —
+    # e.g. add "groq" here if the dev machine is on a VPN exit Groq blocks.
+    _DEPRIORITIZED_PROVIDERS: set = set()
+
     def _select_providers(self, n: int, exclude: set = None) -> List[AIProvider]:
         """Pick N distinct providers/models from the pool, preferring alive ones.
 
@@ -708,12 +714,18 @@ class AIClient:
         shuffled = list(alive)
         random.shuffle(shuffled)
 
-        # Sort so providers with more minute-tokens come first (more headroom)
-        def _headroom(p: AIProvider) -> float:
+        # Sort: deprioritized providers LAST, then by minute-token headroom.
+        # Python sort is stable, so the random shuffle above breaks ties within
+        # each priority tier (keeps selection diverse across runs).
+        def _sort_key(p: AIProvider) -> tuple:
+            deprio = p.name in self._DEPRIORITIZED_PROVIDERS
             info = p.rate_limiter.tokens_remaining
             minute_val = info.get("minute", 0)
-            return float(minute_val) if isinstance(minute_val, (int, float)) else 0.0
-        shuffled.sort(key=_headroom, reverse=True)
+            headroom = float(minute_val) if isinstance(minute_val, (int, float)) else 0.0
+            # (False, ...) sorts before (True, ...), so non-deprio comes first.
+            # Within a tier, higher headroom comes first via negation.
+            return (deprio, -headroom)
+        shuffled.sort(key=_sort_key)
 
         for p in shuffled:
             fam = _model_family(p.model)
