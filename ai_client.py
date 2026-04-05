@@ -333,7 +333,7 @@ class OpenRouterProvider(AIProvider):
     #   "meta-llama/llama-3.3-70b-instruct:free"
     #   "qwen/qwen-2.5-72b-instruct:free"
 
-    def __init__(self, api_key: str, model: str = "google/gemini-2.0-flash-exp:free", **kwargs):
+    def __init__(self, api_key: str, model: str = "nvidia/nemotron-3-super-120b-a12b:free", **kwargs):
         super().__init__(
             name="openrouter",
             model=model,
@@ -1215,18 +1215,35 @@ class AIClient:
                 providers.append(NvidiaNIMProvider(api_key=nvidia_key, model=model))
             logger.info(f"[AI] NVIDIA NIM council: {len(nvidia_models)} models (incl. DeepSeek, Kimi)")
 
-        # 4. OpenRouter — free model aggregator (DeepSeek available here too)
+        # 4. OpenRouter — free model aggregator (includes Llama, GPT-OSS, NVIDIA, etc.)
         or_key = get_key("openrouter", "OPENROUTER_API_KEY")
         if or_key:
+            # Verified-working free models on OpenRouter (2026-04-05).
+            # Includes Meta Llama (rate-limited sometimes), NVIDIA Nemotron,
+            # OpenAI GPT-OSS, Qwen, Minimax, Arcee, z-ai GLM.
             or_models = [
+                # Llama family (Meta open-source)
                 "meta-llama/llama-3.3-70b-instruct:free",
+                "meta-llama/llama-3.2-3b-instruct:free",
                 "nousresearch/hermes-3-llama-3.1-405b:free",
+                # NVIDIA Nemotron
                 "nvidia/nemotron-3-super-120b-a12b:free",
-                "mistralai/mistral-small-3.1-24b-instruct:free",
-                "google/gemma-3-27b-it:free",
+                "nvidia/nemotron-3-nano-30b-a3b:free",
+                "nvidia/nemotron-nano-12b-v2-vl:free",
+                "nvidia/nemotron-nano-9b-v2:free",
+                # OpenAI open-source
+                "openai/gpt-oss-120b:free",
+                "openai/gpt-oss-20b:free",
+                # Qwen (very large context)
+                "qwen/qwen3.6-plus:free",
+                "qwen/qwen3-next-80b-a3b-instruct:free",
                 "qwen/qwen3-coder:free",
-                "stepfun/step-3.5-flash:free",
+                # Others
                 "z-ai/glm-4.5-air:free",
+                "google/gemma-3-27b-it:free",
+                "minimax/minimax-m2.5:free",
+                "arcee-ai/trinity-mini:free",
+                "arcee-ai/trinity-large-preview:free",
             ]
             for model in or_models:
                 providers.append(OpenRouterProvider(api_key=or_key, model=model))
