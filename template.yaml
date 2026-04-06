@@ -243,12 +243,32 @@ Resources:
       CodeUri: lambdas/pipeline/
       Handler: score_batch.handler
       Runtime: python3.11
-      Timeout: 600
+      Timeout: 900
       MemorySize: 512
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
             ParameterName: naukribaba/*
+
+  ChunkHashesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-chunk-hashes
+      CodeUri: lambdas/pipeline/
+      Handler: chunk_hashes.handler
+      Runtime: python3.11
+      Timeout: 10
+      MemorySize: 128
+
+  AggregateScoresFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-aggregate-scores
+      CodeUri: lambdas/pipeline/
+      Handler: aggregate_scores.handler
+      Runtime: python3.11
+      Timeout: 30
+      MemorySize: 256
 
   TailorResumeFunction:
     Type: AWS::Serverless::Function
@@ -601,7 +621,9 @@ Resources:
                   - !GetAtt ScrapeIrishFunction.Arn
                   - !GetAtt ScrapeContactsFunction.Arn
                   - !GetAtt MergeDedupFunction.Arn
+                  - !GetAtt ChunkHashesFunction.Arn
                   - !GetAtt ScoreBatchFunction.Arn
+                  - !GetAtt AggregateScoresFunction.Arn
                   - !GetAtt TailorResumeFunction.Arn
                   - !GetAtt CompileLatexFunction.Arn
                   - !GetAtt GenerateCoverLetterFunction.Arn
@@ -814,16 +836,53 @@ Resources:
               "Type": "Task",
               "Resource": "${MergeDedupFunction.Arn}",
               "ResultPath": "$.dedup_result",
-              "Next": "ScoreBatch",
+              "Next": "ChunkJobHashes",
               "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyError"}]
             },
-            "ScoreBatch": {
+            "ChunkJobHashes": {
               "Type": "Task",
-              "Resource": "${ScoreBatchFunction.Arn}",
+              "Resource": "${ChunkHashesFunction.Arn}",
               "Parameters": {
-                "user_id.$": "$.user_id",
                 "new_job_hashes.$": "$.dedup_result.new_job_hashes",
-                "min_match_score.$": "$.min_match_score"
+                "user_id.$": "$.user_id",
+                "min_match_score.$": "$.min_match_score",
+                "chunk_size": 25
+              },
+              "ResultPath": "$.chunks_result",
+              "Next": "ScoreBatchMap",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyError"}]
+            },
+            "ScoreBatchMap": {
+              "Type": "Map",
+              "ItemsPath": "$.chunks_result.chunks",
+              "MaxConcurrency": 5,
+              "ResultPath": "$.score_chunks",
+              "Next": "AggregateScores",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyError"}],
+              "ItemProcessor": {
+                "ProcessorConfig": { "Mode": "INLINE" },
+                "StartAt": "ScoreChunk",
+                "States": {
+                  "ScoreChunk": {
+                    "Type": "Task",
+                    "Resource": "${ScoreBatchFunction.Arn}",
+                    "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 1, "BackoffRate": 2}],
+                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "ScoreChunkFailed"}],
+                    "End": true
+                  },
+                  "ScoreChunkFailed": {
+                    "Type": "Pass",
+                    "Result": {"matched_items": [], "matched_count": 0, "skipped_count": 0, "error": "chunk_scoring_failed"},
+                    "End": true
+                  }
+                }
+              }
+            },
+            "AggregateScores": {
+              "Type": "Task",
+              "Resource": "${AggregateScoresFunction.Arn}",
+              "Parameters": {
+                "score_chunks.$": "$.score_chunks"
               },
               "ResultPath": "$.score_result",
               "Next": "ProcessMatchedJobs",

@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir --only-binary=:all: cryptography && \
     pip install --no-cache-dir --prefer-binary -r ${LAMBDA_TASK_ROOT}/requirements-web.txt
 
 COPY *.py ${LAMBDA_TASK_ROOT}/
+COPY utils/ ${LAMBDA_TASK_ROOT}/utils/
 COPY scrapers/ ${LAMBDA_TASK_ROOT}/scrapers/
 COPY resumes/ ${LAMBDA_TASK_ROOT}/resumes/
 COPY templates/ ${LAMBDA_TASK_ROOT}/templates/
