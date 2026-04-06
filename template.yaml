@@ -229,8 +229,8 @@ Resources:
       CodeUri: lambdas/pipeline/
       Handler: merge_dedup.handler
       Runtime: python3.11
-      Timeout: 60
-      MemorySize: 256
+      Timeout: 300
+      MemorySize: 512
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -777,43 +777,12 @@ Resources:
                   }
                 },
                 {
-                  "Comment": "Glassdoor requires JS rendering — runs on Fargate with Scrapling/Playwright",
-                  "StartAt": "ScrapeGlassdoorFargate",
+                  "Comment": "Glassdoor — DORMANT (needs Fargate infra). Returns 0 until enabled.",
+                  "StartAt": "GlassdoorSkipped",
                   "States": {
-                    "ScrapeGlassdoorFargate": {
-                      "Type": "Task",
-                      "Resource": "arn:aws:states:::ecs:runTask.sync",
-                      "Parameters": {
-                        "LaunchType": "FARGATE",
-                        "Cluster": "${ScraperCluster.Arn}",
-                        "TaskDefinition": "${PlaywrightTaskDef}",
-                        "NetworkConfiguration": {
-                          "AwsvpcConfiguration": {
-                            "Subnets": ["subnet-0a1b2c3d4e5f6a7b8"],
-                            "SecurityGroups": ["${ScraperSecurityGroup.GroupId}"],
-                            "AssignPublicIp": "ENABLED"
-                          }
-                        },
-                        "Overrides": {
-                          "ContainerOverrides": [{
-                            "Name": "scraper",
-                            "Environment": [
-                              {"Name": "SCRAPER_SOURCE", "Value": "glassdoor"},
-                              {"Name": "SCRAPE_LOCATION", "Value": "Ireland"},
-                              {"Name": "PIPELINE_RUN_ID", "Value.$": "$.pipeline_run_id"},
-                              {"Name": "QUERY_HASH", "Value.$": "$.query_hash"}
-                            ]
-                          }]
-                        }
-                      },
-                      "TimeoutSeconds": 600,
-                      "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 60, "MaxAttempts": 1, "BackoffRate": 2}],
-                      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "GlassdoorFailed"}],
-                      "End": true
-                    },
-                    "GlassdoorFailed": {
+                    "GlassdoorSkipped": {
                       "Type": "Pass",
-                      "Result": {"count": 0, "source": "glassdoor", "error": "fargate_task_failed"},
+                      "Result": {"count": 0, "source": "glassdoor", "skipped": "fargate_not_configured"},
                       "End": true
                     }
                   }
@@ -1113,7 +1082,7 @@ Resources:
       Name: naukribaba-daily-pipeline-schedule
       Description: Run daily pipeline on weekdays at 7:00 UTC
       ScheduleExpression: "cron(0 7 ? * MON-FRI *)"
-      State: DISABLED
+      State: ENABLED
       Targets:
         - Arn: !GetAtt DailyPipelineStateMachine.Arn
           Id: DailyPipelineTarget
@@ -1126,7 +1095,7 @@ Resources:
       Name: naukribaba-expiry-check
       Description: Check job expiry weekly on Sundays at 6:00 UTC
       ScheduleExpression: "cron(0 6 ? * SUN *)"
-      State: DISABLED
+      State: ENABLED
       Targets:
         - Arn: !GetAtt CheckExpiryFunction.Arn
           Id: ExpiryCheckTarget
@@ -1166,7 +1135,7 @@ Resources:
       Name: naukribaba-stale-nudge
       Description: Weekly stale job nudges (Monday 9:00 UTC)
       ScheduleExpression: "cron(0 9 ? * MON *)"
-      State: DISABLED
+      State: ENABLED
       Targets:
         - Arn: !GetAtt StaleNudgeFunction.Arn
           Id: StaleNudgeTarget
@@ -1185,7 +1154,7 @@ Resources:
       Name: naukribaba-followup-reminder
       Description: Daily follow-up reminders (10:00 UTC weekdays)
       ScheduleExpression: "cron(0 10 ? * MON-FRI *)"
-      State: DISABLED
+      State: ENABLED
       Targets:
         - Arn: !GetAtt FollowUpReminderFunction.Arn
           Id: FollowUpTarget

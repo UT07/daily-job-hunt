@@ -464,6 +464,9 @@ Reminder: your output MUST contain all six section headers verbatim: \\section*{
         # Validate structural integrity: check that key LaTeX structures survived
         tailored_tex = _validate_latex_structure(tailored_tex, base_tex, job.company)
 
+        # Check page length: fall back to base if body is too short (1 page)
+        tailored_tex = _check_page_length(tailored_tex, base_tex, job.company)
+
         # Fix common AI LaTeX typos before sanitization
         _TYPO_FIXES = {
             "\\emphergencystretch": "\\emergencystretch",
@@ -499,6 +502,39 @@ Reminder: your output MUST contain all six section headers verbatim: \\section*{
     except Exception as e:
         logger.error(f"Error tailoring for {job.company}: {e}")
         return ""
+
+
+def _estimate_body_words(tex: str) -> int:
+    """Estimate word count of LaTeX body content (excluding commands/markup)."""
+    m = re.search(r"\\begin\{document\}(.*?)\\end\{document\}", tex, re.DOTALL)
+    body = m.group(1) if m else tex
+    stripped = re.sub(r"\\[a-zA-Z]+\*?(\{[^}]*\})*", " ", body)
+    stripped = re.sub(r"[{}\\%&$#_^~]", " ", stripped)
+    stripped = re.sub(r"\s+", " ", stripped)
+    return len(stripped.split())
+
+
+def _check_page_length(tailored_tex: str, base_tex: str, company: str) -> str:
+    """Warn and fallback to base if content is wildly off 2-page target.
+
+    Approximate thresholds (LaTeX with standard resume formatting):
+    - Under 500 words → likely 1 page (too short)
+    - Over 1200 words → likely 3+ pages (too long)
+    """
+    words = _estimate_body_words(tailored_tex)
+    if words < 500:
+        base_words = _estimate_body_words(base_tex)
+        logger.warning(
+            f"[TAILOR] {company}: body too short ({words} words, base={base_words}). "
+            f"Likely 1 page. Using base resume."
+        )
+        return base_tex
+    if words > 1200:
+        logger.warning(
+            f"[TAILOR] {company}: body too long ({words} words). "
+            f"Likely 3+ pages. Content may overflow."
+        )
+    return tailored_tex
 
 
 # ---------------------------------------------------------------------------

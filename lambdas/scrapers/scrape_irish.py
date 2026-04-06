@@ -47,16 +47,49 @@ def _make_hash(company, title, desc):
 
 
 def _extract_description(html_text):
-    """Extract job description from a StepStone detail page HTML."""
+    """Extract job description from a StepStone detail page HTML.
+
+    Tries three strategies in order:
+      1. data-testid HTML attributes (StepStone React components)
+      2. JSON-LD structured data (application/ld+json JobPosting)
+      3. Generic job-description class patterns
+    """
+    import json as _json
+
     detail_clean = re.sub(r'<style[^>]*>.*?</style>', '', html_text, flags=re.DOTALL)
+
+    # Strategy 1: StepStone data-testid attributes
     for pattern in [
         r'data-testid="vacancy-description"[^>]*>(.*?)</div>\s*</div>',
         r'data-testid="job-description"[^>]*>(.*?)</div>\s*</div>',
+    ]:
+        match = re.search(pattern, detail_clean, re.DOTALL)
+        if match and len(match.group(1)) > 100:
+            return _clean(match.group(1))
+
+    # Strategy 2: JSON-LD structured data (Jobs.ie uses this reliably)
+    ld_blocks = re.findall(
+        r'<script[^>]*type="application/ld\+json"[^>]*>(.*?)</script>',
+        html_text, re.DOTALL,
+    )
+    for block in ld_blocks:
+        try:
+            data = _json.loads(block)
+            if isinstance(data, dict) and data.get("@type") == "JobPosting":
+                desc = _clean(data.get("description", ""))
+                if len(desc) > 100:
+                    return desc
+        except (ValueError, KeyError, TypeError):
+            continue
+
+    # Strategy 3: Generic class-based patterns
+    for pattern in [
         r'class="[^"]*job-description[^"]*"[^>]*>(.*?)</div>',
     ]:
         match = re.search(pattern, detail_clean, re.DOTALL)
         if match and len(match.group(1)) > 100:
             return _clean(match.group(1))
+
     return ""
 
 

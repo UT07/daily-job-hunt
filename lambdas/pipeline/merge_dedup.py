@@ -166,10 +166,23 @@ def handler(event, context):
     result = db.table("jobs_raw").select("job_hash, title, company, source, description, location") \
         .gte("scraped_at", today).execute()
 
-    if not result.data and not fargate_hashes:
-        return {"new_job_hashes": [], "total_new": 0, "filtered_out": 0}
-
     all_jobs = result.data or []
+
+    # --- Source 3: Catch unscored jobs from recent days (backfill) ---
+    # If the pipeline failed mid-run or was offline, jobs sit in jobs_raw
+    # but never make it to the scored 'jobs' table. Pick them up within 7 days.
+    lookback = (datetime.now(timezone.utc).date() - timedelta(days=7)).isoformat()
+    recent = db.table("jobs_raw").select("job_hash, title, company, source, description, location") \
+        .gte("scraped_at", lookback).lt("scraped_at", today).execute()
+    if recent.data:
+        today_hashes = {j["job_hash"] for j in all_jobs}
+        backfill = [j for j in recent.data if j["job_hash"] not in today_hashes]
+        if backfill:
+            all_jobs.extend(backfill)
+            logger.info(f"[merge_dedup] Backfill: {len(backfill)} unscored jobs from last 7 days")
+
+    if not all_jobs and not fargate_hashes:
+        return {"new_job_hashes": [], "total_new": 0, "filtered_out": 0}
 
     # If we have specific hashes from this pipeline run, scope to those
     # This prevents processing stale jobs from previous runs
