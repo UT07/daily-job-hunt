@@ -1,8 +1,54 @@
 # NaukriBaba — Unified Grand Plan
 
-**Date**: 2026-04-03 (last updated 2026-04-05)
+**Date**: 2026-04-03 (last updated 2026-04-06)
 **Status**: Approved
 **Supersedes**: Individual phase numbering from v2 design spec (2A-2G)
+**Integration**: career-ops (github.com/santifer/career-ops) — adopted as reference architecture
+
+---
+
+## Status Snapshot — 2026-04-06
+
+### ✅ Done today (Apr 6)
+- **3.0 Deploy**: SAM deployed (4x), EventBridge ENABLED (weekdays 07:00 UTC), Step Functions pipeline tested end-to-end
+- **ScoreBatch Map batching**: 421 jobs split into 25-job chunks, 5 parallel, no timeout
+- **Data quality audit**: 149 scores fixed, 59 expired, 205 dupes removed, 117 tiers realigned, 18 descriptions backfilled
+- **IrishJobs JSON-LD**: Detail page descriptions now extracted via structured data
+- **API 500 fix**: `utils/` added to Dockerfile.lambda
+- **Page length validation**: Fallback to base if AI output too short (1 page)
+
+### 🔴 Issues found
+- **Lambda tailoring quality**: Cut-off summaries, incomplete education, missing certifications — Lambda `tailor_resume.py` lacks guards from local `tailorer.py`
+- **190 cross-source dupes**: Same job from LinkedIn+Indeed gets different hash → Tier 0 dedup needed
+- **687→467 jobs in DB**: Still too many — user wants only top matches (filter, not firehose)
+- **Cover letters**: Only 99/467 jobs have cover letters
+
+### 🎯 Immediate next (Priority 0 from career-ops integration plan)
+1. Fix cross-source dedup (Tier 0 exact company+title match)
+2. Port tailoring guards to Lambda
+3. Dashboard declutter (tier filter, hide expired/C/D)
+4. Greenhouse + Lever API scrapers
+5. Update grand plan with career-ops A-F evaluation framework
+
+---
+
+## Career-Ops Integration Map
+
+Reference: github.com/santifer/career-ops — 740+ job evaluations, 100+ tailored CVs.
+
+Philosophy: **"A filter, not spray-and-pray."** Only top matches get full treatment.
+
+| Our Phase | Career-Ops Feature | Integration |
+|-----------|-------------------|-------------|
+| 2.6 Writing Quality | ATS keyword injection, proof-point extraction | Extract 15-20 JD keywords → inject into existing bullets (never fabricate) |
+| 2.7 Data Quality | Cross-source dedup | Description-independent `dedup_hash`, Tier 0 exact match |
+| 2.10 Tiering | "Don't apply below 4.0" | D-tier never enters DB, C-tier no artifacts, S+A get full treatment |
+| 3.1 Discover+ | 3-tier scanning (Playwright→API→WebSearch), 60+ companies | Greenhouse API + Lever API + company watchlist |
+| 3.2 Research | A-F Evaluation (10 dimensions), compensation data | Multi-dimension scoring: role fit, CV alignment, seniority, compensation, personalization plan, interview prep |
+| 3.3 Tailor+ | ATS-optimized PDF, template system | Keyword-first tailoring, regen button per job |
+| **3.4 Apply** | **Semi-auto apply: Playwright extracts form → AI generates STAR answers → user confirms** | **NEW FEATURE: Smart form-filling with human-in-the-loop** |
+| 3.5 Interview Prep | STAR+Reflection stories, behavioral mapping | Story bank in Supabase, per-job prep auto-generated |
+| 3.6 Analytics | Application outcome tracking → feedback loop | Ground truth feeds scoring accuracy |
 
 ---
 
@@ -210,7 +256,7 @@ These map to the 6 v2 product stages (Discover → Research → Tailor → Apply
 | 3.1 | Discover+ | Stage 1 | Part of 2A | Manual JD submission, "+Add Job" button, enhanced dedup | 2.7 unified hash |
 | 3.2 | Research | Stage 2 | 2D | CompanyLens, GDELT news, salary data, red flags, deeper AI job analysis | 2.6 keyword analysis |
 | 3.3 | Tailor+ | Stage 3 | 2B + 2C | PDF-to-LaTeX conversion, Overleaf-style split-pane editor, resume version history | 2.6 quality gates, PDF validation |
-| 3.4 | Apply | Stage 4 | Part of 2A | Contact finder fix, email templates, follow-ups, application outcome tracking → feeds 2.9 | 2.9 user feedback |
+| 3.4 | Apply | Stage 4 | Part of 2A | **Semi-auto apply** (Playwright form extraction → AI STAR answers → user confirms), contact finder, email templates, follow-ups, application outcome tracking → feeds 2.9 | 2.9 user feedback, career-ops apply mode |
 | 3.5 | Interview Prep | Stage 5 | 2F | Coding bank (Blind 75), system design rubrics, STAR stories, mock AI | — |
 | 3.6 | Analytics | Stage 6 | 2G | Funnel viz, score trends, scraper health dashboard, self-improvement viz | 2.9 pipeline_runs data |
 
