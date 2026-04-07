@@ -111,6 +111,8 @@ def handler(event, context):
                     "source": "greenhouse",
                     "job_hash": canonical_hash(slug, title, description),
                     "query_hash": query_hash,
+                    "posting_id": str(j.get("id", "")),
+                    "board_token": slug,
                 })
 
         except Exception as e:

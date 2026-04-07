@@ -1,6 +1,384 @@
 {
   "_comment": "Golden dataset: 25 JD+resume pairs, human-labeled. Utkarsh must label these from dashboard jobs.",
-  "_instructions": "Select 25 jobs from the 177 in the dashboard. Label each as strong_match (5), good_match (8), weak_match (7), or no_match (5). Include the JD and base resume text.",
+  "_instructions": "Review each pair. Confirm or adjust expected_label. Set needs_review=false once you've verified the label is correct.",
   "_created": "2026-04-04",
-  "pairs": []
+  "_generated": "2026-04-07T18:38:05Z",
+  "_total_pairs": 25,
+  "pairs": [
+    {
+      "job_hash": "d2fc52b4c75af8e9e6f98e4fc0384677",
+      "title": "Full Stack Developer (Python / React / AWS)",
+      "company": "RECRUITERS",
+      "description": "Full Stack Developer (Python / React / AWS) Salary: €55,000 to €70,000 DOE + bonus + benefits Location: Dublin City Centre Hybrid: 3 days per week in the office Our client is a global financial services company supporting investment funds, multinational companies and private clients worldwide. With over 6,000 employees across more than 40 countries, they build technology platforms that support key financial operations such as treasury, collateral management and trade processing. Dublin is one of their main technology hubs where many strategic systems are developed. Our client is looking for a Full Stack Developer to join a global engineering team building core platforms used by treasury, collateral and trade operations teams. You will work across the full development lifecycle building modern cloud based systems. The stack is focused on React on the frontend and Python on the backend running on AWS. There is currently a strong focus on improving and redesigning user interfaces across multiple applications. Must Have (Key Requirements) 2+ years Python development experience AWS cloud experience Experience using code generation tools such as GitHub Copilot or Amazon Q Experience with a JavaScript framework such as React or Angular Experience building or integrating APIs Strong understanding of system design and modern development practices The main stack includes Python, React, FastAPI, PostgreSQL and AWS. Experience with Django or Flask is also relevant. Nice to Have DevOps experience Cloud native architecture experience Understanding of GenAI or agentic systems Event driven architecture Financial services experience What You’ll Do Build new features and improve existing platforms Develop frontend interfaces and backend services Design and integrate APIs Work with AWS cloud services and databases Write unit tests and support test driven development The hiring manager is looking for strong engineers who enjoy building systems and working across both frontend and backe",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 85,
+        "hm": 80,
+        "tr": 90,
+        "match": 97
+      },
+      "expected_label": "strong_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "3704e55d2ac929253fef2a2368de0725",
+      "title": "Site Reliability Engineer",
+      "company": "Mars Capital",
+      "description": "<p><strong>Job Description</strong></p><p><br></p><p><strong>Role Overview</strong></p><p><br></p><p>We are seeking a Site Reliability Engineer (Mid-level) with strong expertise in AWS cloud infrastructure, containerised platforms, and Azure DevOps CI/CD pipelines. The successful candidate will focus on improving system reliability, availability, performance, and scalability while enabling engineering teams to deliver high-quality services efficiently.</p><p><br></p><p>This role blends software engineering with operational excellence, emphasising automation, observability, incident response, and continuous improvement across cloud-native environments</p><p><br></p><p><br></p><p><strong>Note</strong>: This is a reliability-focused engineering role with on-call responsibilities and involvement in platform modernisation initiatives.</p><p><br></p><p><strong>Key Responsibilities</strong></p><p><br></p><ul><li>Design, build, and operate highly available AWS infrastructure using Infrastructure as Code (Terraform / CloudFormation)</li><li> Develop and maintain CI/CD pipelines to support automated deployments and testing</li><li>Implement and manage containerised workloads using Docker and Kubernetes (EKS/ECS)</li><li>Improve system reliability through automation, monitoring, alerting, and self-healing mechanisms</li><li>Define and track SLIs/SLOs and error budgets for critical services</li><li>Participate in incident response, lead root cause analysis, and drive post-incident improvement</li><li>Build observability platforms using CloudWatch, Prometheus, Grafana, ELK, or similar to</li><li>Automate operational tasks to reduce toil and improve deployment consistency</li><li>Optimise AWS environments for performance, scalability, and cost efficiency</li><li>Implement security best practices, including IAM, secrets management, and network segmentation</li><li>Collaborate with development teams to improve application reliability and deployment strategy</li><li>Maintain runbook",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 85,
+        "hm": 90,
+        "tr": 92,
+        "match": 96
+      },
+      "expected_label": "strong_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "5a96a105b93a7582b6bb3fa8ae5274a9",
+      "title": "Graduate software engineer",
+      "company": "Bending Spoons",
+      "description": "At Bending Spoons, we’re striving to build one of the all-time great companies. A company that serves a huge number of customers. A company where team members grow to their full potential. A company that functions at unparalleled levels of effectiveness and efficiency. A company that creates value for shareowners at an extraordinary rate. And a company that does so while adhering to high ethical standards.\n\nIn pursuit of this objective, we acquire and improve digital businesses, not to sell on, but to own and operate for the long term. The transformations we make are often deep—designed to speed up innovation, benefit customers, and strengthen business performance. Here, hierarchy is minimal and teams are small and talent-dense. We operate established products with the ambition, agility, and urgency of a startup. Across the company, we integrate AI deeply into how we work so that human judgment and machine intelligence reinforce each other.\n\nFor a talented, driven, and collaborative individual, working at Bending Spoons is an opportunity to learn, make an impact, and progress their career at an exceptionally high rate. That’s our promise to such a candidate.\n\nA few examples of your responsibilities\n\nBuild software that matters.\n Take real ownership from idea to production, creating systems used by millions and evolving them into products at scale.\n\nAmplify your impact with AI. \nIntegrate the most powerful AI tools directly into your development workflow—design, implementation, testing, and documentation—to move faster while maintaining high standards for correctness, reliability, and maintainability.\n\nMaster your toolkit. \nWork across diverse stacks with end-to-end ownership, choosing the right technologies for each challenge. From monoliths to microservices, gRPC to REST, Kubernetes to Docker, Python to Rust—you’ll apply technologies thoughtfully, focusing on depth and purpose rather than trends.\n\nSimplify relentlessly.\n Question every layer of complexity. Improve ",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 95
+      },
+      "expected_label": "strong_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "37657a6f86f14f082e4849cc64c23fe7",
+      "title": "Snr Associate Software Development Engineer - Application Development",
+      "company": "Workday",
+      "description": "Your work days are brighter here.\n\nWe’re obsessed with making hard work pay off, for our people, our customers, and the world around us. As a Fortune 500 company and a leading AI platform for managing people, money, and agents, we’re shaping the future of work so teams can reach their potential and focus on what matters most. The minute you join, you’ll feel it. Not just in the products we build, but in how we show up for each other. Our culture is rooted in integrity, empathy, and shared enthusiasm. We’re in this together, tackling big challenges with bold ideas and genuine care. We look for curious minds and courageous collaborators who bring sun-drenched optimism and drive. Whether you're building smarter solutions, supporting customers, or creating a space where everyone belongs, you’ll do meaningful work with Workmates who’ve got your back. In return, we’ll give you the trust to take risks, the tools to grow, the skills to develop and the support of a company invested in you for the long haul. So, if you want to inspire a brighter work day for everyone, including yourself, you’ve found a match in Workday, and we hope to be a match for you too.\n\nAbout The Team\n\nAs part of the next generation of software application engineers, you will craft and develop high-quality, large scale enterprise cloud solutions, in an agile environment. You will collaborate with software architects, product managers, and other partners to deliver solutions crafted to meet the needs of today's large global businesses. Development is all done in the cloud, on a single codeline, through a continuous development model.\n\nAt Workday, you’ll focus on what you love to do: crafting innovative applications as you address sophisticated problems for our 75+ million users and change the way people work. With agile methodologies and an intuitive UI, you’ll develop & iterate on enterprise products of the future surrounded by top talent.\n\nThrive in a lively, collaborative culture, that supports your c",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 95
+      },
+      "expected_label": "strong_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "92bdac2f401bcb4cb08a705a4866a258",
+      "title": "Senior Python DevOps Engineer",
+      "company": "Oliver Bernard",
+      "description": "Senior Python DevOps Engineer – RevTech - Python, AWS, Kubernetes, Terraform, CI/CD Oliver Bernard are currently working with a RevTech start-up who are looking to take on a Senior Level Python Software DevOps Engineer as part of current expansion plans across their tech team. The incoming engineer will work in the broader Software Engineering team, and work closely with a team of developers whilst being responsible for the implementation of infrastructure across the software function. To be co…",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 95
+      },
+      "expected_label": "strong_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "c34ef0036ded",
+      "title": "AWS DevOps Engineer- BPSS Eligible",
+      "company": "Opus Recruitment Solutions Ltd",
+      "description": "AWS Devops Engineer | BPSS Eligible | Newcastle onsite 3 days per week | £300-£450 InsideIR35 | 6 month initial Some skills required include: IaC: TerraformPipelines: Gitlab CICD & JenkinsScripting: Python & Bash You must be BPSS Eligible to apply for this role.",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 89
+      },
+      "expected_label": "good_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "763572e5c571",
+      "title": "DevOps Engineer",
+      "company": "Synoptix Limited",
+      "description": "DevOps/Infrastructure Engineer The Role: This is a crucial role in ensuring the network infrastructure is optimised for performance and resilience, and mentoring support staff in network infrastructure best practice. The role combines hands-on support of the product pipeline whilst contributing to the improvement of key systems. Essential Skills: Knowledge of DevOps practices including: CI/CD pipeline design and automation Containerisation and orchestration Monitoring and observability tools Ex…",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 89
+      },
+      "expected_label": "good_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "6b092bdb26d9",
+      "title": "Senior SRE / Platform Engineer- Global Prime Brokerage & Financing Platform",
+      "company": "Oxford Knight",
+      "description": "Exciting opportunity at one of the fastest growing financial services firms around the world. They offer prime brokerage, clearing and financing across traditional and digital assets, and are now looking to hire world-class engineers to help build on their success. Responsibilities will include: Automate infrastructure and operational workflows using IaC with Terraform and AWS CDK. Develop & optimize CI/CD pipelines to improve software delivery for large-scale distributed systems using Amazon C…",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 89
+      },
+      "expected_label": "good_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "17a5a2ac6c70137363f4eb87e8197dd0",
+      "title": "Senior AWS DevOps Engineer",
+      "company": "Prism Digital",
+      "description": "Senior AWS Platform Engineer | AWS, Terraform & Kubernetes | Cloud & Platform Consulting Salary: £75,000–£90,000  10% bonus  10% share options Location: London (Hybrid – typically 1 day per week in office or client site) Requirement: UK Security Clearance eligibility required Contract: Permanent, Full-time We’re hiring a Senior AWS Platform Engineer to join a specialist cloud and platform engineering consultancy delivering secure, scalable AWS platforms for enterprise and public sector organisa…",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 89
+      },
+      "expected_label": "good_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "611692be8f3d",
+      "title": "Software Engineer L3 Phone Numbers",
+      "company": "Twilio",
+      "description": "Who we are&nbsp; At Twilio, we’re shaping the future of communications, all from the comfort of our homes. We deliver innovative solutions to &nbsp;hundreds of thousands of businesses&nbsp; and empower millions of developers worldwide to craft personalized customer experiences. Our dedication to remote-first work , and strong culture of connection and global inclusion means that no matter your location, you’re part of a vibrant team with diverse experiences making a global impact each day. As we continue to revolutionize how the world interacts, we’re acquiring new skills and experiences that make work feel truly rewarding. Your career at Twilio is in your hands. We use Artificial Intelligence (AI) to help make our hiring process efficient. That said, every hiring decision is made by real Twilions! . &nbsp; See yourself at Twilio Join the team as Twilio’s next Software Engineer L3 &nbsp; About the job This position is that of a Senior Software Engineer to join Twilio’s Messaging Compliance Onboarding team. Programmable Messaging is Twilio’s biggest product. To keep pace with the evolving messaging compliance ecosystem, we need strong engineers that can create innovative solutions to ensure compliance with Twilio partners. The team ensures Twilio customers are registered and onboard seamlessly to various compliance programs to be able to send messages successfully. As an engineer on the team you will be responsible to build and maintain such compliance programs across US local, Tollfree and other sender types, and also across different geographies directly impacting a wide range of messaging customers.&nbsp; Responsibilities In this role, you’ll: Build and maintain multiple compliance program workflows, carrier/ecosystem integrations and customer interactions in the Compliance domain. Design and develop elegant and scalable solutions across a wide variety of compliance program types including frontend UI experiences and backend APIs, that are highly available and res",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 89
+      },
+      "expected_label": "good_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "5c9a10fc6d4871549f2911f2f6e67d90",
+      "title": "Staff Platform Engineer, EU",
+      "company": "Ashby",
+      "description": "We’re looking for a curious, rigorous, problem-hungry platform engineer (who codes!) to carry the ball as we bring Ashby to the big leagues. Ashby builds software that lets talent teams build an efficient, delightful, respectful hiring process. Similarly, you’re an engineer who wants to build a “paved road” that excellent engineering teams can safely take to the moon and back.\n\nWe have notable customers like Notion, Linear, Shopify, and Snowflake. Our growth and retention metrics are best-in-class among our peers: we have tens of millions in ARR, growing >100% year over year, over 2500 customers, very low churn, and many years of runway. We’ll share more details once we meet, but you now probably have a good idea as to why we're hiring for this role 😅.\n\nWe’ve listed this role twice: as a Platform Engineer and Site Reliability Engineer – our team does both, and we are open to candidates who lean towards one or the other.\n\nAbout The Role And How We Work\n\nHi 👋 I’m Colin, Head of EMEA Engineering. I’ve spent a number of years leading engineering teams in startups, and that has always included being close to infrastructure teams - no matter what name they’ve worn (SRE, infrastructure, platform, etc). I’ve got my hands dirty building the initial infrastructure for startups and know the value a talented infrastructure engineer brings. The rigour, the discipline, the peace and quiet when everything just hums along.\n\nOur infrastructure is in a good place for now. Nothing is static. Ashby continues to grow rapidly, putting strain on our existing infrastructure. We’re always looking to give our customers more powerful hiring software, and building new product features often requires new pieces of infrastructure.\n\nHaving herded plenty of snowflakeservers in the past, I’ve learned there’s a better way. I (and Ashby) place a lot of value on infrastructure-as-code. As a Platform Engineer at Ashby, you’ll get to dive into scaling problems, add new capabilities to our platform, and ",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 89
+      },
+      "expected_label": "good_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "ca6bb6f702fde715971c2f76315f5b01",
+      "title": "All Engineering Roles",
+      "company": "Lark Health",
+      "description": "Lark Health | All Engineering Roles | SF Bay Area | Full-time | Onsite [All remote for now]\nI'm a VPE at Lark Health and we're growing!\nHealthcare, very important right now. Come and help us make the world healthier! :)\nWe're actively hiring and have many positions:\n* Senior DevOps engineers expert in Kubernetes / AWS\n* Manager for the DevOps/Infrastructure team\n* Senior React Native Developer.\n* Different Engineering Managers Roles.\n* Backend Engineers role.\nPreferred stack is Javascript/Typescript, Java, Kubernetes, AWS, Serverless.\nWe're in Mountain View, California. Working remote for now but looking for people local in the SF Bay Area.\nIf you are anyone are looking, let me know!\nhttps://boards.greenhouse.io/larkhealth",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 89
+      },
+      "expected_label": "good_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "d9ad0af23b3db06103cb19e771f8dde2",
+      "title": "Software Engineer - Dublin, Ireland - Onsite/Hybrid",
+      "company": "VETRO",
+      "description": "Software Engineer - Dublin Innovation Center/Hybrid Role\n\nCompany Overview\n\nVETRO provides cutting-edge Geographic Information Systems (GIS) solutions tailored for telecom and broadband providers. Our platform equips organizations with the tools to efficiently design, deploy, and manage fiber optic networks. At VETRO, we are driving innovation in broadband infrastructure, ensuring networks are built and managed with precision, speed, and scalability.\n\nVETRO is used to deploy fiber optic cable on 5 continents. We are a global, scaling organization composed of technology, GIS, and fiber enthusiasts!\n\nDublin Focus\n\nOur Dublin team, including our VP of Engineering, focuses on next-gen innovation products.\n\nPosition Summary\n\nReporting to the VP of Engineering, we are seeking an experienced Software Engineer with full-stack experience to join our global engineering team. You will be responsible for designing and implementing the features and platforms that power the global VETRO broadband platform in order to deliver the next generation of GIS fiber management software.\n\nAbout The VETRO Broadband Platform\n\nThe VETRO Broadband Platform is built on open-source libraries and tools hosted on AWS cloud infrastructure. We use technologies and services such as Node.js, Vue.js, React.js, Kafka, and PostgreSQL. Our software development practices are built on Agile Development Methodologies.\n\nWhat You Will Work On\n\nDesign and develop features for our web based fiber management platform and enable our customers to design, sell, and manage their next-gen broadband networks.Technically challenging GIS-based systems including state of the art tile servers, fiber network models, and interactive maps. All built on open source libraries and tools.Web services that extend the VETRO platform to work with other critical systems.Support the production systems that serve our global platform by triaging bugs and application performance issues, and periodically participating in on-call rotations",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 89
+      },
+      "expected_label": "good_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "ef764ad1682a79a72a23bab1d517eea6",
+      "title": "Software Engineer",
+      "company": "IT Search",
+      "description": "Software Engineer\nGlobal Insurance Firm \nDublin (Hybrid, with fully remote options available)\nIT Search has partnered with a global insurance organisation to appoint a Full Stack Software Engineer to their Dublin based technology team.\nThis role sits within a collaborative engineering group responsible for delivering and evolving modern internal platforms used across a large international business. The successful candidate will contribute to the development of scalable web applications and services, working closely with engineers, architects and product stakeholders.\nResponsibilities\nDevelop and maintain backend services using C# and modern .NET technologiesBuild and enhance web based user interfaces using frameworks such as Blazor, Angular, React or similarDesign and implement REST based integrations and APIsWork with relational databases to support application data requirementsContribute to code quality initiatives, including reviews, testing and engineering best practicesCollaborate with cross functional teams within an Agile development environment\nExperience Required\nBackground in Computer Science, Software Engineering or a related technical discipline, or equivalent industry experienceStrong understanding of object oriented programming and software design principlesCommercial experience developing applications within the .NET ecosystemExperience building modern web applications, including frontend technologies such as Blazor or similar frameworksFamiliarity with REST APIs, relational databases and Git based development workflowsExposure to CI/CD pipelines or modern development practices\nIf this sounds like your next move, apply via the link or contact Graeme King at IT Search for a confidential chat.",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 79
+      },
+      "expected_label": "weak_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "3705986579d1",
+      "title": "Software Engineer, Gen AI Platform",
+      "company": "Abridge",
+      "description": "About Abridge Abridge was founded in 2018 with the mission of powering deeper understanding in healthcare. Our AI-powered platform was purpose-built for medical conversations, improving clinical documentation efficiencies while enabling clinicians to focus on what matters most—their patients. Our enterprise-grade technology transforms patient-clinician conversations into structured clinical notes in real-time, with deep EMR integrations. Powered by Linked Evidence and our purpose-built, auditable AI, we are the only company that maps AI-generated summaries to ground truth, helping providers quickly trust and verify the output. As pioneers in generative AI for healthcare, we are setting the industry standards for the responsible deployment of AI across health systems. We are a growing team of practicing MDs, AI scientists, PhDs, creatives, technologists, and engineers working together to empower people and make care make more sense. We have offices located in the Mission District in San Francisco, the SoHo neighborhood of New York, and East Liberty in Pittsburgh. The Role Our generative AI-powered products are making a huge impact in the Healthcare industry. As an AI Platform Engineer, you will collaborate closely with a cross-functional team of researchers, clinical scientists, and product engineers. You will design and build the runtime, orchestration engine, and evaluation platform for agentic orchestration and LLM-driven workflows. What You’ll Do Design and build GenAI systems that turn LLMs into composable, dependable tools—leveraging retrieval, tool use, agentic reasoning, and structured outputs. Design and implement a highly reliable and scalable agent runtime: orchestration, shared state and memory, tool-calling interfaces, and scheduling for cost, latency, and quality. Build secure, sandboxed execution for agent actions and code; optimize cold start, isolation, and observability. Ship unified interfaces for multiple model sizes and providers; integrate with ",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 79
+      },
+      "expected_label": "weak_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "e67c6bfffb1fbda25cb32a7865388743",
+      "title": "Senior Fullstack Engineer (JavaScript/TypeScript)",
+      "company": "Linear",
+      "description": "Linear | Senior Fullstack Engineer (JavaScript/TypeScript) | Full-Time | Remote (US/EU timezone)\nLinear is building a streamlined for teams to manage bugs, tasks, projects and sprints.\nThe company was founded in 2019, and today, hundreds of high-impact teams and companies are already using Linear daily to build next-generation software.\nWe are a remote-first company, and backed by some of the best founders, angels and venture capitalists (Sequoia, Index Ventures) in the industry. Our founders are ex-YC and have led and delivered large-scale projects at Uber, Airbnb, and Coinbase.\nRight now we’re building our founding team. See more about our philosophy and the role here:\nhttps://linear.app/readme",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 79
+      },
+      "expected_label": "weak_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "f31874b77f03bf8df4e75f9f7106d854",
+      "title": "Site Reliability Engineer (Senior or Staff), Observability",
+      "company": "MongoDB, Inc. formerly 10gen, Inc.",
+      "description": "Team and Role Overview\nThe SRE Observability team is part of the larger Platform Engineering organization, and is dedicated to building and maintaining the observability stack (metrics, logging, tracing) used by all engineering teams to ensure the smooth functioning of their service. We also own related services, including our telemetry pipeline, and our monitoring and alerting infrastructure. Our stack includes VictoriaMetrics, Splunk, QuickWit, Jaeger, Fluentbit, and Vector. In addition to owning our observability infrastructure, as an Engineer on the team, you'll also work closely with other SWE and SRE teams to promote and implement best practices in instrumenting and monitoring their services. This is a highly collaborative role, and you will get to own some of the most relied upon internal infrastructure at Mongo.\nWe are looking to speak to candidates who are based in Dublin for our hybrid working model.\nResponsibilities\nDefine standards and vision for the mission-critical observability platform leveraged by all parts of the engineering organization\nDesign, architect, build and deliver core pieces of our observability services in collaboration with other vested parties\nDesign, implement, and troubleshoot the monitoring of services that seamlessly spans the globe - including several cloud providers\nBuild for reliability, making services and infrastructure available, resilient, fault tolerant and self-healing\nIdentify and configure key metrics to detect incidents and quantify service health, availability and performance.\nImprove our observability capabilities, optimizing for cost, ease of use, and maintainability\nRequirements\nExperience running mission critical services at scale\nExperience with observability of large scale distributed systems\nAn understanding of information security issues\nFirm grasp of at least one modern programming language, beyond basic scripting\nSolid understanding of web and network protocols and standards (HTTP, TLS, DNS, etc)\nBachelor's ",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 79
+      },
+      "expected_label": "weak_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "cd80f652edc018dfd7fae4fe8a31ce6f",
+      "title": "Python Developer - Visualisation - Remote",
+      "company": "The Bridge IT Recruitment",
+      "description": "Salary: £84,000 - 84,600 per year Requirements: Proven experience in Python development Familiarity with AWS services Strong knowledge of data science libraries (numpy, pandas, scipy.stats, and .spatial) Experience in data visualization tools (dash or seaborn) Responsibilities: Develop and maintain software applications using Python Collaborate with cross-functional teams to design effective solutions Utilize AWS for deployment and scalability Implement data science techniques to analyze and in…",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 79
+      },
+      "expected_label": "weak_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "3705986579d1",
+      "title": "Software Engineer, Gen AI Platform",
+      "company": "Abridge",
+      "description": "About Abridge Abridge was founded in 2018 with the mission of powering deeper understanding in healthcare. Our AI-powered platform was purpose-built for medical conversations, improving clinical documentation efficiencies while enabling clinicians to focus on what matters most—their patients. Our enterprise-grade technology transforms patient-clinician conversations into structured clinical notes in real-time, with deep EMR integrations. Powered by Linked Evidence and our purpose-built, auditable AI, we are the only company that maps AI-generated summaries to ground truth, helping providers quickly trust and verify the output. As pioneers in generative AI for healthcare, we are setting the industry standards for the responsible deployment of AI across health systems. We are a growing team of practicing MDs, AI scientists, PhDs, creatives, technologists, and engineers working together to empower people and make care make more sense. We have offices located in the Mission District in San Francisco, the SoHo neighborhood of New York, and East Liberty in Pittsburgh. The Role Our generative AI-powered products are making a huge impact in the Healthcare industry. As an AI Platform Engineer, you will collaborate closely with a cross-functional team of researchers, clinical scientists, and product engineers. You will design and build the runtime, orchestration engine, and evaluation platform for agentic orchestration and LLM-driven workflows. What You’ll Do Design and build GenAI systems that turn LLMs into composable, dependable tools—leveraging retrieval, tool use, agentic reasoning, and structured outputs. Design and implement a highly reliable and scalable agent runtime: orchestration, shared state and memory, tool-calling interfaces, and scheduling for cost, latency, and quality. Build secure, sandboxed execution for agent actions and code; optimize cold start, isolation, and observability. Ship unified interfaces for multiple model sizes and providers; integrate with ",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 79
+      },
+      "expected_label": "weak_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "756b911dd60779039a22716c193907c4",
+      "title": "Senior Automation Integration Engineer",
+      "company": "Regeneron Ireland",
+      "description": "We are seeking a highly skilled, experienced software Integration Engineer with experience in real-time data collection and analysis to join a diverse team of engineers, developers, analysts, and administrators to design, implement and support Data Acquisition and Analysis Systems. As a Senior Automation Systems Integration Engineer, a typical day might include the following: Designing, developing, and implementing software/hardware improvements to existing automated equipment and new equipment according to change control procedures. Integration of industrial automation systems, business applications and enterprise data platforms. Performing troubleshooting and investigations relating to manufacturing deviations and anomalies associated with automated control systems. Developing and editing engineering design documents, technical evaluations, and test plans for cGMP process equipment while following GAMP 5 guidelines. Supporting small manufacturing, engineering, and validation projects. Providing support to process control and process monitoring equipment software design, commissioning, testing, and corrective action. Authoring or updating system specifications, user and functional requirements specifications, generating and executing vital Factory Acceptance Tests (FAT) and (Site Acceptance Testing) SAT protocols. Reviewing cyber security vulnerabilities and risk pertaining to automation systems, software, and infrastructure Creation, modification, and maintenance of automation system documentation This role might be for you if you: Have experience with OT applications, including SCADAs, HMIs, Historians, etc. Experience working with advanced technologies such as OPC UA, MQTT, IIOT platforms, and data integration tools to create a centralized, real-time data architecture that supports Industry 4.0 initiatives. Are familiar with standing up large systems at the enterprise level Have core knowledge related to ISE S95, S88 principles and IT/Automation integration Have",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 92,
+        "hm": 95,
+        "tr": 98,
+        "match": 79
+      },
+      "expected_label": "weak_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "2fbcc6dfe4f071952f53898491eccd36",
+      "title": "Senior Software Engineer - Pricing Analytics",
+      "company": "Bloomberg",
+      "description": "Location\n\nDublin\n\nBusiness Area\n\nEngineering and CTO\n\nRef #\n\n10049069\n\nDescription & Requirements\n\nOur core product, The Bloomberg Terminal, is used by 400,000 financial professionals around the world. It's continuously being developed and improved by about 6,000 engineers that are experts in their field.\n\nThe Composite Pricing Ingestion Analytics team is a high-impact, cross-asset engineering group responsible for safeguarding the quality, stability, and integrity of Bloomberg’s composite pricing data contributions across derivatives: FX, commodities, credit derivatives, and related asset classes. Our systems are designed for scale, performance, and reliability, processing billions of multi-dimensional time-series data points daily from a diverse set of global contributors at the core of Bloomberg’s pricing infrastructure.\n\nAs part of this team, you will design and build scalable, high-performance, real-time cross-asset anomaly detection and monitoring systems, leveraging distributed streaming and data science platforms in Python and Java. This role offers the opportunity to work at the intersection of large-scale market data engineering, distributed systems and applied machine learning, solving complex cross-asset problems at global scale while shaping the future of Bloomberg’s pricing quality platform.\n\nWhat’s in it for you? \n\nBuild scalable infrastructure used by global financial institutions daily The chance to work with distributed streaming, applied machine learning, and performance-critical distributed systems Collaborate with experienced engineers, Data Analysts and Products across London, New York & San Francisco on a high-visibility product Grow quickly in a team that values mentorship, ownership, and technical excellence \n\nWe’ll trust you to \n\nDesign and implement distributed systems that deliver scalable and high-performance market data solutions Build APIs, services, and tooling to enable downstream applications to consume data efficiently and reliably",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 69
+      },
+      "expected_label": "no_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "1b75ba9558895c05acf8507cb87da7b6",
+      "title": "Sr Full-stack Engineer, Sr Data Engineer, Data Scientist, Machine Learning Engineer, Sr iOS/Android Engineer",
+      "company": "Instacart",
+      "description": "Instacart | Sr Full-stack Engineer, Sr Data Engineer, Data Scientist, Machine Learning Engineer, Sr iOS/Android Engineer | onsite in San Francisco |\nhttps://instacart.com\nInstacart (YC S12) is building the best way for people everywhere in the world to shop for groceries. Using your phone or the web, you can order groceries and have them delivered to your door in minutes. You can choose from a variety of local stores, as well as being able to mix items from multiple stores into one order.\nEvery day, we solve incredibly hard problems to create an experience for our customers that is magical. We aim to give our customers back their invaluable time so they can spend it doing the things they love with the people they love.\nHiring Process depends on the position, but will generally follow this flow: Phone screen + simple challenge / Take-home challenge / On-site. We're pretty flexible and can work with you on this.\nWe care that you can ship product and enjoy taking ownership over what you're working on. We don't really care where you went to school or what companies you've worked for.\nTech:\n• Ruby (on Rails)\n• ES6+\n• React / Redux\n• PostgreSQL\n• Elasticsearch\n• Memcached / Redis\nData Analysis & Data Science: SQL, R, Python\nLearn more about us and apply directly at:\n• https://careers.instacart.com/\n• http://tech.instacart.com\n• http://stackshare.io/posts/the-tech-behind-instacarts-grocery-delivery-service",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 69
+      },
+      "expected_label": "no_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "60424bc44c8e2d94be46e3b2ba10dddc",
+      "title": "Senior Software Engineer",
+      "company": "Microsoft",
+      "description": "Overview\n\nSecurity represents the most critical priorities for our customers in a world awash in digital threats, regulatory scrutiny, and estate complexity. Microsoft Security aspires to make the world a safer place for all. We want to reshape security and empower every user, customer, and developer with a security cloud that protects them with end to end, simplified solutions. The Microsoft Security organization accelerates Microsoft’s mission and bold ambitions to ensure that our company and industry is securing digital technology platforms, devices, and clouds in our customers’ heterogeneous environments, as well as ensuring the security of our own internal estate. Our culture is centered on embracing a growth mindset, a theme of inspiring excellence, and encouraging teams and leaders to bring their best each day. In doing so, we create life-changing innovations that impact billions of lives around the world.\n\nThe Microsoft Entra group serves over a billion active users, powering the Microsoft Entra ID and Microsoft Account services that are at the core of almost every Microsoft product and platform like Office, Xbox, HoloLens and Azure. Our engineering team has opportunities for engineers to work across the stack from delivering user-facing experiences to innovations in hyper-scale, geo-distributed, stateful, fault tolerant services. We are the Core Authentication team responsible for the authentication service serving users and devices everywhere, securing access to your favourite applications and services. We are looking for an experienced software engineer with years of technical expertise in building highly scalable and distributed systems to join us to support new and exciting scenarios in the enterprise and customer identity and access management spaces. This opportunity will allow you to work hands-on on a core service serving billions of users each month, and you will need to draw on your deep technical experience to support the team. You will also have",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 69
+      },
+      "expected_label": "no_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "017094909504647e5a99f7bbe656dad8",
+      "title": "Senior AWS Cloud Platform Engineer",
+      "company": "Stelfox Tech Recruitment",
+      "description": "Senior Cloud Platform Engineer - Daily Rate Contract - Hybrid-Working Model - Excellent NEW Role\nOur client is looking to hire a Senior Cloud Platform Engineer (Contractor) with hands-on experience in AWS infrastructure to help build and support cloud-native environments.In this role, the successful candidate will work as a key contributor within a cloud platform team, focusing on automation, infrastructure as code, and secure delivery pipelines to: collaborate with engineering, security, and operations teams to deliver well-architected solutions aligned with industry best practices.\nSkills Required:• 7+ years of experience in software engineering, platform engineering, or site reliability engineering, including 5+ years of direct experience with AWS.• Proven experience designing production-grade cloud infrastructure in regulated environments.• Deep understanding of cloud security, networking, identity and access management, and governance within AWS.• Advanced knowledge of networking (firewalls, DNS, Load Balancing, Proxies, etc.)• Proficiency in a scripting or programming language (e.g., Python, Go, Shell).• Experience with continuous integration/delivery pipelines and GitOps workflows.• Excellent communication skills and a collaborative mindset.• Experience with multi-account cloud architecture, landing zones, or control tower setups.• Familiarity with zero-trust architecture, data encryption, and key management systems (KMS).• Strong proficiency with using Infrastructure as Code tools such as Terraform to build cloud infrastructure solutions and automating cloud deployments.• Prior experience in financial services, fintech, or other regulated industries.• Hands-on experience with containerization (Docker) and orchestration platforms (e.g., EKS/Kubernetes).• Experience with monitoring tools such as Grafana, Prometheus, Splunk, or Dynatrace, as well as AWS native tools• Experience optimizing cost and performance across large-scale cloud environments.• Contribution",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 68
+      },
+      "expected_label": "no_match",
+      "needs_review": true
+    },
+    {
+      "job_hash": "695c74422ca7",
+      "title": "Staff Software Engineer, Atlas Growth",
+      "company": "Mongodb",
+      "description": "The MongoDB Atlas team is a diverse group of contributors working together to help our users manage MongoDB at global scale. We are responsible for MongoDB Atlas: our database as a service offering and fastest growing product, which allows users to deploy fault-tolerant, globally distributed MongoDB clusters in just minutes. The Atlas Growth experimentation teams focus on improving the customer experience via new product features and refinements to existing user flows. These teams work closely with cross-functional partners in Product, Design and Analytics, as well as many other MongoDB engineering teams, to bring new visions to life. We are constantly challenged to design backend and frontend features such as new onboarding flows, partner integrations, monetization improvements, and enterprise enablement for our large B2B customer base.&nbsp; The Atlas Frontend Platform team works to enable Atlas Engineering teams to work across the Atlas UI, owning foundational infrastructure and iterating to move our frontend interface to the cutting edge of user experience. We are seeking a Staff Software Engineer to join the Atlas Growth and Frontend Platform teams. Growth is made up of both platform and product teams. A successful Staff Software Engineer on Atlas Growth will come to understand the behaviors that make users successful in Atlas.&nbsp; They will be a strong partner for our Product team in identifying and prioritizing the right UX improvements, as well as have a strong infrastructural bent, leading the evolution of our backend service-oriented architecture.&nbsp; They will be an owner of our partner platform, driving Atlas's integration into the many SaaS players defining our industry, and they will become an expert in the experimentation and analytics platform services Growth owns, shaping their roadmaps to accelerate how quickly Atlas learns and delivers. Role Responsibilities Define the future evolution and vision of Growth by working closely with Product Manag",
+      "resume_excerpt": "\\documentclass[10pt,a4paper]{article}\n\\usepackage[utf8]{inputenc}\n\\usepackage{cmap}\n\\usepackage[T1]{fontenc}\n\\usepackage{lmodern}\n\\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}\n\\usepackage[hidelinks]{hyperref}\n\\usepackage{titlesec}\n\\usepackage{enumitem}\n\\usepackage[expansion=false]{microtype}\n\\usepackage{needspace}\n\\pagestyle{empty}\n\\raggedright\n\\raggedbottom\n\\setlength{\\parindent}{0pt}\n\\setlength{\\parskip}{0pt}\n\\setlength{\\emergencystretch}{2em}\n\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n\\titleformat{\\section}{\\large\\bfseries}{}{0pt}{}[\\vspace{0.06em}\\hrule height 0.4pt]\n\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n\\newcommand{\\jobentry}[4]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} -- #2 \\hfill \\textit{#3}\\\\[-0.15em]\n  \\textit{#4}\\\\[-0.25em]\n}\n\\newcommand{\\projectentry}[3]{%\n  \\Needspace{3\\baselineskip}%\n  \\textbf{#1} \\hfill \\textit{#2}\\\\[-0.15em]\n  \\textit{#3}\\\\[-0.25em]\n}\n\\newcommand{\\projectentryurl}[5]{%\n ",
+      "scores": {
+        "ats": 0,
+        "hm": 0,
+        "tr": 0,
+        "match": 68
+      },
+      "expected_label": "no_match",
+      "needs_review": true
+    }
+  ]
 }

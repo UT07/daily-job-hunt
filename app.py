@@ -1020,6 +1020,154 @@ Return ONLY the improved section content. No explanations. Keep the same format 
     return {"suggestion": suggestion.strip(), "section": body.section}
 
 
+@app.post("/api/dashboard/jobs/{job_id}/research")
+def generate_company_research(
+    job_id: str,
+    user: AuthUser = Depends(get_current_user),
+):
+    """Generate AI-powered company research for interview prep."""
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+    if _ai_client is None:
+        raise HTTPException(503, "AI client not configured")
+
+    result = (
+        _db.client.table("jobs")
+        .select("title, company, description, source, location")
+        .eq("job_id", job_id)
+        .eq("user_id", user.id)
+        .maybe_single()
+        .execute()
+    )
+    if not result or not result.data:
+        raise HTTPException(404, "Job not found")
+
+    job = result.data
+    prompt = f"""Research this company for a job interview. Return a JSON object with these fields:
+
+- company_overview: 2-3 sentences about what the company does, their market position, and size
+- engineering_culture: 2-3 sentences about their engineering practices, tech stack, team structure
+- red_flags: array of 0-3 potential concerns (layoffs, bad reviews, funding issues). Empty array if none
+- talking_points: array of 3-5 specific things to mention in an interview showing you researched them
+- salary_range: estimated salary range for this role and location (e.g. "€70,000 - €95,000")
+
+Company: {job.get('company', '')}
+Role: {job.get('title', '')}
+Location: {job.get('location', '')}
+JD excerpt: {(job.get('description') or '')[:1500]}
+
+Return ONLY valid JSON. No explanations."""
+
+    try:
+        raw = _ai_client.complete(prompt, temperature=0.3)
+    except Exception as e:
+        raise HTTPException(500, f"AI call failed: {e}")
+
+    import re as _re
+    json_text = raw.strip()
+    fence_match = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", json_text, _re.DOTALL)
+    if fence_match:
+        json_text = fence_match.group(1)
+    else:
+        brace_match = _re.search(r"\{.*\}", json_text, _re.DOTALL)
+        if brace_match:
+            json_text = brace_match.group(0)
+
+    try:
+        research = json.loads(json_text)
+    except Exception:
+        raise HTTPException(500, "AI returned invalid JSON")
+
+    # Cache in DB
+    try:
+        _db.client.table("jobs").update({"company_research": json.dumps(research)}) \
+            .eq("job_id", job_id).eq("user_id", user.id).execute()
+    except Exception:
+        pass  # non-critical
+
+    return research
+
+
+@app.post("/api/dashboard/jobs/{job_id}/interview-prep")
+def generate_interview_prep(
+    job_id: str,
+    user: AuthUser = Depends(get_current_user),
+):
+    """Generate AI-powered interview preparation for a specific job."""
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+    if _ai_client is None:
+        raise HTTPException(503, "AI client not configured")
+
+    result = (
+        _db.client.table("jobs")
+        .select("title, company, description, key_matches, gaps")
+        .eq("job_id", job_id)
+        .eq("user_id", user.id)
+        .maybe_single()
+        .execute()
+    )
+    if not result or not result.data:
+        raise HTTPException(404, "Job not found")
+
+    job = result.data
+    key_matches = job.get("key_matches") or []
+    if isinstance(key_matches, str):
+        try:
+            key_matches = json.loads(key_matches)
+        except Exception:
+            key_matches = []
+    gaps = job.get("gaps") or []
+    if isinstance(gaps, str):
+        try:
+            gaps = json.loads(gaps)
+        except Exception:
+            gaps = []
+
+    prompt = f"""Generate interview preparation for this role. The candidate is Utkarsh Singh, a software engineer with 3 years at Clover IT Services (SRE/backend, AWS, Python, React) and MSc Cloud Computing from ATU. Return a JSON object:
+
+- star_stories: array of 3 STAR stories tailored to this role. Each has: question (likely interview question), situation, task, action, result. Use REAL experience from Clover IT Services — do NOT fabricate.
+- technical_topics: array of 8-12 technical topics to review based on JD requirements
+- behavioral_questions: array of 5-7 likely behavioral questions for this role
+- company_specific: array of 3-5 company-specific things to prepare (product knowledge, recent news, team structure)
+
+Role: {job.get('title', '')} at {job.get('company', '')}
+Key matches: {', '.join(key_matches[:10])}
+Gaps to address: {', '.join(gaps[:5])}
+JD excerpt: {(job.get('description') or '')[:1500]}
+
+Return ONLY valid JSON."""
+
+    try:
+        raw = _ai_client.complete(prompt, temperature=0.4)
+    except Exception as e:
+        raise HTTPException(500, f"AI call failed: {e}")
+
+    import re as _re
+    json_text = raw.strip()
+    fence_match = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", json_text, _re.DOTALL)
+    if fence_match:
+        json_text = fence_match.group(1)
+    else:
+        brace_match = _re.search(r"\{.*\}", json_text, _re.DOTALL)
+        if brace_match:
+            json_text = brace_match.group(0)
+
+    try:
+        prep = json.loads(json_text)
+    except Exception:
+        raise HTTPException(500, "AI returned invalid JSON")
+
+    # Cache in DB
+    try:
+        _db.client.table("jobs").update({"interview_prep": json.dumps(prep)}) \
+            .eq("job_id", job_id).eq("user_id", user.id).execute()
+    except Exception:
+        pass
+
+    return prep
+
+
 @app.post("/api/dashboard/jobs/{job_id}/find-contacts", status_code=202)
 def find_contacts_for_job(job_id: str, user: AuthUser = Depends(get_current_user)):
     """Find LinkedIn contacts for a specific job."""

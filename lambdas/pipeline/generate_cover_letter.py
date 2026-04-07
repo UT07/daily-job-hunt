@@ -137,7 +137,11 @@ def _escape_latex(text: str) -> str:
 def handler(event, context):
     job_hash = event["job_hash"]
     user_id = event["user_id"]
-    light_touch = event.get("light_touch", False)
+    tailoring_depth = event.get("tailoring_depth")
+    if tailoring_depth is None:
+        # Backward-compat: old callers only set light_touch
+        tailoring_depth = "light" if event.get("light_touch") else "moderate"
+    light_touch = tailoring_depth == "light"
 
     db = get_supabase()
     s3 = boto3.client("s3")

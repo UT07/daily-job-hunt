@@ -281,6 +281,226 @@ function ApplicationTimeline({ jobId, events, onEventAdded }) {
   );
 }
 
+// ---- Research tab (Phase 3.2) ----
+function ResearchTab({ job }) {
+  const [research, setResearch] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function handleGenerate() {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await apiCall(`/api/dashboard/jobs/${job.job_id}/research`, {});
+      setResearch(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // Auto-load if job has cached research
+  useEffect(() => {
+    if (job.company_research) {
+      try {
+        setResearch(typeof job.company_research === 'string' ? JSON.parse(job.company_research) : job.company_research);
+      } catch { /* ignore parse errors */ }
+    }
+  }, [job.company_research]);
+
+  const companyUrl = job.apply_url || '';
+  const glassdoorUrl = `https://www.glassdoor.com/Reviews/${encodeURIComponent(job.company)}-reviews-SRCH_KE0,${job.company?.length}.htm`;
+  const linkedinUrl = `https://www.linkedin.com/company/${encodeURIComponent(job.company?.toLowerCase().replace(/\s+/g, '-'))}`;
+
+  return (
+    <div className="space-y-4">
+      {/* Quick links */}
+      <div className="border-2 border-black bg-white p-4">
+        <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-3">Quick Links</p>
+        <div className="flex flex-wrap gap-2">
+          {companyUrl && (
+            <a href={companyUrl} target="_blank" rel="noopener noreferrer"
+              className="text-xs font-bold border-2 border-black px-3 py-1.5 hover:bg-yellow transition-colors">
+              Job Posting
+            </a>
+          )}
+          <a href={glassdoorUrl} target="_blank" rel="noopener noreferrer"
+            className="text-xs font-bold border-2 border-black px-3 py-1.5 hover:bg-yellow transition-colors">
+            Glassdoor Reviews
+          </a>
+          <a href={linkedinUrl} target="_blank" rel="noopener noreferrer"
+            className="text-xs font-bold border-2 border-black px-3 py-1.5 hover:bg-yellow transition-colors">
+            LinkedIn Company
+          </a>
+          <a href={`https://www.google.com/search?q=${encodeURIComponent(job.company + ' engineering blog')}`}
+            target="_blank" rel="noopener noreferrer"
+            className="text-xs font-bold border-2 border-black px-3 py-1.5 hover:bg-yellow transition-colors">
+            Engineering Blog
+          </a>
+        </div>
+      </div>
+
+      {/* AI Research */}
+      <div className="border-2 border-black bg-white p-4">
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">AI Company Research</p>
+          <Button size="sm" onClick={handleGenerate} disabled={loading}>
+            {loading ? 'Researching...' : research ? 'Refresh' : 'Generate Research'}
+          </Button>
+        </div>
+
+        {error && <p className="text-xs text-error font-mono mb-2">{error}</p>}
+
+        {research ? (
+          <div className="space-y-3">
+            {research.company_overview && (
+              <div>
+                <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-1">Company Overview</p>
+                <p className="text-sm text-stone-700 leading-relaxed">{research.company_overview}</p>
+              </div>
+            )}
+            {research.engineering_culture && (
+              <div>
+                <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-1">Engineering Culture</p>
+                <p className="text-sm text-stone-700 leading-relaxed">{research.engineering_culture}</p>
+              </div>
+            )}
+            {research.red_flags?.length > 0 && (
+              <div>
+                <p className="text-[10px] font-bold text-error uppercase tracking-wider mb-1">Red Flags</p>
+                <ul className="list-disc list-inside text-sm text-stone-700">
+                  {research.red_flags.map((f, i) => <li key={i}>{f}</li>)}
+                </ul>
+              </div>
+            )}
+            {research.talking_points?.length > 0 && (
+              <div>
+                <p className="text-[10px] font-bold text-success uppercase tracking-wider mb-1">Talking Points for Interview</p>
+                <ul className="list-disc list-inside text-sm text-stone-700">
+                  {research.talking_points.map((p, i) => <li key={i}>{p}</li>)}
+                </ul>
+              </div>
+            )}
+            {research.salary_range && (
+              <div>
+                <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-1">Estimated Salary Range</p>
+                <p className="text-sm font-mono text-stone-700">{research.salary_range}</p>
+              </div>
+            )}
+          </div>
+        ) : !loading && (
+          <p className="text-sm text-stone-400">Click "Generate Research" to get AI-powered company insights.</p>
+        )}
+      </div>
+
+      {/* JD Analysis */}
+      {job.description && (
+        <div className="border-2 border-black bg-white p-4">
+          <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Job Description</p>
+          <div className="text-sm text-stone-700 leading-relaxed max-h-96 overflow-y-auto font-mono whitespace-pre-wrap">
+            {decodeHtml(job.description)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Interview Prep tab (Phase 3.5) ----
+function PrepTab({ job }) {
+  const [prep, setPrep] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function handleGenerate() {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await apiCall(`/api/dashboard/jobs/${job.job_id}/interview-prep`, {});
+      setPrep(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (job.interview_prep) {
+      try {
+        setPrep(typeof job.interview_prep === 'string' ? JSON.parse(job.interview_prep) : job.interview_prep);
+      } catch { /* ignore */ }
+    }
+  }, [job.interview_prep]);
+
+  return (
+    <div className="space-y-4">
+      <div className="border-2 border-black bg-white p-4">
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">AI Interview Prep</p>
+          <Button size="sm" onClick={handleGenerate} disabled={loading}>
+            {loading ? 'Generating...' : prep ? 'Refresh' : 'Generate Prep'}
+          </Button>
+        </div>
+
+        {error && <p className="text-xs text-error font-mono mb-2">{error}</p>}
+
+        {prep ? (
+          <div className="space-y-4">
+            {prep.star_stories?.length > 0 && (
+              <div>
+                <p className="text-[10px] font-bold text-yellow-dark uppercase tracking-wider mb-2">STAR Stories for This Role</p>
+                {prep.star_stories.map((story, i) => (
+                  <div key={i} className="mb-3 border-l-4 border-yellow pl-3">
+                    <p className="text-xs font-bold text-black mb-1">{story.question}</p>
+                    <p className="text-xs text-stone-500 font-mono mb-1">Situation: {story.situation}</p>
+                    <p className="text-xs text-stone-500 font-mono mb-1">Task: {story.task}</p>
+                    <p className="text-xs text-stone-500 font-mono mb-1">Action: {story.action}</p>
+                    <p className="text-xs text-stone-600 font-mono font-bold">Result: {story.result}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+            {prep.technical_topics?.length > 0 && (
+              <div>
+                <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Technical Topics to Review</p>
+                <div className="flex flex-wrap gap-2">
+                  {prep.technical_topics.map((t, i) => (
+                    <span key={i} className="text-xs border-2 border-stone-300 px-2 py-1 font-mono">{t}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {prep.behavioral_questions?.length > 0 && (
+              <div>
+                <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Likely Behavioral Questions</p>
+                <ul className="space-y-1">
+                  {prep.behavioral_questions.map((q, i) => (
+                    <li key={i} className="text-sm text-stone-700">• {q}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {prep.company_specific?.length > 0 && (
+              <div>
+                <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Company-Specific Prep</p>
+                <ul className="space-y-1">
+                  {prep.company_specific.map((note, i) => (
+                    <li key={i} className="text-sm text-stone-700">• {note}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        ) : !loading && (
+          <p className="text-sm text-stone-400">Click "Generate Prep" to get AI-powered interview preparation for this role.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const JOB_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'research', label: 'Research' },
@@ -890,14 +1110,10 @@ export default function JobWorkspace() {
           <ContactsTab job={job} />
         )}
         {activeTab === 'research' && (
-          <div>
-            <p className="text-stone-400">Company Research — coming in Phase 2D.</p>
-          </div>
+          <ResearchTab job={job} />
         )}
         {activeTab === 'prep' && (
-          <div>
-            <p className="text-stone-400">Interview Prep — coming in Phase 2F.</p>
-          </div>
+          <PrepTab job={job} />
         )}
       </div>
     </div>

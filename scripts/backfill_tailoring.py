@@ -12,22 +12,31 @@ import boto3
 
 REGION = "eu-west-1"
 USER_ID = "7b28f6d3-46c9-4c46-a3a8-d5d7b3480e39"
-MAX_WORKERS = 5  # Parallel Lambda invocations (respect rate limits)
+MAX_WORKERS = 2  # Keep low — each job invokes 5 Lambdas sequentially
+DELAY_BETWEEN_JOBS = 3  # seconds between starting new jobs
 
 lambda_client = boto3.client("lambda", region_name=REGION)
 
 
-def invoke_lambda(function_name: str, payload: dict, timeout_qualifier="") -> dict:
-    """Invoke a Lambda function synchronously and return parsed response."""
-    resp = lambda_client.invoke(
-        FunctionName=function_name,
-        InvocationType="RequestResponse",
-        Payload=json.dumps(payload),
-    )
-    body = json.loads(resp["Payload"].read())
-    if resp.get("FunctionError"):
-        return {"error": body}
-    return body
+def invoke_lambda(function_name: str, payload: dict, max_retries: int = 3) -> dict:
+    """Invoke a Lambda function with retry on rate limiting."""
+    for attempt in range(max_retries + 1):
+        try:
+            resp = lambda_client.invoke(
+                FunctionName=function_name,
+                InvocationType="RequestResponse",
+                Payload=json.dumps(payload),
+            )
+            body = json.loads(resp["Payload"].read())
+            if resp.get("FunctionError"):
+                return {"error": body}
+            return body
+        except lambda_client.exceptions.TooManyRequestsException:
+            if attempt < max_retries:
+                wait = (2 ** attempt) * 5  # 5s, 10s, 20s
+                time.sleep(wait)
+            else:
+                raise
 
 
 def process_job(job_hash: str, light_touch: bool) -> dict:
@@ -106,7 +115,11 @@ def main():
     start = time.time()
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        futures = {pool.submit(process_job, h, lt): h for h, lt in jobs}
+        futures = {}
+        for i, (h, lt) in enumerate(jobs):
+            futures[pool.submit(process_job, h, lt)] = h
+            if i > 0 and i % MAX_WORKERS == 0:
+                time.sleep(DELAY_BETWEEN_JOBS)
         for future in as_completed(futures):
             job_hash = futures[future]
             try:

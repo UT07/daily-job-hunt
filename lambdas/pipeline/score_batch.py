@@ -132,11 +132,17 @@ def handler(event, context):
                 logger.warning(f"[score_batch] Insert failed for {job['job_hash']}: {e}")
                 continue
 
-        light_touch = match_score >= 85
+        if match_score >= 85:
+            tailoring_depth = "light"
+        elif match_score >= 70:
+            tailoring_depth = "moderate"
+        else:
+            tailoring_depth = "heavy"
         matched_items.append({
             "job_hash": job["job_hash"],
             "user_id": user_id,
-            "light_touch": light_touch,
+            "tailoring_depth": tailoring_depth,
+            "light_touch": tailoring_depth == "light",  # backward compat
         })
 
     logger.info(f"[score_batch] {len(jobs)} fetched, {skipped_count} skipped, {len(matched_items)} matched (min_score={min_score})")

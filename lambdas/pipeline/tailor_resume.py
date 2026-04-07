@@ -192,6 +192,10 @@ _LIGHT_TOUCH_NOTE = (
     "TAILORING DEPTH: LIGHT TOUCH — make minimal edits: reorder skills to match JD "
     "keywords, tweak the summary sentence. Keep 95%+ of the body unchanged."
 )
+_MODERATE_NOTE = (
+    "TAILORING DEPTH: MODERATE — rewrite bullet points to emphasize relevant "
+    "experience, reorder sections strategically, but keep overall structure intact."
+)
 _FULL_REWRITE_NOTE = (
     "TAILORING DEPTH: FULL REWRITE — rewrite bullet points to emphasize relevant "
     "experience. Reorder sections strategically within the body."
@@ -201,7 +205,11 @@ _FULL_REWRITE_NOTE = (
 def handler(event, context):
     job_hash = event["job_hash"]
     user_id = event["user_id"]
-    light_touch = event.get("light_touch", False)
+    tailoring_depth = event.get("tailoring_depth")
+    if tailoring_depth is None:
+        # Backward-compat: old callers only set light_touch
+        tailoring_depth = "light" if event.get("light_touch") else "moderate"
+    light_touch = tailoring_depth == "light"
 
     db = get_supabase()
     s3 = boto3.client("s3")
@@ -235,7 +243,11 @@ def handler(event, context):
         keyword_section = f"\n\nKEY JD REQUIREMENTS: {', '.join(keywords)}\nEnsure each of these is addressed in the resume. Weave them into existing bullets — do NOT add new fabricated experience."
 
     # Tailor using AI (body-only prompt)
-    depth_note = _LIGHT_TOUCH_NOTE if light_touch else _FULL_REWRITE_NOTE
+    depth_note = {
+        "light": _LIGHT_TOUCH_NOTE,
+        "moderate": _MODERATE_NOTE,
+        "heavy": _FULL_REWRITE_NOTE,
+    }.get(tailoring_depth, _MODERATE_NOTE)
     system_prompt = f"{depth_note}\n\n{_SYSTEM_PROMPT}{keyword_section}"
 
     user_prompt = f"""Tailor this resume body for the following job.
@@ -346,7 +358,7 @@ Reminder: your output MUST contain all six section headers verbatim: \\section*{
     }).eq("user_id", user_id).eq("job_hash", job_hash).execute()
 
     logger.info(
-        f"[tailor] {'Light' if light_touch else 'Full'} tailor for {job_hash} "
+        f"[tailor] {tailoring_depth.capitalize()} tailor for {job_hash} "
         f"({'fallback' if validation_errors else 'ok'})"
     )
     return {

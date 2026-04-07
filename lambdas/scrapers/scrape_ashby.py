@@ -133,6 +133,8 @@ def handler(event, context):
                     "source": "ashby",
                     "job_hash": canonical_hash(company_name, title, description),
                     "query_hash": query_hash,
+                    "posting_id": str(j.get("id", "")),
+                    "company_slug": company,
                 })
 
         except Exception as e:
