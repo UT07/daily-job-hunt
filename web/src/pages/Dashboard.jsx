@@ -142,7 +142,7 @@ export default function Dashboard() {
   const [minScore, setMinScore] = useState(0);
   const [companySearch, setCompanySearch] = useState('');
   const [tailoredOnly, setTailoredOnly] = useState(true);
-  const [tierFilter, setTierFilter] = useState('S,A,B');
+  const [tierFilter, setTierFilter] = useState('S');
   const [hideExpired, setHideExpired] = useState(true);
 
   // View mode: 'list' or 'card'
@@ -320,19 +320,6 @@ export default function Dashboard() {
             />
           </div>
 
-          <Select
-            label="Tier"
-            value={tierFilter}
-            onChange={(e) => setTierFilter(e.target.value)}
-            className="w-36"
-          >
-            <option value="S,A,B">S + A + B</option>
-            <option value="S,A">S + A only</option>
-            <option value="S">S only</option>
-            <option value="All">All tiers</option>
-            <option value="S,A,B,C">Include C</option>
-          </Select>
-
           <div className="flex items-center gap-2">
             <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider">Tailored</label>
             <button
@@ -388,12 +375,50 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Tier Tabs */}
+      {!loading && (
+        <div className="flex items-center gap-0 mb-6 border-b-2 border-black">
+          {[
+            { key: 'S', label: 'Must Apply', color: 'bg-amber-300 text-black border-amber-400' },
+            { key: 'A', label: 'Strong Match', color: 'bg-emerald-100 text-black border-emerald-300' },
+            { key: 'B', label: 'Worth Trying', color: 'bg-sky-100 text-black border-sky-300' },
+            { key: 'All', label: 'All Jobs', color: 'bg-stone-100 text-stone-600 border-stone-300' },
+          ].map((tier) => {
+            const isActive = tierFilter === (tier.key === 'All' ? 'All' : tier.key);
+            const count = tier.key === 'All' ? total : jobs.filter(j => j.score_tier === tier.key).length;
+            return (
+              <button
+                key={tier.key}
+                onClick={() => {
+                  setTierFilter(tier.key === 'All' ? 'All' : tier.key);
+                  setFilterVersion(v => v + 1);
+                }}
+                className={`px-5 py-2.5 text-sm font-heading font-bold transition-all border-b-3 -mb-[2px] cursor-pointer ${
+                  isActive
+                    ? `${tier.color} border-black`
+                    : 'bg-white text-stone-400 border-transparent hover:text-black hover:bg-stone-50'
+                }`}
+              >
+                <span className={`inline-block w-5 h-5 text-[10px] font-bold leading-5 text-center border mr-1.5 ${
+                  tier.key === 'S' ? 'bg-amber-300 border-amber-500' :
+                  tier.key === 'A' ? 'bg-emerald-200 border-emerald-400' :
+                  tier.key === 'B' ? 'bg-sky-200 border-sky-400' :
+                  'bg-stone-200 border-stone-400'
+                }`}>{tier.key === 'All' ? '∞' : tier.key}</span>
+                {tier.label}
+                {isActive && <span className="ml-1.5 font-mono text-xs">({total})</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* View Toggle + Job Display */}
       {!loading && (
         <div>
           <div className="flex items-center justify-between mb-3">
             <p className="text-xs font-bold text-stone-400 uppercase tracking-wider">
-              {total} job{total !== 1 ? 's' : ''}
+              {total} job{total !== 1 ? 's' : ''}{tierFilter !== 'All' && ` in Tier ${tierFilter}`}
             </p>
             <div className="flex items-center border-2 border-black">
               <button
