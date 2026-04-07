@@ -87,3 +87,7 @@ supabase/.branches
 supabase/.temp
 supabase/config.toml
 .superpowers/
+layer/python/
+layer-tectonic/bin/
+.playwright-mcp/
+AGENTS.md
