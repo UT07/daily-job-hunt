@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import uuid
 from collections import Counter
 from datetime import datetime, timedelta
 
@@ -188,7 +189,7 @@ def _notify_medium_risk(user_id: str, adjustments: list[dict]):
 
 def handler(event, context):
     user_id = event["user_id"]
-    run_id = event.get("pipeline_run_id", "")
+    run_id = str(uuid.uuid4())
     started_at = event.get("started_at", "")
     matched_count_from_event = event.get("matched_count", 0)
 

@@ -180,7 +180,7 @@ RULES:
 
 WRITING STYLE (CRITICAL):
 - Do NOT use em-dashes (---, --, or the — character) as clause connectors. Use periods to end sentences.
-- Do NOT use filler phrases: "directly transferable to", "aligned with", "outcomes relevant to", "leveraging", "utilizing", "showcasing", "demonstrating proficiency in".
+- Do NOT use filler phrases: "directly transferable to", "aligned with", "outcomes relevant to", "leveraging", "utilizing", "showcasing", "demonstrating proficiency in", "proven track record", "passionate about", "highly motivated", "self-motivated", "team player", "detail-oriented", "results-driven", "strong background in", "extensive experience", "seasoned professional".
 - Write short, direct sentences in active voice. Lead with the action verb.
 - Do NOT append company-specific qualifiers to bullet points (e.g., "practices aligned with Company's GitOps patterns"). The bullet should stand on its own.
 - Quantify impact with numbers and percentages where they already exist.
@@ -250,18 +250,22 @@ Return ONLY the tailored body. No \\documentclass, no \\newcommand, no \\begin{{
 
 Reminder: your output MUST contain all six section headers verbatim: \\section*{{Summary}}, \\section*{{Technical Skills}}, \\section*{{Experience}}, \\section*{{Featured Projects}}, \\section*{{Education}}, \\section*{{Certifications}}."""
 
-    # Use council mode (2 generators + 1 critic) for higher quality output
-    try:
-        response_dict = council_complete(
-            prompt=user_prompt,
-            system=system_prompt,
-            task_description="Pick the resume that best matches the job description with complete sections.",
-            n_generators=2,
-            temperature=0.3,
-        )
-    except RuntimeError:
-        # Fall back to single-provider if council completely fails
-        response_dict = ai_complete(user_prompt, system=system_prompt)
+    # Light-touch jobs (score >= 85) only change ~5% of resume — single AI call is sufficient.
+    # Full rewrites use council mode (2 generators + 1 critic) for quality.
+    if light_touch:
+        logger.info(f"[tailor] Light-touch mode for {job_hash} — single AI call")
+        response_dict = ai_complete(user_prompt, system=system_prompt, temperature=0.3)
+    else:
+        try:
+            response_dict = council_complete(
+                prompt=user_prompt,
+                system=system_prompt,
+                task_description="Pick the resume that best matches the job description with complete sections.",
+                n_generators=2,
+                temperature=0.3,
+            )
+        except RuntimeError:
+            response_dict = ai_complete(user_prompt, system=system_prompt)
     ai_response = response_dict["content"]
 
     # Strip markdown code fences (```latex, ```tex, etc.)

@@ -305,7 +305,7 @@ Resources:
       CodeUri: lambdas/pipeline/
       Handler: tailor_resume.handler
       Runtime: python3.11
-      Timeout: 120
+      Timeout: 300
       MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Policies:
@@ -337,7 +337,7 @@ Resources:
       CodeUri: lambdas/pipeline/
       Handler: generate_cover_letter.handler
       Runtime: python3.11
-      Timeout: 120
+      Timeout: 300
       MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Policies:
@@ -353,7 +353,7 @@ Resources:
       CodeUri: lambdas/pipeline/
       Handler: find_contacts.handler
       Runtime: python3.11
-      Timeout: 120
+      Timeout: 30
       MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Policies:
@@ -367,7 +367,7 @@ Resources:
       CodeUri: lambdas/pipeline/
       Handler: save_job.handler
       Runtime: python3.11
-      Timeout: 60
+      Timeout: 300
       MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Policies:
@@ -403,6 +403,22 @@ Resources:
       Policies:
         - SSMParameterReadPolicy:
             ParameterName: naukribaba/*
+
+  PostScoreFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-post-score
+      CodeUri: lambdas/pipeline/
+      Handler: post_score.handler
+      Runtime: python3.11
+      Timeout: 300
+      MemorySize: 256
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: naukribaba/*
+        - S3CrudPolicy:
+            BucketName: utkarsh-job-hunt
 
   SelfImproveFunction:
     Type: AWS::Serverless::Function
@@ -659,6 +675,7 @@ Resources:
                   - !GetAtt GenerateCoverLetterFunction.Arn
                   - !GetAtt FindContactsFunction.Arn
                   - !GetAtt SaveJobFunction.Arn
+                  - !GetAtt PostScoreFunction.Arn
                   - !GetAtt SaveMetricsFunction.Arn
                   - !GetAtt SendEmailFunction.Arn
                   - !GetAtt SelfImproveFunction.Arn
@@ -767,22 +784,12 @@ Resources:
                   }
                 },
                 {
-                  "StartAt": "ScrapeAdzuna",
+                  "Comment": "Adzuna — DISABLED (only supports UK, user ineligible). Ireland not a supported country.",
+                  "StartAt": "AdzunaSkipped",
                   "States": {
-                    "ScrapeAdzuna": {
-                      "Type": "Task",
-                      "Resource": "${ScrapeAdzunaFunction.Arn}",
-                      "Parameters": {
-                        "queries.$": "$.queries",
-                        "query_hash.$": "$.query_hash"
-                      },
-                      "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 10, "MaxAttempts": 2, "BackoffRate": 2}],
-                      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "AdzunaFailed"}],
-                      "End": true
-                    },
-                    "AdzunaFailed": {
+                    "AdzunaSkipped": {
                       "Type": "Pass",
-                      "Result": {"count": 0, "source": "adzuna", "error": "scraper_failed"},
+                      "Result": {"count": 0, "source": "adzuna", "skipped": "uk_only_not_eligible"},
                       "End": true
                     }
                   }
@@ -916,7 +923,7 @@ Resources:
                 "new_job_hashes.$": "$.dedup_result.new_job_hashes",
                 "user_id.$": "$.user_id",
                 "min_match_score.$": "$.min_match_score",
-                "chunk_size": 25
+                "chunk_size": 15
               },
               "ResultPath": "$.chunks_result",
               "Next": "ScoreBatchMap",
@@ -925,7 +932,7 @@ Resources:
             "ScoreBatchMap": {
               "Type": "Map",
               "ItemsPath": "$.chunks_result.chunks",
-              "MaxConcurrency": 5,
+              "MaxConcurrency": 8,
               "ResultPath": "$.score_chunks",
               "Next": "AggregateScores",
               "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyError"}],
@@ -961,10 +968,10 @@ Resources:
             "ProcessMatchedJobs": {
               "Type": "Map",
               "ItemsPath": "$.score_result.matched_items",
-              "MaxConcurrency": 3,
+              "MaxConcurrency": 8,
               "ResultPath": "$.processed_jobs",
-              "Next": "SavePipelineMetrics",
-              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SavePipelineMetrics"}],
+              "Next": "PostScoreTailoredJobs",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PostScoreTailoredJobs"}],
               "ItemProcessor": {
                 "ProcessorConfig": {
                   "Mode": "INLINE"
@@ -990,18 +997,19 @@ Resources:
                     },
                     "ResultPath": "$.compile_result",
                     "Next": "GenerateCoverLetter",
-                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "FindContacts"}]
+                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "GenerateCoverLetter"}]
                   },
                   "GenerateCoverLetter": {
                     "Type": "Task",
                     "Resource": "${GenerateCoverLetterFunction.Arn}",
                     "Parameters": {
                       "job_hash.$": "$.job_hash",
-                      "user_id.$": "$.user_id"
+                      "user_id.$": "$.user_id",
+                      "light_touch.$": "$.light_touch"
                     },
                     "ResultPath": "$.cover_letter_result",
                     "Next": "CompileCoverLetter",
-                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "FindContacts"}]
+                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SaveJob"}]
                   },
                   "CompileCoverLetter": {
                     "Type": "Task",
@@ -1013,17 +1021,6 @@ Resources:
                       "doc_type": "cover_letter"
                     },
                     "ResultPath": "$.cover_compile_result",
-                    "Next": "FindContacts",
-                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "FindContacts"}]
-                  },
-                  "FindContacts": {
-                    "Type": "Task",
-                    "Resource": "${FindContactsFunction.Arn}",
-                    "Parameters": {
-                      "job_hash.$": "$.job_hash",
-                      "user_id.$": "$.user_id"
-                    },
-                    "ResultPath": "$.contacts_result",
                     "Next": "SaveJob",
                     "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SaveJob"}]
                   },
@@ -1041,12 +1038,40 @@ Resources:
                 }
               }
             },
+            "PostScoreTailoredJobs": {
+              "Type": "Map",
+              "Comment": "Deferred post-tailor scoring — runs after all jobs saved, not in hot path",
+              "ItemsPath": "$.score_result.matched_items",
+              "MaxConcurrency": 5,
+              "ResultPath": "$.post_score_results",
+              "Next": "SavePipelineMetrics",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SavePipelineMetrics"}],
+              "ItemProcessor": {
+                "ProcessorConfig": { "Mode": "INLINE" },
+                "StartAt": "PostScoreJob",
+                "States": {
+                  "PostScoreJob": {
+                    "Type": "Task",
+                    "Resource": "${PostScoreFunction.Arn}",
+                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PostScoreFailed"}],
+                    "End": true
+                  },
+                  "PostScoreFailed": {
+                    "Type": "Pass",
+                    "Result": {"scored": false, "reason": "post_score_failed"},
+                    "End": true
+                  }
+                }
+              }
+            },
             "SavePipelineMetrics": {
               "Type": "Task",
               "Resource": "${SaveMetricsFunction.Arn}",
               "Parameters": {
                 "user_id.$": "$.user_id",
-                "scraper_results.$": "$.scraper_results"
+                "scraper_results.$": "$.scraper_results",
+                "score_result.$": "$.score_result",
+                "dedup_result.$": "$.dedup_result"
               },
               "ResultPath": "$.metrics_saved",
               "Next": "SendEmailSummary",
@@ -1068,7 +1093,7 @@ Resources:
               "Resource": "${SelfImproveFunction.Arn}",
               "Parameters": {
                 "user_id.$": "$.user_id",
-                "pipeline_run_id.$": "$$.Execution.Name",
+                "execution_name.$": "$$.Execution.Name",
                 "started_at.$": "$$.Execution.StartTime",
                 "matched_count.$": "$.score_result.matched_count"
               },

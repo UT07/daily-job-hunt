@@ -144,9 +144,9 @@ export default function Dashboard() {
   // Filters
   const [statusFilter, setStatusFilter] = useState('All');
   const [sourceFilter, setSourceFilter] = useState('All');
-  const [minScore, setMinScore] = useState(0);
+  const [minScore, setMinScore] = useState(60);
   const [companySearch, setCompanySearch] = useState('');
-  const [tailoredOnly, setTailoredOnly] = useState(true);
+  const [tailoredOnly, setTailoredOnly] = useState(false);
   const [tierFilter, setTierFilter] = useState('S');
   const [hideExpired, setHideExpired] = useState(true);
 

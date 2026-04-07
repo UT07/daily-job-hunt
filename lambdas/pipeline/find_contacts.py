@@ -35,6 +35,9 @@ def handler(event, context):
 
     try:
         apify_key = get_param("/naukribaba/APIFY_API_KEY")
+        if not apify_key or apify_key.startswith("mock"):
+            logger.info(f"[contacts] Skipped {job_hash}: no Apify key configured")
+            return {"job_hash": job_hash, "user_id": user_id, "contacts_found": 0, "skipped": "no_apify_key"}
         from apify_client import ApifyClient
         client = ApifyClient(apify_key)
 

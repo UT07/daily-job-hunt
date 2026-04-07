@@ -52,7 +52,9 @@ Return ONLY the 3 body paragraphs as plain text. Nothing else."""
 BANNED_PHRASES = [
     "i am excited", "leverage", "passionate", "synergy", "aligns with",
     "keen to", "eager to", "i am writing to", "thrilled", "delighted",
-    "dynamic team",
+    "dynamic team", "proven track record", "highly motivated", "self-motivated",
+    "results-driven", "detail-oriented", "strong background",
+    "i am confident", "i would welcome", "i look forward to",
 ]
 
 DASH_PATTERN = re.compile(r"[–—]|--")
@@ -135,6 +137,7 @@ def _escape_latex(text: str) -> str:
 def handler(event, context):
     job_hash = event["job_hash"]
     user_id = event["user_id"]
+    light_touch = event.get("light_touch", False)
 
     db = get_supabase()
     s3 = boto3.client("s3")
@@ -186,16 +189,19 @@ Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
 
     def _generate_body(prompt: str) -> tuple[str, str, str]:
         """Call AI and return (body_text, provider, model)."""
-        try:
-            result = council_complete(
-                prompt=prompt,
-                system=COVER_LETTER_SYSTEM_PROMPT,
-                task_description=f"Write cover letter body for {job['title']} at {job['company']}",
-                n_generators=2,
-                temperature=0.7,
-            )
-        except RuntimeError:
+        if light_touch:
             result = ai_complete(prompt, system=COVER_LETTER_SYSTEM_PROMPT, temperature=0.7)
+        else:
+            try:
+                result = council_complete(
+                    prompt=prompt,
+                    system=COVER_LETTER_SYSTEM_PROMPT,
+                    task_description=f"Write cover letter body for {job['title']} at {job['company']}",
+                    n_generators=2,
+                    temperature=0.7,
+                )
+            except RuntimeError:
+                result = ai_complete(prompt, system=COVER_LETTER_SYSTEM_PROMPT, temperature=0.7)
         return result["content"].strip(), result.get("provider", "council"), result.get("model", "consensus")
 
     # Generate with validation + retry (max 2 retries)

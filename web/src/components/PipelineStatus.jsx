@@ -91,10 +91,12 @@ export default function PipelineStatus({ onComplete }) {
   const latest = status?.latest_run;
   const metrics = status?.today_metrics || [];
 
-  // Aggregate scraper stats from today's metrics
+  // Aggregate scraper stats from today's metrics (exclude disabled scrapers)
+  const DISABLED_SCRAPERS = ['adzuna', 'glassdoor'];
   const scraperStats = {};
   for (const m of metrics) {
     const name = m.scraper_name || 'unknown';
+    if (DISABLED_SCRAPERS.includes(name)) continue;
     if (!scraperStats[name]) scraperStats[name] = { found: 0, matched: 0 };
     scraperStats[name].found += m.jobs_found || 0;
     scraperStats[name].matched += m.jobs_matched || 0;
