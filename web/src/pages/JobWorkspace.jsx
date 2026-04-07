@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { apiGet, apiPatch, apiCall } from '../api';
+import EmailComposer from '../components/EmailComposer';
 
 function decodeHtml(text) {
   if (!text) return '';
@@ -13,6 +14,7 @@ import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
 import { ScoreBadge } from '../components/ui/Badge';
 import Badge from '../components/ui/Badge';
+import ResumeEditor from '../components/ResumeEditor';
 
 // ---- Contacts tab ----
 function ContactItem({ contact }) {
@@ -127,6 +129,10 @@ function ContactsTab({ job }) {
           <p className="text-stone-400 text-sm">No contacts found yet. Click "Find Contacts" above.</p>
         </div>
       )}
+      <EmailComposer
+        job={job}
+        defaultContactName={contacts[0]?.name || ''}
+      />
     </div>
   );
 }
@@ -279,6 +285,7 @@ const JOB_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'research', label: 'Research' },
   { id: 'resume', label: 'Resume' },
+  { id: 'editor', label: 'Editor' },
   { id: 'cover-letter', label: 'Cover Letter' },
   { id: 'contacts', label: 'Contacts' },
   { id: 'prep', label: 'Interview Prep' },
@@ -297,6 +304,12 @@ export default function JobWorkspace() {
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null);
   const [regenLoading, setRegenLoading] = useState(null); // 'resume' | 'cover' | null
+
+  // Version history state
+  const [versions, setVersions] = useState([]);
+  const [versionsLoading, setVersionsLoading] = useState(false);
+  const [selectedVersionId, setSelectedVersionId] = useState(null); // null = current live
+  const [restoring, setRestoring] = useState(false);
 
   // Timeline state
   const [timeline, setTimeline] = useState([]);
@@ -356,6 +369,10 @@ export default function JobWorkspace() {
             // Refresh job data to get new PDF URLs
             const updated = await apiGet(`/api/dashboard/jobs/${job.job_id}`);
             if (updated) setJob(updated);
+            // Reset to current live version and refresh version list
+            setSelectedVersionId(null);
+            const versionData = await apiGet(`/api/dashboard/jobs/${job.job_id}/versions`);
+            setVersions(Array.isArray(versionData) ? versionData : []);
           }
         } catch (err) {
           console.error('Regen poll error:', err);
@@ -364,6 +381,26 @@ export default function JobWorkspace() {
     } catch (err) {
       console.error('Regen failed:', err);
       setRegenLoading(null);
+    }
+  }
+
+  async function handleRestore(versionNumber) {
+    setRestoring(true);
+    try {
+      const updated = await apiCall(
+        `/api/dashboard/jobs/${job.job_id}/versions/${versionNumber}/restore`,
+        {},
+      );
+      // Update the live job state with the restored URLs
+      setJob((prev) => ({ ...prev, ...updated }));
+      setSelectedVersionId(null);
+      // Refresh version list
+      const versionData = await apiGet(`/api/dashboard/jobs/${job.job_id}/versions`);
+      setVersions(Array.isArray(versionData) ? versionData : []);
+    } catch (err) {
+      console.error('Restore failed:', err);
+    } finally {
+      setRestoring(false);
     }
   }
 
@@ -381,6 +418,15 @@ export default function JobWorkspace() {
     }
     load();
   }, [jobId]);
+
+  useEffect(() => {
+    if (!jobId || activeTab !== 'resume') return;
+    setVersionsLoading(true);
+    apiGet(`/api/dashboard/jobs/${jobId}/versions`)
+      .then((data) => setVersions(Array.isArray(data) ? data : []))
+      .catch((err) => console.error('Failed to load versions:', err))
+      .finally(() => setVersionsLoading(false));
+  }, [jobId, activeTab]);
 
   useEffect(() => {
     if (!jobId) return;
@@ -663,38 +709,121 @@ export default function JobWorkspace() {
           <div>
             {job.resume_s3_url ? (
               <div>
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <p className="text-sm text-stone-500">
-                      AI Model: <span className="border border-black bg-stone-900 text-cream font-mono text-[10px] font-bold px-2 py-0.5">{job.tailoring_model || '--'}</span>
-                    </p>
-                    {job.resume_version > 1 && (
-                      <span className="text-[10px] font-bold px-1.5 py-0.5 border border-stone-400 bg-stone-100 text-stone-600">v{job.resume_version}</span>
-                    )}
+                {/* Version selector — only shown when there are saved older versions */}
+                {versions.length > 0 && (
+                  <div className="mb-4 border-2 border-stone-200 bg-stone-50 p-3">
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider shrink-0">
+                        Version History
+                      </span>
+                      {versionsLoading ? (
+                        <span className="spinner" />
+                      ) : (
+                        <>
+                          {/* Current (live) entry */}
+                          <button
+                            onClick={() => setSelectedVersionId(null)}
+                            className={`text-xs font-mono px-2.5 py-1 border-2 transition-colors cursor-pointer ${
+                              selectedVersionId === null
+                                ? 'border-black bg-black text-cream'
+                                : 'border-stone-300 text-stone-600 hover:border-black hover:text-black'
+                            }`}
+                          >
+                            v{job.resume_version} (current)
+                          </button>
+                          {/* Older saved versions */}
+                          {versions.map((v) => {
+                            const dateStr = new Date(v.created_at).toLocaleDateString('en-IE', {
+                              day: '2-digit', month: 'short',
+                            });
+                            const modelLabel = v.tailoring_model
+                              ? `, ${v.tailoring_model}`
+                              : '';
+                            const isSelected = selectedVersionId === v.id;
+                            return (
+                              <div key={v.id} className="flex items-center gap-1">
+                                <button
+                                  onClick={() => setSelectedVersionId(v.id)}
+                                  className={`text-xs font-mono px-2.5 py-1 border-2 transition-colors cursor-pointer ${
+                                    isSelected
+                                      ? 'border-black bg-black text-cream'
+                                      : 'border-stone-300 text-stone-600 hover:border-black hover:text-black'
+                                  }`}
+                                >
+                                  v{v.version_number} ({dateStr}{modelLabel})
+                                </button>
+                                {isSelected && (
+                                  <button
+                                    disabled={restoring}
+                                    onClick={() => handleRestore(v.version_number)}
+                                    className="text-[10px] font-bold text-stone-600 border-2 border-stone-400 px-2 py-1
+                                      hover:border-black hover:text-black transition-colors cursor-pointer disabled:opacity-50"
+                                  >
+                                    {restoring ? 'Restoring...' : 'Restore'}
+                                  </button>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      loading={regenLoading === 'resume'}
-                      disabled={!!regenLoading}
-                      onClick={() => handleRegen('resume')}
-                    >
-                      {regenLoading === 'resume' ? 'Regenerating...' : 'Regenerate'}
-                    </Button>
-                    <a href={job.resume_s3_url} target="_blank" rel="noopener noreferrer">
-                      <Button variant="primary" size="sm">Download PDF</Button>
-                    </a>
-                  </div>
-                </div>
-                <div className="border-2 border-black bg-stone-100">
-                  <iframe
-                    src={job.resume_s3_url}
-                    title="Resume PDF Preview"
-                    className="w-full bg-white"
-                    style={{ height: '700px' }}
-                  />
-                </div>
+                )}
+
+                {/* Toolbar row */}
+                {(() => {
+                  const displayVersion = selectedVersionId
+                    ? versions.find((v) => v.id === selectedVersionId)
+                    : null;
+                  const model = displayVersion ? displayVersion.tailoring_model : job.tailoring_model;
+                  const versionNum = displayVersion ? displayVersion.version_number : job.resume_version;
+                  const pdfUrl = displayVersion?.resume_s3_url ?? job.resume_s3_url;
+                  return (
+                    <>
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-3">
+                          <p className="text-sm text-stone-500">
+                            AI Model:{' '}
+                            <span className="border border-black bg-stone-900 text-cream font-mono text-[10px] font-bold px-2 py-0.5">
+                              {model || '--'}
+                            </span>
+                          </p>
+                          {versionNum > 1 && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 border border-stone-400 bg-stone-100 text-stone-600">
+                              v{versionNum}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            loading={regenLoading === 'resume'}
+                            disabled={!!regenLoading}
+                            onClick={() => handleRegen('resume')}
+                          >
+                            {regenLoading === 'resume' ? 'Regenerating...' : 'Regenerate'}
+                          </Button>
+                          {pdfUrl && (
+                            <a href={pdfUrl} target="_blank" rel="noopener noreferrer">
+                              <Button variant="primary" size="sm">Download PDF</Button>
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                      <div className="border-2 border-black bg-stone-100">
+                        <iframe
+                          key={pdfUrl}
+                          src={pdfUrl}
+                          title="Resume PDF Preview"
+                          className="w-full bg-white"
+                          style={{ height: '700px' }}
+                        />
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             ) : (
               <div className="text-center py-16">
@@ -715,6 +844,9 @@ export default function JobWorkspace() {
               </div>
             )}
           </div>
+        )}
+        {activeTab === 'editor' && (
+          <ResumeEditor job={job} />
         )}
         {activeTab === 'cover-letter' && (
           <div>

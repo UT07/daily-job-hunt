@@ -16,9 +16,12 @@ Endpoints:
 - PATCH /api/dashboard/jobs/{id}    — update job status
 - DELETE /api/dashboard/jobs/{id}   — delete job
 - GET  /api/dashboard/jobs/{id}/timeline — list application timeline events
+- GET  /api/dashboard/jobs/{id}/versions — list resume versions (newest first)
+- POST /api/dashboard/jobs/{id}/versions/{ver}/restore — restore a version as current
 - GET  /api/dashboard/jobs/{id}/sections — parse .tex into editable sections + JD analysis
 - POST /api/dashboard/jobs/{id}/sections — rebuild .tex from edited sections, compile PDF
 - POST /api/dashboard/jobs/{id}/timeline — add a timeline event (also updates job status)
+- POST /api/dashboard/jobs/{id}/generate-email — AI-generate a cold outreach / follow-up / thank-you email
 - GET  /api/dashboard/stats         — aggregate metrics
 - GET  /api/dashboard/runs          — run history
 - POST /api/resumes/upload          — upload PDF resume
@@ -809,6 +812,158 @@ def contacts(req: ContactsRequest, user: AuthUser = Depends(get_current_user)):
     return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
 
 
+class GenerateEmailRequest(BaseModel):
+    template: str = Field(..., description="cold_outreach | follow_up | thank_you")
+    contact_name: Optional[str] = None
+
+
+class GenerateEmailResponse(BaseModel):
+    subject: str
+    body: str
+
+
+_EMAIL_TEMPLATE_NAMES = {"cold_outreach", "follow_up", "thank_you"}
+
+_EMAIL_PROMPTS = {
+    "cold_outreach": """You are a career strategist writing a cold outreach email on behalf of a software engineer.
+
+Job: {job_title} at {company}
+{contact_line}
+Key skills the candidate matches: {key_matches}
+Job description excerpt: {jd_excerpt}
+
+Write a short, confident cold outreach email. Rules:
+- Subject: specific to the role and company, max 10 words
+- 3-4 short paragraphs, no fluff, no "I hope this email finds you well"
+- Open with why you are reaching out to THIS company specifically
+- 1 concrete proof point (metric or achievement) mapped to a JD requirement
+- Close with a clear, low-friction ask (15-min call, not "any opportunities")
+- Tone: peer-to-peer, not applicant-to-gatekeeper. Confident, not desperate.
+- Do NOT use: "I am passionate about", "leverage", "synergy", "excited to apply"
+- Sign off as: Utkarsh
+
+Return ONLY a JSON object: {{"subject": "...", "body": "..."}}""",
+
+    "follow_up": """You are a career strategist writing a follow-up email for a software engineer who applied to a job 7+ days ago.
+
+Job: {job_title} at {company}
+{contact_line}
+Key skills the candidate matches: {key_matches}
+Job description excerpt: {jd_excerpt}
+
+Write a concise follow-up email. Rules:
+- Subject: reference the application directly, max 10 words
+- 2-3 short paragraphs
+- Mention the application was submitted and express continued interest
+- Add one new proof point or relevant context not in the original application
+- Close with a gentle ask to confirm receipt or discuss next steps
+- Tone: confident and direct, not apologetic or pushy
+- Sign off as: Utkarsh
+
+Return ONLY a JSON object: {{"subject": "...", "body": "..."}}""",
+
+    "thank_you": """You are a career strategist writing a post-interview thank-you email for a software engineer.
+
+Job: {job_title} at {company}
+{contact_line}
+Key skills the candidate matches: {key_matches}
+Job description excerpt: {jd_excerpt}
+
+Write a brief thank-you note. Rules:
+- Subject: thank them and reference the role, max 10 words
+- 2-3 short paragraphs
+- Reference something specific discussed in the interview (use a placeholder if unknown: "[topic discussed]")
+- Reinforce one key qualification that maps directly to their biggest stated need
+- Close by expressing genuine enthusiasm and readiness to move forward
+- Tone: warm but professional, not sycophantic
+- Sign off as: Utkarsh
+
+Return ONLY a JSON object: {{"subject": "...", "body": "..."}}""",
+}
+
+
+@app.post("/api/dashboard/jobs/{job_id}/generate-email", response_model=GenerateEmailResponse)
+def generate_email_for_job(
+    job_id: str,
+    body: GenerateEmailRequest,
+    user: AuthUser = Depends(get_current_user),
+):
+    """Generate a personalized email draft using AI for a given job and template type."""
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+    if body.template not in _EMAIL_TEMPLATE_NAMES:
+        raise HTTPException(400, f"Invalid template. Must be one of: {sorted(_EMAIL_TEMPLATE_NAMES)}")
+    if _ai_client is None:
+        raise HTTPException(503, "AI client not configured")
+
+    result = (
+        _db.client.table("jobs")
+        .select("title, company, description, key_matches")
+        .eq("job_id", job_id)
+        .eq("user_id", user.id)
+        .maybe_single()
+        .execute()
+    )
+    if not result or not result.data:
+        raise HTTPException(404, "Job not found")
+
+    job_row = result.data
+    job_title = job_row.get("title") or "Software Engineer"
+    company = job_row.get("company") or "the company"
+    description = job_row.get("description") or ""
+    raw_matches = job_row.get("key_matches") or []
+
+    # Normalize key_matches — may be a JSON string or already a list
+    if isinstance(raw_matches, str):
+        try:
+            raw_matches = json.loads(raw_matches)
+        except Exception:
+            raw_matches = []
+    key_matches_str = ", ".join(raw_matches[:8]) if raw_matches else "not available"
+
+    jd_excerpt = description[:600].strip() if description else "not available"
+
+    contact_line = f"Contact: {body.contact_name}" if body.contact_name else ""
+
+    prompt = _EMAIL_PROMPTS[body.template].format(
+        job_title=job_title,
+        company=company,
+        contact_line=contact_line,
+        key_matches=key_matches_str,
+        jd_excerpt=jd_excerpt,
+    )
+
+    try:
+        raw_ai = _ai_client.complete(prompt, temperature=0.7)
+    except Exception as e:
+        logger.error("Email generation AI call failed: %s", e)
+        raise HTTPException(500, f"AI call failed: {e}")
+
+    # Parse JSON from AI response — handle markdown fences
+    import re as _re
+    json_text = raw_ai.strip()
+    fence_match = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", json_text, _re.DOTALL)
+    if fence_match:
+        json_text = fence_match.group(1)
+    else:
+        brace_match = _re.search(r"\{.*\}", json_text, _re.DOTALL)
+        if brace_match:
+            json_text = brace_match.group(0)
+
+    try:
+        parsed = json.loads(json_text)
+        subject = str(parsed.get("subject", "")).strip()
+        email_body = str(parsed.get("body", "")).strip()
+    except Exception:
+        logger.warning("Email AI response was not valid JSON: %s", raw_ai[:200])
+        raise HTTPException(500, "AI returned an unexpected format. Please try again.")
+
+    if not subject or not email_body:
+        raise HTTPException(500, "AI returned empty subject or body. Please try again.")
+
+    return GenerateEmailResponse(subject=subject, body=email_body)
+
+
 @app.post("/api/dashboard/jobs/{job_id}/find-contacts", status_code=202)
 def find_contacts_for_job(job_id: str, user: AuthUser = Depends(get_current_user)):
     """Find LinkedIn contacts for a specific job."""
@@ -1147,6 +1302,107 @@ def add_timeline_event(
     _db.client.table("jobs").update({"application_status": body.status}).eq("job_id", job_id).eq("user_id", user.id).execute()
 
     return inserted
+
+
+# ---------------------------------------------------------------------------
+# Resume Version History endpoints (Phase 3.3c)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/dashboard/jobs/{job_id}/versions")
+def get_resume_versions(
+    job_id: str,
+    user: AuthUser = Depends(get_current_user),
+):
+    """List all saved resume versions for a job, newest first."""
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+
+    # Verify the job belongs to this user.
+    job_check = (
+        _db.client.table("jobs")
+        .select("job_id")
+        .eq("job_id", job_id)
+        .eq("user_id", user.id)
+        .maybe_single()
+        .execute()
+    )
+    if not job_check or not job_check.data:
+        raise HTTPException(404, "Job not found")
+
+    result = (
+        _db.client.table("resume_versions")
+        .select("*")
+        .eq("job_id", job_id)
+        .eq("user_id", user.id)
+        .order("version_number", desc=True)
+        .execute()
+    )
+    return result.data or []
+
+
+@app.post("/api/dashboard/jobs/{job_id}/versions/{version_number}/restore", status_code=200)
+def restore_resume_version(
+    job_id: str,
+    version_number: int,
+    user: AuthUser = Depends(get_current_user),
+):
+    """Restore a saved version as the current resume/cover letter for a job."""
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+
+    # Verify the job belongs to this user.
+    job_check = (
+        _db.client.table("jobs")
+        .select("job_id, resume_s3_url, cover_letter_s3_url, tailoring_model, resume_version")
+        .eq("job_id", job_id)
+        .eq("user_id", user.id)
+        .maybe_single()
+        .execute()
+    )
+    if not job_check or not job_check.data:
+        raise HTTPException(404, "Job not found")
+    job = job_check.data
+
+    # Fetch the requested version.
+    ver_check = (
+        _db.client.table("resume_versions")
+        .select("*")
+        .eq("job_id", job_id)
+        .eq("user_id", user.id)
+        .eq("version_number", version_number)
+        .maybe_single()
+        .execute()
+    )
+    if not ver_check or not ver_check.data:
+        raise HTTPException(404, "Version not found")
+    version = ver_check.data
+
+    # Save the current live URLs as a new snapshot before overwriting.
+    current_version = job.get("resume_version") or 1
+    if job.get("resume_s3_url") or job.get("cover_letter_s3_url"):
+        _db.client.table("resume_versions").insert({
+            "user_id": user.id,
+            "job_id": job_id,
+            "version_number": current_version,
+            "resume_s3_url": job.get("resume_s3_url"),
+            "cover_letter_s3_url": job.get("cover_letter_s3_url"),
+            "tailoring_model": job.get("tailoring_model"),
+        }).execute()
+
+    next_version = current_version + 1
+    _db.client.table("jobs").update({
+        "resume_s3_url": version.get("resume_s3_url"),
+        "cover_letter_s3_url": version.get("cover_letter_s3_url"),
+        "tailoring_model": version.get("tailoring_model"),
+        "resume_version": next_version,
+    }).eq("job_id", job_id).eq("user_id", user.id).execute()
+
+    return {
+        "resume_s3_url": version.get("resume_s3_url"),
+        "cover_letter_s3_url": version.get("cover_letter_s3_url"),
+        "tailoring_model": version.get("tailoring_model"),
+        "resume_version": next_version,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1513,9 +1769,17 @@ def re_tailor_job(job_id: str, user: AuthUser = Depends(get_current_user)):
         raise HTTPException(404, "Job not found")
     job = job.data[0]
 
-    # Get current resume version
-    resumes = _db.get_resumes(user.id)
-    current_version = len(resumes) if resumes else 0
+    # Save the current resume/cover letter as a version snapshot BEFORE re-tailoring.
+    current_version = job.get("resume_version") or 1
+    if job.get("resume_s3_url") or job.get("cover_letter_s3_url"):
+        _db.client.table("resume_versions").insert({
+            "user_id": user.id,
+            "job_id": job_id,
+            "version_number": current_version,
+            "resume_s3_url": job.get("resume_s3_url"),
+            "cover_letter_s3_url": job.get("cover_letter_s3_url"),
+            "tailoring_model": job.get("tailoring_model"),
+        }).execute()
 
     sfn = _get_sfn()
     execution = sfn.start_execution(
@@ -1531,15 +1795,15 @@ def re_tailor_job(job_id: str, user: AuthUser = Depends(get_current_user)):
         }),
     )
 
-    # Increment resume_version on the job
+    next_version = current_version + 1
     _db.client.table("jobs").update({
-        "resume_version": (job.get("resume_version") or 0) + 1,
+        "resume_version": next_version,
     }).eq("job_id", job_id).execute()
 
     return {
         "executionArn": execution["executionArn"],
         "pollUrl": f"/api/pipeline/status/{execution['executionArn'].split(':')[-1]}",
-        "resume_version": (job.get("resume_version") or 0) + 1,
+        "resume_version": next_version,
     }
 
 
