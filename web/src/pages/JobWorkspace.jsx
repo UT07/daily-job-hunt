@@ -77,6 +77,8 @@ function ContactItem({ contact }) {
 }
 
 function ContactsTab({ job }) {
+  const [findingContacts, setFindingContacts] = useState(false);
+
   let contacts = [];
   if (job.linkedin_contacts) {
     try {
@@ -89,26 +91,186 @@ function ContactsTab({ job }) {
     }
   }
 
-  if (!contacts.length) {
-    return (
-      <div className="text-center py-10">
-        <p className="text-stone-400 text-sm mb-2">No contacts found yet.</p>
-        <p className="text-xs text-stone-400">
-          Use <span className="font-mono font-bold">Add Job → Find Contacts</span> to search for
-          LinkedIn contacts at this company.
-        </p>
-      </div>
-    );
+  async function handleFindContacts() {
+    setFindingContacts(true);
+    try {
+      await apiCall(`/api/dashboard/jobs/${job.job_id}/find-contacts`, {});
+    } catch (err) {
+      console.error('Find contacts failed:', err);
+    } finally {
+      setFindingContacts(false);
+    }
   }
 
   return (
     <div className="space-y-3">
-      <p className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-3">
-        {contacts.length} Contact{contacts.length !== 1 ? 's' : ''} · {job.company}
-      </p>
-      {contacts.map((c, i) => (
-        <ContactItem key={i} contact={c} />
-      ))}
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-xs font-bold text-stone-400 uppercase tracking-wider">
+          {contacts.length} Contact{contacts.length !== 1 ? 's' : ''} · {job.company}
+        </p>
+        <Button
+          variant="secondary"
+          size="sm"
+          loading={findingContacts}
+          disabled={findingContacts}
+          onClick={handleFindContacts}
+        >
+          {findingContacts ? 'Finding...' : contacts.length ? 'Find More' : 'Find Contacts'}
+        </Button>
+      </div>
+      {contacts.length > 0 ? (
+        contacts.map((c, i) => (
+          <ContactItem key={i} contact={c} />
+        ))
+      ) : (
+        <div className="text-center py-10">
+          <p className="text-stone-400 text-sm">No contacts found yet. Click "Find Contacts" above.</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Application Timeline ----
+
+const VALID_STATUSES = ['New', 'Applied', 'Phone Screen', 'Interview', 'Offer', 'Rejected', 'Withdrawn', 'Accepted'];
+
+function timeAgo(isoString) {
+  const seconds = Math.floor((Date.now() - new Date(isoString).getTime()) / 1000);
+  if (seconds < 60) return 'just now';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `${days} day${days !== 1 ? 's' : ''} ago`;
+  const months = Math.floor(days / 30);
+  return `${months} month${months !== 1 ? 's' : ''} ago`;
+}
+
+function ApplicationTimeline({ jobId, events, onEventAdded }) {
+  const [showForm, setShowForm] = useState(false);
+  const [selectedStatus, setSelectedStatus] = useState('');
+  const [notes, setNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!selectedStatus) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const event = await apiCall(`/api/dashboard/jobs/${jobId}/timeline`, {
+        status: selectedStatus,
+        notes: notes.trim() || null,
+      });
+      onEventAdded(event, selectedStatus);
+      setShowForm(false);
+      setSelectedStatus('');
+      setNotes('');
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-xs font-bold text-stone-400 uppercase tracking-wider">Application Timeline</h3>
+        {!showForm && (
+          <button
+            onClick={() => setShowForm(true)}
+            className="inline-flex items-center gap-1.5 text-xs font-bold text-stone-500 border-2 border-stone-300 px-2.5 py-1
+              hover:border-black hover:text-black transition-colors cursor-pointer"
+          >
+            Update Status
+          </button>
+        )}
+      </div>
+
+      {showForm && (
+        <form
+          onSubmit={handleSubmit}
+          className="mb-4 border-2 border-yellow bg-yellow-light p-4"
+        >
+          <div className="flex flex-col sm:flex-row gap-3 mb-3">
+            <div className="flex-1">
+              <label className="block text-xs font-bold text-black mb-1 uppercase tracking-wider">New Status</label>
+              <select
+                value={selectedStatus}
+                onChange={(e) => setSelectedStatus(e.target.value)}
+                required
+                className="w-full border-2 border-black bg-white text-sm font-bold px-3 py-2 appearance-none focus:outline-none focus:border-yellow-dark"
+              >
+                <option value="">Select status...</option>
+                {VALID_STATUSES.map((s) => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="mb-3">
+            <label className="block text-xs font-bold text-black mb-1 uppercase tracking-wider">Notes (optional)</label>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={2}
+              placeholder="e.g. Submitted via company portal"
+              className="w-full border-2 border-black bg-white text-sm px-3 py-2 resize-none focus:outline-none focus:border-yellow-dark font-mono"
+            />
+          </div>
+          {error && (
+            <p className="text-xs text-error mb-2 font-mono">{error}</p>
+          )}
+          <div className="flex items-center gap-2">
+            <button
+              type="submit"
+              disabled={submitting || !selectedStatus}
+              className="text-xs font-bold text-cream bg-black border-2 border-black px-3 py-1.5
+                hover:bg-stone-700 transition-colors cursor-pointer disabled:opacity-50"
+            >
+              {submitting ? 'Saving...' : 'Save'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setShowForm(false); setError(null); }}
+              className="text-xs font-bold text-stone-500 border-2 border-stone-300 px-3 py-1.5
+                hover:border-black hover:text-black transition-colors cursor-pointer"
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+
+      {events.length === 0 ? (
+        <p className="text-xs text-stone-400 font-mono py-2">No status updates yet. Click "Update Status" to record your first action.</p>
+      ) : (
+        <div className="relative">
+          {/* Vertical line */}
+          <div className="absolute left-[7px] top-2 bottom-2 w-0.5 bg-stone-300" />
+          <div className="space-y-3 pl-6">
+            {events.map((ev) => (
+              <div key={ev.id} className="relative">
+                {/* Dot on the timeline */}
+                <div className="absolute -left-6 top-1.5 w-3.5 h-3.5 border-2 border-black bg-white" />
+                <div className="border-2 border-stone-200 bg-white p-3">
+                  <div className="flex items-center gap-2 mb-1">
+                    <Badge status={ev.status} />
+                    <span className="text-[10px] font-mono text-stone-400">{timeAgo(ev.created_at)}</span>
+                  </div>
+                  {ev.notes && (
+                    <p className="text-xs text-stone-600 font-mono leading-relaxed">{ev.notes}</p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -135,6 +297,11 @@ export default function JobWorkspace() {
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null);
   const [regenLoading, setRegenLoading] = useState(null); // 'resume' | 'cover' | null
+
+  // Timeline state
+  const [timeline, setTimeline] = useState([]);
+  const [timelineLoading, setTimelineLoading] = useState(false);
+  const [currentStatus, setCurrentStatus] = useState(null); // tracks latest status from timeline
 
   function startEditing() {
     setEditFields({
@@ -205,6 +372,7 @@ export default function JobWorkspace() {
       try {
         const data = await apiGet(`/api/dashboard/jobs/${jobId}`);
         setJob(data || null);
+        if (data) setCurrentStatus(data.application_status || 'New');
       } catch (err) {
         console.error('Failed to load job:', err);
       } finally {
@@ -213,6 +381,20 @@ export default function JobWorkspace() {
     }
     load();
   }, [jobId]);
+
+  useEffect(() => {
+    if (!jobId) return;
+    setTimelineLoading(true);
+    apiGet(`/api/dashboard/jobs/${jobId}/timeline`)
+      .then((data) => setTimeline(Array.isArray(data) ? data : []))
+      .catch((err) => console.error('Failed to load timeline:', err))
+      .finally(() => setTimelineLoading(false));
+  }, [jobId]);
+
+  function handleTimelineEventAdded(event, newStatus) {
+    setTimeline((prev) => [event, ...prev]);
+    setCurrentStatus(newStatus);
+  }
 
   if (loading) {
     return (
@@ -253,7 +435,7 @@ export default function JobWorkspace() {
         </div>
         <div className="flex items-center gap-3">
           <ScoreBadge score={job.match_score} className="text-2xl" />
-          <Badge status={job.application_status || 'New'} />
+          <Badge status={currentStatus || job.application_status || 'New'} />
           {job.apply_url && job.apply_url !== 'Apply' && (
             <a href={job.apply_url} target="_blank" rel="noopener noreferrer">
               <Button variant="accent" size="sm">Apply</Button>
@@ -269,6 +451,20 @@ export default function JobWorkspace() {
       <div className="border-2 border-t-0 border-black bg-white p-6 min-h-[300px]">
         {activeTab === 'overview' && (
           <div>
+            {/* Application Timeline */}
+            {timelineLoading ? (
+              <div className="mb-6 flex items-center gap-2">
+                <span className="spinner" />
+                <span className="text-xs text-stone-400 font-mono">Loading timeline...</span>
+              </div>
+            ) : (
+              <ApplicationTimeline
+                jobId={jobId}
+                events={timeline}
+                onEventAdded={handleTimelineEventAdded}
+              />
+            )}
+
             {/* Inline editable fields */}
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-xs font-bold text-stone-400 uppercase tracking-wider">Job Details</h3>

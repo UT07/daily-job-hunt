@@ -15,6 +15,10 @@ Endpoints:
 - GET  /api/dashboard/jobs          — paginated job list
 - PATCH /api/dashboard/jobs/{id}    — update job status
 - DELETE /api/dashboard/jobs/{id}   — delete job
+- GET  /api/dashboard/jobs/{id}/timeline — list application timeline events
+- GET  /api/dashboard/jobs/{id}/sections — parse .tex into editable sections + JD analysis
+- POST /api/dashboard/jobs/{id}/sections — rebuild .tex from edited sections, compile PDF
+- POST /api/dashboard/jobs/{id}/timeline — add a timeline event (also updates job status)
 - GET  /api/dashboard/stats         — aggregate metrics
 - GET  /api/dashboard/runs          — run history
 - POST /api/resumes/upload          — upload PDF resume
@@ -560,6 +564,9 @@ def _dispatch_task(task_type: str, payload: dict, user_id: str = "") -> dict:
             _update_job_artifacts(job_id, {"linkedin_contacts": _json.dumps(result["contacts"])})
         result["job_id"] = job_id
         return result
+    elif task_type == "rebuild_sections":
+        result = _do_rebuild_sections(payload.get("job_id", ""), payload.get("sections", {}), user_id)
+        return result
     else:
         raise ValueError(f"Unknown task_type: {task_type}")
 
@@ -683,6 +690,77 @@ def _do_contacts(job):
     return {"contacts": result or []}
 
 
+def _do_rebuild_sections(job_id: str, sections: dict, user_id: str) -> dict:
+    """Rebuild a .tex from edited sections, compile to PDF, upload both to S3.
+
+    Workflow:
+    1. Fetch the current tailored .tex from S3 (to reuse its preamble)
+    2. Rebuild the body from `sections` using parse_sections.rebuild_tex_from_sections
+    3. Compile the new .tex with tectonic
+    4. Upload updated .tex and .pdf to S3 (overwrite in place)
+    5. Update the job row with the new resume_s3_url
+
+    Returns dict with pdf_url and tex_s3_key.
+    """
+    from lambdas.pipeline.parse_sections import rebuild_tex_from_sections
+
+    bucket = os.environ.get("S3_BUCKET", os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt"))
+    tex_s3_key = f"users/{user_id}/resumes/{job_id}_tailored.tex"
+
+    s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
+
+    # Fetch base .tex (for preamble)
+    try:
+        obj = s3.get_object(Bucket=bucket, Key=tex_s3_key)
+        base_tex = obj["Body"].read().decode("utf-8")
+    except Exception as e:
+        raise RuntimeError(f"Could not fetch base .tex from S3 ({tex_s3_key}): {e}")
+
+    # Rebuild .tex from edited sections
+    new_tex = rebuild_tex_from_sections(sections, base_tex)
+
+    # Write new .tex back to S3
+    s3.put_object(Bucket=bucket, Key=tex_s3_key, Body=new_tex.encode("utf-8"))
+
+    # Compile to PDF
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tex_path = Path(tmpdir) / "resume.tex"
+        tex_path.write_text(new_tex)
+        pdf_path = compile_tex_to_pdf(str(tex_path), tmpdir)
+        if not pdf_path:
+            raise RuntimeError("LaTeX compilation failed after section rebuild")
+
+        # Upload PDF — use the same key as the existing PDF (replace .tex → .pdf)
+        pdf_s3_key = tex_s3_key.replace(".tex", ".pdf")
+        with open(pdf_path, "rb") as f:
+            s3.put_object(
+                Bucket=bucket,
+                Key=pdf_s3_key,
+                Body=f.read(),
+                ContentType="application/pdf",
+            )
+
+    # Generate a presigned URL for the new PDF (7-day expiry)
+    try:
+        pdf_url = s3.generate_presigned_url(
+            "get_object",
+            Params={"Bucket": bucket, "Key": pdf_s3_key},
+            ExpiresIn=7 * 24 * 60 * 60,
+        )
+    except Exception:
+        pdf_url = ""
+
+    # Update job row in Supabase
+    _update_job_artifacts(job_id, {"resume_s3_url": pdf_url})
+
+    return {
+        "job_id": job_id,
+        "tex_s3_key": tex_s3_key,
+        "pdf_s3_key": pdf_s3_key,
+        "pdf_url": pdf_url,
+    }
+
+
 # ---------------------------------------------------------------------------
 # POST endpoints — return 202 Accepted with task_id for long-running ops
 # ---------------------------------------------------------------------------
@@ -726,6 +804,26 @@ def contacts(req: ContactsRequest, user: AuthUser = Depends(get_current_user)):
         "job_description": req.job_description,
         "job_title": req.job_title,
         "company": req.company,
+    }
+    _enqueue_task(task_id, user.id, "contacts", payload)
+    return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
+
+
+@app.post("/api/dashboard/jobs/{job_id}/find-contacts", status_code=202)
+def find_contacts_for_job(job_id: str, user: AuthUser = Depends(get_current_user)):
+    """Find LinkedIn contacts for a specific job."""
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+    job = _db.client.table("jobs").select("title, company, description").eq("job_id", job_id).eq("user_id", user.id).execute()
+    if not job.data:
+        raise HTTPException(404, "Job not found")
+    j = job.data[0]
+    task_id = str(uuid.uuid4())
+    payload = {
+        "job_description": j.get("description", ""),
+        "job_title": j.get("title", ""),
+        "company": j.get("company", ""),
+        "job_id": job_id,
     }
     _enqueue_task(task_id, user.id, "contacts", payload)
     return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
@@ -854,7 +952,7 @@ def get_search_config(user: AuthUser = Depends(get_current_user)):
 # Dashboard endpoints
 # ---------------------------------------------------------------------------
 
-_VALID_STATUSES = {"New", "Applied", "Interview", "Offer", "Rejected", "Withdrawn"}
+_VALID_STATUSES = {"New", "Applied", "Phone Screen", "Interview", "Offer", "Rejected", "Withdrawn", "Accepted"}
 
 
 @app.get("/api/dashboard/jobs")
@@ -967,6 +1065,197 @@ def get_single_job(
     if not result or not result.data:
         raise HTTPException(404, "Job not found")
     return result.data
+
+
+class TimelineEventRequest(BaseModel):
+    status: str
+    notes: Optional[str] = None
+
+
+@app.get("/api/dashboard/jobs/{job_id}/timeline")
+def get_job_timeline(
+    job_id: str,
+    user: AuthUser = Depends(get_current_user),
+):
+    """List all timeline events for a job, newest first."""
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+
+    # Verify the job belongs to this user before returning timeline data.
+    job_check = (
+        _db.client.table("jobs")
+        .select("job_id")
+        .eq("job_id", job_id)
+        .eq("user_id", user.id)
+        .maybe_single()
+        .execute()
+    )
+    if not job_check or not job_check.data:
+        raise HTTPException(404, "Job not found")
+
+    result = (
+        _db.client.table("application_timeline")
+        .select("*")
+        .eq("job_id", job_id)
+        .eq("user_id", user.id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return result.data or []
+
+
+@app.post("/api/dashboard/jobs/{job_id}/timeline")
+def add_timeline_event(
+    job_id: str,
+    body: TimelineEventRequest,
+    user: AuthUser = Depends(get_current_user),
+):
+    """Add a status-update event to the timeline and update jobs.application_status."""
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+
+    if body.status not in _VALID_STATUSES:
+        raise HTTPException(400, f"Invalid status. Must be one of: {sorted(_VALID_STATUSES)}")
+
+    # Verify the job belongs to this user.
+    job_check = (
+        _db.client.table("jobs")
+        .select("job_id")
+        .eq("job_id", job_id)
+        .eq("user_id", user.id)
+        .maybe_single()
+        .execute()
+    )
+    if not job_check or not job_check.data:
+        raise HTTPException(404, "Job not found")
+
+    # Insert the timeline event.
+    event = {
+        "user_id": user.id,
+        "job_id": job_id,
+        "status": body.status,
+        "notes": body.notes or None,
+    }
+    insert_result = (
+        _db.client.table("application_timeline")
+        .insert(event)
+        .execute()
+    )
+    inserted = insert_result.data[0] if insert_result.data else event
+
+    # Also keep jobs.application_status in sync.
+    _db.client.table("jobs").update({"application_status": body.status}).eq("job_id", job_id).eq("user_id", user.id).execute()
+
+    return inserted
+
+
+# ---------------------------------------------------------------------------
+# Smart Section Editor endpoints (Phase 3.3b)
+# ---------------------------------------------------------------------------
+
+class SectionsBuildRequest(BaseModel):
+    sections: dict
+
+
+@app.get("/api/dashboard/jobs/{job_id}/sections")
+def get_job_sections(
+    job_id: str,
+    user: AuthUser = Depends(get_current_user),
+):
+    """Parse the tailored .tex for a job into editable plain-text sections.
+
+    Fetches the .tex from S3 using the key convention
+    ``users/{user_id}/resumes/{job_hash}_tailored.tex``, parses it into
+    structured sections, and runs JD keyword analysis.
+
+    Returns:
+        sections (dict), jd_analysis (dict), tex_s3_key (str)
+    """
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+
+    # Fetch the job row to get description (for JD analysis)
+    result = (
+        _db.client.table("jobs")
+        .select("*")
+        .eq("job_id", job_id)
+        .eq("user_id", user.id)
+        .maybe_single()
+        .execute()
+    )
+    if not result or not result.data:
+        raise HTTPException(404, "Job not found")
+
+    job_row = result.data
+    jd = job_row.get("description", "") or ""
+
+    # Derive tex S3 key from convention: users/{user_id}/resumes/{job_id}_tailored.tex
+    bucket = os.environ.get("S3_BUCKET", os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt"))
+    tex_s3_key = f"users/{user.id}/resumes/{job_id}_tailored.tex"
+
+    # Fetch .tex from S3
+    s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
+    try:
+        obj = s3.get_object(Bucket=bucket, Key=tex_s3_key)
+        tex_content = obj["Body"].read().decode("utf-8")
+    except s3.exceptions.NoSuchKey:
+        raise HTTPException(404, f"No tailored .tex found for job {job_id}. Run tailoring first.")
+    except Exception as e:
+        logger.error("S3 fetch failed for %s: %s", tex_s3_key, e)
+        raise HTTPException(500, f"Could not retrieve .tex: {e}")
+
+    # Parse into sections
+    from lambdas.pipeline.parse_sections import (
+        parse_resume_sections,
+        analyze_sections_vs_jd,
+    )
+    sections = parse_resume_sections(tex_content)
+    jd_analysis = analyze_sections_vs_jd(sections, jd) if jd else {}
+
+    return {
+        "sections": sections,
+        "jd_analysis": jd_analysis,
+        "tex_s3_key": tex_s3_key,
+    }
+
+
+@app.post("/api/dashboard/jobs/{job_id}/sections", status_code=202)
+def update_job_sections(
+    job_id: str,
+    body: SectionsBuildRequest,
+    user: AuthUser = Depends(get_current_user),
+):
+    """Rebuild .tex from edited sections, compile to PDF, upload to S3.
+
+    Takes the edited sections dict, fetches the original .tex from S3 to
+    reuse its preamble, rebuilds the document body, compiles with tectonic,
+    uploads both .tex and .pdf to S3, and updates the job row with the new
+    PDF URL.
+
+    Returns a task_id to poll via GET /api/tasks/{task_id}.
+    """
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+
+    # Verify job ownership
+    job_check = (
+        _db.client.table("jobs")
+        .select("job_id, description")
+        .eq("job_id", job_id)
+        .eq("user_id", user.id)
+        .maybe_single()
+        .execute()
+    )
+    if not job_check or not job_check.data:
+        raise HTTPException(404, "Job not found")
+
+    task_id = str(uuid.uuid4())
+    payload = {
+        "job_id": job_id,
+        "sections": body.sections,
+    }
+    _enqueue_task(task_id, user.id, "rebuild_sections", payload)
+    return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
 
 
 @app.get("/api/dashboard/stats")
