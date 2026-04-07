@@ -129,7 +129,7 @@ def _prefilter_job(job: dict, user_skills: set) -> tuple[bool, str]:
             return False, f"too_senior:{kw}"
 
     # Rule 2: Description quality gate
-    if len(desc) < 100:
+    if len(desc) < 200:
         return False, "description_too_short"
 
     # Rule 3: Minimum skill overlap

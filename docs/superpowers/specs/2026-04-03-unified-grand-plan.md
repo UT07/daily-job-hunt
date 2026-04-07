@@ -271,6 +271,27 @@ These map to the 6 v2 product stages (Discover → Research → Tailor → Apply
 
 ---
 
+### Phase 3.2 Enhancement: Glassdoor Company Research
+
+**Status**: Backlog — Glassdoor job scraping deprioritized (covered by LinkedIn/Greenhouse/Ashby), but their **company data** is unique and valuable.
+
+**What Glassdoor uniquely provides**:
+- Company ratings (overall, culture, compensation, career opportunities)
+- Salary ranges by role and location
+- Interview reviews and difficulty ratings
+- Employee reviews (pros/cons/advice)
+- CEO approval ratings
+
+**Integration plan** (Phase 3.2 Research):
+- Use Bright Data's Glassdoor dataset API or Web Unlocker for company pages
+- Store company data in `company_intel` Supabase table
+- Display on job cards as "Company Intel" section
+- Feed into the A-F evaluation framework (Section D: compensation + market demand)
+
+**Not needed for job scraping** — Greenhouse (650+ Dublin jobs), Ashby (Anthropic, Linear, etc.), LinkedIn, Indeed provide sufficient job coverage.
+
+---
+
 ### Cross-Cutting Concerns (Not Phases)
 
 | Concern | How It's Handled |
