@@ -50,13 +50,28 @@ def handler(event, context):
                 return {"error": "no_pdf_output", "tex_s3_key": tex_s3_key,
                         "job_hash": job_hash, "user_id": user_id, "doc_type": doc_type}
 
+            # Validate PDF before uploading
+            validation = {}
+            try:
+                from utils.pdf_validator import validate_pdf
+                expected_pages = 2 if doc_type == "resume" else 1
+                validation = validate_pdf(pdf_path, expected_pages=expected_pages,
+                                          check_sections=(doc_type == "resume"))
+                if validation.get("errors"):
+                    logger.warning(f"[compile] PDF validation issues for {job_hash}: {validation['errors']}")
+                if validation.get("warnings"):
+                    logger.info(f"[compile] PDF validation warnings for {job_hash}: {validation['warnings']}")
+            except Exception as e:
+                logger.warning(f"[compile] PDF validation skipped for {job_hash}: {e}")
+
             # Upload PDF to S3
             pdf_key = tex_s3_key.replace(".tex", ".pdf")
             with open(pdf_path, "rb") as f:
                 s3.put_object(Bucket=bucket, Key=pdf_key, Body=f.read(), ContentType="application/pdf")
 
             logger.info(f"[compile] {doc_type} PDF: {pdf_key}")
-            return {"job_hash": job_hash, "pdf_s3_key": pdf_key, "user_id": user_id, "doc_type": doc_type}
+            return {"job_hash": job_hash, "pdf_s3_key": pdf_key, "user_id": user_id,
+                    "doc_type": doc_type, "validation": validation}
 
         except FileNotFoundError:
             # tectonic binary not available in this runtime

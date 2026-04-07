@@ -964,6 +964,62 @@ def generate_email_for_job(
     return GenerateEmailResponse(subject=subject, body=email_body)
 
 
+class SuggestRequest(BaseModel):
+    section: str
+    current_content: str = ""
+
+
+@app.post("/api/dashboard/jobs/{job_id}/suggest")
+def suggest_section_improvement(
+    job_id: str,
+    body: SuggestRequest,
+    user: AuthUser = Depends(get_current_user),
+):
+    """AI-suggest improvements for a specific resume section based on JD analysis."""
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+    if _ai_client is None:
+        raise HTTPException(503, "AI client not configured")
+
+    result = (
+        _db.client.table("jobs")
+        .select("title, company, description, key_matches")
+        .eq("job_id", job_id)
+        .eq("user_id", user.id)
+        .maybe_single()
+        .execute()
+    )
+    if not result or not result.data:
+        raise HTTPException(404, "Job not found")
+
+    job = result.data
+    description = job.get("description") or ""
+    key_matches = job.get("key_matches") or []
+    if isinstance(key_matches, str):
+        try:
+            key_matches = json.loads(key_matches)
+        except Exception:
+            key_matches = []
+
+    prompt = f"""Improve this resume section for a {job.get('title', 'Software Engineer')} role at {job.get('company', 'the company')}.
+
+JD KEYWORDS TO ADDRESS: {', '.join(key_matches[:10]) if key_matches else 'N/A'}
+JD EXCERPT: {description[:800]}
+
+CURRENT SECTION ({body.section}):
+{body.current_content}
+
+Return ONLY the improved section content. No explanations. Keep the same format (LaTeX if the input is LaTeX, plain text if plain text). Make it more specific, quantified, and aligned with the JD keywords. Do NOT fabricate experience."""
+
+    try:
+        suggestion = _ai_client.complete(prompt, temperature=0.3)
+    except Exception as e:
+        logger.error("Suggest AI call failed: %s", e)
+        raise HTTPException(500, f"AI call failed: {e}")
+
+    return {"suggestion": suggestion.strip(), "section": body.section}
+
+
 @app.post("/api/dashboard/jobs/{job_id}/find-contacts", status_code=202)
 def find_contacts_for_job(job_id: str, user: AuthUser = Depends(get_current_user)):
     """Find LinkedIn contacts for a specific job."""
