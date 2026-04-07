@@ -49,6 +49,34 @@ def handler(event, context):
         )
         update["cover_letter_s3_url"] = cl_url
 
+    # Score the tailored resume (before/after delta + writing quality)
+    if resume_pdf_key:
+        try:
+            # Read the tailored .tex from S3
+            tex_key = resume_pdf_key.replace(".pdf", ".tex")
+            tex_obj = s3.get_object(Bucket=bucket, Key=tex_key)
+            tailored_tex = tex_obj["Body"].read().decode("utf-8")
+
+            # Get the job description for scoring
+            job_row = db.table("jobs_raw").select("description, title, company").eq("job_hash", job_hash).execute()
+            if job_row.data and tailored_tex:
+                job_data = job_row.data[0]
+
+                # Compute tailored scores (before/after comparison)
+                from score_batch import compute_tailored_scores, score_writing_quality
+                tailored_scores = compute_tailored_scores(job_data, tailored_tex)
+                if tailored_scores:
+                    update.update(tailored_scores)
+                    logger.info(f"[save_job] Tailored scores for {job_hash}: {tailored_scores}")
+
+                # Compute writing quality
+                wq = score_writing_quality(tailored_tex)
+                if wq.get("writing_quality_score") is not None:
+                    update["writing_quality_score"] = wq["writing_quality_score"]
+                    logger.info(f"[save_job] Writing quality for {job_hash}: {wq['writing_quality_score']}")
+        except Exception as e:
+            logger.warning(f"[save_job] Post-tailor scoring failed for {job_hash}: {e}")
+
     if update:
         update["application_status"] = "ready"
         db.table("jobs").update(update).eq("user_id", user_id).eq("job_hash", job_hash).execute()
