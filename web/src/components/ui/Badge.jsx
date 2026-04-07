@@ -1,20 +1,24 @@
 const VARIANTS = {
   new: 'bg-info-light text-info border-info',
   applied: 'bg-yellow-light text-yellow-dark border-yellow-dark',
-  interview: 'bg-success-light text-success border-success',
+  phone_screen: 'bg-yellow-light text-yellow-dark border-yellow-dark',
+  interview: 'bg-amber-100 text-amber-700 border-amber-500',
   offer: 'bg-success text-white border-success',
   rejected: 'bg-error-light text-error border-error',
   withdrawn: 'bg-stone-200 text-stone-600 border-stone-400',
+  accepted: 'bg-success text-white border-success',
   default: 'bg-stone-200 text-stone-700 border-stone-400',
 };
 
 const STATUS_MAP = {
   New: 'new',
   Applied: 'applied',
+  'Phone Screen': 'phone_screen',
   Interview: 'interview',
   Offer: 'offer',
   Rejected: 'rejected',
   Withdrawn: 'withdrawn',
+  Accepted: 'accepted',
 };
 
 export default function Badge({ status, children, className = '' }) {

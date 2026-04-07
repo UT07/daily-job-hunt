@@ -193,7 +193,22 @@ def main(action: str, tier_filter: str, max_jobs: int | None, skip_existing: boo
             if skip_existing and jd.get("cover_letter_s3_url"):
                 log.info(f"  skip cover (exists)")
                 results["skipped"] += 1
-            elif not (hasattr(job, "tailored_tex_path") and job.tailored_tex_path):
+                continue
+            # Try to discover tailored .tex from disk if not set on job object
+            if not (hasattr(job, "tailored_tex_path") and job.tailored_tex_path):
+                tex_candidate = out_resumes / f"{fn_base}.tex"
+                if tex_candidate.exists():
+                    job.tailored_tex_path = str(tex_candidate)
+                    log.info(f"  found existing .tex on disk")
+                else:
+                    # Glob for partial match (title may be truncated differently)
+                    matches = list(out_resumes.glob(
+                        f"Utkarsh_Singh_*{safe_name(jd.get('company',''), 15)}*{TODAY}.tex"
+                    ))
+                    if matches:
+                        job.tailored_tex_path = str(matches[0])
+                        log.info(f"  found existing .tex via glob: {matches[0].name}")
+            if not (hasattr(job, "tailored_tex_path") and job.tailored_tex_path):
                 log.warning(f"  skip cover — no tailored .tex (run resume action first)")
             else:
                 try:

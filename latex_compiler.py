@@ -276,8 +276,9 @@ def compile_tex_to_pdf(tex_path: str, output_dir: str = None) -> str:
             logger.error(f"[HARD GATE] Brace imbalance in {tex_path.name} — compilation blocked")
             return ""
 
-        # --- Hard gate: section completeness ---
-        if not check_section_completeness(sanitized):
+        # --- Hard gate: section completeness (resumes only, skip cover letters) ---
+        is_cover_letter = "coverletter" in tex_path.name.lower().replace("_", "").replace("-", "")
+        if not is_cover_letter and not check_section_completeness(sanitized):
             import re as _re
             _heads = _re.findall(r"\\section\*?\{([^}]*)\}", sanitized.lower())
             missing = [s for s in REQUIRED_SECTIONS if not any(s in h for h in _heads)]
