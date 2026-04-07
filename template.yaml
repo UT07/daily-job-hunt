@@ -1067,7 +1067,10 @@ Resources:
               "Type": "Task",
               "Resource": "${SelfImproveFunction.Arn}",
               "Parameters": {
-                "user_id.$": "$.user_id"
+                "user_id.$": "$.user_id",
+                "pipeline_run_id.$": "$$.Execution.Name",
+                "started_at.$": "$$.Execution.StartTime",
+                "matched_count.$": "$.score_result.matched_count"
               },
               "End": true,
               "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PipelineComplete"}]

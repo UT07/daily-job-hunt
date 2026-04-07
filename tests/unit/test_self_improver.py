@@ -126,6 +126,78 @@ class TestGenerateAdjustments:
         adjs = generate_adjustments()
         assert adjs == []
 
+    def test_generates_source_order_when_matched_data_available(self):
+        # Provide both yields and matched to trigger source_order adjustment
+        scraper_stats = {
+            "linkedin": {"yields": [50, 60], "matched": [10, 12]},  # ~20% rate
+            "adzuna": {"yields": [40, 30], "matched": [1, 1]},      # ~2.9% rate
+        }
+        adjs = generate_adjustments(scraper_stats=scraper_stats)
+        source_order_adjs = [a for a in adjs if a["adjustment_type"] == "source_order"]
+        assert len(source_order_adjs) == 1
+        assert source_order_adjs[0]["risk_level"] == "low"
+        assert source_order_adjs[0]["status"] == "auto_applied"
+        # linkedin should be first (higher match rate)
+        ranked = source_order_adjs[0]["payload"]["sources_ranked"]
+        assert ranked[0] == "linkedin"
+
+    def test_source_order_not_generated_without_matched(self):
+        # No matched key means source_rates stays empty, no adjustment
+        scraper_stats = {"linkedin": {"yields": [50, 60]}}
+        adjs = generate_adjustments(scraper_stats=scraper_stats)
+        source_order_adjs = [a for a in adjs if a["adjustment_type"] == "source_order"]
+        assert len(source_order_adjs) == 0
+
+    def test_zero_sa_tier_generates_medium_risk(self):
+        # 10+ jobs, all C/D tiers, no S/A
+        score_stats = {
+            "pct_below_50": 0.1,  # not triggering the pct_below_50 check
+            "avg_score": 65,
+            "total": 15,
+            "tier_distribution": {"C": 10, "D": 5},
+        }
+        adjs = generate_adjustments(score_stats=score_stats)
+        tier_adjs = [a for a in adjs if a["adjustment_type"] == "score_threshold"]
+        assert len(tier_adjs) == 1
+        assert tier_adjs[0]["risk_level"] == "medium"
+        assert tier_adjs[0]["notify"] is True
+        assert "Zero S/A" in tier_adjs[0]["reason"]
+
+    def test_zero_sa_tier_not_triggered_when_few_jobs(self):
+        # Only 9 total jobs — below the min_total=10 guard
+        score_stats = {
+            "pct_below_50": 0.1,
+            "avg_score": 65,
+            "total": 9,
+            "tier_distribution": {"C": 5, "D": 4},
+        }
+        adjs = generate_adjustments(score_stats=score_stats)
+        tier_adjs = [a for a in adjs if a["adjustment_type"] == "score_threshold"]
+        assert len(tier_adjs) == 0
+
+    def test_zero_sa_tier_not_triggered_when_has_high_tier(self):
+        score_stats = {
+            "pct_below_50": 0.1,
+            "avg_score": 65,
+            "total": 20,
+            "tier_distribution": {"S": 1, "C": 10, "D": 9},
+        }
+        adjs = generate_adjustments(score_stats=score_stats)
+        tier_adjs = [a for a in adjs if a["adjustment_type"] == "score_threshold"]
+        assert len(tier_adjs) == 0
+
+    def test_high_risk_from_compile_fail_rate(self):
+        quality_stats = {
+            "trend": "declining",
+            "compile_fail_rate": 0.35,
+            "avg_last_3": None,
+            "avg_prev_3": None,
+        }
+        adjs = generate_adjustments(quality_stats=quality_stats)
+        high = [a for a in adjs if a["risk_level"] == "high"]
+        assert len(high) == 1
+        assert "compilation failure" in high[0]["reason"].lower()
+
     def test_combined_low_and_medium(self):
         adjs = generate_adjustments(
             scraper_stats={"glassdoor": {"yields": [0, 0, 0]}},

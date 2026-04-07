@@ -655,7 +655,29 @@ def generate_adjustments(
                     "evidence": {"yields": yields},
                 })
 
-    # Medium-risk: score threshold adjustment
+    # Low-risk: reorder sources by historical match rate
+    if scraper_stats:
+        source_rates = {}
+        for name, stats in scraper_stats.items():
+            yields = stats.get("yields", [])
+            matched = stats.get("matched", [])
+            if yields and matched and len(yields) == len(matched):
+                total_yielded = sum(yields)
+                total_matched = sum(matched)
+                if total_yielded > 0:
+                    source_rates[name] = round(total_matched / total_yielded, 3)
+        if source_rates:
+            ordered = sorted(source_rates, key=lambda k: source_rates[k], reverse=True)
+            adjustments.append({
+                "adjustment_type": "source_order",
+                "risk_level": "low",
+                "status": "auto_applied",
+                "payload": {"sources_ranked": ordered, "match_rates": source_rates},
+                "reason": "Reorder sources by historical match rate to prioritise high-signal scrapers",
+                "evidence": {"source_rates": source_rates},
+            })
+
+    # Medium-risk: score threshold adjustment (too many low-scoring jobs)
     if score_stats:
         if score_stats.get("pct_below_50", 0) > 0.8:
             adjustments.append({
@@ -672,11 +694,32 @@ def generate_adjustments(
                 "evidence": score_stats,
             })
 
-    # High-risk: prompt change suggestion (writing quality declining)
+        # Medium-risk: flag when all jobs cluster in C/D tiers (no S/A)
+        tier_dist = score_stats.get("tier_distribution", {})
+        high_tier_count = tier_dist.get("S", 0) + tier_dist.get("A", 0)
+        total = score_stats.get("total", 0)
+        if total >= 10 and high_tier_count == 0:
+            adjustments.append({
+                "adjustment_type": "score_threshold",
+                "risk_level": "medium",
+                "status": "auto_applied",
+                "notify": True,
+                "payload": {"min_match_score": max(40, score_stats.get("avg_score", 60) - 15)},
+                "previous_state": {"min_match_score": 60},
+                "reason": (
+                    f"Zero S/A tier jobs in last 7 days ({total} scored). "
+                    "Threshold may be too strict or queries need refinement."
+                ),
+                "evidence": tier_dist,
+            })
+
+    # High-risk: prompt change suggestion (writing quality declining or high compile failure)
     if quality_stats:
         if quality_stats.get("trend") == "declining":
-            avg_last = quality_stats.get("avg_last_3", 0)
-            avg_prev = quality_stats.get("avg_prev_3", 0)
+            avg_last = quality_stats.get("avg_last_3") or 0
+            avg_prev = quality_stats.get("avg_prev_3") or 0
+            fail_rate = quality_stats.get("compile_fail_rate", 0)
+
             if avg_prev > 0 and (avg_prev - avg_last) / avg_prev > 0.1:
                 adjustments.append({
                     "adjustment_type": "prompt_change",
@@ -686,6 +729,18 @@ def generate_adjustments(
                     "reason": (
                         f"Writing quality declining: avg {avg_last:.1f} (last 3 runs)"
                         f" vs {avg_prev:.1f} (previous 3)"
+                    ),
+                    "evidence": quality_stats,
+                })
+            elif fail_rate > 0.2:
+                adjustments.append({
+                    "adjustment_type": "prompt_change",
+                    "risk_level": "high",
+                    "status": "pending",
+                    "payload": {"target": "tailoring_prompt", "action": "review_and_update"},
+                    "reason": (
+                        f"LaTeX compilation failure rate is {fail_rate:.0%} — "
+                        "AI tailoring prompt may be generating invalid LaTeX"
                     ),
                     "evidence": quality_stats,
                 })
