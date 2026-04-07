@@ -1097,6 +1097,32 @@ def pipeline_status(user: AuthUser = Depends(get_current_user)):
     runs = _db.get_runs(user.id)
     latest = runs[0] if runs else None
 
+    # Fallback: query Step Functions for latest execution if pipeline_runs is empty
+    if not latest:
+        try:
+            import boto3
+            sfn = boto3.client("states", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
+            state_machine_arn = os.environ.get(
+                "DAILY_PIPELINE_ARN",
+                "arn:aws:states:eu-west-1:385017713886:stateMachine:naukribaba-daily-pipeline",
+            )
+            executions = sfn.list_executions(
+                stateMachineArn=state_machine_arn, maxResults=1
+            ).get("executions", [])
+            if executions:
+                ex = executions[0]
+                latest = {
+                    "status": ex["status"].lower(),
+                    "started_at": ex["startDate"].isoformat(),
+                    "run_date": ex["startDate"].strftime("%Y-%m-%d"),
+                    "jobs_found": 0,
+                    "jobs_matched": 0,
+                }
+                if ex.get("stopDate"):
+                    latest["completed_at"] = ex["stopDate"].isoformat()
+        except Exception as e:
+            logger.warning("Failed to fetch Step Functions status: %s", e)
+
     # Get scraper-level metrics for today
     metrics = []
     try:
