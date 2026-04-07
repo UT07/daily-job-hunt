@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { apiGet, apiPatch } from '../api';
+import { apiGet, apiPatch, apiCall } from '../api';
 
 function decodeHtml(text) {
   if (!text) return '';
@@ -134,6 +134,7 @@ export default function JobWorkspace() {
   const [editFields, setEditFields] = useState({});
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null);
+  const [regenLoading, setRegenLoading] = useState(null); // 'resume' | 'cover' | null
 
   function startEditing() {
     setEditFields({
@@ -169,6 +170,34 @@ export default function JobWorkspace() {
 
   function updateEditField(field, value) {
     setEditFields((prev) => ({ ...prev, [field]: value }));
+  }
+
+  async function handleRegen(type) {
+    setRegenLoading(type);
+    try {
+      const data = await apiCall(`/api/pipeline/re-tailor/${job.job_id}`, {});
+      const execName = data.pollUrl?.split('/').pop();
+      if (!execName) throw new Error('No execution ID returned');
+
+      // Poll until done
+      const poll = setInterval(async () => {
+        try {
+          const result = await apiGet(`/api/pipeline/status/${execName}`);
+          if (result.status !== 'RUNNING') {
+            clearInterval(poll);
+            setRegenLoading(null);
+            // Refresh job data to get new PDF URLs
+            const updated = await apiGet(`/api/dashboard/jobs/${job.job_id}`);
+            if (updated) setJob(updated);
+          }
+        } catch (err) {
+          console.error('Regen poll error:', err);
+        }
+      }, 5000);
+    } catch (err) {
+      console.error('Regen failed:', err);
+      setRegenLoading(null);
+    }
   }
 
   useEffect(() => {
@@ -439,12 +468,28 @@ export default function JobWorkspace() {
             {job.resume_s3_url ? (
               <div>
                 <div className="flex items-center justify-between mb-4">
-                  <p className="text-sm text-stone-500">
-                    AI Model: <span className="border border-black bg-stone-900 text-cream font-mono text-[10px] font-bold px-2 py-0.5">{job.tailoring_model || '--'}</span>
-                  </p>
-                  <a href={job.resume_s3_url} target="_blank" rel="noopener noreferrer">
-                    <Button variant="primary" size="sm">Download Resume PDF</Button>
-                  </a>
+                  <div className="flex items-center gap-3">
+                    <p className="text-sm text-stone-500">
+                      AI Model: <span className="border border-black bg-stone-900 text-cream font-mono text-[10px] font-bold px-2 py-0.5">{job.tailoring_model || '--'}</span>
+                    </p>
+                    {job.resume_version > 1 && (
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 border border-stone-400 bg-stone-100 text-stone-600">v{job.resume_version}</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      loading={regenLoading === 'resume'}
+                      disabled={!!regenLoading}
+                      onClick={() => handleRegen('resume')}
+                    >
+                      {regenLoading === 'resume' ? 'Regenerating...' : 'Regenerate'}
+                    </Button>
+                    <a href={job.resume_s3_url} target="_blank" rel="noopener noreferrer">
+                      <Button variant="primary" size="sm">Download PDF</Button>
+                    </a>
+                  </div>
                 </div>
                 <div className="border-2 border-black bg-stone-100">
                   <iframe
@@ -461,7 +506,16 @@ export default function JobWorkspace() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                 </svg>
                 <p className="text-stone-400 font-heading font-bold">No resume generated yet</p>
-                <p className="text-xs text-stone-400 mt-1">Run the pipeline to generate a tailored resume for this job.</p>
+                <p className="text-xs text-stone-400 mt-1 mb-4">Generate a tailored resume for this job.</p>
+                <Button
+                  variant="accent"
+                  size="sm"
+                  loading={regenLoading === 'resume'}
+                  disabled={!!regenLoading}
+                  onClick={() => handleRegen('resume')}
+                >
+                  {regenLoading === 'resume' ? 'Generating...' : 'Generate Resume'}
+                </Button>
               </div>
             )}
           </div>
@@ -470,9 +524,18 @@ export default function JobWorkspace() {
           <div>
             {job.cover_letter_s3_url ? (
               <div>
-                <div className="flex items-center justify-end mb-4">
+                <div className="flex items-center justify-end gap-2 mb-4">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    loading={regenLoading === 'cover'}
+                    disabled={!!regenLoading}
+                    onClick={() => handleRegen('cover')}
+                  >
+                    {regenLoading === 'cover' ? 'Regenerating...' : 'Regenerate'}
+                  </Button>
                   <a href={job.cover_letter_s3_url} target="_blank" rel="noopener noreferrer">
-                    <Button variant="primary" size="sm">Download Cover Letter PDF</Button>
+                    <Button variant="primary" size="sm">Download PDF</Button>
                   </a>
                 </div>
                 <div className="border-2 border-black bg-stone-100">
