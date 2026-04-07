@@ -111,6 +111,78 @@ def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096, temperatu
     raise RuntimeError(f"All {len(providers)} AI providers failed. Last error: {last_error}")
 
 
+def council_complete(
+    prompt: str,
+    system: str = "",
+    task_description: str = "",
+    n_generators: int = 2,
+    temperature: float = 0.3,
+) -> dict:
+    """Generate multiple AI responses and pick the best via critique.
+
+    Calls n_generators providers independently, then uses a critic to evaluate
+    and select the highest-quality output. Falls back to the first successful
+    response if the critique step fails.
+    """
+    import concurrent.futures
+    import json
+
+    candidates = []
+
+    def _generate(attempt_idx):
+        """Generate one candidate, skipping the first `attempt_idx` providers."""
+        try:
+            return ai_complete(prompt, system, temperature=temperature)
+        except RuntimeError:
+            return None
+
+    # Generate candidates (sequential to avoid provider key caching issues)
+    for i in range(n_generators):
+        result = _generate(i)
+        if result and result.get("content"):
+            candidates.append(result)
+
+    if not candidates:
+        raise RuntimeError("Council: all generators failed")
+    if len(candidates) == 1:
+        return candidates[0]
+
+    # Critique: ask AI to pick the better candidate
+    critique_prompt = f"""You are evaluating {len(candidates)} resume tailoring attempts. Pick the BETTER one.
+
+EVALUATION CRITERIA (score each 1-10):
+1. KEYWORD COVERAGE: Does the resume address the top JD keywords?
+2. SECTION COMPLETENESS: Are all 6 sections present (Summary, Skills, Experience, Projects, Education, Certifications)?
+3. WRITING QUALITY: Active voice, specific metrics, no filler phrases?
+4. PAGE LENGTH: Is it approximately 850-1000 words (2 pages)?
+5. TRUTHFULNESS: Does it avoid fabricating experience?
+
+{task_description}
+
+"""
+    for i, c in enumerate(candidates):
+        critique_prompt += f"\n--- CANDIDATE {i+1} (by {c['provider']}:{c['model']}) ---\n{c['content'][:3000]}\n"
+
+    critique_prompt += "\nReturn ONLY a JSON object: {\"winner\": 1 or 2, \"reason\": \"brief explanation\"}"
+
+    try:
+        critique = ai_complete(critique_prompt, system="You are a resume quality evaluator. Return only valid JSON.", temperature=0)
+        text = critique["content"].strip()
+        if "```" in text:
+            text = text.split("```")[1]
+            if text.startswith("json"):
+                text = text[4:]
+        result = json.loads(text.strip())
+        winner_idx = int(result.get("winner", 1)) - 1
+        winner_idx = max(0, min(winner_idx, len(candidates) - 1))
+        winner = candidates[winner_idx]
+        logger.info(f"[council] Winner: candidate {winner_idx+1} ({winner['provider']}:{winner['model']}). Reason: {result.get('reason','')[:100]}")
+        return winner
+    except Exception as e:
+        logger.warning(f"[council] Critique failed ({e}), returning first candidate")
+        return candidates[0]
+
+
 def ai_complete_cached(prompt: str, system: str = "", cache_hours: int = 72, temperature: float = 0.3) -> dict:
     """AI complete with Supabase cache. Returns dict with content, provider, model."""
     cache_key = hashlib.md5(f"{system}|{prompt}".encode()).hexdigest()

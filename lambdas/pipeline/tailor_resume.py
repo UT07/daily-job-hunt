@@ -4,7 +4,7 @@ import re
 
 import boto3
 
-from ai_helper import ai_complete, get_supabase
+from ai_helper import ai_complete, council_complete, get_supabase
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -211,21 +211,42 @@ def handler(event, context):
         logger.error(f"[tailor] base resume missing \\begin{{document}} for user {user_id}")
         return {"error": "base resume has no \\begin{document}"}
 
+    # Extract top keywords from JD for targeted tailoring
+    from utils.keyword_extractor import extract_keywords
+    description = job.get("description", "") or ""
+    keywords = extract_keywords(description, max_keywords=15)
+    keyword_section = ""
+    if keywords:
+        keyword_section = f"\n\nKEY JD REQUIREMENTS: {', '.join(keywords)}\nEnsure each of these is addressed in the resume. Weave them into existing bullets — do NOT add new fabricated experience."
+
     # Tailor using AI (body-only prompt)
     depth_note = _LIGHT_TOUCH_NOTE if light_touch else _FULL_REWRITE_NOTE
-    system_prompt = f"{depth_note}\n\n{_SYSTEM_PROMPT}"
+    system_prompt = f"{depth_note}\n\n{_SYSTEM_PROMPT}{keyword_section}"
 
     user_prompt = f"""Tailor this resume body for the following job.
 
 Job: {job['title']} at {job['company']}
-Description: {job.get('description', '')[:3000]}
+Description: {description[:4000]}
 
 BASE RESUME BODY:
 {base_body}
 
-Return ONLY the tailored body. No \\documentclass, no \\newcommand, no \\begin{{document}}."""
+Return ONLY the tailored body. No \\documentclass, no \\newcommand, no \\begin{{document}}.
 
-    response_dict = ai_complete(user_prompt, system=system_prompt)
+Reminder: your output MUST contain all six section headers verbatim: \\section*{{Summary}}, \\section*{{Technical Skills}}, \\section*{{Experience}}, \\section*{{Featured Projects}}, \\section*{{Education}}, \\section*{{Certifications}}."""
+
+    # Use council mode (2 generators + 1 critic) for higher quality output
+    try:
+        response_dict = council_complete(
+            prompt=user_prompt,
+            system=system_prompt,
+            task_description="Pick the resume that best matches the job description with complete sections.",
+            n_generators=2,
+            temperature=0.3,
+        )
+    except RuntimeError:
+        # Fall back to single-provider if council completely fails
+        response_dict = ai_complete(user_prompt, system=system_prompt)
     ai_response = response_dict["content"]
 
     # Strip markdown code fences (```latex, ```tex, etc.)

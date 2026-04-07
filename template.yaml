@@ -193,6 +193,20 @@ Resources:
         - SSMParameterReadPolicy:
             ParameterName: naukribaba/*
 
+  ScrapeGreenhouseFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-scrape-greenhouse
+      CodeUri: lambdas/scrapers/
+      Handler: scrape_greenhouse.handler
+      Runtime: python3.11
+      Timeout: 120
+      MemorySize: 256
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: naukribaba/*
+
   ScrapeContactsFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -620,6 +634,7 @@ Resources:
                   - !GetAtt ScrapeGlassdoorFunction.Arn
                   - !GetAtt ScrapeIrishFunction.Arn
                   - !GetAtt ScrapeContactsFunction.Arn
+                  - !GetAtt ScrapeGreenhouseFunction.Arn
                   - !GetAtt MergeDedupFunction.Arn
                   - !GetAtt ChunkHashesFunction.Arn
                   - !GetAtt ScoreBatchFunction.Arn
@@ -826,6 +841,26 @@ Resources:
                     "IrishFailed": {
                       "Type": "Pass",
                       "Result": {"count": 0, "source": "irish_portals", "error": "scraper_failed"},
+                      "End": true
+                    }
+                  }
+                },
+                {
+                  "StartAt": "ScrapeGreenhouse",
+                  "States": {
+                    "ScrapeGreenhouse": {
+                      "Type": "Task",
+                      "Resource": "${ScrapeGreenhouseFunction.Arn}",
+                      "Parameters": {
+                        "query_hash.$": "$.query_hash"
+                      },
+                      "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 10, "MaxAttempts": 2, "BackoffRate": 2}],
+                      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "GreenhouseFailed"}],
+                      "End": true
+                    },
+                    "GreenhouseFailed": {
+                      "Type": "Pass",
+                      "Result": {"count": 0, "source": "greenhouse", "error": "scraper_failed"},
                       "End": true
                     }
                   }
