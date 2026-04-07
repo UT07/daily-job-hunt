@@ -867,6 +867,8 @@ def get_dashboard_jobs(
     source: Optional[str] = None,
     company: Optional[str] = None,
     tailored: Optional[str] = None,
+    tier: Optional[str] = None,
+    hide_expired: Optional[str] = None,
 ):
     """Paginated, filterable job list."""
     if _db is None:
@@ -888,6 +890,10 @@ def get_dashboard_jobs(
         filters["company"] = company
     if tailored:
         filters["tailored"] = tailored
+    if tier:
+        filters["tier"] = tier
+    if hide_expired and hide_expired.lower() == "true":
+        filters["hide_expired"] = True
 
     jobs, total = _db.get_jobs(user.id, filters=filters, page=page, per_page=per_page)
     return {"jobs": jobs, "page": page, "per_page": per_page, "total": total}

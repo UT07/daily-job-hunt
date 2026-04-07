@@ -180,8 +180,10 @@ class SupabaseClient:
             source       — exact match on job source
             min_score    — match_score >= value
             status       — exact match on application_status
-            company      — exact match on company name
+            company      — substring match on company name
             tailored     — if "true", only return jobs with resume_s3_url
+            tier         — exact match on score_tier (S, A, B, C, D) or comma-separated (S,A)
+            hide_expired — if True, exclude expired jobs
         """
         query = (
             self.client.table("jobs")
@@ -200,6 +202,14 @@ class SupabaseClient:
                 query = query.ilike("company", f"%{filters['company']}%")
             if filters.get("tailored") == "true":
                 query = query.neq("resume_s3_url", None).neq("resume_s3_url", "")
+            if "tier" in filters:
+                tiers = [t.strip() for t in filters["tier"].split(",")]
+                if len(tiers) == 1:
+                    query = query.eq("score_tier", tiers[0])
+                else:
+                    query = query.in_("score_tier", tiers)
+            if filters.get("hide_expired"):
+                query = query.eq("is_expired", False)
 
         offset = (page - 1) * per_page
         query = query.order("first_seen", desc=True).range(offset, offset + per_page - 1)

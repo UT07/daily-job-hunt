@@ -1,8 +1,8 @@
 """Merge and deduplicate scraped jobs, apply relevance pre-filter.
 
 Reads from jobs_raw (shared pool) and scrape_runs (output contract).
-Applies 2-tier dedup (exact hash + fuzzy title/company) and relevance
-pre-filter before passing job hashes to score_batch.
+Applies 3-tier dedup (exact hash + exact company+title + fuzzy) and
+relevance pre-filter before passing job hashes to score_batch.
 """
 import logging
 import re
@@ -201,9 +201,24 @@ def handler(event, context):
         if not existing or _richness_score(job) > _richness_score(existing):
             by_hash[h] = job
 
-    # --- Tier 2: Fuzzy title+company dedup ---
-    seen_fuzzy = {}
+    # --- Tier 0: Exact normalized (company+title) dedup (cross-source) ---
+    # Same job from LinkedIn and Indeed has different descriptions → different job_hash.
+    # This tier catches those by ignoring description entirely.
+    from utils.canonical_hash import normalize_company, normalize_whitespace
+    by_dedup_key = {}
     for job in by_hash.values():
+        norm_company = normalize_company(job.get("company", ""))
+        norm_title = normalize_whitespace(job.get("title", "")).lower()
+        dedup_key = f"{norm_company}|{norm_title}"
+        existing = by_dedup_key.get(dedup_key)
+        if not existing or _richness_score(job) > _richness_score(existing):
+            by_dedup_key[dedup_key] = job
+
+    logger.info(f"[merge_dedup] Tier 0: {len(by_hash)} → {len(by_dedup_key)} (exact company+title)")
+
+    # --- Tier 2: Fuzzy title+company dedup (catches remaining near-matches) ---
+    seen_fuzzy = {}
+    for job in by_dedup_key.values():
         norm_title = _normalize_title(job.get("title", ""))
         norm_company = job.get("company", "").lower().strip()
         fuzzy_key = f"{norm_company}|{norm_title}"
@@ -211,7 +226,7 @@ def handler(event, context):
         matched = False
         for existing_key, existing_job in seen_fuzzy.items():
             ex_company, ex_title = existing_key.split("|", 1)
-            if _fuzzy_match(norm_company, ex_company, 0.8) and _fuzzy_match(norm_title, ex_title, 0.7):
+            if _fuzzy_match(norm_company, ex_company, 0.75) and _fuzzy_match(norm_title, ex_title, 0.65):
                 # Keep the richest version
                 if _richness_score(job) > _richness_score(existing_job):
                     seen_fuzzy[existing_key] = job

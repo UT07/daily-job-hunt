@@ -43,3 +43,15 @@ def canonical_hash(company: str, title: str, description: str) -> str:
         normalize_whitespace(description).lower(),
     ])
     return hashlib.md5(parts.encode()).hexdigest()[:12]
+
+
+def dedup_hash(company: str, title: str) -> str:
+    """Description-independent hash for cross-source dedup.
+
+    Same job posted on LinkedIn and Indeed has different descriptions
+    but identical (company, title). This hash catches those dupes.
+    """
+    company = normalize_company(company or "")
+    title = normalize_whitespace(title or "").lower()
+    parts = f"{company}\0{title}"
+    return hashlib.md5(parts.encode()).hexdigest()[:12]

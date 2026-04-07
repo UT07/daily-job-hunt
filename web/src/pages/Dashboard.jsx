@@ -64,7 +64,19 @@ function CardView({ jobs, onStatusChange, onDelete }) {
                   {decodeHtml(job.company)} {job.location && `\u00b7 ${job.location}`}
                 </p>
               </div>
-              <ScoreBadge score={job.match_score} className="text-xl shrink-0" />
+              <div className="flex items-center gap-1.5 shrink-0">
+                {job.score_tier && (
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 border border-black ${
+                    job.score_tier === 'S' ? 'bg-amber-300 text-black' :
+                    job.score_tier === 'A' ? 'bg-emerald-200 text-black' :
+                    job.score_tier === 'B' ? 'bg-sky-200 text-black' :
+                    'bg-stone-200 text-stone-600'
+                  }`}>
+                    {job.score_tier}
+                  </span>
+                )}
+                <ScoreBadge score={job.match_score} className="text-xl" />
+              </div>
             </div>
           </div>
 
@@ -130,6 +142,8 @@ export default function Dashboard() {
   const [minScore, setMinScore] = useState(0);
   const [companySearch, setCompanySearch] = useState('');
   const [tailoredOnly, setTailoredOnly] = useState(true);
+  const [tierFilter, setTierFilter] = useState('S,A,B');
+  const [hideExpired, setHideExpired] = useState(true);
 
   // View mode: 'list' or 'card'
   const [viewMode, setViewMode] = useState(getViewPreference);
@@ -143,8 +157,8 @@ export default function Dashboard() {
   const [filterVersion, setFilterVersion] = useState(0);
 
   // Use refs for filter values so fetchJobs stays stable across filter changes
-  const filtersRef = useRef({ statusFilter, sourceFilter, minScore, companySearch, tailoredOnly });
-  filtersRef.current = { statusFilter, sourceFilter, minScore, companySearch, tailoredOnly };
+  const filtersRef = useRef({ statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired });
+  filtersRef.current = { statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired };
 
   const fetchJobs = useCallback(async () => {
     setLoading(true);
@@ -159,6 +173,8 @@ export default function Dashboard() {
       if (f.minScore > 0) params.set('min_score', String(f.minScore));
       if (f.companySearch.trim()) params.set('company', f.companySearch.trim());
       if (f.tailoredOnly) params.set('tailored', 'true');
+      if (f.tierFilter !== 'All') params.set('tier', f.tierFilter);
+      if (f.hideExpired) params.set('hide_expired', 'true');
 
       const data = await apiGet(`/api/dashboard/jobs?${params.toString()}`);
       setJobs(data.jobs || []);
@@ -304,6 +320,19 @@ export default function Dashboard() {
             />
           </div>
 
+          <Select
+            label="Tier"
+            value={tierFilter}
+            onChange={(e) => setTierFilter(e.target.value)}
+            className="w-36"
+          >
+            <option value="S,A,B">S + A + B</option>
+            <option value="S,A">S + A only</option>
+            <option value="S">S only</option>
+            <option value="All">All tiers</option>
+            <option value="S,A,B,C">Include C</option>
+          </Select>
+
           <div className="flex items-center gap-2">
             <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider">Tailored</label>
             <button
@@ -315,6 +344,22 @@ export default function Dashboard() {
               <span
                 className={`inline-block h-4 w-4 transform transition-transform ${
                   tailoredOnly ? 'translate-x-[22px] bg-yellow' : 'translate-x-[2px] bg-stone-300'
+                }`}
+              />
+            </button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider">Hide Expired</label>
+            <button
+              onClick={() => setHideExpired((v) => !v)}
+              className={`relative inline-flex h-6 w-11 items-center border-2 border-black transition-colors cursor-pointer ${
+                hideExpired ? 'bg-black' : 'bg-white'
+              }`}
+            >
+              <span
+                className={`inline-block h-4 w-4 transform transition-transform ${
+                  hideExpired ? 'translate-x-[22px] bg-yellow' : 'translate-x-[2px] bg-stone-300'
                 }`}
               />
             </button>

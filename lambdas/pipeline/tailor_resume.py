@@ -88,7 +88,7 @@ def _validate_macro_arities(tex: str) -> list[str]:
     return issues
 
 
-_REQUIRED_SECTIONS = ["experience", "skills", "education"]
+_REQUIRED_SECTIONS = ["experience", "skills", "education", "projects", "certifications"]
 
 # Header markers that MUST survive tailoring — contact info is essential.
 _HEADER_MARKERS = ["Utkarsh Singh", "254utkarsh@gmail.com"]
@@ -132,6 +132,21 @@ _SYSTEM_PROMPT = r"""You are an expert resume writer who tailors technical resum
 CRITICAL OUTPUT RULE:
 Return ONLY the tailored body. Do NOT emit \documentclass, \usepackage, \newcommand, \begin{document}, or \end{document}. The base preamble is managed separately.
 
+PAGE LAYOUT (CRITICAL — the resume MUST be exactly TWO PAGES):
+- Target 850-1000 words of content for exactly 2 pages.
+- Page 1: Header, Summary (40-60 words), Technical Skills (50-80 words), Experience (400-500 words across 2 roles, 7+3 bullets).
+- Page 2: 3 selected Projects (Purrrfect Keys always + 2 others), Education, Certifications.
+- If content overflows to page 3, CUT bullet points. Do NOT add extra bullets.
+
+REQUIRED SECTIONS — your output MUST contain ALL SIX section headers verbatim:
+  \section*{Summary}
+  \section*{Technical Skills}
+  \section*{Experience}
+  \section*{Featured Projects}
+  \section*{Education}
+  \section*{Certifications}
+Do NOT drop, rename, or merge any section.
+
 KEEP THE HEADER BLOCK VERBATIM (must appear at the top of your output — name, phone, email, GitHub, LinkedIn, portfolio links. You MAY only change the \normalsize role title line):
   \begin{center}
   {\Large \textbf{Utkarsh Singh}}\\[0.04em]
@@ -147,10 +162,16 @@ CUSTOM MACROS (already defined — use with EXACT argument counts):
 
 Each macro call MUST be followed by a \begin{itemize}...\end{itemize} block. Do NOT put \begin{itemize} inside the macro call.
 
+WRITING STYLE:
+- Do NOT use em-dashes (---, --, or —) as clause connectors. Use periods.
+- Write short, direct sentences in active voice. Lead with action verbs.
+- Quantify impact with numbers and percentages where they exist.
+- Match job posting keywords by weaving them into existing bullets, not adding new sentences.
+
 RULES:
 1. NEVER fabricate experience. Reword, reorder, emphasize what already exists.
 2. The resume must remain truthful.
-3. Return ONLY the body — no preamble, no markdown fences."""
+3. Return ONLY the body — no preamble, no markdown fences, no explanations."""
 
 _LIGHT_TOUCH_NOTE = (
     "TAILORING DEPTH: LIGHT TOUCH — make minimal edits: reorder skills to match JD "
@@ -207,6 +228,19 @@ Return ONLY the tailored body. No \\documentclass, no \\newcommand, no \\begin{{
     response_dict = ai_complete(user_prompt, system=system_prompt)
     ai_response = response_dict["content"]
 
+    # Strip markdown code fences (```latex, ```tex, etc.)
+    ai_response = ai_response.strip()
+    if "```" in ai_response:
+        lines = ai_response.split("\n")
+        filtered = []
+        in_fence = False
+        for line in lines:
+            if line.strip().startswith("```"):
+                in_fence = not in_fence
+                continue
+            filtered.append(line)
+        ai_response = "\n".join(filtered)
+
     # Extract body: AI may return a full doc despite instructions, or just a body.
     if "\\begin{document}" in ai_response:
         _ignored, ai_body = _split_tex(ai_response)
@@ -219,6 +253,26 @@ Return ONLY the tailored body. No \\documentclass, no \\newcommand, no \\begin{{
 
     # Splice: base preamble (known-good) + AI body + \end{document}
     tailored_tex = _splice_tex(base_preamble, ai_body)
+
+    # Fix common AI LaTeX typos
+    _TYPO_FIXES = {
+        "\\emphergencystretch": "\\emergencystretch",
+        "\\emergecystretch": "\\emergencystretch",
+        "\\emergenystretch": "\\emergencystretch",
+    }
+    for typo, fix in _TYPO_FIXES.items():
+        if typo in tailored_tex:
+            tailored_tex = tailored_tex.replace(typo, fix)
+
+    # Page length check: estimate body word count
+    body_text = re.sub(r"\\[a-zA-Z]+\*?(\{[^}]*\})*", " ", ai_body)
+    body_text = re.sub(r"[{}\\%&$#_^~]", " ", body_text)
+    word_count = len(body_text.split())
+    if word_count < 500:
+        logger.warning(
+            f"[tailor] body too short ({word_count} words) for {job_hash}, using base"
+        )
+        tailored_tex = base_tex
 
     # Hard gates: fall back to base_tex on validation failure
     validation_errors = []
