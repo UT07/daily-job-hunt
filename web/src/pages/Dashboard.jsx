@@ -262,9 +262,11 @@ export default function Dashboard() {
             Your AI-powered job search command center
           </p>
         </div>
-        <Button variant="accent" size="sm">
-          + Add Job
-        </Button>
+        <a href="/add-job">
+          <Button variant="accent" size="sm">
+            + Add Job
+          </Button>
+        </a>
       </div>
 
       {/* Pipeline status + Run button */}
