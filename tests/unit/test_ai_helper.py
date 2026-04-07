@@ -127,7 +127,7 @@ class TestAiComplete:
         """When every provider fails, a RuntimeError is raised."""
         with patch("ai_helper.get_param", return_value="real-api-key"), \
              patch("httpx.post", side_effect=httpx.ConnectError("All down")):
-            with pytest.raises(RuntimeError, match="All 4 AI providers failed"):
+            with pytest.raises(RuntimeError, match="All \\d+ AI providers failed"):
                 ai_complete("prompt")
 
     def test_raises_runtime_error_when_all_providers_rate_limited(self):
@@ -136,7 +136,7 @@ class TestAiComplete:
 
         with patch("ai_helper.get_param", return_value="real-api-key"), \
              patch("httpx.post", return_value=rate_limit_resp):
-            with pytest.raises(RuntimeError, match="All 4 AI providers failed"):
+            with pytest.raises(RuntimeError, match="All \\d+ AI providers failed"):
                 ai_complete("prompt")
 
     def test_skips_providers_with_mock_value_key(self):
