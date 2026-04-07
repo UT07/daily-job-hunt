@@ -1100,19 +1100,27 @@ def pipeline_status(user: AuthUser = Depends(get_current_user)):
     # Fallback: query Step Functions for latest execution if pipeline_runs is empty
     if not latest:
         try:
-            import boto3
+            import boto3, json as _json
             sfn = boto3.client("states", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
             state_machine_arn = os.environ.get(
                 "DAILY_PIPELINE_ARN",
                 "arn:aws:states:eu-west-1:385017713886:stateMachine:naukribaba-daily-pipeline",
             )
+            # Get last 5 executions, pick the most recent SUCCEEDED one (or last overall)
             executions = sfn.list_executions(
-                stateMachineArn=state_machine_arn, maxResults=1
+                stateMachineArn=state_machine_arn, maxResults=5
             ).get("executions", [])
-            if executions:
-                ex = executions[0]
+            ex = None
+            for e in executions:
+                if e["status"] == "SUCCEEDED":
+                    ex = e
+                    break
+            if not ex and executions:
+                ex = executions[0]  # fallback to most recent regardless of status
+
+            if ex:
                 latest = {
-                    "status": ex["status"].lower(),
+                    "status": "completed" if ex["status"] == "SUCCEEDED" else ex["status"].lower(),
                     "started_at": ex["startDate"].isoformat(),
                     "run_date": ex["startDate"].strftime("%Y-%m-%d"),
                     "jobs_found": 0,
@@ -1120,6 +1128,24 @@ def pipeline_status(user: AuthUser = Depends(get_current_user)):
                 }
                 if ex.get("stopDate"):
                     latest["completed_at"] = ex["stopDate"].isoformat()
+
+                # Try to extract job counts from execution output
+                try:
+                    detail = sfn.describe_execution(executionArn=ex["executionArn"])
+                    if detail.get("output"):
+                        output = _json.loads(detail["output"])
+                        # Scraper results are in scraper_results array
+                        scraper_results = output.get("scraper_results", [])
+                        total_found = sum(
+                            r.get("count", 0) for r in scraper_results if isinstance(r, dict)
+                        )
+                        # Score result has matched count
+                        score_result = output.get("score_result", {})
+                        total_matched = score_result.get("matched_count", 0)
+                        latest["jobs_found"] = total_found
+                        latest["jobs_matched"] = total_matched
+                except Exception:
+                    pass  # counts stay at 0 if we can't parse output
         except Exception as e:
             logger.warning("Failed to fetch Step Functions status: %s", e)
 
