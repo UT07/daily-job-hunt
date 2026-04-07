@@ -1,0 +1,131 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{cmap}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[top=0.60in,bottom=0.60in,left=0.70in,right=0.70in]{geometry}
+\usepackage[hidelinks]{hyperref}
+\usepackage{titlesec}
+\usepackage{enumitem}
+\usepackage[expansion=false]{microtype}
+\usepackage{needspace}
+\pagestyle{empty}
+\raggedright
+\raggedbottom
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0pt}
+\setlength{\emergencystretch}{2em}
+\setlist[itemize]{leftmargin=*, itemsep=1.4pt, topsep=2.0pt, parsep=0pt, partopsep=0pt}
+\titleformat{\section}{\large\bfseries}{}{0pt}{}[\vspace{0.06em}\hrule height 0.4pt]
+\titlespacing*{\section}{0pt}{0.50em}{0.30em}
+\newcommand{\jobentry}[4]{%
+  \Needspace{3\baselineskip}%
+  \textbf{#1} -- #2 \hfill \textit{#3}\\[-0.15em]
+  \textit{#4}\\[-0.25em]
+}
+\newcommand{\projectentry}[3]{%
+  \Needspace{3\baselineskip}%
+  \textbf{#1} \hfill \textit{#2}\\[-0.15em]
+  \textit{#3}\\[-0.25em]
+}
+\newcommand{\projectentryurl}[5]{%
+  \Needspace{3\baselineskip}%
+  \textbf{#1} \hfill \textit{#2}\\[-0.15em]
+  {\small\href{#3}{\texttt{#4}}} \textbar\ \textit{#5}\\[-0.25em]
+}
+\begin{document}
+%==================== HEADER ====================
+\begin{center}
+{\Large \textbf{Utkarsh Singh}}\\[0.04em]
+{\normalsize Full-Stack Engineer (Python, TypeScript, React, System Design, GitHub)}\\[0.08em]
+Dublin, Ireland \textbar\ +353 892515620 \textbar\ \href{mailto:254utkarsh@gmail.com}{254utkarsh@gmail.com}\\[0.08em]
+\href{https://github.com/UT07}{github.com/UT07} \textbar\
+\href{https://www.linkedin.com/in/utkarshsingh2001/}{linkedin.com/in/utkarshsingh2001} \textbar\
+\href{https://utworld.netlify.app}{utworld.netlify.app}
+\end{center}
+\vspace{0.06em}
+
+%==================== SUMMARY ====================
+\section*{Summary}
+Full-Stack Engineer with \textbf{3 years} of production experience building and operating fault-tolerant distributed systems on AWS. Write production code daily in Python, TypeScript, and Bash. Reduced MTTR by \textbf{35\%}, cut deployment lead time by \textbf{85\%}, and lowered infrastructure costs by \textbf{22\%} through automation, SLO tracking, capacity planning, and blameless postmortems. \textbf{MSc in Cloud Computing}; \textbf{AWS Solutions Architect, Professional}. Dublin-based (Stamp 1G), eligible for full-time employment in Ireland.
+
+%==================== TECHNICAL SKILLS ====================
+\section*{Technical Skills}
+\begin{itemize}
+  \item \textbf{Programming \& Algorithms:} Python (boto3, FastAPI, Flask/Django, automation scripts), TypeScript/JavaScript, Node.js, Bash, SQL/PostgreSQL; data structures, algorithm design, complexity analysis
+  \item \textbf{Front-End Development:} React, JavaScript, HTML, CSS, Jest, GitHub Actions
+  \item \textbf{Back-End Development:} FastAPI, Flask, Django, Node.js, Express, PostgreSQL, MySQL
+  \item \textbf{Containers \& Orchestration:} Docker (multi-stage, multi-arch), Kubernetes/EKS (Helm, RBAC, health probes, autoscaling), Docker Compose, ECR; rollout strategies (blue/green, canary)
+  \item \textbf{Observability \& Incident Response:} Prometheus/Grafana, CloudWatch (Logs/Metrics/Alarms), PagerDuty (on-call, escalation policies), AWS X-Ray; SLO/SLI tracking, capacity planning, RCA, blameless postmortems, runbooks, alert tuning
+  \item \textbf{CI/CD \& Release Engineering:} Jenkins (shared libraries), GitHub Actions, AWS CodePipeline/CodeDeploy, Bitbucket Pipelines, Git; automated test gates, pipeline troubleshooting, code review workflows
+  \item \textbf{IaC \& Automation:} Terraform (modules, remote state, workspaces), Ansible (playbooks, Tower), AWS CloudFormation/SAM; Python/Bash tooling for toil elimination and ops workflows
+  \item \textbf{Cloud \& Infrastructure:} AWS (EC2, ECS/Fargate, EKS, Lambda, VPC, ALB/NLB, RDS/Aurora, DynamoDB, S3, CloudFront, Route\,53, SQS/SNS, IAM, KMS, Secrets Manager, API Gateway), Firebase (Auth, Firestore, Functions), Azure (Data Factory)
+  \item \textbf{Security \& Quality:} container and dependency scanning (Trivy, Snyk), secrets hygiene, least-privilege IAM; SAST/DAST integration (SonarCloud, OWASP ZAP); code review for correctness, testability, efficiency
+  \item \textbf{Linux \& Networking:} Linux/Ubuntu, process/resource debugging (strace, top, lsof), TCP/IP, HTTP/HTTPS, DNS, SSL/TLS, reverse proxies (Caddy, Nginx)
+\end{itemize}
+
+%==================== EXPERIENCE ====================
+\section*{Experience}
+\jobentry{Clover IT Services}{New York, NY (Remote)}{Jun 2022 -- Jul 2024}{\textbf{\textit{Site Reliability / DevOps Engineer}}}
+\begin{itemize}
+  \item Owned reliability for a multi-account, multi-region AWS SaaS platform (5+ accounts, 3 regions, 8 microservices); primary on-call engineer coordinating incident response, triage, and release health across Dev/Test/Prod.
+  \item Led end-to-end incident management -- triage, root cause analysis, blameless postmortems, and Jira-tracked remediation; authored runbooks and release checklists for critical services; reduced \textbf{MTTR by 35\%}.
+  \item Wrote and reviewed production code: built reusable Python/Bash automation for operational toil elimination, contributed service-level code fixes during incidents, and conducted regular code reviews enforcing style, testability, and efficiency standards.
+  \item Designed and implemented full-stack observability (Prometheus/Grafana, CloudWatch, X-Ray, PagerDuty) with SLO/SLI tracking, proactive alerting, and distributed tracing -- enabling faster root cause isolation across services.
+  \item Built self-service infrastructure using reusable Terraform modules (remote state, workspaces) and Ansible Tower playbooks; cut environment spin-up time by \textbf{60\%}, eliminated configuration drift, and delivered \textbf{22\%} cost reduction through right-sizing and capacity analysis.
+  \item Rebuilt CI/CD pipelines for 10+ services (Jenkins shared libraries, CodePipeline/CodeDeploy) with automated pytest/Jest test gates; reduced release lead time from 3 days to \textbf{4--6 hours} (\textbf{85\% improvement}).
+  \item Containerised microservices with multi-stage Docker builds; deployed to EKS via Helm with safe rollout strategies and Trivy/Snyk scanning; sustained \textbf{99.9\% uptime} with \textbf{zero rollback incidents}.
+  \item \textbf{Promoted to team lead within 14 months}; mentored 3--4 engineers on SRE practices and on-call operations; led design reviews to evaluate infrastructure and tooling decisions.
+\end{itemize}
+
+\jobentry{Seattle Kraken (NHL)}{Seattle, WA}{Jun 2021 -- May 2022}{\textbf{\textit{Data Analyst Intern}}}
+\begin{itemize}
+  \item Automated analytics reporting pipelines in Python and improved ingestion/validation workflows using PySpark and Azure Data Factory; reduced weekly report preparation time by 30\% and reconciled discrepancies across 500K+ records.
+  \item Partnered with engineering to debug ETL reliability issues, improve data freshness, and contribute documentation for stakeholder reporting workflows.
+\end{itemize}
+
+%==================== PROJECTS ====================
+\section*{Featured Projects}
+\projectentryurl{Purrrfect Keys -- AI Piano Learning App (Google Firebase)}{Jan 2026 -- Present}{https://expo.dev/accounts/ut254/projects/purrrfect-keys/builds/229bd252-c684-4af5-b39f-4f3623455a7e}{expo.dev/accounts/ut254/projects/purrrfect-keys}{React Native, TypeScript, Firebase Auth/Firestore/Functions, GitHub Actions, Jest, Maestro}
+\begin{itemize}
+  \item Designed and built a cross-platform app end-to-end using \textbf{Google Firebase} (Auth, Firestore, Cloud Functions) as the backend platform; implemented GDPR-aligned user data deletion via Firebase Functions, real-time data sync through Firestore, and secure authentication flows.
+  \item Engineered low-latency audio performance (\textbf{\textless10ms} touch-to-sound) with a native audio layer, pitch detection via ONNX inference, and AI-generated lesson content; shipped with production-grade CI/CD (GitHub Actions + EAS) and \textbf{2,630 Jest tests} across 122 suites.
+\end{itemize}
+
+\vspace{0.10em}
+\projectentryurl{WhatsTheCraic -- Live Event Discovery Platform}{Apr 2025 -- Jul 2025}{https://github.com/UT07/whatsthecraic}{https://whatsthecraic.run.place}{Node.js/Express, React, FastAPI, MySQL, DynamoDB, Docker, AWS, GitHub Actions}
+\begin{itemize}
+  \item Built a 6-microservice event platform ingesting 4 external APIs with normalization + deduplication; deployed on AWS EC2 using Docker Compose, Caddy auto-TLS, and Route\,53 across 4 production subdomains.
+  \item Shipped production-grade ops: GitHub Actions CI/CD + automated smoke tests, SSM-based remote operations, rate limiting, and \texttt{/health}/\texttt{/metrics} instrumentation (error rate, p95 latency, upstream failure rate); improved event-save conversion by \textbf{18\%} via A/B-tested ranking logic.
+\end{itemize}
+
+\vspace{0.10em}
+\projectentryurl{Genomic Benchmarking Platform -- MSc Thesis}{Sep 2025 -- Dec 2025}{https://github.com/UT07/Performance-Optimization-and-Cost-Analysis-of-qpAdm-Genomic-Modeling}{github.com/UT07/qpAdm-Genomic-Benchmarking}{Terraform, Docker, Snakemake, EC2 Auto Scaling, S3, CloudWatch, Python, Bash}
+\begin{itemize}
+  \item Built a fully automated AWS benchmarking pipeline: Terraform-provisioned Auto Scaling Groups launched \textbf{10,700+} ephemeral Graviton3 workers, executed containerised Snakemake workloads from S3, emitted CloudWatch metrics, and self-terminated with \textbf{zero manual intervention}.
+  \item Validated reproducibility across instance families and optimized for cost/performance: identified c7g optimal at \textbf{\$0.006/run}, achieved \textbf{66\%} cost reduction via Spot Instances, and eliminated \textbf{99\%} preprocessing overhead through EIGENSTRAT precomputation.
+\end{itemize}
+
+%==================== EDUCATION ====================
+\section*{Education}
+\textbf{National College of Ireland}, Dublin, Ireland \hfill \textit{Sep 2024 -- Jan 2026}\\[-0.15em]
+\textbf{\textit{MSc Cloud Computing}}\\[-0.25em]
+\begin{itemize}
+  \item \textbf{Coursework:} Cloud Architectures, Cloud DevOpsSec, Scalable Cloud Programming, Cloud Machine Learning, Data Governance/Compliance/Ethics, Research in Computing.
+\end{itemize} 
+
+\vspace{0.12em}
+\textbf{Southern New Hampshire University}, Manchester, NH \hfill \textit{Aug 2023 -- May 2024}\\[-0.15em]
+\textbf{\textit{BS Computer Science}} -- Software Dev Lifecycle, Full-Stack, Database Systems, Software Testing\\[0.05em]
+
+\textbf{The University of Texas at Arlington}, Arlington, TX \hfill \textit{Aug 2019 -- May 2022}\\[-0.15em]
+\textbf{\textit{BS Software Engineering (Coursework, Transferred)}} -- Algorithms \& DS, Operating Systems, Computer Networks, Information Security \textbar\ \textit{TA: CSE 3318 Data Structures \& Algorithms (50+ students)}
+
+%==================== CERTIFICATIONS ====================
+\section*{Certifications}
+\begin{itemize}
+  \item \href{https://www.credly.com/badges/6e22a6c0-9922-49d5-b59f-34cc593c82c3/public_url}{\textbf{\textit{AWS Certified Solutions Architect -- Professional (SAP-C02)}}} \hfill \textit{Issued Mar 2024}
+  \item \href{https://www.credly.com/badges/84671bf4-ce9f-4d8b-a0de-0ef606ad5646/public_url}{\textbf{\textit{AWS Certified Developer -- Associate (DVA-C01)}}} \hfill \textit{Issued Sep 2022}
+  \item \href{https://www.credly.com/badges/e671b9de-e72a-48cb-82fc-33776c285174/public_url}{\textbf{\textit{AWS Certified Cloud Practitioner (CLF-C01)}}} \hfill \textit{Issued Jun 2022}
+\end{itemize}
+\end{document}

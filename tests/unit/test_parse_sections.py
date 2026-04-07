@@ -9,7 +9,6 @@ Tests cover:
 - analyze_sections_vs_jd: keyword matching + coverage scores
 """
 
-import re
 import sys
 from pathlib import Path
 

@@ -7,7 +7,7 @@ architecture = "x86_64"
 handler = "scrape_apify.handler"
 manifest_hash = ""
 packagetype = "Zip"
-functions = ["ScrapeApifyFunction", "ScrapeAdzunaFunction", "ScrapeHNFunction", "ScrapeYCFunction", "ScrapeLinkedInFunction", "ScrapeIndeedFunction", "ScrapeGlassdoorFunction", "ScrapeIrishFunction", "ScrapeContactsFunction"]
+functions = ["ScrapeApifyFunction", "ScrapeAdzunaFunction", "ScrapeHNFunction", "ScrapeYCFunction", "ScrapeLinkedInFunction", "ScrapeIndeedFunction", "ScrapeGlassdoorFunction", "ScrapeIrishFunction", "ScrapeGreenhouseFunction", "ScrapeAshbyFunction", "ScrapeContactsFunction"]
 
 [function_build_definitions.983d6132-bf61-416c-a638-08746b2af1b6]
 codeuri = "/Users/ut/code/naukribaba/lambdas/pipeline"
@@ -16,13 +16,13 @@ architecture = "x86_64"
 handler = "load_config.handler"
 manifest_hash = ""
 packagetype = "Zip"
-functions = ["LoadConfigFunction", "MergeDedupFunction", "ScoreBatchFunction", "TailorResumeFunction", "CompileLatexFunction", "GenerateCoverLetterFunction", "FindContactsFunction", "SaveJobFunction", "SaveMetricsFunction", "SendEmailFunction", "SelfImproveFunction", "NotifyErrorFunction", "CheckExpiryFunction", "StaleNudgeFunction", "FollowUpReminderFunction"]
+functions = ["LoadConfigFunction", "MergeDedupFunction", "ScoreBatchFunction", "ChunkHashesFunction", "AggregateScoresFunction", "TailorResumeFunction", "CompileLatexFunction", "GenerateCoverLetterFunction", "FindContactsFunction", "SaveJobFunction", "SaveMetricsFunction", "SendEmailFunction", "SelfImproveFunction", "NotifyErrorFunction", "CheckExpiryFunction", "StaleNudgeFunction", "FollowUpReminderFunction"]
 
-[function_build_definitions.9729891e-70f2-43c8-a3a8-015e07fc0f59]
+[function_build_definitions.12ee2e06-00c8-437d-aeb7-09abba0390dc]
 packagetype = "Image"
 functions = ["JobHuntApi"]
 
-[function_build_definitions.9729891e-70f2-43c8-a3a8-015e07fc0f59.metadata]
+[function_build_definitions.12ee2e06-00c8-437d-aeb7-09abba0390dc.metadata]
 DockerTag = "latest"
 DockerContext = "/Users/ut/code/naukribaba"
 Dockerfile = "Dockerfile.lambda"

@@ -1389,7 +1389,8 @@ def pipeline_status(user: AuthUser = Depends(get_current_user)):
     # Fallback: query Step Functions for latest execution if pipeline_runs is empty
     if not latest:
         try:
-            import boto3, json as _json
+            import boto3
+            import json as _json
             sfn = boto3.client("states", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
             state_machine_arn = os.environ.get(
                 "DAILY_PIPELINE_ARN",

@@ -124,7 +124,6 @@ def council_complete(
     and select the highest-quality output. Falls back to the first successful
     response if the critique step fails.
     """
-    import concurrent.futures
     import json
 
     candidates = []

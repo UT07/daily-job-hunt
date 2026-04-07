@@ -12,7 +12,6 @@ The parsed structure is a plain-text dict that the Smart Section Editor
 
 import re
 import sys
-import os
 from pathlib import Path
 
 # Allow imports from the project root when running from Lambda or locally.
