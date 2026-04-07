@@ -207,6 +207,20 @@ Resources:
         - SSMParameterReadPolicy:
             ParameterName: naukribaba/*
 
+  ScrapeAshbyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-scrape-ashby
+      CodeUri: lambdas/scrapers/
+      Handler: scrape_ashby.handler
+      Runtime: python3.11
+      Timeout: 120
+      MemorySize: 256
+      Layers: [!Ref SharedDepsLayer]
+      Policies:
+        - SSMParameterReadPolicy:
+            ParameterName: naukribaba/*
+
   ScrapeContactsFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -635,6 +649,7 @@ Resources:
                   - !GetAtt ScrapeIrishFunction.Arn
                   - !GetAtt ScrapeContactsFunction.Arn
                   - !GetAtt ScrapeGreenhouseFunction.Arn
+                  - !GetAtt ScrapeAshbyFunction.Arn
                   - !GetAtt MergeDedupFunction.Arn
                   - !GetAtt ChunkHashesFunction.Arn
                   - !GetAtt ScoreBatchFunction.Arn
@@ -861,6 +876,26 @@ Resources:
                     "GreenhouseFailed": {
                       "Type": "Pass",
                       "Result": {"count": 0, "source": "greenhouse", "error": "scraper_failed"},
+                      "End": true
+                    }
+                  }
+                },
+                {
+                  "StartAt": "ScrapeAshby",
+                  "States": {
+                    "ScrapeAshby": {
+                      "Type": "Task",
+                      "Resource": "${ScrapeAshbyFunction.Arn}",
+                      "Parameters": {
+                        "query_hash.$": "$.query_hash"
+                      },
+                      "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 10, "MaxAttempts": 2, "BackoffRate": 2}],
+                      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "AshbyFailed"}],
+                      "End": true
+                    },
+                    "AshbyFailed": {
+                      "Type": "Pass",
+                      "Result": {"count": 0, "source": "ashby", "error": "scraper_failed"},
                       "End": true
                     }
                   }
