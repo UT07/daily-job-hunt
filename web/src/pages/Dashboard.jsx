@@ -62,6 +62,11 @@ function CardView({ jobs, onStatusChange, onDelete }) {
                 </p>
                 <p className="text-xs text-stone-500 mt-0.5 truncate">
                   {decodeHtml(job.company)} {job.location && `\u00b7 ${job.location}`}
+                  {job.first_seen && (
+                    <span className="ml-1.5 text-stone-400">
+                      \u00b7 {new Date(job.first_seen).toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })}
+                    </span>
+                  )}
                 </p>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
