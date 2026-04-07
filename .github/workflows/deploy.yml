@@ -45,7 +45,7 @@ jobs:
       # and contract tests here to block deploy on main if tests are broken.
       - name: Run unit tests before deploy
         run: |
-          pip install -r tests/requirements-test.txt
+          pip install -r requirements.txt -r tests/requirements-test.txt
           pytest tests/unit/ tests/contract/ -v --tb=short -x
         env:
           AWS_DEFAULT_REGION: eu-west-1
