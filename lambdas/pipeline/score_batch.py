@@ -138,11 +138,16 @@ def handler(event, context):
             tailoring_depth = "moderate"
         else:
             tailoring_depth = "heavy"
+
+        # Artifact rules: resume for B+, cover letter for A+, contacts for S+A
+        tier = score_to_tier(match_score)
         matched_items.append({
             "job_hash": job["job_hash"],
             "user_id": user_id,
             "tailoring_depth": tailoring_depth,
-            "light_touch": tailoring_depth == "light",  # backward compat
+            "light_touch": tailoring_depth == "light",
+            "skip_cover_letter": tier in ("B", "C"),
+            "skip_contacts": tier in ("B", "C"),
         })
 
     logger.info(f"[score_batch] {len(jobs)} fetched, {skipped_count} skipped, {len(matched_items)} matched (min_score={min_score})")
@@ -180,6 +185,12 @@ SCORING GUIDANCE FOR JUNIOR/GRADUATE ROLES:
 - A strong portfolio and relevant coursework/projects can compensate for fewer years of experience.
 - Do NOT penalize junior roles for listing technologies the candidate hasn't used.
 - Anti-inflation rules still apply but with relaxed thresholds: ATS cap becomes 80, TR cap becomes 80.
+
+CRITICAL — INTERN/STUDENT ELIGIBILITY FILTER:
+- The candidate has COMPLETED their MSc (graduated). They are NOT a current student.
+- If the JD explicitly requires "currently enrolled", "must be pursuing a degree", "ongoing education", "returning to studies after internship", or similar language indicating the role is ONLY for current students: ALL scores must be capped at 40 (effectively disqualifying the role).
+- This applies to most internship programs. Roles like "New Grad" or "Entry Level" that do NOT require current enrollment are fine.
+- Add "ineligible: not currently enrolled student" to the gaps list when this filter triggers.
 
 Return ONLY valid JSON (no markdown, no code fences):
 {

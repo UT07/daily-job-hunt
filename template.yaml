@@ -996,8 +996,19 @@ Resources:
                       "doc_type": "resume"
                     },
                     "ResultPath": "$.compile_result",
-                    "Next": "GenerateCoverLetter",
-                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "GenerateCoverLetter"}]
+                    "Next": "ShouldGenerateCoverLetter",
+                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "ShouldGenerateCoverLetter"}]
+                  },
+                  "ShouldGenerateCoverLetter": {
+                    "Type": "Choice",
+                    "Choices": [
+                      {
+                        "Variable": "$.skip_cover_letter",
+                        "BooleanEquals": true,
+                        "Next": "SaveJob"
+                      }
+                    ],
+                    "Default": "GenerateCoverLetter"
                   },
                   "GenerateCoverLetter": {
                     "Type": "Task",
