@@ -263,12 +263,35 @@ def handler(event, context):
 
     # --- Check which are truly new (not already scored for this user) ---
     existing_hashes = set()
+    existing_dedup_keys: set[str] = set()
     if user_id:
-        existing = db.table("jobs").select("job_hash").eq("user_id", user_id) \
+        existing = db.table("jobs").select("job_hash, company, title").eq("user_id", user_id) \
             .not_.is_("job_hash", "null").execute()
-        existing_hashes = {j["job_hash"] for j in (existing.data or [])}
+        for j in (existing.data or []):
+            existing_hashes.add(j["job_hash"])
+            # Build cross-query dedup key: same company+title already in jobs table
+            norm_co = normalize_company(j.get("company", ""))
+            norm_ti = normalize_whitespace(j.get("title", "")).lower()
+            existing_dedup_keys.add(f"{norm_co}|{norm_ti}")
 
-    new_hashes = [j["job_hash"] for j in filtered_jobs if j["job_hash"] not in existing_hashes]
+    def _new_job_dedup_key(job: dict) -> str:
+        return f"{normalize_company(job.get('company', ''))}|{normalize_whitespace(job.get('title', '')).lower()}"
+
+    cross_query_skipped = 0
+    new_hashes = []
+    for j in filtered_jobs:
+        if j["job_hash"] in existing_hashes:
+            continue
+        if _new_job_dedup_key(j) in existing_dedup_keys:
+            cross_query_skipped += 1
+            logger.debug(
+                f"[cross-query dedup] Skipping '{j.get('title')}' @ '{j.get('company')}' — already in jobs table"
+            )
+            continue
+        new_hashes.append(j["job_hash"])
+
+    if cross_query_skipped:
+        logger.info(f"[merge_dedup] Cross-query dedup: skipped {cross_query_skipped} jobs already in jobs table")
 
     logger.info(
         f"[merge_dedup] {len(all_jobs)} scraped → {len(unique_jobs)} unique "
