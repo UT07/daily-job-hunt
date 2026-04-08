@@ -209,9 +209,12 @@ def handler(event, context):
     ).eq("user_id", user_id).gte("first_seen", seven_days_ago).execute()
 
     # --- 3. Scraper health check: 3+ consecutive days of zero results → notify ---
+    DISABLED_SCRAPERS = {"glassdoor", "adzuna", "gradireland"}
     scraper_names = set(m["scraper_name"] for m in (metrics.data or []))
     unhealthy = []
     for scraper in scraper_names:
+        if scraper in DISABLED_SCRAPERS:
+            continue
         scraper_metrics = sorted(
             [m for m in metrics.data if m["scraper_name"] == scraper],
             key=lambda m: m["run_date"], reverse=True
