@@ -282,6 +282,32 @@ Playwright extracts form structure:
 }
 ```
 
+### Artifact Retrieval from S3
+
+Resume and cover letter PDFs live in S3. Both submission paths need them:
+
+**Easy Apply (API):** Lambda downloads PDF from S3 → sends as multipart file to Greenhouse/Ashby API.
+```python
+# Lambda has direct S3 access — no presigned URL needed
+s3 = boto3.client("s3")
+pdf_bytes = s3.get_object(Bucket="utkarsh-job-hunt", Key=job.resume_s3_key)["Body"].read()
+# Multipart upload to Greenhouse
+files = {"resume": ("resume.pdf", pdf_bytes, "application/pdf")}
+requests.post(greenhouse_url, data=form_fields, files=files)
+```
+
+**Remote Browser (Playwright):** Fargate downloads PDF from S3 → saves to /tmp → Playwright uploads via file input.
+```python
+# Fargate task has S3 access via IAM role
+s3.download_file("utkarsh-job-hunt", job.resume_s3_key, "/tmp/resume.pdf")
+# Playwright uploads to form
+page.locator("input[type=file]").set_input_files("/tmp/resume.pdf")
+```
+
+**Key requirement:** `resume_s3_key` must be stored in the `jobs` table (not just the presigned URL which expires). We added this column on Apr 8 — SaveJob now stores it. Older jobs need the key extracted from their presigned URL.
+
+**Cover letter handling:** Same pattern. For Greenhouse/Ashby, cover letter text is often a textarea (not file upload). We paste the generated cover letter text directly. For file upload forms, same S3 download → upload flow.
+
 ### AI Answer Generation
 Standard fields filled from user profile:
 - Name → user.name
