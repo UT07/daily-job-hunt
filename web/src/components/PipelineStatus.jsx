@@ -126,7 +126,7 @@ export default function PipelineStatus({ onComplete }) {
             {latest && !pollStatus && (
               <span className="text-xs text-stone-500 ml-2">
                 Last run: {new Date(latest.started_at || latest.run_date).toLocaleDateString()} —{' '}
-                {latest.jobs_found || 0} found, {latest.jobs_matched || 0} matched
+                {latest.raw_jobs || latest.jobs_found || 0} found, {latest.matched_jobs || latest.jobs_matched || 0} matched
               </span>
             )}
             {pollStatus === 'RUNNING' && (
