@@ -410,18 +410,33 @@ _GRADIRELAND_EMPTY = "<html><body><p>No jobs found</p></body></html>"
 
 
 # ---------------------------------------------------------------------------
-# _scrape_gradireland — JSON-LD strategy
+# _scrape_gradireland — JSON API (rewritten Apr 2026, Gatsby SPA)
 # ---------------------------------------------------------------------------
 
-def test_scrape_gradireland_json_ld():
-    """GradIreland scraper picks up JSON-LD jobs."""
+def test_scrape_gradireland_json_api():
+    """GradIreland scraper returns jobs from JSON search API."""
     import scrape_irish
 
-    mock_client = MagicMock()
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_response.text = _GRADIRELAND_JSON_LD
-    mock_client.get.return_value = mock_response
+    mock_response.json.return_value = {
+        "data": {
+            "search": {
+                "documents": [
+                    {
+                        "title": "Graduate Python Developer",
+                        "organisation": {"title": "TechCorp"},
+                        "location": "Dublin",
+                        "body": "<p>Looking for a Python dev</p>",
+                        "applicationUrl": "https://techcorp.com/apply",
+                    }
+                ]
+            }
+        }
+    }
+
+    mock_client = MagicMock()
+    mock_client.post.return_value = mock_response
 
     jobs = scrape_irish._scrape_gradireland(["python developer"], mock_client)
 
@@ -431,126 +446,23 @@ def test_scrape_gradireland_json_ld():
     assert jobs[0]["source"] == "gradireland"
 
 
-# ---------------------------------------------------------------------------
-# _scrape_gradireland — Drupal field pattern (original)
-# ---------------------------------------------------------------------------
-
-def test_scrape_gradireland_drupal_fields():
-    """GradIreland scraper falls back to Drupal field--name-title pattern."""
+def test_scrape_gradireland_empty_results():
+    """Empty search results return [] with no crash."""
     import scrape_irish
 
-    mock_client = MagicMock()
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_response.text = _GRADIRELAND_DRUPAL_FIELDS
-    mock_client.get.return_value = mock_response
-
-    jobs = scrape_irish._scrape_gradireland(["frontend developer"], mock_client)
-
-    assert len(jobs) == 1
-    assert jobs[0]["title"] == "Frontend Developer"
-    assert jobs[0]["company"] == "MegaCorp"
-
-
-# ---------------------------------------------------------------------------
-# _scrape_gradireland — views-row strategy
-# ---------------------------------------------------------------------------
-
-def test_scrape_gradireland_views_row():
-    """GradIreland scraper picks up Drupal views-row jobs."""
-    import scrape_irish
+    mock_response.json.return_value = {"data": {"search": {"documents": []}}}
 
     mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.text = _GRADIRELAND_VIEWS_ROW
-    mock_client.get.return_value = mock_response
-
-    jobs = scrape_irish._scrape_gradireland(["backend developer"], mock_client)
-
-    assert len(jobs) == 1
-    assert jobs[0]["title"] == "Backend Developer"
-    assert jobs[0]["company"] == "Acme Corp"
-
-
-# ---------------------------------------------------------------------------
-# _scrape_gradireland — URL path fallback
-# ---------------------------------------------------------------------------
-
-def test_scrape_gradireland_path_fallback():
-    """If primary path returns 404, tries alternate paths."""
-    import scrape_irish
-
-    call_urls = []
-
-    mock_client = MagicMock()
-
-    def mock_get(url, **kwargs):
-        call_urls.append(url)
-        resp = MagicMock()
-        if "/graduate-jobs" in url:
-            resp.status_code = 404
-            resp.text = ""
-        elif "/jobs" in url:
-            resp.status_code = 200
-            resp.text = _GRADIRELAND_JSON_LD
-        else:
-            resp.status_code = 404
-            resp.text = ""
-        return resp
-
-    mock_client.get.side_effect = mock_get
-
-    jobs = scrape_irish._scrape_gradireland(["software engineer"], mock_client)
-
-    # Should have tried /graduate-jobs first, then /jobs
-    assert any("/graduate-jobs" in u for u in call_urls)
-    assert any("/jobs" in u for u in call_urls)
-    assert len(jobs) == 1
-
-
-# ---------------------------------------------------------------------------
-# _scrape_gradireland — zero jobs returns empty, no crash
-# ---------------------------------------------------------------------------
-
-def test_scrape_gradireland_zero_jobs():
-    """Empty results return [] with no exceptions."""
-    import scrape_irish
-
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.text = _GRADIRELAND_EMPTY
-    mock_client.get.return_value = mock_response
+    mock_client.post.return_value = mock_response
 
     jobs = scrape_irish._scrape_gradireland(["data scientist"], mock_client)
     assert jobs == []
 
 
-# ---------------------------------------------------------------------------
-# _scrape_gradireland — bot protection handled gracefully
-# ---------------------------------------------------------------------------
-
-def test_scrape_gradireland_bot_protection():
-    """Bot protection page stops scraping but does not crash."""
-    import scrape_irish
-
-    mock_client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.text = "<html><body>Access Denied - Bot Protection</body></html>"
-    mock_client.get.return_value = mock_response
-
-    jobs = scrape_irish._scrape_gradireland(["devops"], mock_client)
-    assert jobs == []
-
-
-# ---------------------------------------------------------------------------
-# _scrape_gradireland — HTTP error handled gracefully
-# ---------------------------------------------------------------------------
-
 def test_scrape_gradireland_http_error():
-    """Non-200/403/404 HTTP status does not crash."""
+    """Non-200 HTTP status does not crash."""
     import scrape_irish
 
     mock_client = MagicMock()

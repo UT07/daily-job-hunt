@@ -72,6 +72,14 @@ def _make_error_response(status_code: int) -> MagicMock:
 class TestAiComplete:
     """Tests for the ai_complete failover chain."""
 
+    def setup_method(self):
+        """Disable A/B provider shuffle for deterministic tests."""
+        self._random_patcher = patch("ai_helper.random.random", return_value=1.0)
+        self._random_patcher.start()
+
+    def teardown_method(self):
+        self._random_patcher.stop()
+
     def test_first_provider_succeeds(self):
         """When the first provider returns 200, its response is returned immediately."""
         with patch("ai_helper.get_param", return_value="real-api-key"), \
