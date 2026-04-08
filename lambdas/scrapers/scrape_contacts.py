@@ -140,8 +140,8 @@ def handler(event, context):
     db = get_supabase()
     proxy_url = get_param("/naukribaba/PROXY_URL")
 
-    # Get matched jobs that need contacts (have resume, no contacts yet)
-    result = db.table("jobs").select("job_id, title, company, score_tier") \
+    # Get matched jobs that need contacts (S+A tier, no contacts yet)
+    result = db.table("jobs").select("job_id, title, company, location, score_tier") \
         .eq("user_id", user_id) \
         .in_("score_tier", ["S", "A"]) \
         .is_("linkedin_contacts", "null") \
@@ -159,10 +159,13 @@ def handler(event, context):
 
     for job in jobs:
         company = job["company"]
+        location = job.get("location", "")
+        # Extract city/region for location-filtered search (e.g. "Dublin" from "Dublin, Ireland")
+        location_hint = location.split(",")[0].strip() if location else "Ireland"
         all_contacts = []
 
         for role_name, role_type in SEARCH_ROLES:
-            query = f'site:linkedin.com/in "{company}" "{role_name}"'
+            query = f'site:linkedin.com/in "{company}" "{role_name}" "{location_hint}"'
             url = f"https://www.google.com/search?q={quote_plus(query)}&num=5"
 
             try:

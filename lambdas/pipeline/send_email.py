@@ -32,11 +32,11 @@ def handler(event, context):
     db = get_supabase()
 
     # Get user email
-    user = db.table("users").select("email, full_name").eq("id", user_id).execute()
+    user = db.table("users").select("email, name").eq("id", user_id).execute()
     if not user.data:
         return {"sent": False, "reason": "no_user"}
     user_email = user.data[0]["email"]
-    user_name = user.data[0].get("full_name", "")
+    user_name = user.data[0].get("name", "")
 
     # Get today's matched jobs
     today = datetime.utcnow().date().isoformat()

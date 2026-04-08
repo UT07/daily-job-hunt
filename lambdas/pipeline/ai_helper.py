@@ -1,6 +1,7 @@
 """Lightweight AI helper for Lambda functions. Calls AI providers via httpx."""
 import hashlib
 import logging
+import random
 from datetime import datetime, timedelta
 
 import boto3
@@ -68,6 +69,17 @@ def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096, temperatu
          "timeout": 90},
     )
 
+    # A/B testing: 20% of calls rotate providers so we don't always hit the same
+    # one first. Log which provider wins so CloudWatch logs can be analysed for
+    # quality comparison across providers (Phase 2.9).
+    if random.random() < 0.2:
+        # Keep first provider (groq) pinned — it's fastest when available.
+        # Shuffle only the tail so we occasionally promote different providers.
+        tail = providers[1:]
+        random.shuffle(tail)
+        providers = [providers[0]] + tail
+        logger.info(f"[ab_test] shuffled providers: {[p['name'] for p in providers[:3]]}...")
+
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
@@ -99,6 +111,7 @@ def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096, temperatu
                     logger.warning(f"[ai] {provider['name']} returned empty content, trying next")
                     continue
                 logger.info(f"[ai] {provider['name']}/{provider['model']} succeeded")
+                logger.info(f"[ab_test] provider={provider['name']} model={provider['model']}")
                 return {"content": content, "provider": provider["name"], "model": provider["model"]}
             elif resp.status_code == 429:
                 logger.warning(f"[ai] {provider['name']} rate limited, trying next")

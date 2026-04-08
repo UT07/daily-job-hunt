@@ -108,7 +108,7 @@ def handler(event, context):
 
     db = get_supabase()
 
-    job = db.table("jobs").select("company, title").eq("user_id", user_id) \
+    job = db.table("jobs").select("company, title, location").eq("user_id", user_id) \
         .eq("job_hash", job_hash).execute()
     if not job.data:
         return {"job_hash": job_hash, "contacts_found": 0}
@@ -121,10 +121,12 @@ def handler(event, context):
         return {"job_hash": job_hash, "user_id": user_id, "contacts_found": 0, "skipped": "no_proxy"}
 
     company = job["company"]
+    location = job.get("location", "")
+    location_hint = location.split(",")[0].strip() if location else "Ireland"
     all_contacts = []
 
     for role_name, role_type in SEARCH_ROLES:
-        query = f'site:linkedin.com/in "{company}" "{role_name}"'
+        query = f'site:linkedin.com/in "{company}" "{role_name}" "{location_hint}"'
         url = f"https://www.google.com/search?q={quote_plus(query)}&num=5"
 
         try:
