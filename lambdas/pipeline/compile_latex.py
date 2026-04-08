@@ -35,9 +35,15 @@ def handler(event, context):
         tectonic_path = "/opt/bin/tectonic" if os.path.exists("/opt/bin/tectonic") else "tectonic"
 
         try:
+            # tectonic needs writable cache — Lambda only allows /tmp
+            env = os.environ.copy()
+            env["XDG_CACHE_HOME"] = "/tmp"
+            env["HOME"] = "/tmp"
+
             result = subprocess.run(
                 [tectonic_path, "-X", "compile", tex_path],
                 capture_output=True, text=True, timeout=45,
+                env=env,
             )
             if result.returncode != 0:
                 logger.error(f"[compile] tectonic failed: {result.stderr}")
