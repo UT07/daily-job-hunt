@@ -185,7 +185,8 @@ class TestNewAdjustments:
         ]
         assert len(scraper_adjs) >= 1
         assert scraper_adjs[0]["user_id"] == "u1"
-        assert scraper_adjs[0]["run_id"] == "run-1"
+        # run_id is now a generated UUID, not the event's pipeline_run_id
+        assert len(scraper_adjs[0]["run_id"]) == 36  # UUID format
         assert "applied_at" in scraper_adjs[0]
 
 
