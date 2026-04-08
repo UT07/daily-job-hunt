@@ -316,9 +316,10 @@ Reminder: your output MUST contain all six section headers verbatim: \\section*{
         if typo in tailored_tex:
             tailored_tex = tailored_tex.replace(typo, fix)
 
-    # Escape unescaped # characters (e.g., C#, F#) — but not \# which is already escaped
+    # Escape unescaped special characters that crash tectonic
     import re
-    tailored_tex = re.sub(r'(?<!\\)#', r'\\#', tailored_tex)
+    tailored_tex = re.sub(r'(?<!\\)#', r'\\#', tailored_tex)  # C#, F#
+    tailored_tex = re.sub(r'(?<!\\)&(?!\\)', r'\\&', tailored_tex)  # R&D, AT&T
 
     # Page length check: estimate body word count
     body_text = re.sub(r"\\[a-zA-Z]+\*?(\{[^}]*\})*", " ", ai_body)
