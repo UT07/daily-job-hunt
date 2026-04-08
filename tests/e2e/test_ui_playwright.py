@@ -3,7 +3,7 @@
 Checks: pages load, no console errors, key elements render, navigation works.
 Run with: python tests/e2e/test_ui_playwright.py
 """
-import json
+
 import sys
 import time
 
@@ -18,12 +18,20 @@ USER_ID = "7b28f6d3-46c9-4c46-a3a8-d5d7b3480e39"
 def make_token():
     import jwt
     from datetime import datetime, timedelta
-    return jwt.encode({
-        "sub": USER_ID, "role": "authenticated", "iss": "supabase",
-        "aud": "authenticated", "email": "254utkarsh@gmail.com",
-        "iat": int(datetime.now().timestamp()),
-        "exp": int((datetime.now() + timedelta(hours=24)).timestamp()),
-    }, JWT_SECRET, algorithm="HS256")
+
+    return jwt.encode(
+        {
+            "sub": USER_ID,
+            "role": "authenticated",
+            "iss": "supabase",
+            "aud": "authenticated",
+            "email": "254utkarsh@gmail.com",
+            "iat": int(datetime.now().timestamp()),
+            "exp": int((datetime.now() + timedelta(hours=24)).timestamp()),
+        },
+        JWT_SECRET,
+        algorithm="HS256",
+    )
 
 
 class Results:
@@ -44,17 +52,17 @@ class Results:
 
     def summary(self):
         total = self.passed + self.failed
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"UI TESTS: {self.passed}/{total} passed, {self.failed} failed")
         if self.console_errors:
             print(f"\nBROWSER CONSOLE ERRORS ({len(self.console_errors)}):")
             for msg in self.console_errors[:10]:
                 print(f"  ! {msg[:120]}")
         if self.errors:
-            print(f"\nFAILURES:")
+            print("\nFAILURES:")
             for name, detail in self.errors:
                 print(f"  ✗ {name}: {detail}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         return self.failed == 0
 
 
@@ -67,10 +75,7 @@ def run_tests():
         page = context.new_page()
 
         # Capture console errors
-        page.on("console", lambda msg: (
-            results.console_errors.append(f"[{msg.type}] {msg.text}")
-            if msg.type == "error" and "favicon" not in msg.text else None
-        ))
+        page.on("console", lambda msg: results.console_errors.append(f"[{msg.type}] {msg.text}") if msg.type == "error" and "favicon" not in msg.text else None)
 
         # ================================================================
         # 1. LOGIN PAGE / AUTH
@@ -275,9 +280,7 @@ def run_tests():
         # 6. CONSOLE ERROR SUMMARY
         # ================================================================
         print("\n=== 6. BROWSER CONSOLE ===")
-        real_errors = [e for e in results.console_errors
-                       if "favicon" not in e and "websocket" not in e.lower()
-                       and "HMR" not in e and "404" not in e]
+        real_errors = [e for e in results.console_errors if "favicon" not in e and "websocket" not in e.lower() and "HMR" not in e and "404" not in e]
         if len(real_errors) == 0:
             results.ok("No critical console errors")
         else:

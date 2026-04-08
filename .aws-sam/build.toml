@@ -16,13 +16,13 @@ architecture = "x86_64"
 handler = "load_config.handler"
 manifest_hash = ""
 packagetype = "Zip"
-functions = ["LoadConfigFunction", "MergeDedupFunction", "ScoreBatchFunction", "ChunkHashesFunction", "AggregateScoresFunction", "TailorResumeFunction", "CompileLatexFunction", "GenerateCoverLetterFunction", "FindContactsFunction", "SaveJobFunction", "SaveMetricsFunction", "SendEmailFunction", "SelfImproveFunction", "NotifyErrorFunction", "CheckExpiryFunction", "StaleNudgeFunction", "FollowUpReminderFunction"]
+functions = ["LoadConfigFunction", "MergeDedupFunction", "ScoreBatchFunction", "ChunkHashesFunction", "AggregateScoresFunction", "TailorResumeFunction", "CompileLatexFunction", "GenerateCoverLetterFunction", "FindContactsFunction", "SaveJobFunction", "SaveMetricsFunction", "SendEmailFunction", "PostScoreFunction", "SelfImproveFunction", "NotifyErrorFunction", "CheckExpiryFunction", "StaleNudgeFunction", "FollowUpReminderFunction"]
 
-[function_build_definitions.12ee2e06-00c8-437d-aeb7-09abba0390dc]
+[function_build_definitions.09944a3b-2100-4544-9d8c-dfe98cb6a597]
 packagetype = "Image"
 functions = ["JobHuntApi"]
 
-[function_build_definitions.12ee2e06-00c8-437d-aeb7-09abba0390dc.metadata]
+[function_build_definitions.09944a3b-2100-4544-9d8c-dfe98cb6a597.metadata]
 DockerTag = "latest"
 DockerContext = "/Users/ut/code/naukribaba"
 Dockerfile = "Dockerfile.lambda"

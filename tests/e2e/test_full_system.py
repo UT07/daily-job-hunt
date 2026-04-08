@@ -4,9 +4,9 @@ Run with: python tests/e2e/test_full_system.py
 
 Tests against the LIVE deployed API (not local). Reports all failures.
 """
+
 import json
 import sys
-import time
 from datetime import datetime, timedelta
 
 import boto3
@@ -20,11 +20,18 @@ REGION = "eu-west-1"
 
 # Generate auth token
 import jwt as pyjwt
-TOKEN = pyjwt.encode({
-    "sub": USER_ID, "role": "authenticated", "iss": "supabase",
-    "iat": int(datetime.now().timestamp()),
-    "exp": int((datetime.now() + timedelta(hours=24)).timestamp()),
-}, JWT_SECRET, algorithm="HS256")
+
+TOKEN = pyjwt.encode(
+    {
+        "sub": USER_ID,
+        "role": "authenticated",
+        "iss": "supabase",
+        "iat": int(datetime.now().timestamp()),
+        "exp": int((datetime.now() + timedelta(hours=24)).timestamp()),
+    },
+    JWT_SECRET,
+    algorithm="HS256",
+)
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
 
 
@@ -45,13 +52,13 @@ class TestResult:
 
     def summary(self):
         total = self.passed + self.failed
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"RESULTS: {self.passed}/{total} passed, {self.failed} failed")
         if self.errors:
-            print(f"\nFAILURES:")
+            print("\nFAILURES:")
             for name, detail in self.errors:
                 print(f"  ✗ {name}: {detail}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         return self.failed == 0
 
 
@@ -205,17 +212,25 @@ else:
     has_cl = bool(detail.get("cover_letter_s3_url"))
     has_contacts = bool(detail.get("linkedin_contacts"))
 
-    if has_desc: results.ok("Job has description")
-    else: results.fail("Job description", "MISSING")
+    if has_desc:
+        results.ok("Job has description")
+    else:
+        results.fail("Job description", "MISSING")
 
-    if has_score: results.ok(f"Job has score: {detail['match_score']}")
-    else: results.fail("Job score", "MISSING or 0")
+    if has_score:
+        results.ok(f"Job has score: {detail['match_score']}")
+    else:
+        results.fail("Job score", "MISSING or 0")
 
-    if has_resume: results.ok("Job has resume URL")
-    else: results.fail("Job resume URL", "MISSING — tailoring may not have run")
+    if has_resume:
+        results.ok("Job has resume URL")
+    else:
+        results.fail("Job resume URL", "MISSING — tailoring may not have run")
 
-    if has_contacts: results.ok("Job has contacts")
-    else: results.fail("Job contacts", "MISSING")
+    if has_contacts:
+        results.ok("Job has contacts")
+    else:
+        results.fail("Job contacts", "MISSING")
 
     # Check resume URL is not expired
     if has_resume:
@@ -253,9 +268,7 @@ print("\n=== 6. AI ENDPOINTS ===")
 
 if job_id:
     # Suggest
-    status, data = api_post(f"/api/dashboard/jobs/{job_id}/suggest", {
-        "section": "summary", "current_content": "Experienced engineer"
-    })
+    status, data = api_post(f"/api/dashboard/jobs/{job_id}/suggest", {"section": "summary", "current_content": "Experienced engineer"})
     if status == 200 and data.get("suggestion"):
         results.ok(f"AI Suggest — {len(data['suggestion'])} chars")
     else:
@@ -264,7 +277,7 @@ if job_id:
     # Research
     status, data = api_post(f"/api/dashboard/jobs/{job_id}/research")
     if status == 200 and data.get("company_overview"):
-        results.ok(f"AI Research — has company_overview")
+        results.ok("AI Research — has company_overview")
     else:
         results.fail("AI Research", f"status={status} data={str(data)[:80]}")
 
@@ -276,9 +289,7 @@ if job_id:
         results.fail("AI Interview Prep", f"status={status} data={str(data)[:80]}")
 
     # Email generation
-    status, data = api_post(f"/api/dashboard/jobs/{job_id}/generate-email", {
-        "template": "cold_outreach"
-    })
+    status, data = api_post(f"/api/dashboard/jobs/{job_id}/generate-email", {"template": "cold_outreach"})
     if status == 200 and data.get("subject") and data.get("body"):
         results.ok(f"Email generation — subject: {data['subject'][:40]}")
     else:
@@ -298,6 +309,7 @@ if job_id:
 print("\n=== 7. CONTACT QUALITY AUDIT ===")
 
 from supabase import create_client
+
 ssm = boto3.client("ssm", region_name=REGION)
 db = create_client(
     ssm.get_parameter(Name="/naukribaba/SUPABASE_URL", WithDecryption=True)["Parameter"]["Value"],
@@ -317,21 +329,25 @@ for j in sa_contacts.data:
         contacts = json.loads(j["linkedin_contacts"]) if isinstance(j["linkedin_contacts"], str) else j["linkedin_contacts"]
         for c in contacts:
             total_contacts += 1
-            if not c.get("name"): names_missing += 1
-            if not c.get("profile_url") or len(c.get("profile_url", "")) < 20: urls_missing += 1
+            if not c.get("name"):
+                names_missing += 1
+            if not c.get("profile_url") or len(c.get("profile_url", "")) < 20:
+                urls_missing += 1
             name = c.get("name", "")
-            if "<" in name or "substring" in name or len(name) > 50: garbage_names += 1
+            if "<" in name or "substring" in name or len(name) > 50:
+                garbage_names += 1
             msg = c.get("message", "")
-            if "[First Name]" in msg or "[first name]" in msg.lower(): placeholder_msgs += 1
+            if "[First Name]" in msg or "[first name]" in msg.lower():
+                placeholder_msgs += 1
     except Exception:
         pass
 
 if total_contacts > 0:
     results.ok(f"Contact audit — {total_contacts} contacts across {len(sa_contacts.data)} jobs")
     if names_missing / total_contacts < 0.3:
-        results.ok(f"Names — {names_missing}/{total_contacts} missing ({100*names_missing//total_contacts}%)")
+        results.ok(f"Names — {names_missing}/{total_contacts} missing ({100 * names_missing // total_contacts}%)")
     else:
-        results.fail("Contact names", f"{names_missing}/{total_contacts} missing ({100*names_missing//total_contacts}%)")
+        results.fail("Contact names", f"{names_missing}/{total_contacts} missing ({100 * names_missing // total_contacts}%)")
     if garbage_names == 0:
         results.ok("No garbage names")
     else:
@@ -366,13 +382,13 @@ pct_resume = 100 * sa_resume.count // max(1, sa_total.count)
 if pct_resume >= 70:
     results.ok(f"S+A with resume: {sa_resume.count}/{sa_total.count} ({pct_resume}%)")
 else:
-    results.fail(f"S+A resume coverage", f"{sa_resume.count}/{sa_total.count} ({pct_resume}%) — target ≥70%")
+    results.fail("S+A resume coverage", f"{sa_resume.count}/{sa_total.count} ({pct_resume}%) — target ≥70%")
 
 pct_cl = 100 * sa_cl.count // max(1, sa_total.count)
 if pct_cl >= 50:
     results.ok(f"S+A with cover letter: {sa_cl.count}/{sa_total.count} ({pct_cl}%)")
 else:
-    results.fail(f"S+A CL coverage", f"{sa_cl.count}/{sa_total.count} ({pct_cl}%) — target ≥50%")
+    results.fail("S+A CL coverage", f"{sa_cl.count}/{sa_total.count} ({pct_cl}%) — target ≥50%")
 
 pct_contacts = 100 * sa_contacts_count.count // max(1, sa_total.count)
 results.ok(f"S+A with contacts: {sa_contacts_count.count}/{sa_total.count} ({pct_contacts}%)")
@@ -384,6 +400,7 @@ else:
 
 # Check for expired presigned URLs
 import urllib.parse
+
 expired = 0
 sample = db.table("jobs").select("resume_s3_url").not_.is_("resume_s3_url", "null").limit(50).execute()
 for j in sample.data:
