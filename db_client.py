@@ -258,6 +258,7 @@ class SupabaseClient:
             self.client.table("jobs")
             .select("match_score, application_status")
             .eq("user_id", user_id)
+            .eq("is_expired", False)
             .execute()
         )
         rows = all_jobs.data or []
