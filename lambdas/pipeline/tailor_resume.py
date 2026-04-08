@@ -180,17 +180,27 @@ RULES:
 
 WRITING STYLE (CRITICAL):
 - Do NOT use em-dashes (---, --, or the — character) as clause connectors. Use periods to end sentences.
-- Do NOT use filler phrases: "directly transferable to", "aligned with", "outcomes relevant to", "leveraging", "utilizing", "showcasing", "demonstrating proficiency in", "proven track record", "passionate about", "highly motivated", "self-motivated", "team player", "detail-oriented", "results-driven", "strong background in", "extensive experience", "seasoned professional".
+- Do NOT use filler phrases: "directly transferable to", "aligned with", "outcomes relevant to", "leveraging", "utilizing", "showcasing", "demonstrating proficiency in", "proven track record", "passionate about", "highly motivated", "self-motivated", "team player", "detail-oriented", "results-driven", "strong background in", "extensive experience in", "extensive experience", "seasoned professional", "experienced professional".
 - Write short, direct sentences in active voice. Lead with the action verb.
 - Do NOT append company-specific qualifiers to bullet points (e.g., "practices aligned with Company's GitOps patterns"). The bullet should stand on its own.
 - Quantify impact with numbers and percentages where they already exist.
 - Match job posting keywords by naturally weaving them into existing bullets, not by adding new sentences about them.
 
+SUMMARY SECTION (CRITICAL):
+- The summary MUST mention the specific role title from the JD (e.g., "Site Reliability Engineer", not just "engineer").
+- The summary MUST include 1-2 specific metrics from the candidate's existing experience (e.g., "reduced MTTR by 35%", "maintained 99.9% uptime"). Use only metrics that appear in the base resume — do NOT fabricate numbers.
+- The summary MUST reference at least 2 technologies that appear in BOTH the JD and the base resume.
+- Do NOT open with generic phrases like "Highly motivated", "Experienced professional", "Strong background in", or "Passionate about". Lead with the role title or the candidate's most relevant qualification for THIS specific role.
+- The summary should be 2-3 sentences. Do NOT write a paragraph.
+- Every word must be specific to this job. A reader should not be able to swap this summary onto a different resume for a different role.
+
 Return ONLY the tailored body content. No explanations, no markdown fences, no preamble commands."""
 
 _LIGHT_TOUCH_NOTE = (
     "TAILORING DEPTH: LIGHT TOUCH — make minimal edits: reorder skills to match JD "
-    "keywords, tweak the summary sentence. Keep 95%+ of the body unchanged."
+    "keywords, and rewrite the Summary to be specific to this role (follow SUMMARY "
+    "SECTION rules: mention the exact role title, include 1-2 real metrics, reference "
+    "2 technologies from the JD). Keep 95%+ of the body unchanged."
 )
 _MODERATE_NOTE = (
     "TAILORING DEPTH: MODERATE — rewrite bullet points to emphasize relevant "
