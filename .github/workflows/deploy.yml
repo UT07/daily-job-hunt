@@ -2,19 +2,6 @@ name: Deploy Backend
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '*.py'
-      - 'scrapers/**'
-      - 'resumes/**'
-      - 'templates/**'
-      - 'config.yaml'
-      - 'requirements-web.txt'
-      - 'Dockerfile.lambda'
-      - 'template.yaml'
-      - 'lambdas/**'
-      - 'layer/**'
 
 jobs:
   deploy:
