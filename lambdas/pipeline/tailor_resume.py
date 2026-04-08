@@ -306,7 +306,7 @@ Reminder: your output MUST contain all six section headers verbatim: \\section*{
     # Splice: base preamble (known-good) + AI body + \end{document}
     tailored_tex = _splice_tex(base_preamble, ai_body)
 
-    # Fix common AI LaTeX typos
+    # Fix common AI LaTeX typos and unescaped special characters
     _TYPO_FIXES = {
         "\\emphergencystretch": "\\emergencystretch",
         "\\emergecystretch": "\\emergencystretch",
@@ -315,6 +315,10 @@ Reminder: your output MUST contain all six section headers verbatim: \\section*{
     for typo, fix in _TYPO_FIXES.items():
         if typo in tailored_tex:
             tailored_tex = tailored_tex.replace(typo, fix)
+
+    # Escape unescaped # characters (e.g., C#, F#) — but not \# which is already escaped
+    import re
+    tailored_tex = re.sub(r'(?<!\\)#', r'\\#', tailored_tex)
 
     # Page length check: estimate body word count
     body_text = re.sub(r"\\[a-zA-Z]+\*?(\{[^}]*\})*", " ", ai_body)
