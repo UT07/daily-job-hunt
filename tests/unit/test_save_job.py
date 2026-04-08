@@ -87,7 +87,7 @@ def test_missing_cover_letter_still_saves_resume():
 
 
 def test_no_pdfs_still_saves_status_only():
-    """When no PDF keys are present, save_job returns saved=True without calling presigned URL or update."""
+    """When no PDF keys are present, save_job still sets application_status='scored'."""
     event = {**BASE_EVENT}  # no compile_result
     s3 = _make_s3_mock()
     db = _make_supabase()
@@ -100,5 +100,6 @@ def test_no_pdfs_still_saves_status_only():
     assert result["saved"] is True
     assert result["job_hash"] == "hash-abc"
     s3.generate_presigned_url.assert_not_called()
-    # No update should be issued when there's nothing to update
-    db.table.return_value.update.assert_not_called()
+    # Should still update status to 'scored' even without PDFs (SaveJobAfterError path)
+    update_payload = db.table.return_value.update.call_args_list[0][0][0]
+    assert update_payload["application_status"] == "scored"
