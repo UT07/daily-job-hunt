@@ -558,17 +558,20 @@ function PreferencesSection({ prefs, setPrefs }) {
 }
 
 const JOB_SOURCES = [
-  { id: 'linkedin', label: 'LinkedIn' },
-  { id: 'indeed', label: 'Indeed' },
-  { id: 'glassdoor', label: 'Glassdoor' },
-  { id: 'adzuna', label: 'Adzuna' },
-  { id: 'hn', label: 'HN Hiring' },
-  { id: 'yc', label: 'YC / WATS' },
+  { id: 'linkedin', label: 'LinkedIn', enabled: true },
+  { id: 'indeed', label: 'Indeed', enabled: true },
+  { id: 'greenhouse', label: 'Greenhouse API', enabled: true },
+  { id: 'ashby', label: 'Ashby API', enabled: true },
+  { id: 'irish_portals', label: 'Irish Portals', enabled: true },
+  { id: 'hn', label: 'HN Hiring', enabled: true },
+  { id: 'yc', label: 'YC / WATS', enabled: true },
+  { id: 'glassdoor', label: 'Glassdoor', enabled: false, note: 'Needs Fargate (dormant)' },
+  { id: 'adzuna', label: 'Adzuna', enabled: false, note: 'UK only — disabled' },
 ]
 
 function JobSourcesSection() {
   const [enabledSources, setEnabledSources] = useState(
-    JOB_SOURCES.map((s) => s.id)
+    JOB_SOURCES.filter((s) => s.enabled).map((s) => s.id)
   )
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState(null)
@@ -622,27 +625,35 @@ function JobSourcesSection() {
         <div className="space-y-3">
           {JOB_SOURCES.map((source) => {
             const active = enabledSources.includes(source.id)
+            const disabled = source.enabled === false
             return (
               <div
                 key={source.id}
                 className={`flex items-center justify-between px-4 py-3 border-2 transition-colors ${
+                  disabled ? 'border-stone-200 bg-stone-100 opacity-60' :
                   active ? 'border-black bg-white' : 'border-stone-300 bg-stone-50'
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <span className={`w-2 h-2 ${active ? 'bg-success' : 'bg-stone-300'}`} />
-                  <span className={`text-sm font-bold ${active ? 'text-black' : 'text-stone-400'}`}>
+                  <span className={`w-2 h-2 ${disabled ? 'bg-error' : active ? 'bg-success' : 'bg-stone-300'}`} />
+                  <span className={`text-sm font-bold ${disabled ? 'text-stone-400 line-through' : active ? 'text-black' : 'text-stone-400'}`}>
                     {source.label}
                   </span>
+                  {source.note && (
+                    <span className="text-[10px] text-stone-400 font-mono">{source.note}</span>
+                  )}
                 </div>
                 <button
-                  onClick={() => toggleSource(source.id)}
-                  className={`relative inline-flex h-6 w-11 items-center border-2 border-black transition-colors cursor-pointer ${
-                    active ? 'bg-black' : 'bg-white'
+                  onClick={() => !disabled && toggleSource(source.id)}
+                  disabled={disabled}
+                  className={`relative inline-flex h-6 w-11 items-center border-2 transition-colors ${
+                    disabled ? 'border-stone-300 bg-stone-200 cursor-not-allowed' :
+                    active ? 'border-black bg-black cursor-pointer' : 'border-black bg-white cursor-pointer'
                   }`}
                 >
                   <span
                     className={`inline-block h-4 w-4 transform transition-transform ${
+                      disabled ? 'translate-x-[2px] bg-stone-400' :
                       active ? 'translate-x-[22px] bg-yellow' : 'translate-x-[2px] bg-stone-300'
                     }`}
                   />
