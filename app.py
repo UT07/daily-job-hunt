@@ -1837,6 +1837,70 @@ def run_single_job(req: SingleJobRunRequest, user: AuthUser = Depends(get_curren
     }
 
 
+class RetailorRequest(BaseModel):
+    tier: str = "S"  # S, A, or SA for both
+    max_jobs: int = 50
+
+
+@app.post("/api/pipeline/re-tailor", status_code=202)
+def re_tailor_jobs(req: RetailorRequest, user: AuthUser = Depends(get_current_user)):
+    """Re-tailor existing jobs that are missing resumes.
+
+    Finds S and/or A tier jobs without resume_s3_url and starts
+    the single-job pipeline for each (up to max_jobs).
+    This is the proper way to regenerate artifacts for existing jobs
+    without running the full daily pipeline.
+    """
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+
+    tiers = ["S", "A"] if req.tier == "SA" else [req.tier]
+    jobs = (
+        _db.client.table("jobs")
+        .select("job_hash, match_score, score_tier")
+        .eq("user_id", user.id)
+        .in_("score_tier", tiers)
+        .is_("resume_s3_url", "null")
+        .order("match_score", desc=True)
+        .limit(req.max_jobs)
+        .execute()
+    )
+
+    if not jobs.data:
+        return {"queued": 0, "message": "No jobs need re-tailoring"}
+
+    # Start single-job pipeline for each
+    sfn = _get_sfn()
+    single_arn = os.environ.get("SINGLE_JOB_PIPELINE_ARN")
+    if not single_arn:
+        raise HTTPException(500, "Single-job pipeline not configured")
+
+    queued = 0
+    errors = 0
+    for job in jobs.data:
+        try:
+            sfn.start_execution(
+                stateMachineArn=single_arn,
+                name=f"retailor-{job['job_hash'][:12]}-{int(__import__('time').time())}",
+                input=json.dumps({
+                    "user_id": user.id,
+                    "job_hash": job["job_hash"],
+                    "skip_scoring": True,
+                }),
+            )
+            queued += 1
+        except Exception as e:
+            logger.warning(f"Failed to start re-tailor for {job['job_hash']}: {e}")
+            errors += 1
+
+    return {
+        "queued": queued,
+        "errors": errors,
+        "tier": req.tier,
+        "message": f"Started re-tailoring {queued} jobs via single-job pipeline",
+    }
+
+
 @app.get("/api/pipeline/status")
 def pipeline_status(user: AuthUser = Depends(get_current_user)):
     """Get latest pipeline metrics and run status."""

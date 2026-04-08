@@ -1135,9 +1135,30 @@ Resources:
       RoleArn: !GetAtt StepFunctionsRole.Arn
       DefinitionString: !Sub |
         {
-          "Comment": "NaukriBaba Single Job Pipeline: score → tailor → compile → save",
-          "StartAt": "ScoreSingleJob",
+          "Comment": "NaukriBaba Single Job Pipeline: score → tailor → compile → save. Supports skip_scoring for re-tailoring existing jobs.",
+          "StartAt": "CheckSkipScoring",
           "States": {
+            "CheckSkipScoring": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.skip_scoring",
+                  "BooleanEquals": true,
+                  "Next": "SkipToTailor"
+                }
+              ],
+              "Default": "ScoreSingleJob"
+            },
+            "SkipToTailor": {
+              "Type": "Pass",
+              "Parameters": {
+                "job_hash.$": "$.job_hash",
+                "user_id.$": "$.user_id",
+                "light_touch": false,
+                "tailoring_depth": "moderate"
+              },
+              "Next": "TailorResume"
+            },
             "ScoreSingleJob": {
               "Type": "Task",
               "Resource": "${ScoreBatchFunction.Arn}",
