@@ -420,18 +420,17 @@ def test_scrape_gradireland_json_api():
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = {
-        "data": {
-            "search": {
-                "documents": [
-                    {
-                        "title": "Graduate Python Developer",
-                        "organisation": {"title": "TechCorp"},
-                        "location": "Dublin",
-                        "body": "<p>Looking for a Python dev</p>",
-                        "applicationUrl": "https://techcorp.com/apply",
-                    }
-                ]
-            }
+        "search": {
+            "documents": [
+                {
+                    "title": "Graduate Python Developer",
+                    "organisation": {"title": "TechCorp"},
+                    "location": "Dublin",
+                    "body": "<p>Looking for a Python dev</p>",
+                    "applicationUrl": "https://techcorp.com/apply",
+                }
+            ],
+            "result_count": 1,
         }
     }
 
@@ -452,7 +451,7 @@ def test_scrape_gradireland_empty_results():
 
     mock_response = MagicMock()
     mock_response.status_code = 200
-    mock_response.json.return_value = {"data": {"search": {"documents": []}}}
+    mock_response.json.return_value = {"search": {"documents": [], "result_count": 0}}
 
     mock_client = MagicMock()
     mock_client.post.return_value = mock_response
