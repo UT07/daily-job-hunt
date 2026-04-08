@@ -1,7 +1,7 @@
 # Auto-Apply — Design Spec
 
 **Date**: 2026-04-08
-**Status**: Draft
+**Status**: Approved — full product, not MVP
 **Phase**: 3.4 Apply
 **Approach**: Remote browser session with persistent logins
 
@@ -69,6 +69,121 @@ Embedded remote browser session in the NaukriBaba web app. Playwright runs a rea
 │  For Greenhouse/Ashby: direct API submission     │
 │  (skip Fargate, faster, no browser needed)       │
 └─────────────────────────────────────────────────┘
+
+## Infrastructure (All SAM — No External Services)
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  SAM Template Additions                                  │
+│                                                          │
+│  ┌─ WebSocket API Gateway ────────────────────────────┐  │
+│  │  wss://xxxxx.execute-api.eu-west-1.amazonaws.com   │  │
+│  │                                                    │  │
+│  │  Routes:                                           │  │
+│  │  $connect    → ConnectHandler Lambda               │  │
+│  │  $disconnect → DisconnectHandler Lambda            │  │
+│  │  browser     → BrowserCommandHandler Lambda        │  │
+│  │                                                    │  │
+│  │  Auth: JWT from query string (?token=xxx)          │  │
+│  └────────────────────────────────────────────────────┘  │
+│                                                          │
+│  ┌─ Fargate Chrome Task ──────────────────────────────┐  │
+│  │  Docker: Dockerfile.playwright (already exists)     │  │
+│  │  Image: ECR (already exists)                        │  │
+│  │                                                    │  │
+│  │  Entrypoint: browser_session.py                    │  │
+│  │  ├── Launches Chrome via Playwright                │  │
+│  │  ├── Connects to WebSocket API Gateway             │  │
+│  │  ├── Streams screenshots (JPEG, 5fps)              │  │
+│  │  ├── Receives click/type events                    │  │
+│  │  ├── Runs form detection + auto-fill               │  │
+│  │  └── Persists cookies in /tmp (EFS optional)       │  │
+│  │                                                    │  │
+│  │  Networking:                                       │  │
+│  │  ├── VPC with public subnet (for Bright Data)      │  │
+│  │  ├── Security group: outbound 443 only             │  │
+│  │  └── No inbound (Fargate connects OUT to WSS)      │  │
+│  └────────────────────────────────────────────────────┘  │
+│                                                          │
+│  ┌─ Session Management ───────────────────────────────┐  │
+│  │  DynamoDB Table: browser_sessions                   │  │
+│  │  ├── session_id (PK)                               │  │
+│  │  ├── user_id                                       │  │
+│  │  ├── fargate_task_arn                              │  │
+│  │  ├── ws_connection_id (frontend)                   │  │
+│  │  ├── ws_connection_id_browser (Fargate)            │  │
+│  │  ├── platform_cookies (encrypted)                  │  │
+│  │  ├── status: starting|ready|filling|submitting     │  │
+│  │  ├── created_at                                    │  │
+│  │  └── ttl (auto-expire after 30 min idle)           │  │
+│  └────────────────────────────────────────────────────┘  │
+│                                                          │
+│  ┌─ New Lambdas ──────────────────────────────────────┐  │
+│  │  naukribaba-ws-connect       (WebSocket $connect)  │  │
+│  │  naukribaba-ws-disconnect    (WebSocket $disconnect)│  │
+│  │  naukribaba-ws-command       (WebSocket browser)   │  │
+│  │  naukribaba-submit-application (Easy Apply API)    │  │
+│  │  naukribaba-start-browser    (Fargate task launch) │  │
+│  │  naukribaba-generate-answers (AI custom Q answers) │  │
+│  └────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Data Flow: Remote Browser Session
+
+```
+Frontend (React)                  API Gateway              Fargate Chrome
+     │                               │                         │
+     │─── WSS connect ──────────────→│                         │
+     │                               │── store connection_id──→│ DynamoDB
+     │                               │                         │
+     │─── POST /apply/start ────────→│                         │
+     │                               │── RunTask ─────────────→│ ECS
+     │                               │                         │
+     │                               │                   Chrome starts
+     │                               │                   Navigates to URL
+     │                               │                   Detects form fields
+     │                               │                         │
+     │                               │←── screenshot (JPEG) ──│ WSS
+     │←── screenshot frame ─────────│                         │
+     │    (renders in Apply tab)     │                         │
+     │                               │                         │
+     │                               │←── fields extracted ───│
+     │←── field list ───────────────│                         │
+     │    AI generates answers       │                         │
+     │                               │                         │
+     │─── fill_form {answers} ─────→│                         │
+     │                               │── fill command ────────→│
+     │                               │                   Playwright fills
+     │                               │                         │
+     │←── screenshot (filled) ──────│←── screenshot ──────────│
+     │    User reviews               │                         │
+     │                               │                         │
+     │─── submit ──────────────────→│                         │
+     │                               │── click submit ────────→│
+     │                               │                   Clicks real button
+     │                               │←── confirmation ───────│
+     │←── applied! ─────────────────│                         │
+```
+
+### Why This Works Without External Services
+
+- **WebSocket API Gateway**: AWS-managed, serverless, pay-per-message (~$1/million messages). Already supported in SAM via `AWS::ApiGatewayV2::Api` with `ProtocolType: WEBSOCKET`.
+- **Fargate**: we already have the task definition and Docker image. Just need to run it.
+- **DynamoDB**: serverless session store. Free tier covers our usage. Auto-TTL for cleanup.
+- **No ALB needed**: Fargate connects OUTBOUND to WebSocket API Gateway (not inbound). The browser pushes screenshots to the WSS endpoint, frontend connects to the same endpoint. API Gateway routes messages between them.
+- **No Browserbase**: we own the entire stack. Zero per-session API costs.
+
+### Cost: ~$0.00-0.02 per application session
+
+| Component | Cost |
+|-----------|------|
+| WebSocket API Gateway | $1.14/million messages (~$0.001/session) |
+| Fargate (0.25 vCPU, 0.5GB, 5 min) | ~$0.01/session |
+| DynamoDB | Free tier (25 WCU/RCU) |
+| Lambda (WS handlers) | Free tier |
+| **Total per browser session** | **~$0.01** |
+| Easy Apply (no Fargate) | **~$0.001** |
 ```
 
 ## Three Submission Modes
@@ -291,39 +406,65 @@ When user updates status (interview → offer → accepted/rejected):
 - Ground truth: "jobs I got interviews for had avg score X"
 - Calibrates scoring accuracy over time
 
-## Implementation Phases
+## Implementation Plan (Full Product)
 
-### Phase 1: Easy Apply MVP (2-3 days)
-- "⚡ Easy Apply" badge on Greenhouse/Ashby job cards in dashboard
-- Easy Apply modal component (compact review + submit)
-- Backend: fetch Greenhouse/Ashby custom questions from job metadata
-- Backend: AI answer generation endpoint
-- Backend: submit application to Greenhouse/Ashby API
-- `applications` table + status tracking
-- Job status auto-updates to "Applied" on success
-- Resume version selector (default: tailored for this job)
+### Step 1: Infrastructure (SAM resources)
+- WebSocket API Gateway in template.yaml
+- DynamoDB `browser_sessions` table
+- New Lambda functions: ws-connect, ws-disconnect, ws-command, submit-application, start-browser, generate-answers
+- Update Fargate task definition with browser_session.py entrypoint
+- ECR image update with WebSocket client deps
+- `applications` table in Supabase
+- SAM deploy + verify
 
-### Phase 2: Batch Easy Apply (1-2 days)
-- "⚡ Easy Apply to N jobs" button in dashboard (S+A tier filter)
-- Sequential modal: review → submit → next job
-- Progress bar with pause/skip/stop
-- Summary: "Applied to 8/10 jobs (2 skipped)"
+### Step 2: Easy Apply (Greenhouse/Ashby API)
+- `POST /api/apply/easy-apply` endpoint in app.py
+- Fetch custom questions from Greenhouse/Ashby job metadata APIs
+- `POST /api/apply/generate-answers` — AI fills custom Qs from user profile + JD
+- Easy Apply modal component in React (compact review UI)
+- "⚡ Easy Apply" badge on Greenhouse/Ashby job cards in Dashboard + JobWorkspace
+- Submit to Greenhouse/Ashby APIs with resume file + cover letter + answers
+- `applications` table tracking
+- Job status auto-updates to "Applied"
+- Resume version selector (default: tailored)
 
-### Phase 3: Remote Browser (3-5 days)
-- Fargate task definition for Chrome + Playwright
-- WebSocket bridge: screenshot stream + click forwarding
-- Form field detection via Playwright
-- AI pre-fill pipeline
-- Session management (create/reuse/timeout)
-- Apply tab embeds remote browser view
-- Per-platform login persistence
+### Step 3: Batch Easy Apply
+- Dashboard: multi-select S+A Greenhouse/Ashby jobs → "⚡ Easy Apply to N jobs"
+- Sequential modal: company/title/score → quick Qs → Submit → next
+- Progress bar with pause/skip/stop controls
+- Summary view: "Applied 8/10 (2 skipped)" with per-job status
 
-### Phase 4: Assisted Manual + Outcome Tracking (2 days)
-- Fallback mode: pre-generate all answers, copy-to-clipboard
-- "Open Application Page" with answers ready
-- Outcome tracking (interview/rejection/offer/ghosted)
-- Feedback loop to scoring accuracy (2.9 integration)
-- Dashboard: application funnel visualization
+### Step 4: Remote Browser Session
+- `browser_session.py` on Fargate: Chrome + Playwright + WebSocket client
+- Screenshot streaming (JPEG, 5fps via WebSocket)
+- Click/type event forwarding (frontend → WSS → Fargate)
+- Form field detection: extract labels, types, options from any page
+- AI pre-fill pipeline: profile fields + AI custom answers
+- Resume PDF upload via Playwright file input
+- Per-platform cookie persistence (LinkedIn, Workday sessions reused)
+- Session lifecycle: create on first apply, reuse, 30-min idle timeout
+- Apply tab: embedded browser view component in React
+
+### Step 5: Assisted Manual Fallback
+- For sites that block Fargate (CAPTCHA-heavy, complex multi-step)
+- Pre-generate all answers in dashboard
+- One-click clipboard copy for each field
+- "Open Application Page →" button
+- Auto-prompt for outcome after 24 hours
+
+### Step 6: Outcome Tracking + Feedback Loop
+- Application status progression: submitted → viewed → interview → offer → accepted/rejected/ghosted
+- Dashboard notifications: "Stripe viewed your application 2 days ago"
+- Outcome stats: "Applied to 45, interviewed at 8 (18%), offered 2"
+- Feed outcomes back to scoring (Phase 2.9): ground truth calibration
+- Funnel visualization in Analytics tab (3.6)
+
+### Step 7: Polish + Edge Cases
+- Rate limiting: max 20 Easy Applies per hour (respect platform limits)
+- Duplicate prevention: can't apply to same job twice
+- Error recovery: if Fargate task crashes, show error + fallback to Mode 3
+- Confirmation screenshots saved to S3 as proof
+- Email summary: "You applied to 12 jobs today" with links
 
 ## Cost Estimate
 
