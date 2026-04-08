@@ -72,8 +72,8 @@ def _richness_score(job: dict) -> tuple:
     # 2. Prefer rows that have artifacts
     has_resume = 1 if job.get("resume_s3_url") else 0
     has_cover = 1 if job.get("cover_letter_s3_url") else 0
-    has_contacts = 1 if job.get("contacts") else 0
-    artifact_count = has_resume + has_cover + has_contacts
+    has_linkedin_contacts = 1 if job.get("linkedin_contacts") else 0
+    artifact_count = has_resume + has_cover + has_linkedin_contacts
     # 3. Prefer longer description
     desc_len = len(job.get("description", "") or "")
     # 4. Prefer more populated fields
@@ -102,7 +102,7 @@ def main(dry_run: bool) -> None:
         db.client.table("jobs")
         .select(
             "job_id, job_hash, user_id, title, company, description, "
-            "match_score, resume_s3_url, cover_letter_s3_url, contacts, "
+            "match_score, resume_s3_url, cover_letter_s3_url, linkedin_contacts, "
             "scored_at"
         )
         .execute()
