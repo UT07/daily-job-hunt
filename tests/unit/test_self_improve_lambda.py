@@ -90,9 +90,9 @@ SAMPLE_METRICS = [
 ]
 
 BROKEN_SCRAPER_METRICS = [
-    {"scraper_name": "glassdoor", "run_date": "2026-04-01", "jobs_found": 0, "jobs_matched": 0, "user_id": "u1"},
-    {"scraper_name": "glassdoor", "run_date": "2026-04-02", "jobs_found": 0, "jobs_matched": 0, "user_id": "u1"},
-    {"scraper_name": "glassdoor", "run_date": "2026-04-03", "jobs_found": 0, "jobs_matched": 0, "user_id": "u1"},
+    {"scraper_name": "indeed", "run_date": "2026-04-01", "jobs_found": 0, "jobs_matched": 0, "user_id": "u1"},
+    {"scraper_name": "indeed", "run_date": "2026-04-02", "jobs_found": 0, "jobs_matched": 0, "user_id": "u1"},
+    {"scraper_name": "indeed", "run_date": "2026-04-03", "jobs_found": 0, "jobs_matched": 0, "user_id": "u1"},
 ]
 
 SAMPLE_JOBS = [
@@ -171,7 +171,7 @@ class TestNewAdjustments:
 
         result = handler({"user_id": "u1", "pipeline_run_id": "run-1"}, None)
 
-        # At minimum 1 scraper_config (disable glassdoor) adjustment
+        # At minimum 1 scraper_config (disable indeed) adjustment
         assert result["new_adjustments"] >= 1
 
         # Verify insert was called on pipeline_adjustments with user_id and run_id
@@ -484,7 +484,7 @@ class TestUnhealthyScraperNotification:
 
         result = handler({"user_id": "u1"}, None)
 
-        assert "glassdoor" in result["unhealthy_scrapers"]
+        assert "indeed" in result["unhealthy_scrapers"]
         # boto3.client("lambda").invoke() should have been called for the notification
         mock_lambda.invoke.assert_called()
 
