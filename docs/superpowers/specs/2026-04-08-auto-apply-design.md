@@ -71,17 +71,36 @@ Embedded remote browser session in the NaukriBaba web app. Playwright runs a rea
 └─────────────────────────────────────────────────┘
 ```
 
-## Two Submission Paths
+## Three Submission Modes
 
-### Path 1: API Submission (Greenhouse/Ashby)
-- No browser session needed
-- Backend POSTs directly to Greenhouse/Ashby application API
-- Fields: name, email, phone, resume (PDF from S3), cover letter, custom answers
-- Custom questions answered by AI, shown in Apply tab for review
-- User confirms → backend submits → status updates
-- Fast (~2 seconds per application)
+### Mode 1: NaukriBaba Easy Apply (Greenhouse/Ashby)
+Like LinkedIn Easy Apply — minimal friction, one-click with quick review.
 
-### Path 2: Remote Browser (LinkedIn, Workday, Custom Forms)
+**UX Flow:**
+1. Job card in dashboard shows green "⚡ Easy Apply" badge (for Greenhouse/Ashby jobs)
+2. User clicks "⚡ Easy Apply" → compact modal appears (NOT a full page)
+3. Modal shows: tailored resume preview, cover letter preview, 2-3 custom questions pre-answered by AI
+4. User reviews for 5 seconds, edits if needed
+5. Clicks "Submit Application" → backend POSTs to Greenhouse/Ashby API → done
+6. Badge changes to "✓ Applied" with timestamp
+7. Total time: **<10 seconds per application**
+
+**Why "Easy Apply" matters:**
+- No browser session needed, no Fargate cost
+- Feels instant — removes the friction that stops people from applying
+- Covers Stripe, MongoDB, Twilio, Anthropic, Linear, Notion, Vercel, Datadog, etc.
+- Can batch-apply: "Easy Apply to all 8 S-tier Greenhouse jobs" with a per-job confirmation step
+
+**API Details:**
+- Greenhouse: `POST https://boards-api.greenhouse.io/v1/boards/{board_token}/jobs/{job_id}`
+- Ashby: `POST https://api.ashbyhq.com/posting-api/application`
+- Fields: name, email, phone, resume (multipart file from S3), cover letter, custom answers
+- Custom questions fetched from job metadata, answered by AI, editable by user
+- `posting_id` and `board_token`/`company_slug` already stored by scrapers
+
+### Mode 2: Remote Browser (LinkedIn, Workday, Custom Forms)
+For job sites without application APIs — full browser session.
+
 - Fargate Chrome navigates to apply URL
 - Playwright detects form fields (labels, types, options)
 - AI generates answers for each field
@@ -89,7 +108,16 @@ Embedded remote browser session in the NaukriBaba web app. Playwright runs a rea
 - Browser view streamed to Apply tab via WebSocket
 - User reviews, solves CAPTCHA if needed, clicks Submit
 - Screenshot captured as proof of submission
-- Slower (~30-60 seconds per application) but works universally
+- ~30-60 seconds per application
+
+### Mode 3: Assisted Manual Apply (fallback)
+For sites that block automation or require complex multi-step flows.
+
+- NaukriBaba generates all answers and copies them to clipboard
+- Opens the real application page in a new tab
+- User pastes answers manually but doesn't have to think/write
+- Dashboard tracks that user clicked "Apply" and prompts for outcome later
+- ~2-3 minutes but user does zero writing
 
 ## Session Management
 
@@ -110,12 +138,16 @@ Platform Sessions (within one dashboard session):
 4. **Extend**: Any apply resets the 30 min timer
 5. **Close**: User closes dashboard or clicks "End Session"
 
-### Batch Apply
-Because sessions persist, batch apply is possible:
-- User selects 5 S-tier Greenhouse jobs → "Apply to All"
-- Backend submits all 5 via API in sequence
-- Each shows in Apply tab for 3-second review before auto-proceeding
-- User can pause/cancel at any time
+### Batch Easy Apply
+For Greenhouse/Ashby jobs (Easy Apply mode), batch is natural:
+- Dashboard shows "⚡ Easy Apply to 8 S-tier jobs" button
+- Compact modal cycles through each job:
+  - Shows: company, title, score, resume preview, custom Qs
+  - User clicks "Submit" or "Skip" for each
+  - 5-10 seconds per job
+- Total: 8 applications in ~60-90 seconds
+- Progress bar: "Applied 5/8 — [Pause] [Stop]"
+- Each application tracked individually in `applications` table
 
 ## Form Detection & AI Filling
 
@@ -166,34 +198,67 @@ For years of experience questions, calculate from resume dates.
 For "why this company" questions, reference specific things about the company from the JD.
 ```
 
-### Answer Review UI (Apply Tab)
+### Easy Apply Modal (Mode 1 — Greenhouse/Ashby)
+```
+┌──────────────────────────────────────────────┐
+│  ⚡ Easy Apply                          [✕]  │
+│                                              │
+│  Senior SRE @ Stripe              Score: 94  │
+│  Dublin, Ireland                             │
+│                                              │
+│  ┌─ Your Application ─────────────────────┐  │
+│  │  📄 Resume: Utkarsh_Singh_SRE_Stripe ▼ │  │
+│  │  📝 Cover Letter: [Preview]       [▼]  │  │
+│  └────────────────────────────────────────┘  │
+│                                              │
+│  ┌─ Quick Questions ──────────────────────┐  │
+│  │  Work authorized in Ireland? [Yes ▼]   │  │
+│  │  Kubernetes experience?      [3 yrs]   │  │
+│  └────────────────────────────────────────┘  │
+│                                              │
+│  [Skip]              [⚡ Submit Application] │
+│                                              │
+│  Applying as: Utkarsh Singh                  │
+│  254utkarsh@gmail.com · +353 892515620       │
+└──────────────────────────────────────────────┘
+```
+
+### Apply Tab (Mode 2 — Remote Browser)
 ```
 ┌─────────────────────────────────────────────────┐
-│  Apply to: Senior SRE @ Stripe                   │
-│  Via: Greenhouse API (direct submission)          │
+│  Apply to: DevOps Engineer @ Microsoft           │
+│  Via: Remote Browser (LinkedIn)                  │
 │                                                  │
-│  ┌─ Standard Fields ──────────────────────────┐  │
-│  │  Name: Utkarsh Singh              [edit]   │  │
-│  │  Email: 254utkarsh@gmail.com      [edit]   │  │
-│  │  Phone: +353 892515620            [edit]   │  │
-│  │  Resume: Utkarsh_Singh_SRE_Stripe.pdf  ▼  │  │
-│  │  Cover Letter: [Preview] [Edit]            │  │
-│  └────────────────────────────────────────────┘  │
+│  ┌─────────────────────────────────────────────┐ │
+│  │                                             │ │
+│  │  [Live browser view — LinkedIn Easy Apply]  │ │
+│  │  [Fields pre-filled, user can interact]     │ │
+│  │  [CAPTCHA? User solves it here]             │ │
+│  │                                             │ │
+│  └─────────────────────────────────────────────┘ │
 │                                                  │
-│  ┌─ Custom Questions (AI-generated) ──────────┐  │
-│  │                                            │  │
-│  │  Q: Are you authorized to work in Ireland? │  │
-│  │  A: [Yes ▼]                       [edit]   │  │
-│  │                                            │  │
-│  │  Q: Years of experience with Kubernetes?   │  │
-│  │  A: [3 years]                     [edit]   │  │
-│  │                                            │  │
-│  │  Q: Why do you want to work at Stripe?     │  │
-│  │  A: [I'm drawn to Stripe's mission of...] │  │
-│  │     [edit]                                 │  │
-│  └────────────────────────────────────────────┘  │
+│  Status: ✅ All fields filled                    │
+│  [Take Screenshot]  [Submit — click in browser]  │
+└─────────────────────────────────────────────────┘
+```
+
+### Assisted Apply Panel (Mode 3 — Fallback)
+```
+┌─────────────────────────────────────────────────┐
+│  Apply to: Platform Engineer @ Workday           │
+│  Via: Assisted (copy-paste)                      │
 │                                                  │
-│  [Cancel]            [✓ Confirm & Submit]        │
+│  Your answers are ready. Open the application    │
+│  page and paste these in:                        │
+│                                                  │
+│  ┌─ Pre-generated Answers ─────────────────────┐ │
+│  │  Work auth: Yes                    [copy]   │ │
+│  │  Experience: 3 years in SRE...     [copy]   │ │
+│  │  Why Workday: I'm drawn to...      [copy]   │ │
+│  │  Cover letter: Dear hiring...      [copy]   │ │
+│  └─────────────────────────────────────────────┘ │
+│                                                  │
+│  [Copy All]        [Open Application Page →]     │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -228,27 +293,37 @@ When user updates status (interview → offer → accepted/rejected):
 
 ## Implementation Phases
 
-### Phase 1: Greenhouse/Ashby API (1-2 days)
-- Apply tab in JobWorkspace
-- Form extraction from Greenhouse/Ashby job metadata
-- AI answer generation for custom questions
-- Review UI with edit capability
-- Direct API submission
-- Status tracking in `applications` table
+### Phase 1: Easy Apply MVP (2-3 days)
+- "⚡ Easy Apply" badge on Greenhouse/Ashby job cards in dashboard
+- Easy Apply modal component (compact review + submit)
+- Backend: fetch Greenhouse/Ashby custom questions from job metadata
+- Backend: AI answer generation endpoint
+- Backend: submit application to Greenhouse/Ashby API
+- `applications` table + status tracking
+- Job status auto-updates to "Applied" on success
+- Resume version selector (default: tailored for this job)
 
-### Phase 2: Remote Browser MVP (3-5 days)
+### Phase 2: Batch Easy Apply (1-2 days)
+- "⚡ Easy Apply to N jobs" button in dashboard (S+A tier filter)
+- Sequential modal: review → submit → next job
+- Progress bar with pause/skip/stop
+- Summary: "Applied to 8/10 jobs (2 skipped)"
+
+### Phase 3: Remote Browser (3-5 days)
 - Fargate task definition for Chrome + Playwright
 - WebSocket bridge: screenshot stream + click forwarding
 - Form field detection via Playwright
 - AI pre-fill pipeline
 - Session management (create/reuse/timeout)
 - Apply tab embeds remote browser view
+- Per-platform login persistence
 
-### Phase 3: Batch Apply + Outcome Tracking (2-3 days)
-- Multi-select jobs → "Apply to All"
-- Sequential processing with per-job review
-- Outcome tracking (interview/rejection/offer)
-- Feedback loop to scoring (2.9 integration)
+### Phase 4: Assisted Manual + Outcome Tracking (2 days)
+- Fallback mode: pre-generate all answers, copy-to-clipboard
+- "Open Application Page" with answers ready
+- Outcome tracking (interview/rejection/offer/ghosted)
+- Feedback loop to scoring accuracy (2.9 integration)
+- Dashboard: application funnel visualization
 
 ## Cost Estimate
 
@@ -263,10 +338,13 @@ When user updates status (interview → offer → accepted/rejected):
 
 ## Success Criteria
 
-- User can apply to a Greenhouse/Ashby job in <30 seconds (review + confirm)
-- User can apply to a LinkedIn job in <90 seconds (browser session + review + submit)
-- Platform login persists across all jobs for that platform within a session
-- 95%+ of standard fields auto-filled correctly
-- AI custom answers are relevant and truthful (no fabrication)
-- Application status automatically tracked
-- User never needs to install anything — everything in the web app
+- **Easy Apply**: apply to a Greenhouse/Ashby job in **<10 seconds** (modal review + one click)
+- **Batch Easy Apply**: apply to 10 Greenhouse jobs in **<2 minutes** (sequential confirm)
+- **Remote Browser**: apply to a LinkedIn job in **<90 seconds** (browser session + review + submit)
+- **Login persistence**: one login per platform per dashboard session (not per job)
+- **95%+ standard fields** auto-filled correctly from user profile
+- **AI custom answers** relevant and truthful (no fabrication)
+- **Application status** automatically tracked in `applications` table
+- **Zero installs** — everything inside naukribaba.netlify.app
+- **"⚡ Easy Apply" badge** visible on all Greenhouse/Ashby jobs in dashboard
+- **Outcome tracking** feeds back to scoring accuracy (Phase 2.9)
