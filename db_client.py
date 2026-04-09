@@ -219,7 +219,8 @@ class SupabaseClient:
             if "level_fit" in filters:
                 query = query.eq("level_fit", filters["level_fit"])
             if "skill" in filters:
-                query = query.contains("key_matches", [filters["skill"]])
+                import json as _json
+                query = query.filter("key_matches", "cs", _json.dumps([filters["skill"]]))
 
         # Sorting — supports sort_by and sort_order from frontend
         sort_by = filters.get("sort_by", "first_seen") if filters else "first_seen"
