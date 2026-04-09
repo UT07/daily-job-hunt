@@ -1326,6 +1326,8 @@ def get_dashboard_jobs(
     tailored: Optional[str] = None,
     tier: Optional[str] = None,
     hide_expired: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = None,
 ):
     """Paginated, filterable job list."""
     if _db is None:
@@ -1351,6 +1353,10 @@ def get_dashboard_jobs(
         filters["tier"] = tier
     if hide_expired and hide_expired.lower() == "true":
         filters["hide_expired"] = True
+    if sort_by:
+        filters["sort_by"] = sort_by
+    if sort_order:
+        filters["sort_order"] = sort_order
 
     jobs, total = _db.get_jobs(user.id, filters=filters, page=page, per_page=per_page)
     return {"jobs": jobs, "page": page, "per_page": per_page, "total": total}
@@ -2023,13 +2029,9 @@ def pipeline_execution_status(execution_name: str, user: AuthUser = Depends(get_
 
 @app.post("/api/pipeline/re-tailor/{job_id}", status_code=202)
 def re_tailor_job(job_id: str, user: AuthUser = Depends(get_current_user)):
-    """Re-tailor a job with the latest resume version via Step Functions."""
+    """Re-tailor a job with the latest resume version via Step Functions (or local fallback)."""
     if _db is None:
         raise HTTPException(503, "Database not configured")
-
-    single_arn = os.environ.get("SINGLE_JOB_PIPELINE_ARN")
-    if not single_arn:
-        raise HTTPException(500, "Pipeline not configured")
 
     # Get the job
     job = _db.client.table("jobs").select("*").eq("job_id", job_id).eq("user_id", user.id).execute()
@@ -2040,39 +2042,60 @@ def re_tailor_job(job_id: str, user: AuthUser = Depends(get_current_user)):
     # Save the current resume/cover letter as a version snapshot BEFORE re-tailoring.
     current_version = job.get("resume_version") or 1
     if job.get("resume_s3_url") or job.get("cover_letter_s3_url"):
-        _db.client.table("resume_versions").insert({
-            "user_id": user.id,
-            "job_id": job_id,
-            "version_number": current_version,
-            "resume_s3_url": job.get("resume_s3_url"),
-            "cover_letter_s3_url": job.get("cover_letter_s3_url"),
-            "tailoring_model": job.get("tailoring_model"),
-        }).execute()
-
-    sfn = _get_sfn()
-    execution = sfn.start_execution(
-        stateMachineArn=single_arn,
-        input=json.dumps({
-            "user_id": user.id,
-            "job_description": job.get("description", ""),
-            "job_title": job.get("title", ""),
-            "company": job.get("company", ""),
-            "resume_type": "default",
-            "re_tailor": True,
-            "job_id": job_id,
-        }),
-    )
+        try:
+            _db.client.table("resume_versions").insert({
+                "user_id": user.id,
+                "job_id": job_id,
+                "version_number": current_version,
+                "resume_s3_url": job.get("resume_s3_url"),
+                "cover_letter_s3_url": job.get("cover_letter_s3_url"),
+                "tailoring_model": job.get("tailoring_model"),
+            }).execute()
+        except Exception as e:
+            logger.warning("Failed to save version snapshot for %s: %s", job_id, e)
 
     next_version = current_version + 1
     _db.client.table("jobs").update({
         "resume_version": next_version,
     }).eq("job_id", job_id).execute()
 
-    return {
-        "executionArn": execution["executionArn"],
-        "pollUrl": f"/api/pipeline/status/{execution['executionArn'].split(':')[-1]}",
-        "resume_version": next_version,
-    }
+    single_arn = os.environ.get("SINGLE_JOB_PIPELINE_ARN")
+    if single_arn:
+        # Production path: invoke Step Functions
+        sfn = _get_sfn()
+        execution = sfn.start_execution(
+            stateMachineArn=single_arn,
+            input=json.dumps({
+                "user_id": user.id,
+                "job_description": job.get("description", ""),
+                "job_title": job.get("title", ""),
+                "company": job.get("company", ""),
+                "resume_type": job.get("matched_resume") or "default",
+                "re_tailor": True,
+                "job_id": job_id,
+            }),
+        )
+        return {
+            "executionArn": execution["executionArn"],
+            "pollUrl": f"/api/pipeline/status/{execution['executionArn'].split(':')[-1]}",
+            "resume_version": next_version,
+        }
+    else:
+        # Local dev fallback: enqueue as an async task
+        task_id = str(uuid.uuid4())
+        _enqueue_task(task_id, user.id, "tailor", {
+            "job_description": job.get("description", ""),
+            "job_title": job.get("title", ""),
+            "company": job.get("company", ""),
+            "resume_type": job.get("matched_resume") or "default",
+            "re_tailor": True,
+            "job_id": job_id,
+        })
+        return {
+            "task_id": task_id,
+            "poll_url": f"/api/tasks/{task_id}",
+            "resume_version": next_version,
+        }
 
 
 class CompileLatexRequest(BaseModel):

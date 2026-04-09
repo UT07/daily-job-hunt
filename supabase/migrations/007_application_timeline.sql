@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS public.application_timeline (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL,
-  job_id UUID NOT NULL,
+  job_id TEXT NOT NULL,
   status TEXT NOT NULL,
   notes TEXT,
   created_at TIMESTAMPTZ DEFAULT now()

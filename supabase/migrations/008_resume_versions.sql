@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS public.resume_versions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL,
-  job_id UUID NOT NULL,
+  job_id TEXT NOT NULL,
   version_number INT NOT NULL DEFAULT 1,
   resume_s3_url TEXT,
   cover_letter_s3_url TEXT,
