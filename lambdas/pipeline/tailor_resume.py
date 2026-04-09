@@ -519,11 +519,7 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
                 + "\nPlease fix ALL of them. Return ONLY the corrected body."
             )
             try:
-                retry_dict = council_complete(
-                    prompt=retry_prompt, system=system_prompt,
-                    task_description=f"Retry tailor for '{title}' — fix quality issues.",
-                    n_generators=2, temperature=0.3,
-                )
+                retry_dict = ai_complete(retry_prompt, system=system_prompt, temperature=0.3)
                 retry_body = retry_dict.get("content", "").strip()
                 if "\\begin{document}" in retry_body:
                     _, retry_body = _split_tex(retry_body)
