@@ -1,6 +1,11 @@
-"""HN Hiring scraper — fetches latest 'Who is hiring?' thread via Algolia API."""
+"""HN Hiring scraper — fetches latest 'Who is hiring?' thread via Algolia API.
+
+Uses search_by_date (not search) so we always get the most recent monthly
+thread, and paginates comments to capture the full thread.
+"""
 import logging
 import re
+import time
 from datetime import datetime, timedelta
 
 import boto3
@@ -11,12 +16,25 @@ logger.setLevel(logging.INFO)
 
 ssm = boto3.client("ssm")
 
+# Matches "Ask HN: Who is hiring? (Month Year)"
+_THREAD_TITLE_RE = re.compile(
+    r"^Ask HN: Who is hiring\?", re.IGNORECASE
+)
+
+# Max comments per page from Algolia (their limit)
+_COMMENTS_PAGE_SIZE = 200
+# Max pages to paginate (safety cap: 5 * 200 = 1000 comments)
+_MAX_COMMENT_PAGES = 5
+
+
 def get_param(name):
     return ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
+
 
 def get_supabase():
     from supabase import create_client
     return create_client(get_param("/naukribaba/SUPABASE_URL"), get_param("/naukribaba/SUPABASE_SERVICE_KEY"))
+
 
 def parse_hn_comment(text: str) -> dict:
     """Parse a HN hiring comment into job fields."""
@@ -45,6 +63,61 @@ def parse_hn_comment(text: str) -> dict:
         "location": location,
     }
 
+
+def _find_latest_thread() -> str | None:
+    """Find the objectID of the latest 'Who is hiring?' monthly thread.
+
+    Uses search_by_date (date-sorted) with a 35-day lookback so we always
+    get the current month's thread rather than a years-old relevance hit.
+    Returns None if no matching thread is found.
+    """
+    search_url = "https://hn.algolia.com/api/v1/search_by_date"
+    cutoff = int(time.time()) - 35 * 86400  # 35 days ago
+    params = {
+        "query": '"Who is hiring"',
+        "tags": "story",
+        "numericFilters": f"created_at_i>{cutoff}",
+        "hitsPerPage": 10,
+    }
+    resp = httpx.get(search_url, params=params, timeout=15)
+    if resp.status_code != 200:
+        logger.warning(f"[hn_hiring] Thread search: HTTP {resp.status_code}")
+        return None
+
+    hits = resp.json().get("hits", [])
+    for hit in hits:
+        title = hit.get("title", "")
+        if _THREAD_TITLE_RE.search(title):
+            logger.info(f"[hn_hiring] Found thread: {title} (id={hit['objectID']})")
+            return hit["objectID"]
+
+    logger.warning(f"[hn_hiring] No matching thread in {len(hits)} hits")
+    return None
+
+
+def _fetch_all_comments(thread_id: str) -> list[dict]:
+    """Fetch all comments for a thread, paginating through results."""
+    all_comments = []
+    for page in range(_MAX_COMMENT_PAGES):
+        url = "https://hn.algolia.com/api/v1/search"
+        params = {
+            "tags": f"comment,story_{thread_id}",
+            "hitsPerPage": _COMMENTS_PAGE_SIZE,
+            "page": page,
+        }
+        resp = httpx.get(url, params=params, timeout=30)
+        if resp.status_code != 200:
+            logger.warning(f"[hn_hiring] Comments page {page}: HTTP {resp.status_code}")
+            break
+        data = resp.json()
+        hits = data.get("hits", [])
+        all_comments.extend(hits)
+        # Stop if we got fewer than a full page (no more results)
+        if len(hits) < _COMMENTS_PAGE_SIZE:
+            break
+    return all_comments
+
+
 def handler(event, context):
     query_hash = event.get("query_hash", "")
     cache_ttl_hours = event.get("cache_ttl_hours", 168)  # 1 week for HN
@@ -59,27 +132,13 @@ def handler(event, context):
     if cached.count > 0:
         return {"count": cached.count, "source": "hn_hiring", "cached": True}
 
-    # Find latest "Who is hiring?" thread
-    search_url = "https://hn.algolia.com/api/v1/search"
-    params = {"query": "Ask HN: Who is hiring?", "tags": "story", "hitsPerPage": 1}
-    resp = httpx.get(search_url, params=params, timeout=15)
-    if resp.status_code != 200:
-        logger.warning(f"[hn_hiring] Thread search: HTTP {resp.status_code}")
-        return {"count": 0, "source": "hn_hiring", "error": f"http_{resp.status_code}"}
-    hits = resp.json().get("hits", [])
-    if not hits:
+    # Find latest "Who is hiring?" thread (date-sorted, title-validated)
+    thread_id = _find_latest_thread()
+    if not thread_id:
         return {"count": 0, "source": "hn_hiring", "error": "no_thread_found"}
 
-    thread_id = hits[0]["objectID"]
-
-    # Fetch comments
-    comments_url = "https://hn.algolia.com/api/v1/search"
-    params = {"tags": f"comment,story_{thread_id}", "hitsPerPage": 200}
-    resp = httpx.get(comments_url, params=params, timeout=30)
-    if resp.status_code != 200:
-        logger.warning(f"[hn_hiring] Comments fetch: HTTP {resp.status_code}")
-        return {"count": 0, "source": "hn_hiring", "error": f"http_{resp.status_code}"}
-    comments = resp.json().get("hits", [])
+    # Fetch all comments with pagination
+    comments = _fetch_all_comments(thread_id)
 
     from normalizers import normalize_hn
     parsed = []
@@ -108,5 +167,5 @@ def handler(event, context):
             job["scraped_at"] = now
         db.table("jobs_raw").upsert(jobs, on_conflict="job_hash").execute()
 
-    logger.info(f"[hn_hiring] {len(jobs)} jobs from {len(comments)} comments")
+    logger.info(f"[hn_hiring] {len(jobs)} jobs from {len(comments)} comments (thread {thread_id})")
     return {"count": len(jobs), "source": "hn_hiring"}
