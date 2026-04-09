@@ -136,6 +136,9 @@ def _job_to_supabase_row(job: Job) -> dict:
         "tailoring_model": getattr(job, "tailoring_model", None) or "",
         "cover_letter_model": getattr(job, "cover_letter_model", None) or "",
     }
+    # Include posted_date when the scraper provided it
+    if job.posted_date:
+        row["posted_date"] = job.posted_date
     # Include artifact paths/URLs when populated
     if job.tailored_pdf_path:
         row["tailored_pdf_path"] = Path(job.tailored_pdf_path).name

@@ -404,6 +404,38 @@ def _load_task(task_id: str) -> dict | None:
     return task
 
 
+_s3_client = None
+
+
+def _get_s3():
+    global _s3_client
+    if _s3_client is None:
+        _s3_client = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
+    return _s3_client
+
+
+def _refresh_s3_urls(jobs: list) -> list:
+    """Regenerate presigned URLs from stored S3 keys so they never expire."""
+    bucket = os.environ.get("S3_BUCKET", os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt"))
+    s3 = _get_s3()
+    for job in jobs:
+        for key_field, url_field in [
+            ("resume_s3_key", "resume_s3_url"),
+            ("cover_letter_s3_key", "cover_letter_s3_url"),
+        ]:
+            s3_key = job.get(key_field)
+            if s3_key:
+                try:
+                    job[url_field] = s3.generate_presigned_url(
+                        "get_object",
+                        Params={"Bucket": bucket, "Key": s3_key},
+                        ExpiresIn=7 * 24 * 3600,  # 7 days
+                    )
+                except Exception:
+                    pass  # keep existing URL
+    return jobs
+
+
 def _enqueue_task(task_id: str, user_id: str, task_type: str, payload: dict):
     """Save task to Supabase then send an SQS message (or fall back to threading for local dev)."""
     _save_task(task_id, user_id, {"status": "running", "payload": payload})
@@ -533,8 +565,8 @@ def _dispatch_task(task_type: str, payload: dict, user_id: str = "") -> dict:
         description=payload.get("job_description", ""),
     )
 
-    # Find or create job in dashboard
-    job_id = _find_or_create_job(user_id, payload) if user_id else ""
+    # Find or create job in dashboard — use explicit job_id if provided (from dashboard endpoints)
+    job_id = payload.get("job_id") or (_find_or_create_job(user_id, payload) if user_id else "")
 
     if task_type == "tailor":
         resume_type = payload.get("resume_type", "sre_devops")
@@ -1326,6 +1358,13 @@ def get_dashboard_jobs(
     tailored: Optional[str] = None,
     tier: Optional[str] = None,
     hide_expired: Optional[str] = None,
+    sort_by: Optional[str] = None,
+    sort_order: Optional[str] = None,
+    archetype: Optional[str] = None,
+    seniority: Optional[str] = None,
+    remote: Optional[str] = None,
+    level_fit: Optional[str] = None,
+    skill: Optional[str] = None,
 ):
     """Paginated, filterable job list."""
     if _db is None:
@@ -1351,8 +1390,23 @@ def get_dashboard_jobs(
         filters["tier"] = tier
     if hide_expired and hide_expired.lower() == "true":
         filters["hide_expired"] = True
+    if sort_by:
+        filters["sort_by"] = sort_by
+    if sort_order:
+        filters["sort_order"] = sort_order
+    if archetype:
+        filters["archetype"] = archetype
+    if seniority:
+        filters["seniority"] = seniority
+    if remote:
+        filters["remote"] = remote
+    if level_fit:
+        filters["level_fit"] = level_fit
+    if skill:
+        filters["skill"] = skill
 
     jobs, total = _db.get_jobs(user.id, filters=filters, page=page, per_page=per_page)
+    _refresh_s3_urls(jobs)
     return {"jobs": jobs, "page": page, "per_page": per_page, "total": total}
 
 
@@ -1423,6 +1477,7 @@ def get_single_job(
     )
     if not result or not result.data:
         raise HTTPException(404, "Job not found")
+    _refresh_s3_urls([result.data])
     return result.data
 
 
@@ -1718,6 +1773,36 @@ def update_job_sections(
     return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
 
 
+@app.get("/api/dashboard/skills")
+def get_dashboard_skills(user: AuthUser = Depends(get_current_user)):
+    """Return unique skills from key_matches across non-expired jobs, sorted by frequency."""
+    if _db is None:
+        return {"skills": []}
+
+    from collections import Counter
+    jobs = (
+        _db.client.table("jobs")
+        .select("key_matches")
+        .eq("user_id", user.id)
+        .eq("is_expired", False)
+        .not_.is_("key_matches", "null")
+        .execute()
+    )
+
+    counts: Counter = Counter()
+    for j in jobs.data:
+        for s in j.get("key_matches") or []:
+            counts[s.strip()] += 1
+
+    # Only return skills appearing in 3+ jobs
+    skills = [
+        {"name": name, "count": count}
+        for name, count in counts.most_common()
+        if count >= 3
+    ]
+    return {"skills": skills}
+
+
 @app.get("/api/dashboard/stats")
 def get_dashboard_stats(user: AuthUser = Depends(get_current_user)):
     """Aggregate metrics for the dashboard KPI cards."""
@@ -1827,6 +1912,7 @@ def run_single_job(req: SingleJobRunRequest, user: AuthUser = Depends(get_curren
             "job_title": req.job_title,
             "company": req.company,
             "resume_type": req.resume_type,
+            "skip_scoring": False,
         }),
     )
 
@@ -1857,9 +1943,10 @@ def re_tailor_jobs(req: RetailorRequest, user: AuthUser = Depends(get_current_us
     tiers = ["S", "A"] if req.tier == "SA" else [req.tier]
     jobs = (
         _db.client.table("jobs")
-        .select("job_hash, match_score, score_tier")
+        .select("job_id, job_hash, match_score, score_tier")
         .eq("user_id", user.id)
         .in_("score_tier", tiers)
+        .eq("is_expired", False)
         .is_("resume_s3_url", "null")
         .order("match_score", desc=True)
         .limit(req.max_jobs)
@@ -1885,6 +1972,7 @@ def re_tailor_jobs(req: RetailorRequest, user: AuthUser = Depends(get_current_us
                 input=json.dumps({
                     "user_id": user.id,
                     "job_hash": job["job_hash"],
+                    "job_id": job["job_id"],
                     "skip_scoring": True,
                 }),
             )
@@ -2023,13 +2111,9 @@ def pipeline_execution_status(execution_name: str, user: AuthUser = Depends(get_
 
 @app.post("/api/pipeline/re-tailor/{job_id}", status_code=202)
 def re_tailor_job(job_id: str, user: AuthUser = Depends(get_current_user)):
-    """Re-tailor a job with the latest resume version via Step Functions."""
+    """Re-tailor a job with the latest resume version via Step Functions (or local fallback)."""
     if _db is None:
         raise HTTPException(503, "Database not configured")
-
-    single_arn = os.environ.get("SINGLE_JOB_PIPELINE_ARN")
-    if not single_arn:
-        raise HTTPException(500, "Pipeline not configured")
 
     # Get the job
     job = _db.client.table("jobs").select("*").eq("job_id", job_id).eq("user_id", user.id).execute()
@@ -2040,39 +2124,54 @@ def re_tailor_job(job_id: str, user: AuthUser = Depends(get_current_user)):
     # Save the current resume/cover letter as a version snapshot BEFORE re-tailoring.
     current_version = job.get("resume_version") or 1
     if job.get("resume_s3_url") or job.get("cover_letter_s3_url"):
-        _db.client.table("resume_versions").insert({
-            "user_id": user.id,
-            "job_id": job_id,
-            "version_number": current_version,
-            "resume_s3_url": job.get("resume_s3_url"),
-            "cover_letter_s3_url": job.get("cover_letter_s3_url"),
-            "tailoring_model": job.get("tailoring_model"),
-        }).execute()
-
-    sfn = _get_sfn()
-    execution = sfn.start_execution(
-        stateMachineArn=single_arn,
-        input=json.dumps({
-            "user_id": user.id,
-            "job_description": job.get("description", ""),
-            "job_title": job.get("title", ""),
-            "company": job.get("company", ""),
-            "resume_type": "default",
-            "re_tailor": True,
-            "job_id": job_id,
-        }),
-    )
+        try:
+            _db.client.table("resume_versions").insert({
+                "user_id": user.id,
+                "job_id": job_id,
+                "version_number": current_version,
+                "resume_s3_url": job.get("resume_s3_url"),
+                "cover_letter_s3_url": job.get("cover_letter_s3_url"),
+                "tailoring_model": job.get("tailoring_model"),
+            }).execute()
+        except Exception as e:
+            logger.warning("Failed to save version snapshot for %s: %s", job_id, e)
 
     next_version = current_version + 1
     _db.client.table("jobs").update({
         "resume_version": next_version,
     }).eq("job_id", job_id).execute()
 
-    return {
-        "executionArn": execution["executionArn"],
-        "pollUrl": f"/api/pipeline/status/{execution['executionArn'].split(':')[-1]}",
-        "resume_version": next_version,
-    }
+    single_arn = os.environ.get("SINGLE_JOB_PIPELINE_ARN")
+    if single_arn:
+        # Production path: invoke Step Functions
+        sfn = _get_sfn()
+        execution = sfn.start_execution(
+            stateMachineArn=single_arn,
+            input=json.dumps({
+                "user_id": user.id,
+                "job_hash": job.get("job_hash"),
+                "skip_scoring": True,
+                "job_id": job_id,
+            }),
+        )
+        return {
+            "executionArn": execution["executionArn"],
+            "pollUrl": f"/api/pipeline/status/{execution['executionArn'].split(':')[-1]}",
+            "resume_version": next_version,
+        }
+    else:
+        # Local dev fallback: enqueue as an async task
+        task_id = str(uuid.uuid4())
+        _enqueue_task(task_id, user.id, "tailor", {
+            "job_hash": job.get("job_hash"),
+            "skip_scoring": True,
+            "job_id": job_id,
+        })
+        return {
+            "task_id": task_id,
+            "poll_url": f"/api/tasks/{task_id}",
+            "resume_version": next_version,
+        }
 
 
 class CompileLatexRequest(BaseModel):

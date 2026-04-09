@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
 import { apiGet } from '../api';
-import { LayoutList, LayoutGrid } from 'lucide-react';
+import { LayoutList, LayoutGrid, ArrowUpDown } from 'lucide-react';
 import PipelineStatus from '../components/PipelineStatus';
 import StatsBar from '../components/StatsBar';
 import JobTable from '../components/JobTable';
@@ -12,8 +12,26 @@ import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import { Select } from '../components/ui/Input';
 
-const SOURCES = ['All', 'adzuna', 'linkedin', 'irishjobs', 'jobs_ie', 'gradireland', 'yc', 'hn', 'web'];
+const SOURCES = ['All', 'adzuna', 'linkedin', 'irishjobs', 'jobs_ie', 'gradireland', 'yc', 'hn', 'web', 'greenhouse', 'ashby', 'indeed'];
 const STATUS_OPTIONS = ['All', 'New', 'Applied', 'Interview', 'Offer', 'Rejected', 'Withdrawn', 'Expired'];
+const ARCHETYPES = ['All', 'sre_devops', 'backend', 'fullstack', 'platform_cloud', 'data'];
+const SENIORITIES = ['All', 'Junior/Graduate', 'Mid-Level', 'Senior', 'Staff/Lead'];
+const REMOTE_OPTIONS = ['All', 'Remote', 'Hybrid', 'On-site', 'Unknown'];
+const LEVEL_FITS = ['All', 'exact_match', 'stretch', 'reach', 'overqualified'];
+
+const ARCHETYPE_LABELS = {
+  sre_devops: 'SRE/DevOps', backend: 'Backend', fullstack: 'Full-Stack',
+  platform_cloud: 'Platform/Cloud', data: 'Data',
+};
+const LEVEL_FIT_COLORS = {
+  exact_match: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+  stretch: 'bg-amber-100 text-amber-800 border-amber-300',
+  reach: 'bg-red-100 text-red-800 border-red-300',
+  overqualified: 'bg-sky-100 text-sky-800 border-sky-300',
+};
+const LEVEL_FIT_LABELS = {
+  exact_match: 'Match', stretch: 'Stretch', reach: 'Reach', overqualified: 'Over',
+};
 
 function getViewPreference() {
   try { return localStorage.getItem('naukribaba_view') || 'list'; } catch { return 'list'; }
@@ -61,10 +79,11 @@ function CardView({ jobs, onStatusChange, onDelete }) {
                   {decodeHtml(job.title)}
                 </p>
                 <p className="text-xs text-stone-500 mt-0.5 truncate">
-                  {decodeHtml(job.company)} {job.location && `\u00b7 ${job.location}`}
-                  {job.first_seen && (
-                    <span className="ml-1.5 text-stone-400">
-                      \u00b7 {new Date(job.first_seen).toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })}
+                  {decodeHtml(job.company)} {job.location && `· ${job.location}`}
+                  {(job.posted_date || job.first_seen) && (
+                    <span className="ml-1.5 text-stone-400" title={job.posted_date ? 'Date posted by company' : 'Date first seen by NaukriBaba'}>
+                      · {job.posted_date ? 'Posted ' : 'Seen '}
+                      {new Date(job.posted_date || job.first_seen).toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })}
                     </span>
                   )}
                 </p>
@@ -102,6 +121,21 @@ function CardView({ jobs, onStatusChange, onDelete }) {
                 <span className="border border-stone-300 text-stone-500 font-mono text-[10px] font-bold px-1.5 py-0.5">
                   {job.source || '--'}
                 </span>
+                {job.archetype && (
+                  <span className="border border-indigo-300 bg-indigo-50 text-indigo-700 font-mono text-[10px] font-bold px-1.5 py-0.5">
+                    {ARCHETYPE_LABELS[job.archetype] || job.archetype}
+                  </span>
+                )}
+                {job.level_fit && job.level_fit !== 'exact_match' && (
+                  <span className={`font-mono text-[10px] font-bold px-1.5 py-0.5 border ${LEVEL_FIT_COLORS[job.level_fit] || 'border-stone-300 bg-stone-100'}`}>
+                    {LEVEL_FIT_LABELS[job.level_fit] || job.level_fit}
+                  </span>
+                )}
+                {job.remote && job.remote !== 'Unknown' && (
+                  <span className="border border-stone-300 text-stone-500 font-mono text-[10px] font-bold px-1.5 py-0.5">
+                    {job.remote}
+                  </span>
+                )}
                 <ModelBadge model={job.tailoring_model} />
               </div>
               {job.apply_url && job.apply_url !== 'Apply' && (
@@ -149,6 +183,15 @@ export default function Dashboard() {
   const [tailoredOnly, setTailoredOnly] = useState(false);
   const [tierFilter, setTierFilter] = useState('S');
   const [hideExpired, setHideExpired] = useState(true);
+  const [archetypeFilter, setArchetypeFilter] = useState('All');
+  const [seniorityFilter, setSeniorityFilter] = useState('All');
+  const [remoteFilter, setRemoteFilter] = useState('All');
+  const [levelFitFilter, setLevelFitFilter] = useState('All');
+  const [skillFilter, setSkillFilter] = useState('');
+  const [availableSkills, setAvailableSkills] = useState([]);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [sortBy, setSortBy] = useState('first_seen');
+  const [sortOrder, setSortOrder] = useState('desc');
 
   // View mode: 'list' or 'card'
   const [viewMode, setViewMode] = useState(getViewPreference);
@@ -162,8 +205,8 @@ export default function Dashboard() {
   const [filterVersion, setFilterVersion] = useState(0);
 
   // Use refs for filter values so fetchJobs stays stable across filter changes
-  const filtersRef = useRef({ statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired });
-  filtersRef.current = { statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired };
+  const filtersRef = useRef({ statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter });
+  filtersRef.current = { statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter };
 
   const fetchJobs = useCallback(async () => {
     setLoading(true);
@@ -180,6 +223,13 @@ export default function Dashboard() {
       if (f.tailoredOnly) params.set('tailored', 'true');
       if (f.tierFilter !== 'All') params.set('tier', f.tierFilter);
       if (f.hideExpired) params.set('hide_expired', 'true');
+      if (f.sortBy) params.set('sort_by', f.sortBy);
+      if (f.sortOrder) params.set('sort_order', f.sortOrder);
+      if (f.archetypeFilter && f.archetypeFilter !== 'All') params.set('archetype', f.archetypeFilter);
+      if (f.seniorityFilter && f.seniorityFilter !== 'All') params.set('seniority', f.seniorityFilter);
+      if (f.remoteFilter && f.remoteFilter !== 'All') params.set('remote', f.remoteFilter);
+      if (f.levelFitFilter && f.levelFitFilter !== 'All') params.set('level_fit', f.levelFitFilter);
+      if (f.skillFilter && f.skillFilter.trim()) params.set('skill', f.skillFilter);
 
       const data = await apiGet(`/api/dashboard/jobs?${params.toString()}`);
       setJobs(data.jobs || []);
@@ -199,6 +249,15 @@ export default function Dashboard() {
       console.error('Failed to fetch stats:', err);
     }
   }, []);
+
+  // Fetch available skills for filter dropdown
+  useEffect(() => {
+    if (user) {
+      apiGet('/api/dashboard/skills').then((data) => {
+        if (data?.skills) setAvailableSkills(data.skills);
+      }).catch(() => {});
+    }
+  }, [user]);
 
   // Fetch only on mount and explicit filter apply (not on every keystroke)
   useEffect(() => {
@@ -359,10 +418,98 @@ export default function Dashboard() {
             </button>
           </div>
 
+          <button
+            onClick={() => setShowAdvanced((v) => !v)}
+            className="text-xs font-bold text-stone-500 uppercase tracking-wider hover:text-black transition-colors cursor-pointer underline"
+          >
+            {showAdvanced ? '− Less' : '+ Advanced'}
+          </button>
+
           <Button variant="primary" size="md" onClick={handleFilterApply}>
             Apply Filters
           </Button>
         </div>
+
+        {/* Advanced Filters */}
+        {showAdvanced && (
+          <div className="flex flex-wrap items-end gap-4 mt-4 pt-4 border-t border-stone-200">
+            <Select
+              label="Archetype"
+              value={archetypeFilter}
+              onChange={(e) => { setArchetypeFilter(e.target.value); handleFilterApply(); }}
+              className="w-36"
+            >
+              {ARCHETYPES.map((a) => (
+                <option key={a} value={a}>{a === 'All' ? 'All' : ARCHETYPE_LABELS[a] || a}</option>
+              ))}
+            </Select>
+
+            <Select
+              label="Seniority"
+              value={seniorityFilter}
+              onChange={(e) => { setSeniorityFilter(e.target.value); handleFilterApply(); }}
+              className="w-36"
+            >
+              {SENIORITIES.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </Select>
+
+            <Select
+              label="Remote"
+              value={remoteFilter}
+              onChange={(e) => { setRemoteFilter(e.target.value); handleFilterApply(); }}
+              className="w-32"
+            >
+              {REMOTE_OPTIONS.map((r) => (
+                <option key={r} value={r}>{r}</option>
+              ))}
+            </Select>
+
+            <Select
+              label="Level Fit"
+              value={levelFitFilter}
+              onChange={(e) => { setLevelFitFilter(e.target.value); handleFilterApply(); }}
+              className="w-36"
+            >
+              {LEVEL_FITS.map((l) => (
+                <option key={l} value={l}>{l === 'All' ? 'All' : LEVEL_FIT_LABELS[l] || l}</option>
+              ))}
+            </Select>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">Skill</label>
+              <div className="relative">
+                <input
+                  list="skill-options"
+                  value={skillFilter}
+                  onChange={(e) => {
+                    setSkillFilter(e.target.value);
+                    if (!e.target.value || availableSkills.some((s) => s.name === e.target.value)) {
+                      handleFilterApply();
+                    }
+                  }}
+                  placeholder="Type to search..."
+                  className="bg-white border-2 border-black px-2 py-1 text-xs font-heading font-bold w-44
+                    focus:outline-none focus:shadow-brutal-yellow placeholder:text-stone-400 placeholder:font-normal"
+                />
+                {skillFilter && (
+                  <button
+                    onClick={() => { setSkillFilter(''); handleFilterApply(); }}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 text-stone-400 hover:text-black text-sm"
+                  >
+                    ✕
+                  </button>
+                )}
+                <datalist id="skill-options">
+                  {availableSkills.map((s) => (
+                    <option key={s.name} value={s.name}>{s.name} ({s.count})</option>
+                  ))}
+                </datalist>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Error */}
@@ -427,6 +574,34 @@ export default function Dashboard() {
             <p className="text-xs font-bold text-stone-400 uppercase tracking-wider">
               {total} job{total !== 1 ? 's' : ''}{tierFilter !== 'All' && ` in Tier ${tierFilter}`}
             </p>
+            <div className="flex items-center gap-3">
+              {/* Sort control */}
+              <div className="flex items-center gap-1.5">
+                <ArrowUpDown size={14} className="text-stone-400" />
+                <select
+                  value={`${sortBy}:${sortOrder}`}
+                  onChange={(e) => {
+                    const [field, order] = e.target.value.split(':');
+                    setSortBy(field);
+                    setSortOrder(order);
+                    setPage(1);
+                    setFilterVersion((v) => v + 1);
+                  }}
+                  className="bg-white border-2 border-black px-2 py-1 text-xs font-heading font-bold
+                    focus:outline-none focus:shadow-brutal-yellow cursor-pointer"
+                >
+                  <option value="match_score:desc">Score (highest)</option>
+                  <option value="match_score:asc">Score (lowest)</option>
+                  <option value="first_seen:desc">Seen (newest)</option>
+                  <option value="first_seen:asc">Seen (oldest)</option>
+                  <option value="posted_date:desc">Posted (newest)</option>
+                  <option value="posted_date:asc">Posted (oldest)</option>
+                  <option value="company:asc">Company (A-Z)</option>
+                  <option value="company:desc">Company (Z-A)</option>
+                  <option value="title:asc">Title (A-Z)</option>
+                  <option value="title:desc">Title (Z-A)</option>
+                </select>
+              </div>
             <div className="flex items-center border-2 border-black">
               <button
                 onClick={() => toggleView('list')}
@@ -451,10 +626,22 @@ export default function Dashboard() {
                 <LayoutGrid size={16} />
               </button>
             </div>
+            </div>
           </div>
 
           {viewMode === 'list' ? (
-            <JobTable jobs={jobs} onStatusChange={handleStatusChange} onDelete={handleDelete} />
+            <JobTable
+              jobs={jobs}
+              onStatusChange={handleStatusChange}
+              onDelete={handleDelete}
+              sortBy={sortBy}
+              sortOrder={sortOrder}
+              onSortChange={(field, order) => {
+                setSortBy(field);
+                setSortOrder(order);
+                setFilterVersion((v) => v + 1);
+              }}
+            />
           ) : (
             <CardView jobs={jobs} onStatusChange={handleStatusChange} onDelete={handleDelete} />
           )}

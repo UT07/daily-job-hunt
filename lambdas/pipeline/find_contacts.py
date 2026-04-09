@@ -66,16 +66,48 @@ def _extract_contacts_from_results(results: list, role_name: str, role_type: str
                 "role_type": role_type,
                 "headline": headline,
                 "why": f"{role_name} at {company} — likely involved in hiring for this role",
-                "message": (
-                    f"Hi {first_name}, I noticed a role at {company} that aligns "
-                    f"well with my background in cloud infrastructure and backend "
-                    f"engineering. I would appreciate the chance to connect and "
-                    f"learn more about the team."
-                ),
+                "message": "",  # Filled by _generate_messages below
                 "profile_url": url,
             })
 
     return contacts[:3]  # Max 3 per role
+
+
+def _generate_messages(contacts: list, company: str, title: str, job_hash: str):
+    """Generate personalized connection messages for each contact using AI."""
+    from ai_helper import ai_complete
+
+    for contact in contacts:
+        first_name = contact["name"].split()[0] if contact["name"] else "there"
+        role_type = contact.get("role_type", "")
+        prompt = f"""Write a LinkedIn connection message (max 280 characters) from Utkarsh Singh to {contact['name']} ({contact['role']}) at {company}.
+
+Context: Utkarsh is applying for the "{title}" role at {company}. He has 3+ years of experience as a Software Engineer at Clover IT Services (Python, AWS, microservices), an MSc in Cloud Computing, and is based in Dublin.
+
+Rules:
+- Address them by first name ({first_name})
+- Reference the SPECIFIC role title ("{title}")
+- Mention ONE relevant skill that matches the role
+- Keep it under 280 characters total
+- Sound human, not templated
+- Do NOT use "I am excited" or "I would love to" or "leverage" or "aligns with"
+- Do NOT mention being a student or recent graduate
+
+Return ONLY the message text, nothing else."""
+
+        try:
+            result = ai_complete(prompt, temperature=0.7, max_tokens=100)
+            msg = result["content"].strip().strip('"').strip("'")
+            if len(msg) > 280:
+                msg = msg[:277] + "..."
+            contact["message"] = msg
+        except Exception as e:
+            logger.warning(f"[contacts] AI message failed for {contact['name']}: {e}")
+            contact["message"] = (
+                f"Hi {first_name}, I saw the {title} opening at {company}. "
+                f"With 3 years building production services in Python and AWS, "
+                f"I think there is a strong fit. Would appreciate connecting."
+            )
 
 
 def handler(event, context):
@@ -122,6 +154,10 @@ def handler(event, context):
             all_contacts.extend(contacts)
         except Exception as e:
             logger.warning(f"[contacts] Apify search failed for {company} {role_name}: {e}")
+
+    # Generate personalized messages for each contact
+    if all_contacts:
+        _generate_messages(all_contacts, company, job.get("title", ""), job_hash)
 
     # Deduplicate by URL
     seen = set()

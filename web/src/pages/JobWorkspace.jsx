@@ -8,6 +8,60 @@ function decodeHtml(text) {
   const doc = new DOMParser().parseFromString(text, 'text/html');
   return doc.body.textContent || '';
 }
+
+function FormattedDescription({ text }) {
+  if (!text) return null;
+  const decoded = decodeHtml(text);
+  const paragraphs = decoded.split(/\n{2,}/);
+
+  return (
+    <div className="space-y-3">
+      {paragraphs.map((para, i) => {
+        const lines = para.split('\n').filter(Boolean);
+        const isList = lines.length > 1 && lines.every((l) => /^\s*[-•●◦▪*]\s/.test(l));
+        if (isList) {
+          return (
+            <ul key={i} className="list-disc list-outside ml-5 space-y-1">
+              {lines.map((line, j) => (
+                <li key={j} className="text-sm text-stone-700 leading-relaxed">
+                  {line.replace(/^\s*[-•●◦▪*]\s*/, '')}
+                </li>
+              ))}
+            </ul>
+          );
+        }
+        const firstLine = lines[0]?.trim() || '';
+        const isHeader = (
+          firstLine.length < 60 &&
+          (firstLine.endsWith(':') || firstLine === firstLine.toUpperCase()) &&
+          firstLine.length > 2
+        );
+        if (isHeader && lines.length > 1) {
+          return (
+            <div key={i}>
+              <p className="text-sm font-bold text-stone-900 mb-1">{firstLine}</p>
+              {lines.slice(1).map((line, j) => {
+                if (/^\s*[-•●◦▪*]\s/.test(line)) {
+                  return (
+                    <li key={j} className="list-disc ml-5 text-sm text-stone-700 leading-relaxed">
+                      {line.replace(/^\s*[-•●◦▪*]\s*/, '')}
+                    </li>
+                  );
+                }
+                return <p key={j} className="text-sm text-stone-700 leading-relaxed">{line}</p>;
+              })}
+            </div>
+          );
+        }
+        return (
+          <p key={i} className="text-sm text-stone-700 leading-relaxed">
+            {para}
+          </p>
+        );
+      })}
+    </div>
+  );
+}
 import { ArrowLeft, Pencil, Save, X } from 'lucide-react';
 import Tabs from '../components/ui/Tabs';
 import Button from '../components/ui/Button';
@@ -398,8 +452,8 @@ function ResearchTab({ job }) {
       {job.description && (
         <div className="border-2 border-black bg-white p-4">
           <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mb-2">Job Description</p>
-          <div className="text-sm text-stone-700 leading-relaxed max-h-96 overflow-y-auto font-mono whitespace-pre-wrap">
-            {decodeHtml(job.description)}
+          <div className="max-h-96 overflow-y-auto">
+            <FormattedDescription text={job.description} />
           </div>
         </div>
       )}
@@ -871,6 +925,14 @@ export default function JobWorkspace() {
                   </span>
                 </div>
               )}
+              {job.posted_date && (
+                <div>
+                  <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mr-2">Posted</span>
+                  <span className="font-mono text-xs text-stone-600">
+                    {new Date(job.posted_date).toLocaleDateString('en-IE', { day: '2-digit', month: 'short', year: 'numeric' })}
+                  </span>
+                </div>
+              )}
               {job.first_seen && (
                 <div>
                   <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mr-2">Found</span>
@@ -918,9 +980,9 @@ export default function JobWorkspace() {
             {job.description && (
               <div>
                 <h3 className="text-xs font-bold text-stone-400 uppercase tracking-wider mb-2">Job Description</h3>
-                <p className="text-sm text-stone-700 leading-relaxed whitespace-pre-wrap max-h-[600px] overflow-y-auto">
-                  {decodeHtml(job.description)}
-                </p>
+                <div className="max-h-[600px] overflow-y-auto">
+                  <FormattedDescription text={job.description} />
+                </div>
               </div>
             )}
           </div>

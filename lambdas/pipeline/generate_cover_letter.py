@@ -17,11 +17,32 @@ COVER_LETTER_SYSTEM_PROMPT = r"""You are writing a cover letter as a real person
 
 STRUCTURE (3-4 paragraphs, 250-350 words):
 
-Paragraph 1 (3 sentences max): Open with something specific about the company. Not generic praise. Show you actually know what they do. Then state what role you want and your strongest qualification in one sentence.
+Paragraph 1 (3 sentences max): Connect YOUR experience to THEIR specific work. Do NOT describe what the company does — they already know. Do NOT say "I want to work as" or "I am applying for" — these are weak student phrases.
+Good example: "Building reliable payment infrastructure at scale is exactly what I did at Clover for 3 years. The DevOps Engineer role caught my attention because your team owns the CI/CD pipeline for the entire platform."
+Bad example: "SearchWorks is modernizing core payment platforms. I want to work as a DevOps Engineer."
+Lead with the CONNECTION between your experience and their work, not a description of their company.
 
-Paragraph 2 (6-8 sentences): This is the meat. Tell a story about your most relevant work. Pick TWO achievements, one from work experience and one from projects. Use real numbers. "I built X which did Y resulting in Z." Connect each to what this team specifically needs. Do not list technologies. Show the impact and what you learned.
+Paragraph 2 (6-8 sentences): This is the meat. Map TWO specific JD requirements to YOUR achievements:
+- Quote or paraphrase a JD requirement, then connect it to a specific metric from your resume.
+- Pattern: "Your team [JD requirement]. At Clover, I [specific achievement with metric]."
+- Example: "Your team ships observability tooling at scale. At Clover, I built monitoring dashboards across 8 microservices that reduced MTTR by 35 percent."
+- Use ONLY metrics that appear VERBATIM in the resume provided below. Do NOT invent, extrapolate, or round numbers.
+- ALLOWED METRICS (these appear in the resume — use ONLY these, with CORRECT context):
+  * "35%" = MTTR reduction (incident response time), NOT code quality
+  * "85%" = release lead time reduction (3 days to 4-6 hours), NOT code quality or test coverage
+  * "99.9%" = uptime SLA, NOT availability of anything else
+  * "30%" = weekly report preparation time reduction, NOT deployment speed
+  * "22%" = infrastructure cost reduction, NOT deployment speed
+  * "8 production microservices" = services built at Clover
+  * "3,000+ tests" = Jest test count, NOT pytest
+  * "14 months" = time to promotion at Clover
+  * "3 AWS regions" = multi-region deployment scope
+  * "4-6 hours" = release lead time AFTER improvement (down from 3 days)
+- Do NOT reattach a metric to a different achievement. "35%" is ALWAYS about MTTR, never about anything else.
+- If a JD requirement doesn't map to a metric in the resume, describe the achievement WITHOUT a number.
+- Do NOT list technologies. Show impact through specific stories.
 
-Paragraph 3 (3-4 sentences): Mention one more relevant skill or project briefly. Say you are available and based in Dublin. End with a confident forward-looking sentence. No begging.
+Paragraph 3 (3-4 sentences): Mention ONE more relevant project by name (e.g., Purrrfect Keys, WhatsTheCraic) with a specific result. Say you are available and based in Dublin. End with a confident, forward-looking sentence. No begging.
 
 VOICE:
 - Write in first person. Vary sentence length. Some short. Some a bit longer to explain something specific.
@@ -30,7 +51,7 @@ VOICE:
 
 ABSOLUTE BANS (violating ANY of these means the letter is rejected):
 - NO dashes of any kind. Not em-dashes. Not en-dashes. Not double hyphens. Use periods or commas instead.
-- NO "I am excited", "I am writing to", "I believe", "I am confident", "I would welcome", "I look forward to"
+- NO "I am excited", "I am writing to", "I believe", "I am confident", "I would welcome", "I look forward to", "I want to work as", "I am applying for"
 - NO "leverage", "utilize", "passionate", "thrilled", "synergy", "aligns with", "keen to", "eager to"
 - NO semicolons. Use periods.
 - NO sentences starting with "With" or "As a"
@@ -55,6 +76,8 @@ BANNED_PHRASES = [
     "dynamic team", "proven track record", "highly motivated", "self-motivated",
     "results-driven", "detail-oriented", "strong background",
     "i am confident", "i would welcome", "i look forward to",
+    "i want to work as", "i am applying for", "will benefit from my",
+    "contribute to the company", "in the next 14 months",
 ]
 
 DASH_PATTERN = re.compile(r"[–—]|--")
@@ -77,6 +100,45 @@ def _validate_cover_letter(text: str) -> dict:
         errors.append("dashes: em-dash, en-dash, or double hyphen found")
 
     return {"valid": len(errors) == 0, "errors": errors, "word_count": word_count}
+
+
+# Metrics that actually exist in the base resume — anything else is fabrication
+_ALLOWED_METRICS = {
+    "35", "85", "99.9", "30", "22", "66",  # percentages
+    "8", "3000", "3,000", "14",  # counts
+    "3",  # years, regions
+}
+
+
+def _check_metric_fabrication(text: str) -> list[str]:
+    """Check if the cover letter uses specific percentages or numbers not in the base resume."""
+    errors = []
+    # Find all percentage claims like "42 percent", "42%", "68%"
+    import re
+    pct_matches = re.findall(r'(\d+(?:\.\d+)?)\s*(?:percent|%)', text.lower())
+    for num in pct_matches:
+        if num not in _ALLOWED_METRICS:
+            errors.append(f"fabricated_metric: '{num}%' not in base resume (allowed: 35%, 85%, 99.9%, 30%, 22%, 66%)")
+
+    return errors
+
+
+def _check_opening_quality(text: str, company: str) -> list[str]:
+    """Check that the cover letter doesn't open by describing the company generically."""
+    errors = []
+    first_sentence = text.split(".")[0].lower() if text else ""
+    company_lower = company.lower()
+    bad_patterns = [
+        f"{company_lower} is a", f"{company_lower} specializes",
+        f"{company_lower} is an", f"{company_lower} provides",
+        f"{company_lower} offers", "a company that",
+        "i want to work as", "i am writing to",
+        "this project taught me", "these experiences have given me",
+    ]
+    for pattern in bad_patterns:
+        if pattern in first_sentence:
+            errors.append(f"bad_opening: '{pattern}' — open with what interests you about their WORK, not what the company IS")
+    return errors
 
 
 # ── LaTeX template ────────────────────────────────────────────────────────────
@@ -192,20 +254,21 @@ Do NOT include the header, date, salutation, or closing — I'll add those from 
 Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
 
     def _generate_body(prompt: str) -> tuple[str, str, str]:
-        """Call AI and return (body_text, provider, model)."""
-        if light_touch:
+        """Call AI and return (body_text, provider, model). ALWAYS uses council."""
+        try:
+            result = council_complete(
+                prompt=prompt,
+                system=COVER_LETTER_SYSTEM_PROMPT,
+                task_description=(
+                    f"Write cover letter for {job['title']} at {job['company']}. "
+                    "Must open with something specific about their WORK, not describe the company. "
+                    "Each paragraph must map a JD requirement to a specific resume achievement with a real metric."
+                ),
+                n_generators=2,
+                temperature=0.7,
+            )
+        except RuntimeError:
             result = ai_complete(prompt, system=COVER_LETTER_SYSTEM_PROMPT, temperature=0.7)
-        else:
-            try:
-                result = council_complete(
-                    prompt=prompt,
-                    system=COVER_LETTER_SYSTEM_PROMPT,
-                    task_description=f"Write cover letter body for {job['title']} at {job['company']}",
-                    n_generators=2,
-                    temperature=0.7,
-                )
-            except RuntimeError:
-                result = ai_complete(prompt, system=COVER_LETTER_SYSTEM_PROMPT, temperature=0.7)
         return result["content"].strip(), result.get("provider", "council"), result.get("model", "consensus")
 
     # Generate with validation + retry (max 2 retries)
@@ -214,6 +277,13 @@ Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
     best_errors: list[str] = []
 
     validation = _validate_cover_letter(body_text)
+    # Also check opening quality and metric fabrication
+    opening_issues = _check_opening_quality(body_text, job.get("company", ""))
+    metric_issues = _check_metric_fabrication(body_text)
+    if opening_issues or metric_issues:
+        validation["errors"].extend(opening_issues)
+        validation["errors"].extend(metric_issues)
+        validation["valid"] = False
     if not validation["valid"]:
         best_errors = validation["errors"]
         logger.warning(f"[cover_letter] Validation failed for {job_hash}: {validation['errors']}")

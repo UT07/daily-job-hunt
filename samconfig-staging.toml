@@ -1,0 +1,12 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "naukribaba-staging"
+s3_bucket = "utkarsh-job-hunt"
+s3_prefix = "sam-artifacts-staging"
+region = "eu-west-1"
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+# NOTE: staging needs its own parameter_overrides with staging API keys
+# and a separate Supabase project. Copy parameter_overrides from samconfig.toml
+# and update the Supabase URL/key + any other staging-specific values.

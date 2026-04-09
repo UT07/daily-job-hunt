@@ -1005,7 +1005,7 @@ Resources:
                       {
                         "Variable": "$.skip_cover_letter",
                         "BooleanEquals": true,
-                        "Next": "SaveJob"
+                        "Next": "ShouldFindContacts"
                       }
                     ],
                     "Default": "GenerateCoverLetter"
@@ -1020,7 +1020,7 @@ Resources:
                     },
                     "ResultPath": "$.cover_letter_result",
                     "Next": "CompileCoverLetter",
-                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SaveJob"}]
+                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "ShouldFindContacts"}]
                   },
                   "CompileCoverLetter": {
                     "Type": "Task",
@@ -1032,6 +1032,29 @@ Resources:
                       "doc_type": "cover_letter"
                     },
                     "ResultPath": "$.cover_compile_result",
+                    "Next": "ShouldFindContacts",
+                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "ShouldFindContacts"}]
+                  },
+                  "ShouldFindContacts": {
+                    "Type": "Choice",
+                    "Choices": [
+                      {
+                        "Variable": "$.skip_contacts",
+                        "BooleanEquals": true,
+                        "Next": "SaveJob"
+                      }
+                    ],
+                    "Default": "FindContacts"
+                  },
+                  "FindContacts": {
+                    "Type": "Task",
+                    "Resource": "${FindContactsFunction.Arn}",
+                    "Parameters": {
+                      "job_hash.$": "$.job_hash",
+                      "user_id.$": "$.user_id",
+                      "light_touch.$": "$.light_touch"
+                    },
+                    "ResultPath": "$.contacts_result",
                     "Next": "SaveJob",
                     "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SaveJob"}]
                   },
