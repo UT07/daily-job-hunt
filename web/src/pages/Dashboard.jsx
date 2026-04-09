@@ -406,16 +406,16 @@ export default function Dashboard() {
             </button>
           </div>
 
-          <Button variant="primary" size="md" onClick={handleFilterApply}>
-            Apply Filters
-          </Button>
-
           <button
             onClick={() => setShowAdvanced((v) => !v)}
             className="text-xs font-bold text-stone-500 uppercase tracking-wider hover:text-black transition-colors cursor-pointer underline"
           >
             {showAdvanced ? '− Less' : '+ Advanced'}
           </button>
+
+          <Button variant="primary" size="md" onClick={handleFilterApply}>
+            Apply Filters
+          </Button>
         </div>
 
         {/* Advanced Filters */}

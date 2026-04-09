@@ -1833,6 +1833,7 @@ def run_single_job(req: SingleJobRunRequest, user: AuthUser = Depends(get_curren
             "job_title": req.job_title,
             "company": req.company,
             "resume_type": req.resume_type,
+            "skip_scoring": False,
         }),
     )
 
@@ -1866,6 +1867,7 @@ def re_tailor_jobs(req: RetailorRequest, user: AuthUser = Depends(get_current_us
         .select("job_hash, match_score, score_tier")
         .eq("user_id", user.id)
         .in_("score_tier", tiers)
+        .eq("is_expired", False)
         .is_("resume_s3_url", "null")
         .order("match_score", desc=True)
         .limit(req.max_jobs)
@@ -2067,11 +2069,8 @@ def re_tailor_job(job_id: str, user: AuthUser = Depends(get_current_user)):
             stateMachineArn=single_arn,
             input=json.dumps({
                 "user_id": user.id,
-                "job_description": job.get("description", ""),
-                "job_title": job.get("title", ""),
-                "company": job.get("company", ""),
-                "resume_type": job.get("matched_resume") or "default",
-                "re_tailor": True,
+                "job_hash": job.get("job_hash"),
+                "skip_scoring": True,
                 "job_id": job_id,
             }),
         )
@@ -2084,11 +2083,8 @@ def re_tailor_job(job_id: str, user: AuthUser = Depends(get_current_user)):
         # Local dev fallback: enqueue as an async task
         task_id = str(uuid.uuid4())
         _enqueue_task(task_id, user.id, "tailor", {
-            "job_description": job.get("description", ""),
-            "job_title": job.get("title", ""),
-            "company": job.get("company", ""),
-            "resume_type": job.get("matched_resume") or "default",
-            "re_tailor": True,
+            "job_hash": job.get("job_hash"),
+            "skip_scoring": True,
             "job_id": job_id,
         })
         return {
