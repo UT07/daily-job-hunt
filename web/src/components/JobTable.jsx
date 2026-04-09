@@ -412,8 +412,11 @@ export default function JobTable({ jobs, onStatusChange, onDelete }) {
                 className={`bg-white border-b border-stone-200 hover:bg-yellow-light transition-colors ${getRowDimming(job)}`}
               >
                 {/* Date */}
-                <td className="px-3 py-2.5 text-stone-400 whitespace-nowrap text-xs font-mono">
-                  {job.first_seen ? new Date(job.first_seen).toLocaleDateString('en-IE', { day: '2-digit', month: 'short' }) : '--'}
+                <td className="px-3 py-2.5 text-stone-400 whitespace-nowrap text-xs font-mono"
+                    title={job.posted_date ? 'Date posted by company' : 'Date first seen by NaukriBaba'}>
+                  {(job.posted_date || job.first_seen)
+                    ? new Date(job.posted_date || job.first_seen).toLocaleDateString('en-IE', { day: '2-digit', month: 'short' })
+                    : '--'}
                 </td>
 
                 {/* Score */}

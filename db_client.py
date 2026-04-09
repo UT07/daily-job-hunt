@@ -214,7 +214,7 @@ class SupabaseClient:
         # Sorting — supports sort_by and sort_order from frontend
         sort_by = filters.get("sort_by", "first_seen") if filters else "first_seen"
         sort_order = filters.get("sort_order", "desc") if filters else "desc"
-        valid_sort_fields = {"first_seen", "match_score", "title", "company", "application_status"}
+        valid_sort_fields = {"first_seen", "match_score", "title", "company", "application_status", "posted_date"}
         if sort_by not in valid_sort_fields:
             sort_by = "first_seen"
 

@@ -871,6 +871,14 @@ export default function JobWorkspace() {
                   </span>
                 </div>
               )}
+              {job.posted_date && (
+                <div>
+                  <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mr-2">Posted</span>
+                  <span className="font-mono text-xs text-stone-600">
+                    {new Date(job.posted_date).toLocaleDateString('en-IE', { day: '2-digit', month: 'short', year: 'numeric' })}
+                  </span>
+                </div>
+              )}
               {job.first_seen && (
                 <div>
                   <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider mr-2">Found</span>

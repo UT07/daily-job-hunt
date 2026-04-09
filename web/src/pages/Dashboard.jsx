@@ -62,9 +62,10 @@ function CardView({ jobs, onStatusChange, onDelete }) {
                 </p>
                 <p className="text-xs text-stone-500 mt-0.5 truncate">
                   {decodeHtml(job.company)} {job.location && `· ${job.location}`}
-                  {job.first_seen && (
-                    <span className="ml-1.5 text-stone-400">
-                      · {new Date(job.first_seen).toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })}
+                  {(job.posted_date || job.first_seen) && (
+                    <span className="ml-1.5 text-stone-400" title={job.posted_date ? 'Date posted by company' : 'Date first seen by NaukriBaba'}>
+                      · {job.posted_date ? 'Posted ' : 'Seen '}
+                      {new Date(job.posted_date || job.first_seen).toLocaleDateString('en-IE', { day: 'numeric', month: 'short' })}
                     </span>
                   )}
                 </p>
@@ -449,8 +450,10 @@ export default function Dashboard() {
                 >
                   <option value="match_score:desc">Score (highest)</option>
                   <option value="match_score:asc">Score (lowest)</option>
-                  <option value="first_seen:desc">Date (newest)</option>
-                  <option value="first_seen:asc">Date (oldest)</option>
+                  <option value="first_seen:desc">Seen (newest)</option>
+                  <option value="first_seen:asc">Seen (oldest)</option>
+                  <option value="posted_date:desc">Posted (newest)</option>
+                  <option value="posted_date:asc">Posted (oldest)</option>
                   <option value="company:asc">Company (A-Z)</option>
                   <option value="company:desc">Company (Z-A)</option>
                   <option value="title:asc">Title (A-Z)</option>
