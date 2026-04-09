@@ -533,8 +533,8 @@ def _dispatch_task(task_type: str, payload: dict, user_id: str = "") -> dict:
         description=payload.get("job_description", ""),
     )
 
-    # Find or create job in dashboard
-    job_id = _find_or_create_job(user_id, payload) if user_id else ""
+    # Find or create job in dashboard — use explicit job_id if provided (from dashboard endpoints)
+    job_id = payload.get("job_id") or (_find_or_create_job(user_id, payload) if user_id else "")
 
     if task_type == "tailor":
         resume_type = payload.get("resume_type", "sre_devops")
