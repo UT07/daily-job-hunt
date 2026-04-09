@@ -211,8 +211,15 @@ class SupabaseClient:
             if filters.get("hide_expired"):
                 query = query.eq("is_expired", False)
 
+        # Sorting — supports sort_by and sort_order from frontend
+        sort_by = filters.get("sort_by", "first_seen") if filters else "first_seen"
+        sort_order = filters.get("sort_order", "desc") if filters else "desc"
+        valid_sort_fields = {"first_seen", "match_score", "title", "company", "application_status"}
+        if sort_by not in valid_sort_fields:
+            sort_by = "first_seen"
+
         offset = (page - 1) * per_page
-        query = query.order("first_seen", desc=True).range(offset, offset + per_page - 1)
+        query = query.order(sort_by, desc=(sort_order == "desc")).range(offset, offset + per_page - 1)
 
         result = query.execute()
         total = result.count if result.count is not None else len(result.data)
