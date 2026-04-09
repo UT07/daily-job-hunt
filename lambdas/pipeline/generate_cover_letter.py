@@ -24,8 +24,19 @@ Paragraph 2 (6-8 sentences): This is the meat. Map TWO specific JD requirements 
 - Pattern: "Your team [JD requirement]. At Clover, I [specific achievement with metric]."
 - Example: "Your team ships observability tooling at scale. At Clover, I built monitoring dashboards across 8 microservices that reduced MTTR by 35 percent."
 - Use ONLY metrics that appear VERBATIM in the resume provided below. Do NOT invent, extrapolate, or round numbers.
-- ALLOWED METRICS (these appear in the resume — use ONLY these): "35%", "85%", "99.9%", "30%", "22%", "8 production microservices", "3,000+ tests", "14 months", "3 AWS regions", "4-6 hours".
-- If a JD requirement doesn't map to a metric in the resume, describe the achievement WITHOUT a number. Example: "I built monitoring dashboards that significantly reduced incident response time" (not "reduced by 42%").
+- ALLOWED METRICS (these appear in the resume — use ONLY these, with CORRECT context):
+  * "35%" = MTTR reduction (incident response time), NOT code quality
+  * "85%" = release lead time reduction (3 days to 4-6 hours), NOT code quality or test coverage
+  * "99.9%" = uptime SLA, NOT availability of anything else
+  * "30%" = weekly report preparation time reduction, NOT deployment speed
+  * "22%" = infrastructure cost reduction, NOT deployment speed
+  * "8 production microservices" = services built at Clover
+  * "3,000+ tests" = Jest test count, NOT pytest
+  * "14 months" = time to promotion at Clover
+  * "3 AWS regions" = multi-region deployment scope
+  * "4-6 hours" = release lead time AFTER improvement (down from 3 days)
+- Do NOT reattach a metric to a different achievement. "35%" is ALWAYS about MTTR, never about anything else.
+- If a JD requirement doesn't map to a metric in the resume, describe the achievement WITHOUT a number.
 - Do NOT list technologies. Show impact through specific stories.
 
 Paragraph 3 (3-4 sentences): Mention ONE more relevant project by name (e.g., Purrrfect Keys, WhatsTheCraic) with a specific result. Say you are available and based in Dublin. End with a confident, forward-looking sentence. No begging.
