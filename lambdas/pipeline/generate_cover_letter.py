@@ -23,7 +23,9 @@ Paragraph 2 (6-8 sentences): This is the meat. Map TWO specific JD requirements 
 - Quote or paraphrase a JD requirement, then connect it to a specific metric from your resume.
 - Pattern: "Your team [JD requirement]. At Clover, I [specific achievement with metric]."
 - Example: "Your team ships observability tooling at scale. At Clover, I built monitoring dashboards across 8 microservices that reduced MTTR by 35 percent."
-- Use ONLY metrics and achievements from the resume. Do NOT invent numbers.
+- Use ONLY metrics that appear VERBATIM in the resume provided below. Do NOT invent, extrapolate, or round numbers.
+- ALLOWED METRICS (these appear in the resume — use ONLY these): "35%", "85%", "99.9%", "30%", "22%", "8 production microservices", "3,000+ tests", "14 months", "3 AWS regions", "4-6 hours".
+- If a JD requirement doesn't map to a metric in the resume, describe the achievement WITHOUT a number. Example: "I built monitoring dashboards that significantly reduced incident response time" (not "reduced by 42%").
 - Do NOT list technologies. Show impact through specific stories.
 
 Paragraph 3 (3-4 sentences): Mention ONE more relevant project by name (e.g., Purrrfect Keys, WhatsTheCraic) with a specific result. Say you are available and based in Dublin. End with a confident, forward-looking sentence. No begging.
@@ -82,6 +84,27 @@ def _validate_cover_letter(text: str) -> dict:
         errors.append("dashes: em-dash, en-dash, or double hyphen found")
 
     return {"valid": len(errors) == 0, "errors": errors, "word_count": word_count}
+
+
+# Metrics that actually exist in the base resume — anything else is fabrication
+_ALLOWED_METRICS = {
+    "35", "85", "99.9", "30", "22", "66",  # percentages
+    "8", "3000", "3,000", "14",  # counts
+    "3",  # years, regions
+}
+
+
+def _check_metric_fabrication(text: str) -> list[str]:
+    """Check if the cover letter uses specific percentages or numbers not in the base resume."""
+    errors = []
+    # Find all percentage claims like "42 percent", "42%", "68%"
+    import re
+    pct_matches = re.findall(r'(\d+(?:\.\d+)?)\s*(?:percent|%)', text.lower())
+    for num in pct_matches:
+        if num not in _ALLOWED_METRICS:
+            errors.append(f"fabricated_metric: '{num}%' not in base resume (allowed: 35%, 85%, 99.9%, 30%, 22%, 66%)")
+
+    return errors
 
 
 def _check_opening_quality(text: str, company: str) -> list[str]:
@@ -238,10 +261,12 @@ Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
     best_errors: list[str] = []
 
     validation = _validate_cover_letter(body_text)
-    # Also check opening quality
+    # Also check opening quality and metric fabrication
     opening_issues = _check_opening_quality(body_text, job.get("company", ""))
-    if opening_issues:
+    metric_issues = _check_metric_fabrication(body_text)
+    if opening_issues or metric_issues:
         validation["errors"].extend(opening_issues)
+        validation["errors"].extend(metric_issues)
         validation["valid"] = False
     if not validation["valid"]:
         best_errors = validation["errors"]
