@@ -19,9 +19,14 @@ STRUCTURE (3-4 paragraphs, 250-350 words):
 
 Paragraph 1 (3 sentences max): Open with something specific about the company. Not generic praise. Show you actually know what they do. Then state what role you want and your strongest qualification in one sentence.
 
-Paragraph 2 (6-8 sentences): This is the meat. Tell a story about your most relevant work. Pick TWO achievements, one from work experience and one from projects. Use real numbers. "I built X which did Y resulting in Z." Connect each to what this team specifically needs. Do not list technologies. Show the impact and what you learned.
+Paragraph 2 (6-8 sentences): This is the meat. Map TWO specific JD requirements to YOUR achievements:
+- Quote or paraphrase a JD requirement, then connect it to a specific metric from your resume.
+- Pattern: "Your team [JD requirement]. At Clover, I [specific achievement with metric]."
+- Example: "Your team ships observability tooling at scale. At Clover, I built monitoring dashboards across 8 microservices that reduced MTTR by 35 percent."
+- Use ONLY metrics and achievements from the resume. Do NOT invent numbers.
+- Do NOT list technologies. Show impact through specific stories.
 
-Paragraph 3 (3-4 sentences): Mention one more relevant skill or project briefly. Say you are available and based in Dublin. End with a confident forward-looking sentence. No begging.
+Paragraph 3 (3-4 sentences): Mention ONE more relevant project by name (e.g., Purrrfect Keys, WhatsTheCraic) with a specific result. Say you are available and based in Dublin. End with a confident, forward-looking sentence. No begging.
 
 VOICE:
 - Write in first person. Vary sentence length. Some short. Some a bit longer to explain something specific.
@@ -77,6 +82,24 @@ def _validate_cover_letter(text: str) -> dict:
         errors.append("dashes: em-dash, en-dash, or double hyphen found")
 
     return {"valid": len(errors) == 0, "errors": errors, "word_count": word_count}
+
+
+def _check_opening_quality(text: str, company: str) -> list[str]:
+    """Check that the cover letter doesn't open by describing the company generically."""
+    errors = []
+    first_sentence = text.split(".")[0].lower() if text else ""
+    company_lower = company.lower()
+    bad_patterns = [
+        f"{company_lower} is a", f"{company_lower} specializes",
+        f"{company_lower} is an", f"{company_lower} provides",
+        f"{company_lower} offers", "a company that",
+        "i want to work as", "i am writing to",
+        "this project taught me", "these experiences have given me",
+    ]
+    for pattern in bad_patterns:
+        if pattern in first_sentence:
+            errors.append(f"bad_opening: '{pattern}' — open with what interests you about their WORK, not what the company IS")
+    return errors
 
 
 # ── LaTeX template ────────────────────────────────────────────────────────────
@@ -192,20 +215,21 @@ Do NOT include the header, date, salutation, or closing — I'll add those from 
 Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
 
     def _generate_body(prompt: str) -> tuple[str, str, str]:
-        """Call AI and return (body_text, provider, model)."""
-        if light_touch:
+        """Call AI and return (body_text, provider, model). ALWAYS uses council."""
+        try:
+            result = council_complete(
+                prompt=prompt,
+                system=COVER_LETTER_SYSTEM_PROMPT,
+                task_description=(
+                    f"Write cover letter for {job['title']} at {job['company']}. "
+                    "Must open with something specific about their WORK, not describe the company. "
+                    "Each paragraph must map a JD requirement to a specific resume achievement with a real metric."
+                ),
+                n_generators=2,
+                temperature=0.7,
+            )
+        except RuntimeError:
             result = ai_complete(prompt, system=COVER_LETTER_SYSTEM_PROMPT, temperature=0.7)
-        else:
-            try:
-                result = council_complete(
-                    prompt=prompt,
-                    system=COVER_LETTER_SYSTEM_PROMPT,
-                    task_description=f"Write cover letter body for {job['title']} at {job['company']}",
-                    n_generators=2,
-                    temperature=0.7,
-                )
-            except RuntimeError:
-                result = ai_complete(prompt, system=COVER_LETTER_SYSTEM_PROMPT, temperature=0.7)
         return result["content"].strip(), result.get("provider", "council"), result.get("model", "consensus")
 
     # Generate with validation + retry (max 2 retries)
@@ -214,6 +238,11 @@ Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
     best_errors: list[str] = []
 
     validation = _validate_cover_letter(body_text)
+    # Also check opening quality
+    opening_issues = _check_opening_quality(body_text, job.get("company", ""))
+    if opening_issues:
+        validation["errors"].extend(opening_issues)
+        validation["valid"] = False
     if not validation["valid"]:
         best_errors = validation["errors"]
         logger.warning(f"[cover_letter] Validation failed for {job_hash}: {validation['errors']}")
