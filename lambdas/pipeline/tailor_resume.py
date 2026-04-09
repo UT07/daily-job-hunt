@@ -326,10 +326,16 @@ Reminder: your output MUST contain all six section headers verbatim: \\section*{
         if typo in tailored_tex:
             tailored_tex = tailored_tex.replace(typo, fix)
 
-    # Escape unescaped special characters that crash tectonic
+    # Escape unescaped special characters in the BODY only (not preamble).
+    # The preamble uses #1, #2 etc as macro parameters — escaping those breaks everything.
     import re
-    tailored_tex = re.sub(r'(?<!\\)#', r'\\#', tailored_tex)  # C#, F#
-    tailored_tex = re.sub(r'(?<!\\)&(?!\\)', r'\\&', tailored_tex)  # R&D, AT&T
+    body_start = tailored_tex.find(r"\begin{document}")
+    if body_start > 0:
+        preamble_part = tailored_tex[:body_start]
+        body_part = tailored_tex[body_start:]
+        body_part = re.sub(r'(?<!\\)#', r'\\#', body_part)  # C#, F# in body
+        body_part = re.sub(r'(?<!\\)&(?!\\)', r'\\&', body_part)  # R&D, AT&T in body
+        tailored_tex = preamble_part + body_part
 
     # Page length check: estimate body word count
     body_text = re.sub(r"\\[a-zA-Z]+\*?(\{[^}]*\})*", " ", ai_body)
