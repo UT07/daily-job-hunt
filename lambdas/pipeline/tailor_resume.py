@@ -291,12 +291,13 @@ WRITING STYLE (CRITICAL):
 - Quantify impact with numbers and percentages where they already exist.
 - Match job posting keywords by naturally weaving them into existing bullets, not by adding new sentences about them.
 
-SUMMARY SECTION (CRITICAL):
+SUMMARY SECTION (CRITICAL — 4-6 lines, not a one-liner):
 - The summary MUST mention the specific role title from the JD (e.g., "Site Reliability Engineer", not just "engineer").
-- The summary MUST include 1-2 specific metrics from the candidate's existing experience (e.g., "reduced MTTR by 35%", "maintained 99.9% uptime"). Use only metrics that appear in the base resume — do NOT fabricate numbers.
-- The summary MUST reference at least 2 technologies that appear in BOTH the JD and the base resume.
+- The summary MUST include 2-3 specific metrics from the candidate's existing experience (e.g., "reduced MTTR by 35%", "maintained 99.9% uptime", "cut release lead time by 85%"). Use only metrics that appear in the base resume — do NOT fabricate numbers.
+- The summary MUST reference at least 3 technologies that appear in BOTH the JD and the base resume.
+- The summary MUST mention years of experience (3+ years at Clover IT Services) and the MSc in Cloud Computing.
 - Do NOT open with generic phrases like "Highly motivated", "Experienced professional", "Strong background in", or "Passionate about". Lead with the role title or the candidate's most relevant qualification for THIS specific role.
-- The summary should be 2-3 sentences. Do NOT write a paragraph.
+- Write 4-6 lines (60-100 words). NOT a one-liner. NOT a paragraph. A concise but substantive professional summary that gives a hiring manager enough to want to keep reading.
 - Every word must be specific to this job. A reader should not be able to swap this summary onto a different resume for a different role.
 
 KEYWORD INJECTION (adapted from career-ops methodology):
