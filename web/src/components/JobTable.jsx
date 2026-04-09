@@ -273,40 +273,28 @@ function getTitleStyle(job) {
   return '';
 }
 
-export default function JobTable({ jobs, onStatusChange, onDelete }) {
+export default function JobTable({ jobs, onStatusChange, onDelete, sortBy = 'first_seen', sortOrder = 'desc', onSortChange }) {
   const navigate = useNavigate();
-  const [sortKey, setSortKey] = useState('first_seen');
-  const [sortDir, setSortDir] = useState('desc');
 
   function handleSort(key) {
-    if (sortKey === key) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    if (!onSortChange) return;
+    if (sortBy === key) {
+      onSortChange(key, sortOrder === 'asc' ? 'desc' : 'asc');
     } else {
-      setSortKey(key);
-      setSortDir('desc');
+      onSortChange(key, 'desc');
     }
   }
 
-  const sorted = [...jobs].sort((a, b) => {
-    let aVal = a[sortKey] ?? '';
-    let bVal = b[sortKey] ?? '';
-    if (typeof aVal === 'number' && typeof bVal === 'number') {
-      return sortDir === 'asc' ? aVal - bVal : bVal - aVal;
-    }
-    aVal = String(aVal).toLowerCase();
-    bVal = String(bVal).toLowerCase();
-    if (aVal < bVal) return sortDir === 'asc' ? -1 : 1;
-    if (aVal > bVal) return sortDir === 'asc' ? 1 : -1;
-    return 0;
-  });
+  // Server already sorted — no client-side re-sort
+  const sorted = jobs;
 
   function SortArrow({ columnKey }) {
-    if (sortKey !== columnKey) {
+    if (sortBy !== columnKey) {
       return <span className="text-stone-500 ml-1 opacity-0 group-hover:opacity-100 transition-opacity">&#9650;</span>;
     }
     return (
       <span className="text-yellow ml-1">
-        {sortDir === 'asc' ? '\u25B2' : '\u25BC'}
+        {sortOrder === 'asc' ? '\u25B2' : '\u25BC'}
       </span>
     );
   }

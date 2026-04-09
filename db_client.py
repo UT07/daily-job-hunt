@@ -218,6 +218,8 @@ class SupabaseClient:
                 query = query.eq("remote", filters["remote"])
             if "level_fit" in filters:
                 query = query.eq("level_fit", filters["level_fit"])
+            if "skill" in filters:
+                query = query.contains("key_matches", [filters["skill"]])
 
         # Sorting — supports sort_by and sort_order from frontend
         sort_by = filters.get("sort_by", "first_seen") if filters else "first_seen"

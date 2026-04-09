@@ -187,6 +187,8 @@ export default function Dashboard() {
   const [seniorityFilter, setSeniorityFilter] = useState('All');
   const [remoteFilter, setRemoteFilter] = useState('All');
   const [levelFitFilter, setLevelFitFilter] = useState('All');
+  const [skillFilter, setSkillFilter] = useState('');
+  const [availableSkills, setAvailableSkills] = useState([]);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [sortBy, setSortBy] = useState('first_seen');
   const [sortOrder, setSortOrder] = useState('desc');
@@ -204,7 +206,7 @@ export default function Dashboard() {
 
   // Use refs for filter values so fetchJobs stays stable across filter changes
   const filtersRef = useRef({ statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter });
-  filtersRef.current = { statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter };
+  filtersRef.current = { statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter };
 
   const fetchJobs = useCallback(async () => {
     setLoading(true);
@@ -227,6 +229,7 @@ export default function Dashboard() {
       if (f.seniorityFilter && f.seniorityFilter !== 'All') params.set('seniority', f.seniorityFilter);
       if (f.remoteFilter && f.remoteFilter !== 'All') params.set('remote', f.remoteFilter);
       if (f.levelFitFilter && f.levelFitFilter !== 'All') params.set('level_fit', f.levelFitFilter);
+      if (f.skillFilter) params.set('skill', f.skillFilter);
 
       const data = await apiGet(`/api/dashboard/jobs?${params.toString()}`);
       setJobs(data.jobs || []);
@@ -246,6 +249,15 @@ export default function Dashboard() {
       console.error('Failed to fetch stats:', err);
     }
   }, []);
+
+  // Fetch available skills for filter dropdown
+  useEffect(() => {
+    if (user) {
+      apiGet('/api/dashboard/skills').then((data) => {
+        if (data?.skills) setAvailableSkills(data.skills);
+      }).catch(() => {});
+    }
+  }, [user]);
 
   // Fetch only on mount and explicit filter apply (not on every keystroke)
   useEffect(() => {
@@ -464,6 +476,38 @@ export default function Dashboard() {
                 <option key={l} value={l}>{l === 'All' ? 'All' : LEVEL_FIT_LABELS[l] || l}</option>
               ))}
             </Select>
+
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-bold text-stone-500 uppercase tracking-wider">Skill</label>
+              <div className="relative">
+                <input
+                  list="skill-options"
+                  value={skillFilter}
+                  onChange={(e) => {
+                    setSkillFilter(e.target.value);
+                    if (!e.target.value || availableSkills.some((s) => s.name === e.target.value)) {
+                      handleFilterApply();
+                    }
+                  }}
+                  placeholder="Type to search..."
+                  className="bg-white border-2 border-black px-2 py-1 text-xs font-heading font-bold w-44
+                    focus:outline-none focus:shadow-brutal-yellow placeholder:text-stone-400 placeholder:font-normal"
+                />
+                {skillFilter && (
+                  <button
+                    onClick={() => { setSkillFilter(''); handleFilterApply(); }}
+                    className="absolute right-1 top-1/2 -translate-y-1/2 text-stone-400 hover:text-black text-sm"
+                  >
+                    ✕
+                  </button>
+                )}
+                <datalist id="skill-options">
+                  {availableSkills.map((s) => (
+                    <option key={s.name} value={s.name}>{s.name} ({s.count})</option>
+                  ))}
+                </datalist>
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -586,7 +630,18 @@ export default function Dashboard() {
           </div>
 
           {viewMode === 'list' ? (
-            <JobTable jobs={jobs} onStatusChange={handleStatusChange} onDelete={handleDelete} />
+            <JobTable
+              jobs={jobs}
+              onStatusChange={handleStatusChange}
+              onDelete={handleDelete}
+              sortBy={sortBy}
+              sortOrder={sortOrder}
+              onSortChange={(field, order) => {
+                setSortBy(field);
+                setSortOrder(order);
+                setFilterVersion((v) => v + 1);
+              }}
+            />
           ) : (
             <CardView jobs={jobs} onStatusChange={handleStatusChange} onDelete={handleDelete} />
           )}

@@ -404,6 +404,35 @@ def _load_task(task_id: str) -> dict | None:
     return task
 
 
+_s3_client = None
+
+
+def _get_s3():
+    global _s3_client
+    if _s3_client is None:
+        _s3_client = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
+    return _s3_client
+
+
+def _refresh_s3_urls(jobs: list) -> list:
+    """Regenerate presigned URLs from stored S3 keys so they never expire."""
+    bucket = os.environ.get("S3_BUCKET", os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt"))
+    s3 = _get_s3()
+    for job in jobs:
+        for key_field, url_field in [
+            ("resume_s3_key", "resume_s3_url"),
+            ("cover_letter_s3_key", "cover_letter_s3_url"),
+        ]:
+            s3_key = job.get(key_field)
+            if s3_key:
+                job[url_field] = s3.generate_presigned_url(
+                    "get_object",
+                    Params={"Bucket": bucket, "Key": s3_key},
+                    ExpiresIn=7 * 24 * 3600,  # 7 days
+                )
+    return jobs
+
+
 def _enqueue_task(task_id: str, user_id: str, task_type: str, payload: dict):
     """Save task to Supabase then send an SQS message (or fall back to threading for local dev)."""
     _save_task(task_id, user_id, {"status": "running", "payload": payload})
@@ -1328,6 +1357,11 @@ def get_dashboard_jobs(
     hide_expired: Optional[str] = None,
     sort_by: Optional[str] = None,
     sort_order: Optional[str] = None,
+    archetype: Optional[str] = None,
+    seniority: Optional[str] = None,
+    remote: Optional[str] = None,
+    level_fit: Optional[str] = None,
+    skill: Optional[str] = None,
 ):
     """Paginated, filterable job list."""
     if _db is None:
@@ -1357,8 +1391,19 @@ def get_dashboard_jobs(
         filters["sort_by"] = sort_by
     if sort_order:
         filters["sort_order"] = sort_order
+    if archetype:
+        filters["archetype"] = archetype
+    if seniority:
+        filters["seniority"] = seniority
+    if remote:
+        filters["remote"] = remote
+    if level_fit:
+        filters["level_fit"] = level_fit
+    if skill:
+        filters["skill"] = skill
 
     jobs, total = _db.get_jobs(user.id, filters=filters, page=page, per_page=per_page)
+    _refresh_s3_urls(jobs)
     return {"jobs": jobs, "page": page, "per_page": per_page, "total": total}
 
 
@@ -1429,6 +1474,7 @@ def get_single_job(
     )
     if not result or not result.data:
         raise HTTPException(404, "Job not found")
+    _refresh_s3_urls([result.data])
     return result.data
 
 
@@ -1722,6 +1768,36 @@ def update_job_sections(
     }
     _enqueue_task(task_id, user.id, "rebuild_sections", payload)
     return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
+
+
+@app.get("/api/dashboard/skills")
+def get_dashboard_skills(user: AuthUser = Depends(get_current_user)):
+    """Return unique skills from key_matches across non-expired jobs, sorted by frequency."""
+    if _db is None:
+        return {"skills": []}
+
+    from collections import Counter
+    jobs = (
+        _db.client.table("jobs")
+        .select("key_matches")
+        .eq("user_id", user.id)
+        .eq("is_expired", False)
+        .not_.is_("key_matches", "null")
+        .execute()
+    )
+
+    counts: Counter = Counter()
+    for j in jobs.data:
+        for s in j.get("key_matches") or []:
+            counts[s.strip().title()] += 1
+
+    # Only return skills appearing in 3+ jobs
+    skills = [
+        {"name": name, "count": count}
+        for name, count in counts.most_common()
+        if count >= 3
+    ]
+    return {"skills": skills}
 
 
 @app.get("/api/dashboard/stats")
