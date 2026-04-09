@@ -127,6 +127,111 @@ def _check_brace_balance(tex: str) -> bool:
     return depth == 0
 
 
+# ---------------------------------------------------------------------------
+# Quality validation — checks writing quality, not just LaTeX structure
+# ---------------------------------------------------------------------------
+
+_BANNED_PHRASES = [
+    "highly motivated", "extensive experience", "proven track record",
+    "passionate about", "self-motivated", "team player", "detail-oriented",
+    "results-driven", "strong background in", "experienced professional",
+    "seasoned professional", "leveraging", "utilizing", "showcasing",
+    "demonstrating proficiency", "directly transferable to", "aligned with",
+    "outcomes relevant to", "i am excited", "excited to join",
+    "results-oriented", "spearheaded", "facilitated", "synergies",
+    "robust", "seamless", "cutting-edge", "innovative",
+    "in today's fast-paced world", "demonstrated ability to",
+]
+
+
+def _check_banned_phrases(tex: str) -> list[str]:
+    """Check for banned filler phrases in the tailored body."""
+    tex_lower = tex.lower()
+    return [f"banned_phrase: '{p}'" for p in _BANNED_PHRASES if p in tex_lower]
+
+
+def _check_textbf_preservation(base_body: str, tailored_body: str) -> list[str]:
+    r"""Check that \textbf formatting is preserved from base resume."""
+    base_count = len(re.findall(r"\\textbf\{", base_body))
+    tailored_count = len(re.findall(r"\\textbf\{", tailored_body))
+    if base_count == 0:
+        return []
+    ratio = tailored_count / base_count
+    if ratio < 0.5:
+        return [
+            f"textbf_stripped: base has {base_count} \\textbf, tailored has {tailored_count} "
+            f"({ratio:.0%} preserved, need >=50%)"
+        ]
+    return []
+
+
+def _check_fabrication(base_skills_text: str, tailored_tex: str) -> list[str]:
+    """Check if tailored resume mentions skills not present in base."""
+    _KNOWN_FABRICATIONS = {
+        "java", "vue.js", "angular", "ruby", "php", "scala", "rust",
+        "kotlin", "swift", "dart", "flutter", "spring", "hibernate",
+        "django", "rails", "laravel", "spring boot",
+    }
+    base_lower = base_skills_text.lower()
+    errors = []
+    skills_match = re.search(
+        r"\\section\*\{(?:Technical )?Skills\}(.*?)\\section\*\{",
+        tailored_tex, re.DOTALL,
+    )
+    if not skills_match:
+        return []
+    clean = re.sub(r"\\[a-zA-Z]+\{([^}]*)\}", r"\1", skills_match.group(1))
+    clean = re.sub(r"[{}\\]", "", clean)
+    for item in re.split(r"[,&\n]+", clean):
+        skill = item.strip().lower()
+        if skill and skill in _KNOWN_FABRICATIONS and skill not in base_lower:
+            errors.append(f"fabrication: '{skill.title()}' not in base resume")
+    return errors
+
+
+# ---------------------------------------------------------------------------
+# Archetype detection (career-ops methodology)
+# ---------------------------------------------------------------------------
+
+_ARCHETYPES = {
+    "sre_devops": {
+        "signals": ["SRE", "site reliability", "infrastructure", "terraform", "kubernetes",
+                     "monitoring", "incident", "on-call", "uptime", "observability", "platform engineer"],
+        "framing": "Emphasize reliability metrics (uptime, MTTR), infrastructure automation, monitoring dashboards, incident response.",
+    },
+    "backend": {
+        "signals": ["backend", "API", "microservices", "distributed systems", "database",
+                     "REST", "GraphQL", "server-side"],
+        "framing": "Emphasize API design, data modeling, system architecture, performance optimization.",
+    },
+    "fullstack": {
+        "signals": ["full-stack", "full stack", "frontend", "React", "Vue", "Angular",
+                     "Node.js", "web application", "UI"],
+        "framing": "Emphasize end-to-end ownership, responsive UI, API integration, deployment pipelines.",
+    },
+    "platform_cloud": {
+        "signals": ["platform", "cloud engineer", "AWS", "GCP", "Azure", "CI/CD",
+                     "deployment", "DevOps", "IaC", "CDK", "CloudFormation"],
+        "framing": "Emphasize cloud architecture, cost optimization, CI/CD pipelines, infrastructure as code.",
+    },
+    "data": {
+        "signals": ["data engineer", "ETL", "Spark", "analytics", "ML pipeline",
+                     "data platform", "warehouse", "Airflow"],
+        "framing": "Emphasize data pipelines, processing scale, data quality, ML infrastructure.",
+    },
+}
+
+
+def _detect_archetype(title: str, description: str) -> tuple[str, str]:
+    """Classify job into an archetype. Returns (name, framing_instruction)."""
+    text = f"{title} {description}".lower()
+    scores = {}
+    for arch, config in _ARCHETYPES.items():
+        scores[arch] = sum(1 for s in config["signals"] if s.lower() in text)
+    best = max(scores, key=scores.get) if any(scores.values()) else "fullstack"
+    return best, _ARCHETYPES[best]["framing"]
+
+
 _SYSTEM_PROMPT = r"""You are an expert resume writer who tailors technical resumes for specific job listings. You work with LaTeX resume BODIES (the content between \begin{document} and \end{document} only).
 
 CRITICAL OUTPUT RULE:
@@ -194,6 +299,20 @@ SUMMARY SECTION (CRITICAL):
 - The summary should be 2-3 sentences. Do NOT write a paragraph.
 - Every word must be specific to this job. A reader should not be able to swap this summary onto a different resume for a different role.
 
+KEYWORD INJECTION (adapted from career-ops methodology):
+- Reformulate EXISTING bullets using JD vocabulary. Example: if the base says "built automated data pipelines" and the JD says "ETL orchestration", rewrite as "orchestrated ETL data pipelines". Same truth, JD words.
+- Distribute keywords strategically:
+  * Summary: must contain the top 5 JD keywords
+  * First bullet of each job: must contain at least 1 JD keyword
+  * Skills section: reorder to front-load JD-matching skills
+- Prefer proof-point specifics over abstractions:
+  * "Reduced MTTR by 35% across 8 production microservices" > "improved system reliability"
+  * Use ONLY metrics that already exist in the base resume — do NOT invent numbers.
+- PRESERVE all \textbf{} formatting from the base resume. Bold keywords and metrics must stay bold.
+
+ARCHETYPE FRAMING:
+{archetype_framing}
+
 Return ONLY the tailored body content. No explanations, no markdown fences, no preamble commands."""
 
 _LIGHT_TOUCH_NOTE = (
@@ -217,9 +336,7 @@ def handler(event, context):
     user_id = event["user_id"]
     tailoring_depth = event.get("tailoring_depth")
     if tailoring_depth is None:
-        # Backward-compat: old callers only set light_touch
         tailoring_depth = "light" if event.get("light_touch") else "moderate"
-    light_touch = tailoring_depth == "light"
 
     db = get_supabase()
     s3 = boto3.client("s3")
@@ -231,38 +348,42 @@ def handler(event, context):
         return {"error": f"Job {job_hash} not found"}
     job = job.data[0]
 
-    # Get latest resume (no is_active column; use most recently created)
+    # Get latest resume
     resume = db.table("user_resumes").select("*").eq("user_id", user_id) \
         .order("created_at", desc=True).limit(1).execute()
     if not resume.data:
         return {"error": "No resume found"}
     base_tex = resume.data[0].get("tex_content", "")
 
-    # Split base: AI only sees the body, never the preamble.
     base_preamble, base_body = _split_tex(base_tex)
     if not base_preamble:
         logger.error(f"[tailor] base resume missing \\begin{{document}} for user {user_id}")
         return {"error": "base resume has no \\begin{document}"}
 
-    # Extract top keywords from JD for targeted tailoring
+    # Extract keywords and detect archetype
     from utils.keyword_extractor import extract_keywords
     description = job.get("description", "") or ""
+    title = job.get("title", "")
+    company = job.get("company", "")
     keywords = extract_keywords(description, max_keywords=15)
+    archetype, archetype_framing = _detect_archetype(title, description)
+    logger.info(f"[tailor] Archetype: {archetype} for '{title}' at '{company}'")
+
     keyword_section = ""
     if keywords:
-        keyword_section = f"\n\nKEY JD REQUIREMENTS: {', '.join(keywords)}\nEnsure each of these is addressed in the resume. Weave them into existing bullets — do NOT add new fabricated experience."
+        keyword_section = f"\n\nKEY JD REQUIREMENTS: {', '.join(keywords)}\nReformulate existing bullets using these terms. Do NOT fabricate experience."
 
-    # Tailor using AI (body-only prompt)
+    # Build prompts with archetype framing injected
     depth_note = {
         "light": _LIGHT_TOUCH_NOTE,
         "moderate": _MODERATE_NOTE,
         "heavy": _FULL_REWRITE_NOTE,
     }.get(tailoring_depth, _MODERATE_NOTE)
-    system_prompt = f"{depth_note}\n\n{_SYSTEM_PROMPT}{keyword_section}"
+    system_prompt = f"{depth_note}\n\n{_SYSTEM_PROMPT.replace('{archetype_framing}', archetype_framing)}{keyword_section}"
 
     user_prompt = f"""Tailor this resume body for the following job.
 
-Job: {job['title']} at {job['company']}
+Job: {title} at {company}
 Description: {description[:4000]}
 
 BASE RESUME BODY:
@@ -270,24 +391,28 @@ BASE RESUME BODY:
 
 Return ONLY the tailored body. No \\documentclass, no \\newcommand, no \\begin{{document}}.
 
-Reminder: your output MUST contain all six section headers verbatim: \\section*{{Summary}}, \\section*{{Technical Skills}}, \\section*{{Experience}}, \\section*{{Featured Projects}}, \\section*{{Education}}, \\section*{{Certifications}}."""
+Reminder: your output MUST contain all six section headers verbatim: \\section*{{Summary}}, \\section*{{Technical Skills}}, \\section*{{Experience}}, \\section*{{Featured Projects}}, \\section*{{Education}}, \\section*{{Certifications}}.
+PRESERVE all \\textbf{{}} formatting from the base resume."""
 
-    # Light-touch jobs (score >= 85) only change ~5% of resume — single AI call is sufficient.
-    # Full rewrites use council mode (2 generators + 1 critic) for quality.
-    if light_touch:
-        logger.info(f"[tailor] Light-touch mode for {job_hash} — single AI call")
-        response_dict = ai_complete(user_prompt, system=system_prompt, temperature=0.3)
-    else:
-        try:
-            response_dict = council_complete(
-                prompt=user_prompt,
-                system=system_prompt,
-                task_description="Pick the resume that best matches the job description with complete sections.",
-                n_generators=2,
-                temperature=0.3,
-            )
-        except RuntimeError:
-            response_dict = ai_complete(user_prompt, system=system_prompt)
+    # ALWAYS use council — no single-call bypass regardless of tier
+    logger.info(f"[tailor] Council mode for {job_hash} (depth={tailoring_depth}, archetype={archetype})")
+    try:
+        response_dict = council_complete(
+            prompt=user_prompt,
+            system=system_prompt,
+            task_description=(
+                f"Tailor resume for '{title}' at '{company}' (archetype: {archetype}). "
+                f"Depth: {tailoring_depth}. "
+                "Pick the candidate with best JD keyword injection (reformulated, not fabricated), "
+                "complete sections, active voice, preserved \\textbf formatting, "
+                "proof-point specifics, and no filler phrases."
+            ),
+            n_generators=2,
+            temperature=0.3,
+        )
+    except RuntimeError as e:
+        logger.error(f"[tailor] Council failed: {e}")
+        return {"error": str(e), "job_hash": job_hash}
     ai_response = response_dict["content"]
 
     # Strip markdown code fences (```latex, ```tex, etc.)
@@ -367,6 +492,55 @@ Reminder: your output MUST contain all six section headers verbatim: \\section*{
             f"— falling back to base resume"
         )
         tailored_tex = base_tex
+    else:
+        # Quality validation — writing quality, not just structure
+        quality_warnings = _check_banned_phrases(ai_body)
+        quality_warnings.extend(_check_textbf_preservation(base_body, ai_body))
+        base_skills_match = re.search(
+            r"\\section\*\{(?:Technical )?Skills\}(.*?)\\section\*\{",
+            base_body, re.DOTALL,
+        )
+        if base_skills_match:
+            quality_warnings.extend(_check_fabrication(base_skills_match.group(1), ai_body))
+
+        if quality_warnings:
+            logger.warning(f"[tailor] Quality warnings for {job_hash}: {'; '.join(quality_warnings[:5])}")
+            # Retry once with explicit feedback
+            retry_prompt = (
+                user_prompt
+                + "\n\nYour previous attempt had these quality issues:\n"
+                + "\n".join(f"- FIX: {w}" for w in quality_warnings)
+                + "\nPlease fix ALL of them. Return ONLY the corrected body."
+            )
+            try:
+                retry_dict = council_complete(
+                    prompt=retry_prompt, system=system_prompt,
+                    task_description=f"Retry tailor for '{title}' — fix quality issues.",
+                    n_generators=2, temperature=0.3,
+                )
+                retry_body = retry_dict.get("content", "").strip()
+                if "\\begin{document}" in retry_body:
+                    _, retry_body = _split_tex(retry_body)
+                retry_body = retry_body.removesuffix("\\end{document}").strip()
+                # Re-check quality
+                retry_quality = _check_banned_phrases(retry_body) + _check_textbf_preservation(base_body, retry_body)
+                if len(retry_quality) < len(quality_warnings):
+                    logger.info(f"[tailor] Retry improved quality: {len(quality_warnings)} -> {len(retry_quality)} warnings")
+                    ai_body = retry_body
+                    response_dict = retry_dict
+                    tailored_tex = _splice_tex(base_preamble, ai_body)
+                    # Re-escape body
+                    body_start = tailored_tex.find(r"\begin{document}")
+                    if body_start > 0:
+                        preamble_part = tailored_tex[:body_start]
+                        body_part = tailored_tex[body_start:]
+                        body_part = re.sub(r'(?<!\\)#', r'\\#', body_part)
+                        body_part = re.sub(r'(?<!\\)&(?!\\)', r'\\&', body_part)
+                        tailored_tex = preamble_part + body_part
+                else:
+                    logger.info("[tailor] Retry did not improve quality, keeping original")
+            except RuntimeError:
+                logger.warning("[tailor] Quality retry failed, keeping original")
 
     # Write to S3
     tex_key = f"users/{user_id}/resumes/{job_hash}_tailored.tex"
