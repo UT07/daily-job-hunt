@@ -72,7 +72,9 @@ def handler(event, context):
         logger.warning(f"[score_batch] No resume found for user {user_id}")
         return {"matched_items": [], "matched_count": 0, "error": "no_resume"}
 
-    resume_tex = resume_result.data[0].get("tex_content", "")
+    resume_row = resume_result.data[0]
+    resume_tex = resume_row.get("tex_content", "")
+    resume_type = resume_row.get("resume_type", "")
     if not resume_tex:
         logger.warning(f"[score_batch] Resume tex_content is empty for user {user_id}")
         return {"matched_items": [], "matched_count": 0, "error": "no_resume"}
@@ -114,6 +116,7 @@ def handler(event, context):
             "gaps": score_result.get("gaps", []),
             "match_reasoning": score_result.get("reasoning", ""),
             "tailoring_model": f"{score_result.get('provider', 'council')}:{score_result.get('model', 'consensus')}",
+            "matched_resume": resume_type,
             "first_seen": datetime.utcnow().isoformat(),
         }
         try:
