@@ -425,11 +425,14 @@ def _refresh_s3_urls(jobs: list) -> list:
         ]:
             s3_key = job.get(key_field)
             if s3_key:
-                job[url_field] = s3.generate_presigned_url(
-                    "get_object",
-                    Params={"Bucket": bucket, "Key": s3_key},
-                    ExpiresIn=7 * 24 * 3600,  # 7 days
-                )
+                try:
+                    job[url_field] = s3.generate_presigned_url(
+                        "get_object",
+                        Params={"Bucket": bucket, "Key": s3_key},
+                        ExpiresIn=7 * 24 * 3600,  # 7 days
+                    )
+                except Exception:
+                    pass  # keep existing URL
     return jobs
 
 
@@ -1789,7 +1792,7 @@ def get_dashboard_skills(user: AuthUser = Depends(get_current_user)):
     counts: Counter = Counter()
     for j in jobs.data:
         for s in j.get("key_matches") or []:
-            counts[s.strip().title()] += 1
+            counts[s.strip()] += 1
 
     # Only return skills appearing in 3+ jobs
     skills = [
@@ -1940,7 +1943,7 @@ def re_tailor_jobs(req: RetailorRequest, user: AuthUser = Depends(get_current_us
     tiers = ["S", "A"] if req.tier == "SA" else [req.tier]
     jobs = (
         _db.client.table("jobs")
-        .select("job_hash, match_score, score_tier")
+        .select("job_id, job_hash, match_score, score_tier")
         .eq("user_id", user.id)
         .in_("score_tier", tiers)
         .eq("is_expired", False)
@@ -1969,6 +1972,7 @@ def re_tailor_jobs(req: RetailorRequest, user: AuthUser = Depends(get_current_us
                 input=json.dumps({
                     "user_id": user.id,
                     "job_hash": job["job_hash"],
+                    "job_id": job["job_id"],
                     "skip_scoring": True,
                 }),
             )

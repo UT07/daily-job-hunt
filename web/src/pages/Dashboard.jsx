@@ -205,7 +205,7 @@ export default function Dashboard() {
   const [filterVersion, setFilterVersion] = useState(0);
 
   // Use refs for filter values so fetchJobs stays stable across filter changes
-  const filtersRef = useRef({ statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter });
+  const filtersRef = useRef({ statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter });
   filtersRef.current = { statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter };
 
   const fetchJobs = useCallback(async () => {
@@ -229,7 +229,7 @@ export default function Dashboard() {
       if (f.seniorityFilter && f.seniorityFilter !== 'All') params.set('seniority', f.seniorityFilter);
       if (f.remoteFilter && f.remoteFilter !== 'All') params.set('remote', f.remoteFilter);
       if (f.levelFitFilter && f.levelFitFilter !== 'All') params.set('level_fit', f.levelFitFilter);
-      if (f.skillFilter) params.set('skill', f.skillFilter);
+      if (f.skillFilter && f.skillFilter.trim()) params.set('skill', f.skillFilter);
 
       const data = await apiGet(`/api/dashboard/jobs?${params.toString()}`);
       setJobs(data.jobs || []);
