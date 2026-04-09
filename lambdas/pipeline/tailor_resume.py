@@ -295,7 +295,12 @@ SUMMARY SECTION (CRITICAL — 4-6 lines, not a one-liner):
 - The summary MUST mention the specific role title from the JD (e.g., "Site Reliability Engineer", not just "engineer").
 - The summary MUST include 2-3 specific metrics from the candidate's existing experience (e.g., "reduced MTTR by 35%", "maintained 99.9% uptime", "cut release lead time by 85%"). Use only metrics that appear in the base resume — do NOT fabricate numbers.
 - The summary MUST reference at least 3 technologies that appear in BOTH the JD and the base resume.
-- The summary MUST mention years of experience (3+ years at Clover IT Services) and the MSc in Cloud Computing.
+- REQUIRED ELEMENTS THAT MUST ALWAYS APPEAR IN THE SUMMARY (adapt wording to the role, but never drop these):
+  * \textbf{3+ years} of experience (or "3+ years" in some form)
+  * \textbf{MSc Cloud Computing}
+  * \textbf{AWS Solutions Architect -- Professional} certification
+  * Dublin-based (Stamp 1G) — eligible for full-time employment in Ireland
+  * End-to-end ownership narrative (design through delivery)
 - Do NOT open with generic phrases like "Highly motivated", "Experienced professional", "Strong background in", or "Passionate about". Lead with the role title or the candidate's most relevant qualification for THIS specific role.
 - Write 4-6 lines (60-100 words). NOT a one-liner. NOT a paragraph. A concise but substantive professional summary that gives a hiring manager enough to want to keep reading.
 - Every word must be specific to this job. A reader should not be able to swap this summary onto a different resume for a different role.
