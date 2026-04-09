@@ -278,17 +278,25 @@ def handler(event, context):
         return f"{normalize_company(job.get('company', ''))}|{normalize_whitespace(job.get('title', '')).lower()}"
 
     cross_query_skipped = 0
+    batch_dedup_skipped = 0
     new_hashes = []
+    batch_dedup_keys: set[str] = set()  # Track within current batch too
     for j in filtered_jobs:
         if j["job_hash"] in existing_hashes:
             continue
-        if _new_job_dedup_key(j) in existing_dedup_keys:
+        key = _new_job_dedup_key(j)
+        if key in existing_dedup_keys:
             cross_query_skipped += 1
-            logger.debug(
-                f"[cross-query dedup] Skipping '{j.get('title')}' @ '{j.get('company')}' — already in jobs table"
-            )
             continue
+        if key in batch_dedup_keys:
+            batch_dedup_skipped += 1
+            logger.debug(f"[batch dedup] Skipping duplicate in batch: '{j.get('title')}' @ '{j.get('company')}'")
+            continue
+        batch_dedup_keys.add(key)
         new_hashes.append(j["job_hash"])
+
+    if batch_dedup_skipped:
+        logger.info(f"[merge_dedup] Batch dedup: skipped {batch_dedup_skipped} within-batch duplicates")
 
     if cross_query_skipped:
         logger.info(f"[merge_dedup] Cross-query dedup: skipped {cross_query_skipped} jobs already in jobs table")
