@@ -273,7 +273,12 @@ RULES:
    - Summary: adjust emphasis for this role
    - Skills: reorder CATEGORIES to put the most relevant first. PRESERVE ALL 8 CATEGORIES from the base resume — do NOT merge or drop any. Keep the parenthetical details (e.g., "AWS (EC2, ECS/Fargate, EKS, Lambda, RDS, S3, API Gateway, SQS/SNS, CloudFront, Route 53)"). You may reorder items within a category to front-load JD-relevant technologies
    - Experience bullets: reorder within each job; tweak wording to match the job listing's terminology
-   - Projects: ALWAYS KEEP "Purrrfect Keys" (it is the candidate's largest project and shows end-to-end ownership). Then SELECT 2 more from the remaining 4 projects (WhatsTheCraic, Genomic Benchmarking, NaukriBaba, UTWorld) based on relevance to the KEY JD REQUIREMENTS below. REMOVE the other 2 entirely. Rewrite ALL project descriptions to emphasize aspects matching the JD — the same project should highlight different strengths for different jobs.
+   - Projects: EXACTLY 3 PROJECTS. No more, no less.
+     * ALWAYS KEEP "Purrrfect Keys" (candidate's largest project, shows end-to-end ownership).
+     * SELECT 2 more from: WhatsTheCraic, Genomic Benchmarking, NaukriBaba, UTWorld — pick the 2 most relevant to the JD.
+     * COMPLETELY DELETE the other 2 projects. Remove their \projectentry/\projectentryurl AND their \begin{itemize}...\end{itemize} blocks entirely. Do NOT leave empty project shells.
+     * If you output 4 or 5 projects, the resume will overflow to 3 pages and be REJECTED.
+     * Rewrite ALL 3 project descriptions to emphasize aspects matching the JD.
 4. The resume must remain truthful.
 5. PAGE LAYOUT (CRITICAL):
    - The resume MUST be exactly TWO PAGES. No more, no less.

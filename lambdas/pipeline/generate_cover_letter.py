@@ -17,7 +17,10 @@ COVER_LETTER_SYSTEM_PROMPT = r"""You are writing a cover letter as a real person
 
 STRUCTURE (3-4 paragraphs, 250-350 words):
 
-Paragraph 1 (3 sentences max): Open with something specific about the company. Not generic praise. Show you actually know what they do. Then state what role you want and your strongest qualification in one sentence.
+Paragraph 1 (3 sentences max): Connect YOUR experience to THEIR specific work. Do NOT describe what the company does — they already know. Do NOT say "I want to work as" or "I am applying for" — these are weak student phrases.
+Good example: "Building reliable payment infrastructure at scale is exactly what I did at Clover for 3 years. The DevOps Engineer role caught my attention because your team owns the CI/CD pipeline for the entire platform."
+Bad example: "SearchWorks is modernizing core payment platforms. I want to work as a DevOps Engineer."
+Lead with the CONNECTION between your experience and their work, not a description of their company.
 
 Paragraph 2 (6-8 sentences): This is the meat. Map TWO specific JD requirements to YOUR achievements:
 - Quote or paraphrase a JD requirement, then connect it to a specific metric from your resume.
@@ -48,7 +51,7 @@ VOICE:
 
 ABSOLUTE BANS (violating ANY of these means the letter is rejected):
 - NO dashes of any kind. Not em-dashes. Not en-dashes. Not double hyphens. Use periods or commas instead.
-- NO "I am excited", "I am writing to", "I believe", "I am confident", "I would welcome", "I look forward to"
+- NO "I am excited", "I am writing to", "I believe", "I am confident", "I would welcome", "I look forward to", "I want to work as", "I am applying for"
 - NO "leverage", "utilize", "passionate", "thrilled", "synergy", "aligns with", "keen to", "eager to"
 - NO semicolons. Use periods.
 - NO sentences starting with "With" or "As a"
@@ -73,6 +76,8 @@ BANNED_PHRASES = [
     "dynamic team", "proven track record", "highly motivated", "self-motivated",
     "results-driven", "detail-oriented", "strong background",
     "i am confident", "i would welcome", "i look forward to",
+    "i want to work as", "i am applying for", "will benefit from my",
+    "contribute to the company", "in the next 14 months",
 ]
 
 DASH_PATTERN = re.compile(r"[–—]|--")
