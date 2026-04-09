@@ -271,7 +271,7 @@ RULES:
 2. Make targeted, surgical edits. Do NOT rewrite the entire resume.
 3. Focus changes on:
    - Summary: adjust emphasis for this role
-   - Skills: reorder to put the most relevant first; add more relevant skills from the base if they match the JD
+   - Skills: reorder CATEGORIES to put the most relevant first. PRESERVE ALL 8 CATEGORIES from the base resume — do NOT merge or drop any. Keep the parenthetical details (e.g., "AWS (EC2, ECS/Fargate, EKS, Lambda, RDS, S3, API Gateway, SQS/SNS, CloudFront, Route 53)"). You may reorder items within a category to front-load JD-relevant technologies
    - Experience bullets: reorder within each job; tweak wording to match the job listing's terminology
    - Projects: ALWAYS KEEP "Purrrfect Keys" (it is the candidate's largest project and shows end-to-end ownership). Then SELECT 2 more from the remaining 4 projects (WhatsTheCraic, Genomic Benchmarking, NaukriBaba, UTWorld) based on relevance to the KEY JD REQUIREMENTS below. REMOVE the other 2 entirely. Rewrite ALL project descriptions to emphasize aspects matching the JD — the same project should highlight different strengths for different jobs.
 4. The resume must remain truthful.
