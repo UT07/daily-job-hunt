@@ -241,12 +241,27 @@ def council_complete(
     gen_names = [f"{g['name']}:{g['model']}" for g in generators]
     logger.info(f"[council] Generators: {gen_names}")
 
-    # Step 2: Generate candidates
+    # Step 2: Generate candidates — each generator tries its assigned provider first,
+    # then falls back through remaining providers to ensure we actually get output.
     candidates = []
+    used_families = set()
     for gen in generators:
         result = _call_provider(gen, prompt, system, temperature, max_tokens=4096)
         if result and result.get("content"):
             candidates.append(result)
+            used_families.add(_model_family(gen["model"]))
+        else:
+            # Primary provider failed — try others from different families
+            for fallback in all_providers:
+                fb_fam = _model_family(fallback["model"])
+                if fb_fam in used_families or fb_fam == _model_family(gen["model"]):
+                    continue
+                result = _call_provider(fallback, prompt, system, temperature, max_tokens=4096)
+                if result and result.get("content"):
+                    candidates.append(result)
+                    used_families.add(fb_fam)
+                    logger.info(f"[council] Generator fallback: {fallback['name']} succeeded")
+                    break
 
     if not candidates:
         raise RuntimeError("Council: all generators failed")
