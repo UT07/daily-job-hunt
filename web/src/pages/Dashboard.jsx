@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
 import { apiGet } from '../api';
-import { LayoutList, LayoutGrid } from 'lucide-react';
+import { LayoutList, LayoutGrid, ArrowUpDown } from 'lucide-react';
 import PipelineStatus from '../components/PipelineStatus';
 import StatsBar from '../components/StatsBar';
 import JobTable from '../components/JobTable';
@@ -149,6 +149,8 @@ export default function Dashboard() {
   const [tailoredOnly, setTailoredOnly] = useState(false);
   const [tierFilter, setTierFilter] = useState('S');
   const [hideExpired, setHideExpired] = useState(true);
+  const [sortBy, setSortBy] = useState('first_seen');
+  const [sortOrder, setSortOrder] = useState('desc');
 
   // View mode: 'list' or 'card'
   const [viewMode, setViewMode] = useState(getViewPreference);
@@ -162,8 +164,8 @@ export default function Dashboard() {
   const [filterVersion, setFilterVersion] = useState(0);
 
   // Use refs for filter values so fetchJobs stays stable across filter changes
-  const filtersRef = useRef({ statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired });
-  filtersRef.current = { statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired };
+  const filtersRef = useRef({ statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder });
+  filtersRef.current = { statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder };
 
   const fetchJobs = useCallback(async () => {
     setLoading(true);
@@ -180,6 +182,8 @@ export default function Dashboard() {
       if (f.tailoredOnly) params.set('tailored', 'true');
       if (f.tierFilter !== 'All') params.set('tier', f.tierFilter);
       if (f.hideExpired) params.set('hide_expired', 'true');
+      if (f.sortBy) params.set('sort_by', f.sortBy);
+      if (f.sortOrder) params.set('sort_order', f.sortOrder);
 
       const data = await apiGet(`/api/dashboard/jobs?${params.toString()}`);
       setJobs(data.jobs || []);
@@ -427,6 +431,32 @@ export default function Dashboard() {
             <p className="text-xs font-bold text-stone-400 uppercase tracking-wider">
               {total} job{total !== 1 ? 's' : ''}{tierFilter !== 'All' && ` in Tier ${tierFilter}`}
             </p>
+            <div className="flex items-center gap-3">
+              {/* Sort control */}
+              <div className="flex items-center gap-1.5">
+                <ArrowUpDown size={14} className="text-stone-400" />
+                <select
+                  value={`${sortBy}:${sortOrder}`}
+                  onChange={(e) => {
+                    const [field, order] = e.target.value.split(':');
+                    setSortBy(field);
+                    setSortOrder(order);
+                    setPage(1);
+                    setFilterVersion((v) => v + 1);
+                  }}
+                  className="bg-white border-2 border-black px-2 py-1 text-xs font-heading font-bold
+                    focus:outline-none focus:shadow-brutal-yellow cursor-pointer"
+                >
+                  <option value="match_score:desc">Score (highest)</option>
+                  <option value="match_score:asc">Score (lowest)</option>
+                  <option value="first_seen:desc">Date (newest)</option>
+                  <option value="first_seen:asc">Date (oldest)</option>
+                  <option value="company:asc">Company (A-Z)</option>
+                  <option value="company:desc">Company (Z-A)</option>
+                  <option value="title:asc">Title (A-Z)</option>
+                  <option value="title:desc">Title (Z-A)</option>
+                </select>
+              </div>
             <div className="flex items-center border-2 border-black">
               <button
                 onClick={() => toggleView('list')}
@@ -450,6 +480,7 @@ export default function Dashboard() {
               >
                 <LayoutGrid size={16} />
               </button>
+            </div>
             </div>
           </div>
 
