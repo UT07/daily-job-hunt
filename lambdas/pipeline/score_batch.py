@@ -115,6 +115,10 @@ def handler(event, context):
             "key_matches": score_result.get("key_matches", []),
             "gaps": score_result.get("gaps", []),
             "match_reasoning": score_result.get("reasoning", ""),
+            "archetype": score_result.get("archetype", ""),
+            "seniority": score_result.get("seniority", ""),
+            "remote": score_result.get("remote", ""),
+            "requirement_map": score_result.get("requirement_map", []),
             "tailoring_model": f"{score_result.get('provider', 'council')}:{score_result.get('model', 'consensus')}",
             "matched_resume": resume_type,
             "first_seen": datetime.utcnow().isoformat(),
@@ -124,7 +128,8 @@ def handler(event, context):
         except Exception as e:
             # Retry without optional columns if they don't exist yet
             if "column" in str(e) and "does not exist" in str(e):
-                for col in ("key_matches", "gaps", "match_reasoning", "score_tier"):
+                for col in ("key_matches", "gaps", "match_reasoning", "score_tier",
+                            "archetype", "seniority", "remote", "requirement_map", "matched_resume"):
                     job_record.pop(col, None)
                 try:
                     db.table("jobs").insert(job_record).execute()
@@ -195,15 +200,34 @@ CRITICAL — INTERN/STUDENT ELIGIBILITY FILTER:
 - This applies to most internship programs. Roles like "New Grad" or "Entry Level" that do NOT require current enrollment are fine.
 - Add "ineligible: not currently enrolled student" to the gaps list when this filter triggers.
 
+STRUCTURED EVALUATION (career-ops Block A+B methodology):
+Before scoring, classify the role and map requirements to resume evidence:
+
+Block A — Role Classification:
+- Archetype: one of [SRE/DevOps, Backend, Full-Stack, Platform/Cloud, Data, Frontend, AI/ML]
+- Seniority: one of [Junior/Graduate, Mid-Level, Senior, Staff/Lead]
+- Remote: one of [Remote, Hybrid, On-site, Unknown]
+
+Block B — Requirement Mapping:
+For each KEY requirement in the JD, cite the SPECIFIC resume evidence that satisfies it.
+If no evidence exists, mark as a gap with severity (blocker vs nice-to-have).
+
 Return ONLY valid JSON (no markdown, no code fences):
 {
     "ats_score": <0-100>,
     "hiring_manager_score": <0-100>,
     "tech_recruiter_score": <0-100>,
     "match_score": <0-100 weighted average>,
+    "archetype": "<role archetype>",
+    "seniority": "<detected seniority level>",
+    "remote": "<remote status>",
     "reasoning": "<2-3 sentences explaining the scores and key factors>",
     "key_matches": ["<skill1>", "<skill2>", ...],
-    "gaps": ["<missing_skill1>", "<missing_experience1>", ...]
+    "gaps": ["<missing_skill1>", "<missing_experience1>", ...],
+    "requirement_map": [
+        {"requirement": "<JD requirement>", "evidence": "<resume evidence or null>", "severity": "<met|nice_to_have_gap|blocker_gap>"},
+        ...
+    ]
 }"""
 
 
