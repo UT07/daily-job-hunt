@@ -298,11 +298,14 @@ def handler(event, context):
         new_adjustments.extend(kw_adj)
 
     # Write new adjustments to Supabase
+    # Strip transient keys that aren't DB columns before inserting
+    _NON_DB_KEYS = {"notify"}
     for adj in new_adjustments:
         adj["user_id"] = user_id
         adj["run_id"] = run_id
         adj["applied_at"] = datetime.utcnow().isoformat()
-        db.table("pipeline_adjustments").insert(adj).execute()
+        row = {k: v for k, v in adj.items() if k not in _NON_DB_KEYS}
+        db.table("pipeline_adjustments").insert(row).execute()
 
     if new_adjustments:
         logger.info(f"[self_improve] Generated {len(new_adjustments)} new adjustments")

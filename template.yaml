@@ -305,7 +305,7 @@ Resources:
       CodeUri: lambdas/pipeline/
       Handler: tailor_resume.handler
       Runtime: python3.11
-      Timeout: 300
+      Timeout: 600
       MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Policies:
@@ -337,7 +337,7 @@ Resources:
       CodeUri: lambdas/pipeline/
       Handler: generate_cover_letter.handler
       Runtime: python3.11
-      Timeout: 300
+      Timeout: 600
       MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Policies:
@@ -353,7 +353,7 @@ Resources:
       CodeUri: lambdas/pipeline/
       Handler: find_contacts.handler
       Runtime: python3.11
-      Timeout: 30
+      Timeout: 120
       MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Policies:
@@ -427,7 +427,7 @@ Resources:
       CodeUri: lambdas/pipeline/
       Handler: self_improve.handler
       Runtime: python3.11
-      Timeout: 120
+      Timeout: 300
       MemorySize: 256
       Layers: [!Ref SharedDepsLayer]
       Environment:
