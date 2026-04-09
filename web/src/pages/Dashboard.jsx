@@ -12,8 +12,26 @@ import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import { Select } from '../components/ui/Input';
 
-const SOURCES = ['All', 'adzuna', 'linkedin', 'irishjobs', 'jobs_ie', 'gradireland', 'yc', 'hn', 'web'];
+const SOURCES = ['All', 'adzuna', 'linkedin', 'irishjobs', 'jobs_ie', 'gradireland', 'yc', 'hn', 'web', 'greenhouse', 'ashby', 'indeed'];
 const STATUS_OPTIONS = ['All', 'New', 'Applied', 'Interview', 'Offer', 'Rejected', 'Withdrawn', 'Expired'];
+const ARCHETYPES = ['All', 'sre_devops', 'backend', 'fullstack', 'platform_cloud', 'data'];
+const SENIORITIES = ['All', 'Junior/Graduate', 'Mid-Level', 'Senior', 'Staff/Lead'];
+const REMOTE_OPTIONS = ['All', 'Remote', 'Hybrid', 'On-site', 'Unknown'];
+const LEVEL_FITS = ['All', 'exact_match', 'stretch', 'reach', 'overqualified'];
+
+const ARCHETYPE_LABELS = {
+  sre_devops: 'SRE/DevOps', backend: 'Backend', fullstack: 'Full-Stack',
+  platform_cloud: 'Platform/Cloud', data: 'Data',
+};
+const LEVEL_FIT_COLORS = {
+  exact_match: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+  stretch: 'bg-amber-100 text-amber-800 border-amber-300',
+  reach: 'bg-red-100 text-red-800 border-red-300',
+  overqualified: 'bg-sky-100 text-sky-800 border-sky-300',
+};
+const LEVEL_FIT_LABELS = {
+  exact_match: 'Match', stretch: 'Stretch', reach: 'Reach', overqualified: 'Over',
+};
 
 function getViewPreference() {
   try { return localStorage.getItem('naukribaba_view') || 'list'; } catch { return 'list'; }
@@ -103,6 +121,21 @@ function CardView({ jobs, onStatusChange, onDelete }) {
                 <span className="border border-stone-300 text-stone-500 font-mono text-[10px] font-bold px-1.5 py-0.5">
                   {job.source || '--'}
                 </span>
+                {job.archetype && (
+                  <span className="border border-indigo-300 bg-indigo-50 text-indigo-700 font-mono text-[10px] font-bold px-1.5 py-0.5">
+                    {ARCHETYPE_LABELS[job.archetype] || job.archetype}
+                  </span>
+                )}
+                {job.level_fit && job.level_fit !== 'exact_match' && (
+                  <span className={`font-mono text-[10px] font-bold px-1.5 py-0.5 border ${LEVEL_FIT_COLORS[job.level_fit] || 'border-stone-300 bg-stone-100'}`}>
+                    {LEVEL_FIT_LABELS[job.level_fit] || job.level_fit}
+                  </span>
+                )}
+                {job.remote && job.remote !== 'Unknown' && (
+                  <span className="border border-stone-300 text-stone-500 font-mono text-[10px] font-bold px-1.5 py-0.5">
+                    {job.remote}
+                  </span>
+                )}
                 <ModelBadge model={job.tailoring_model} />
               </div>
               {job.apply_url && job.apply_url !== 'Apply' && (
@@ -150,6 +183,11 @@ export default function Dashboard() {
   const [tailoredOnly, setTailoredOnly] = useState(false);
   const [tierFilter, setTierFilter] = useState('S');
   const [hideExpired, setHideExpired] = useState(true);
+  const [archetypeFilter, setArchetypeFilter] = useState('All');
+  const [seniorityFilter, setSeniorityFilter] = useState('All');
+  const [remoteFilter, setRemoteFilter] = useState('All');
+  const [levelFitFilter, setLevelFitFilter] = useState('All');
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [sortBy, setSortBy] = useState('first_seen');
   const [sortOrder, setSortOrder] = useState('desc');
 
@@ -165,8 +203,8 @@ export default function Dashboard() {
   const [filterVersion, setFilterVersion] = useState(0);
 
   // Use refs for filter values so fetchJobs stays stable across filter changes
-  const filtersRef = useRef({ statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder });
-  filtersRef.current = { statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder };
+  const filtersRef = useRef({ statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter });
+  filtersRef.current = { statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter };
 
   const fetchJobs = useCallback(async () => {
     setLoading(true);
@@ -185,6 +223,10 @@ export default function Dashboard() {
       if (f.hideExpired) params.set('hide_expired', 'true');
       if (f.sortBy) params.set('sort_by', f.sortBy);
       if (f.sortOrder) params.set('sort_order', f.sortOrder);
+      if (f.archetypeFilter && f.archetypeFilter !== 'All') params.set('archetype', f.archetypeFilter);
+      if (f.seniorityFilter && f.seniorityFilter !== 'All') params.set('seniority', f.seniorityFilter);
+      if (f.remoteFilter && f.remoteFilter !== 'All') params.set('remote', f.remoteFilter);
+      if (f.levelFitFilter && f.levelFitFilter !== 'All') params.set('level_fit', f.levelFitFilter);
 
       const data = await apiGet(`/api/dashboard/jobs?${params.toString()}`);
       setJobs(data.jobs || []);
@@ -367,7 +409,63 @@ export default function Dashboard() {
           <Button variant="primary" size="md" onClick={handleFilterApply}>
             Apply Filters
           </Button>
+
+          <button
+            onClick={() => setShowAdvanced((v) => !v)}
+            className="text-xs font-bold text-stone-500 uppercase tracking-wider hover:text-black transition-colors cursor-pointer underline"
+          >
+            {showAdvanced ? '− Less' : '+ Advanced'}
+          </button>
         </div>
+
+        {/* Advanced Filters */}
+        {showAdvanced && (
+          <div className="flex flex-wrap items-end gap-4 mt-4 pt-4 border-t border-stone-200">
+            <Select
+              label="Archetype"
+              value={archetypeFilter}
+              onChange={(e) => { setArchetypeFilter(e.target.value); handleFilterApply(); }}
+              className="w-36"
+            >
+              {ARCHETYPES.map((a) => (
+                <option key={a} value={a}>{a === 'All' ? 'All' : ARCHETYPE_LABELS[a] || a}</option>
+              ))}
+            </Select>
+
+            <Select
+              label="Seniority"
+              value={seniorityFilter}
+              onChange={(e) => { setSeniorityFilter(e.target.value); handleFilterApply(); }}
+              className="w-36"
+            >
+              {SENIORITIES.map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </Select>
+
+            <Select
+              label="Remote"
+              value={remoteFilter}
+              onChange={(e) => { setRemoteFilter(e.target.value); handleFilterApply(); }}
+              className="w-32"
+            >
+              {REMOTE_OPTIONS.map((r) => (
+                <option key={r} value={r}>{r}</option>
+              ))}
+            </Select>
+
+            <Select
+              label="Level Fit"
+              value={levelFitFilter}
+              onChange={(e) => { setLevelFitFilter(e.target.value); handleFilterApply(); }}
+              className="w-36"
+            >
+              {LEVEL_FITS.map((l) => (
+                <option key={l} value={l}>{l === 'All' ? 'All' : LEVEL_FIT_LABELS[l] || l}</option>
+              ))}
+            </Select>
+          </div>
+        )}
       </div>
 
       {/* Error */}

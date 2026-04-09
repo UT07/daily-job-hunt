@@ -210,6 +210,14 @@ class SupabaseClient:
                     query = query.in_("score_tier", tiers)
             if filters.get("hide_expired"):
                 query = query.eq("is_expired", False)
+            if "archetype" in filters:
+                query = query.eq("archetype", filters["archetype"])
+            if "seniority" in filters:
+                query = query.eq("seniority", filters["seniority"])
+            if "remote" in filters:
+                query = query.eq("remote", filters["remote"])
+            if "level_fit" in filters:
+                query = query.eq("level_fit", filters["level_fit"])
 
         # Sorting — supports sort_by and sort_order from frontend
         sort_by = filters.get("sort_by", "first_seen") if filters else "first_seen"
