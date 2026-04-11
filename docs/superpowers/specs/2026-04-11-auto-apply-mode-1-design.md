@@ -180,15 +180,19 @@ CREATE TABLE applications (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- One active application per canonical job — retries allowed only for status='unknown' or 'failed'
+-- One active application per canonical job — retries allowed only for status='unknown' or 'failed'.
+-- Dry-run rows are excluded so a dry run doesn't block a real submission.
 CREATE UNIQUE INDEX idx_applications_one_active_per_canonical
   ON applications(user_id, canonical_hash)
-  WHERE status NOT IN ('unknown', 'failed') AND canonical_hash IS NOT NULL;
+  WHERE status NOT IN ('unknown', 'failed')
+    AND canonical_hash IS NOT NULL
+    AND dry_run = false;
 
 -- Fallback uniqueness for rows without canonical_hash
 CREATE UNIQUE INDEX idx_applications_one_active_per_job
   ON applications(user_id, job_id)
-  WHERE status NOT IN ('unknown', 'failed');
+  WHERE status NOT IN ('unknown', 'failed')
+    AND dry_run = false;
 
 CREATE INDEX idx_applications_user_status ON applications(user_id, status);
 CREATE INDEX idx_applications_job ON applications(job_id);
@@ -382,11 +386,14 @@ CREATE TABLE IF NOT EXISTS applications (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_applications_one_active_per_canonical
   ON applications(user_id, canonical_hash)
-  WHERE status NOT IN ('unknown', 'failed') AND canonical_hash IS NOT NULL;
+  WHERE status NOT IN ('unknown', 'failed')
+    AND canonical_hash IS NOT NULL
+    AND dry_run = false;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_applications_one_active_per_job
   ON applications(user_id, job_id)
-  WHERE status NOT IN ('unknown', 'failed');
+  WHERE status NOT IN ('unknown', 'failed')
+    AND dry_run = false;
 
 CREATE INDEX IF NOT EXISTS idx_applications_user_status ON applications(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_applications_job ON applications(job_id);
@@ -671,7 +678,7 @@ The user should populate `users.candidate_context` in Settings for better person
 
 1. Auth (JWT via Depends)
 2. Load job, verify RLS
-3. Idempotency check: query `applications` for existing active rows. Priority: (a) by `canonical_hash` if the job has one, (b) fall back to `(user_id, job_id)` if `canonical_hash` is NULL. Both cases are enforced by the two partial unique indexes in §5.1. Return 409 `already_applied` on match.
+3. Idempotency check: query `applications` for existing active rows that would block a real submission — i.e., `status NOT IN ('unknown', 'failed') AND dry_run = false`. Priority: (a) by `canonical_hash` if the job has one, (b) fall back to `(user_id, job_id)` if `canonical_hash` is NULL. Both cases are enforced by the two partial unique indexes in §5.1. **Dry-run rows do NOT block real submissions, and real rows do NOT block dry runs** — this lets users dry-run repeatedly and then submit for real. Return 409 `already_applied` on match.
 4. Rate limit check: count `applications` rows inserted in last 60 min, reject if ≥ 20
 5. Profile completeness re-check
 6. Re-verify eligibility
@@ -900,6 +907,38 @@ class AshbyClient:
 ```
 
 Internal representation stays simple (`{question_id: value}`); `AshbyClient` translates to Ashby's `fieldSubmissions` format inside `submit_application`.
+
+**Ashby `fieldSubmissions` mapping rules** — implementer reference:
+
+```json
+{
+  "fieldSubmissions": [
+    {"path": "_RESUME", "value": {"fileHandle": "..."}},
+    {"path": "_COVER_LETTER", "value": {"fileHandle": "..."}},
+    {"path": "_FIRST_NAME", "value": "Utkarsh"},
+    {"path": "_LAST_NAME", "value": "Singh"},
+    {"path": "_EMAIL", "value": "254utkarsh@gmail.com"},
+    {"path": "_PHONE", "value": "+353..."},
+    {"path": "_LINKEDIN_URL", "value": "https://..."},
+    {"path": "_GITHUB_URL", "value": "https://..."},
+    {"path": "_WEBSITE", "value": "https://..."},
+    {"path": "_SOURCE", "value": "LinkedIn"},
+    {"path": "<customFieldPath>", "value": "answer text"},
+    {"path": "<customFieldPath>", "value": ["option A", "option B"]}
+  ]
+}
+```
+
+Rules:
+
+- **Standard fields** use underscore-capitalized paths prefixed with `_` (`_RESUME`, `_EMAIL`, `_FIRST_NAME`, etc.). The full list comes from Ashby's posting metadata `applicationForm.fieldDefinitions[]` — each definition has a `path` attribute that's either a standard `_PATH` or a custom path string.
+- **File fields** (resume, cover letter, other uploads) take `{"fileHandle": str}` as the value, obtained by calling `upload_file()` first (2-step flow).
+- **Text/textarea fields** take the raw string as the value.
+- **Single-select dropdowns** take the string value (must match one of the options exactly).
+- **Multi-select** fields take a list of strings.
+- **Yes/no** fields take `"Yes"` or `"No"` as a string.
+
+Build the `fieldSubmissions` list by iterating `applicationForm.fieldDefinitions` from the cached posting response: for each definition, look up the user's answer by the field's path, pick the correct value shape based on the field type. Cover letter mode: if the form has a `_COVER_LETTER` field of type `File`, upload and include the fileHandle. If it's of type `Text` or `LongText`, include the cover letter as a plain string. Check `fieldDefinition.type` before picking the value shape.
 
 ### 7.6 Rate limiting
 
