@@ -194,18 +194,29 @@ CREATE INDEX idx_applications_user_status ON applications(user_id, status);
 CREATE INDEX idx_applications_job ON applications(job_id);
 CREATE INDEX idx_applications_submitted ON applications(submitted_at DESC);
 
--- RLS
+-- RLS (full SQL with DROP-first pattern in §6 — this is the intent)
 ALTER TABLE applications ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Users read own" ON applications FOR SELECT USING (auth.uid() = user_id);
-CREATE POLICY "Users insert own" ON applications FOR INSERT WITH CHECK (auth.uid() = user_id);
-CREATE POLICY "Users update own" ON applications FOR UPDATE USING (auth.uid() = user_id);
-CREATE POLICY "Service role full access" ON applications FOR ALL USING (auth.role() = 'service_role');
+CREATE POLICY "Users read own applications" ON applications FOR SELECT USING (auth.uid() = user_id);
+CREATE POLICY "Users insert own applications" ON applications FOR INSERT WITH CHECK (auth.uid() = user_id);
+CREATE POLICY "Users update own applications" ON applications FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY "Service role full access applications" ON applications FOR ALL USING (auth.role() = 'service_role');
 
 -- updated_at trigger
 CREATE TRIGGER trg_applications_updated_at
   BEFORE UPDATE ON applications
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 ```
+
+### 5.1a New-user JIT provisioning
+
+`db_client.create_user()` is called on first profile fetch for new Supabase-auth users. It currently creates `{id, email}`. Update to also set:
+
+- `first_name = email.split('@')[0]` (placeholder from email local-part)
+- `last_name = ''`
+- `default_referral_source = 'LinkedIn'` (from the new column default)
+- `notice_period_text = 'Available in 2 weeks'` (from the new column default)
+
+This ensures new users don't hit `profile_incomplete` on day 1 for Easy Apply. They can override the placeholder first_name in Settings later.
 
 ### 5.2 New columns on `users`
 
@@ -471,13 +482,20 @@ class SubmitApplicationResponse(BaseModel):
     application_id: str
     status: str                # 'submitted' | 'unknown' | 'failed'
     submitted_at: str
-    platform_response_summary: str | None
+    platform_response_summary: str | None  # short human-readable line, e.g.,
+                                           # "Greenhouse: Application received"
+                                           # Full raw response lives in
+                                           # applications.platform_response JSONB
     dry_run: bool
 ```
 
+**Note on field names verified via fixtures:** The `GreenhouseClient.submit_application()` field names (`first_name`, `last_name`, `email`, `phone`, `resume`, `cover_letter_text`, `question_{id}`) are based on Greenhouse's public API docs. **Verify against the fetched fixture in F3 before shipping.** If Greenhouse uses different names (e.g., `cover_letter` instead of `cover_letter_text`), update the client accordingly. Implementation checklist: run `scripts/fetch_platform_fixtures.py`, inspect the returned JSON, confirm field names match the client.
+
 ### 7.2 Endpoint: `GET /api/apply/eligibility/{job_id}`
 
-**Purpose:** Fast, cheap check for the "⚡ Easy Apply" badge. Called on dashboard render for each job (but served from the batched `jobs.easy_apply_eligible` column so no round-trip per job).
+**Purpose:** On-demand detailed eligibility check for a specific job. Called when the user is about to interact with Easy Apply (badge click, modal open, Apply tab load). **NOT** called for every dashboard card — the dashboard badge visibility is driven by the `jobs.easy_apply_eligible` column returned in the batch `/api/dashboard/jobs` response.
+
+The endpoint also returns extra context (`already_applied`, `application_id`, `missing_required_fields`) that the modal uses to decide which view to render.
 
 **Logic:**
 
@@ -554,29 +572,61 @@ def check_eligibility(job_id: str, user: AuthUser = Depends(get_current_user)):
    - Else: `custom`
 6. **Load resume metadata** — `resume_s3_url` (fresh presigned via `_refresh_s3_urls`), filename, `resume_version`, `is_default` (true if `resume_s3_key` points to `default_base.pdf`).
 7. **Load cover letter** — try `users/{uid}/cover_letters/{job_hash}.tex` from S3, pass through `tex_to_plaintext()`. If missing, use a hardcoded default CL template from config. If both fail, set `cover_letter.text = ''` and `cover_letter.source = 'not_generated'`.
+   - **max_length** — source priority: (1) platform metadata field if present, (2) per-platform hardcoded default:
+     - Greenhouse: **10000** chars
+     - Ashby: **5000** chars
+   - **include_by_default** — source priority: (1) platform metadata `cover_letter_required` (if true → always on), (2) tier-based fallback (S/A → on, B/C → off).
 8. **Build profile dict** — read from `users` table, snapshot the fields for display.
 9. **Generate AI answers** via `_generate_custom_answers()`:
    - For `category='confirmation'` questions: skip AI, set `ai_answer=False`, `requires_user_action=True`.
    - For `category='eeo'` questions: skip AI, set `ai_answer="Decline to self-identify"` (or equivalent from options).
    - For `category='marketing'` questions: skip AI, set `ai_answer=False`.
    - For `category='referral'` questions: if options are present, match `user.default_referral_source` to the closest option. If not in options, set to the dropdown's first entry that includes "LinkedIn" or similar.
-   - For `category='custom'` questions: AI call with the full job description + user context + question.
+   - For `category='custom'` questions: AI call using `ai_complete_cached`:
+     ```python
+     ai_complete_cached(
+         system_prompt=SYSTEM_PROMPT,
+         user_prompt=USER_PROMPT.format(...),
+         temperature=0.3,              # deterministic-ish, allows slight creativity
+         max_tokens=300,               # answers are short
+         providers=["qwen", "nvidia", "groq"],  # existing council failover
+         cache_hours=24 * 7,           # same job+resume → same answers for 7 days
+     )
+     ```
+   - **Post-process every AI answer against the question schema:**
+     ```python
+     if question.type in ("select", "multi_select") and question.options:
+         if ai_answer not in question.options:
+             # Fuzzy match (case-insensitive substring) or fall back to first option
+             match = next((opt for opt in question.options
+                          if ai_answer.lower() in opt.lower() or opt.lower() in ai_answer.lower()),
+                          None)
+             ai_answer = match or question.options[0]
+             logger.warning(f"AI hallucinated option '{ai_answer}' not in {question.options}")
+     if question.type == "yes_no":
+         if ai_answer.lower() not in ("yes", "no"):
+             ai_answer = "Yes"  # safer default for most application Qs
+     ```
 10. **Build and return `ApplyPreviewResponse`**, write to cache.
 
 **AI answer generation prompt:**
+
+The prompt is built from the user's stored profile data, not hardcoded facts. `user.candidate_context` is a free-text field in the `users` table the user can populate with their bio, years of experience, certifications, and skills — it becomes the primary source. A hardcoded fallback applies only if `candidate_context` is empty.
 
 ```
 You are filling out a job application for {user.first_name} {user.last_name}, applying to {job.title} at {job.company}.
 
 CANDIDATE PROFILE:
-- 3+ years of full-stack software engineering experience
-- MSc in Cloud Computing (ATU)
-- AWS Solutions Architect Professional certified
-- Based in Dublin, Ireland (Stamp 1G work authorization)
-- Skills: {user.candidate_context or "Python, TypeScript/React, AWS, CI/CD, Docker, Kubernetes, Terraform"}
+{user.candidate_context or DEFAULT_CANDIDATE_CONTEXT}
+
+CONTACT:
 - LinkedIn: {user.linkedin}
 - GitHub: {user.github}
 - Website: {user.website}
+- Location: {user.location}
+- Visa status: {user.visa_status}
+
+PREFERENCES:
 - Salary expectations: {user.salary_expectation_notes or "Open to discussion, targeting competitive market rate"}
 - Notice period: {user.notice_period_text}
 
@@ -603,13 +653,25 @@ Answer the question concisely, truthfully, and in a way that presents the candid
 Return ONLY the answer text, no explanation.
 ```
 
+**`DEFAULT_CANDIDATE_CONTEXT` fallback** (used only if `user.candidate_context` is empty):
+
+```
+3+ years full-stack software engineering experience. MSc in Cloud Computing (ATU).
+AWS Solutions Architect Professional certified. Strong in Python (FastAPI, Flask,
+Django), TypeScript/React, AWS (ECS/Fargate, Lambda, RDS, S3, API Gateway),
+CI/CD, Docker, Kubernetes, Terraform. Track record of reducing MTTR 35%,
+cutting release lead time 85%, maintaining 99.9% uptime.
+```
+
+The user should populate `users.candidate_context` in Settings for better personalization, but the default makes Easy Apply work on day 1.
+
 ### 7.4 Endpoint: `POST /api/apply/submit/{job_id}`
 
 **Execution order** (critical):
 
 1. Auth (JWT via Depends)
 2. Load job, verify RLS
-3. Idempotency check by `canonical_hash` (see §5.1 unique index)
+3. Idempotency check: query `applications` for existing active rows. Priority: (a) by `canonical_hash` if the job has one, (b) fall back to `(user_id, job_id)` if `canonical_hash` is NULL. Both cases are enforced by the two partial unique indexes in §5.1. Return 409 `already_applied` on match.
 4. Rate limit check: count `applications` rows inserted in last 60 min, reject if ≥ 20
 5. Profile completeness re-check
 6. Re-verify eligibility
@@ -627,8 +689,8 @@ Return ONLY the answer text, no explanation.
     - 404/410 → mark `jobs.is_expired=true`, return 404 with `reason=job_no_longer_available`
     - 4xx/5xx → return 502 `platform_error` with detail, no DB write
     - Timeout / network error → write `applications` row with `status='unknown'`, return 202 with warning
-13. Mirror `jobs.application_status = 'Applied'` to all rows sharing `canonical_hash`
-14. Insert `application_timeline` event (`status='Applied'`, `notes='Easy Apply via {platform}'`)
+13. Mirror `jobs.application_status = 'Applied'` to all rows sharing `canonical_hash` (forward-looking: see §9.3 for the new-job insert path)
+14. Insert **one** `application_timeline` event for the specific `job_id` the user submitted through — siblings mirrored in step 13 do NOT get duplicate timeline entries. Row: `{user_id, job_id, status: 'Applied', notes: 'Easy Apply via {platform}'}`
 15. Return `SubmitApplicationResponse`
 
 If `dry_run=True`, steps 1-10 run normally, then **skip step 11** (no actual POST), write the intended payload to `applications` with `dry_run=true` and `status='submitted'`, return success.
@@ -643,7 +705,22 @@ If `dry_run=True`, steps 1-10 run normally, then **skip step 11** (no actual POS
 | `latex_to_text.py` | `utils/` (root) only | `app.py` preview endpoint |
 | `platform_clients.py` | `utils/` (root) only | `app.py` preview + submit endpoints |
 
-The duplication for `platform_parsers.py` is because the two Lambdas package their sibling directories independently. Add a pre-commit check or a test that compares the two files for drift.
+The duplication for `platform_parsers.py` is because the two Lambdas package their sibling directories independently. A unit test (`tests/unit/test_utils_sync.py`) byte-compares the two copies and fails CI if they drift.
+
+```python
+# tests/unit/test_utils_sync.py
+import hashlib
+from pathlib import Path
+
+def test_platform_parsers_sync():
+    root = Path(__file__).parent.parent.parent
+    a = (root / "utils" / "platform_parsers.py").read_bytes()
+    b = (root / "lambdas" / "pipeline" / "utils" / "platform_parsers.py").read_bytes()
+    assert hashlib.sha256(a).hexdigest() == hashlib.sha256(b).hexdigest(), (
+        "utils/platform_parsers.py out of sync between root and lambdas/pipeline. "
+        "Update both copies."
+    )
+```
 
 **`utils/platform_parsers.py`:**
 
@@ -989,7 +1066,14 @@ const ERROR_MESSAGES = {
 
 ### 8.5 JobWorkspace Apply tab
 
-Embeds the modal form inline (not in a modal). Otherwise identical.
+Alternative full-page view of the same form for users who navigate to JobWorkspace directly instead of clicking the dashboard badge. Renders `<EasyApplyForm />` — the same subcomponent that `<EasyApplyModal />` wraps. No modal chrome (no close X, no overlay). Submit behavior identical.
+
+**Badge click semantics:**
+- From Dashboard → opens `<EasyApplyModal />` (overlay, stays on dashboard)
+- From JobWorkspace → opens `<EasyApplyModal />` (overlay, stays on workspace)
+- Visiting `/workspace/{job_id}` directly and switching to "Apply" tab → renders inline `<EasyApplyForm />` without a modal
+
+Consistent: badge always opens modal. The tab is a no-modal alternative for direct URL users.
 
 ### 8.6 Dashboard integration
 
@@ -1025,6 +1109,30 @@ if platform_info:
 
 Same — after score_batch completes and creates the job row, the new columns are populated by score_batch itself. No additional change needed in `run_single_job`.
 
+### 9.3 Forward-looking canonical-hash mirroring (new job insert path)
+
+**Problem:** §7.4 step 13 mirrors `jobs.application_status = 'Applied'` across all existing jobs sharing `canonical_hash` at submit time. But tomorrow's scrape may create a new `jobs` row with the same `canonical_hash` (duplicate of an already-applied job on a different source). The new row would start with `application_status='New'` — wrong.
+
+**Fix:** In `score_batch.py`'s insert path, after building the `job_record` but before the final `.insert()`, check for existing applications by canonical_hash and pre-set the status:
+
+```python
+# After URL parsing, before insert
+canonical = job_record.get("canonical_hash")
+if canonical:
+    existing = db.table("applications").select("id, status").eq(
+        "user_id", user_id
+    ).eq("canonical_hash", canonical).not_.in_(
+        "status", ["unknown", "failed"]
+    ).limit(1).execute()
+    if existing.data:
+        # Already applied to a canonical sibling — mark this new row as Applied
+        job_record["application_status"] = "Applied"
+```
+
+This runs once per new job insert. Cost: one extra indexed lookup per insert. Worth it for consistency.
+
+Same logic must be added to any other code path that inserts into `jobs` — currently only `score_batch.py` (no other path writes directly to `jobs`).
+
 ---
 
 ## 10. Testing
@@ -1037,6 +1145,7 @@ Same — after score_batch completes and creates the job row, the new columns ar
 | `tests/unit/test_latex_to_text.py` | Tailored CL → plaintext (fixtures for several known CL layouts); edge cases (empty, malformed, no document env) |
 | `tests/unit/test_platform_clients.py` | `GreenhouseClient.fetch_job_metadata()` with mocked httpx; `AshbyClient.fetch_job_posting()` returning (data, form_id); `GreenhouseClient.submit_application()` builds correct multipart payload |
 | `tests/unit/test_score_batch.py` (existing) | Add cases for non-job patterns, entry-level patterns (both should return skip reasons) |
+| `tests/unit/test_utils_sync.py` | Byte-compares `utils/platform_parsers.py` in root vs `lambdas/pipeline/utils/`. Fails CI if drift |
 
 ### 10.2 Integration tests
 
