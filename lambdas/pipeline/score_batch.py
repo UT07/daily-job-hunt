@@ -31,6 +31,41 @@ def score_to_tier(score: float | None) -> str:
     return "D"
 
 
+# Tech-domain keywords — job titles matching any of these pass the prefilter.
+# Case-insensitive substring match. Covers software, infra, data, ML/AI, security.
+_TECH_TITLE_KEYWORDS = (
+    "software", "engineer", "developer", "programmer", "architect",
+    "sre", "devops", "platform", "infrastructure", "infra", "cloud",
+    "backend", "frontend", "fullstack", "full-stack", "full stack",
+    "data", "ml ", "mle", "ai/", " ai ", "machine learning", "llm",
+    "security", "cyber", "site reliability", "systems",
+    "python", "javascript", "typescript", "react", "node",
+    "kubernetes", "aws", "gcp", "azure", "linux",
+    "staff ", "principal ", "senior ", "junior ", "graduate",
+    "tech lead", "technical lead", "eng", "qa ",
+)
+
+# Hard reject titles — obvious non-tech roles we should never score.
+_NON_TECH_TITLE_REJECTS = (
+    "nurse", "doctor", "physician", "pharmacist", "dentist", "therapist",
+    "teacher", "tutor", "professor", "lecturer", "instructor",
+    "sales executive", "sales manager", "sales director", "account executive",
+    "account manager", "customer success", "customer service", "call center",
+    "marketing manager", "marketing director", "brand manager", "copywriter",
+    "hr ", "human resources", "recruiter", "talent acquisition",
+    "accountant", "bookkeeper", "auditor", "tax ", "finance manager",
+    "lawyer", "attorney", "paralegal", "legal counsel",
+    "driver", "delivery", "warehouse", "retail", "cashier", "barista",
+    "cleaner", "janitor", "security guard", "chef", "cook", "waiter",
+    "receptionist", "secretary", "administrator", "office manager",
+    "social worker", "counsellor", "counselor",
+    "construction", "plumber", "electrician", "carpenter", "mechanic",
+    "graphic designer", "art director", "content creator",
+    "project manager", "product manager", "program manager",
+    "business analyst", "business development",
+)
+
+
 def should_skip_scoring(job: dict) -> str | None:
     """Check if job should be skipped for scoring. Returns score_status or None."""
     desc = job.get("description", "") or ""
@@ -39,6 +74,15 @@ def should_skip_scoring(job: dict) -> str | None:
     company = job.get("company", "") or ""
     if not company.strip():
         return "incomplete"
+    title = (job.get("title") or "").lower()
+    if not title:
+        return "incomplete"
+    # Hard reject obvious non-tech titles
+    if any(bad in title for bad in _NON_TECH_TITLE_REJECTS):
+        return "non_tech_role"
+    # Keyword prefilter — at least one tech keyword must be present in the title
+    if not any(kw in title for kw in _TECH_TITLE_KEYWORDS):
+        return "no_tech_keywords"
     return None
 
 
@@ -279,7 +323,7 @@ Resume (LaTeX): {resume_tex}"""
 
 
 def score_single_job_deterministic(
-    job: dict, resume_tex: str, num_calls: int = 3
+    job: dict, resume_tex: str, num_calls: int = 1
 ) -> dict | None:
     """Score a job multiple times with temp=0 and take the median of each perspective.
 

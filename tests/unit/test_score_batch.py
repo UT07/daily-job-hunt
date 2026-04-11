@@ -342,17 +342,31 @@ def test_should_skip_scoring_none_company():
 
 
 def test_should_skip_scoring_valid_job():
-    """Valid job with sufficient description and company returns None."""
+    """Valid tech job with sufficient description, company, and title returns None."""
     import score_batch
-    job = {"description": "x" * 150, "company": "TechCorp"}
+    job = {"description": "x" * 150, "company": "TechCorp", "title": "Software Engineer"}
     assert score_batch.should_skip_scoring(job) is None
 
 
 def test_should_skip_scoring_exactly_100_chars():
     """Job with exactly 100-char description passes (not < 100)."""
     import score_batch
-    job = {"description": "x" * 100, "company": "TechCorp"}
+    job = {"description": "x" * 100, "company": "TechCorp", "title": "Backend Developer"}
     assert score_batch.should_skip_scoring(job) is None
+
+
+def test_should_skip_scoring_rejects_non_tech_title():
+    """Obvious non-tech titles are rejected before AI scoring."""
+    import score_batch
+    job = {"description": "x" * 200, "company": "HealthCorp", "title": "Registered Nurse"}
+    assert score_batch.should_skip_scoring(job) == "non_tech_role"
+
+
+def test_should_skip_scoring_rejects_no_tech_keywords():
+    """Titles without tech keywords are rejected."""
+    import score_batch
+    job = {"description": "x" * 200, "company": "Foo", "title": "Chief Happiness Officer"}
+    assert score_batch.should_skip_scoring(job) == "no_tech_keywords"
 
 
 def test_handler_skips_bad_data_jobs():
@@ -379,10 +393,9 @@ def test_handler_skips_bad_data_jobs():
             None,
         )
 
-    # AI is only called for the good job (short job is skipped before scoring),
-    # but the handler uses deterministic 3-call median scoring so we expect 3
-    # AI calls for that single job.
-    assert mock_ai.call_count == 3
+    # AI is only called for the good job (short job is skipped before scoring).
+    # num_calls was reduced from 3 → 1 to cut scoring cost (temp=0 is deterministic).
+    assert mock_ai.call_count == 1
     assert result["skipped_count"] == 1
     assert result["matched_count"] == 1
 
