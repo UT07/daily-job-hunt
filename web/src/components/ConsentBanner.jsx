@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { apiCall } from '../api'
+import { apiCall, apiGet } from '../api'
 import Button from './ui/Button'
 
 const CONSENT_KEY = 'gdpr_consent'
@@ -10,10 +10,28 @@ export default function ConsentBanner() {
   const [accepting, setAccepting] = useState(false)
 
   useEffect(() => {
-    const consent = localStorage.getItem(CONSENT_KEY)
-    if (consent !== 'true') {
-      setVisible(true)
-    }
+    // Fast path: localStorage says already consented
+    if (localStorage.getItem(CONSENT_KEY) === 'true') return
+
+    // Slow path: check backend — user may have consented on another device,
+    // or localStorage was cleared on logout. Backend persists the timestamp.
+    let cancelled = false
+    apiGet('/api/profile')
+      .then((profile) => {
+        if (cancelled) return
+        if (profile?.gdpr_consent_at) {
+          // Already consented — sync to localStorage and hide banner
+          localStorage.setItem(CONSENT_KEY, 'true')
+          setVisible(false)
+        } else {
+          setVisible(true)
+        }
+      })
+      .catch(() => {
+        // Profile fetch failed — show banner as fallback
+        if (!cancelled) setVisible(true)
+      })
+    return () => { cancelled = true }
   }, [])
 
   async function handleAccept() {

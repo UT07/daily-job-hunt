@@ -291,11 +291,27 @@ class SupabaseClient:
             s = r.get("application_status", "New")
             status_counts[s] = status_counts.get(s, 0) + 1
 
+        # Funnel metrics — "applied" counts anything that ever reached Applied,
+        # not just the current-state Applied bucket. Fixes the bug where changing
+        # status Applied→Rejected would drop the Applied count.
+        _APPLIED_FUNNEL = {"Applied", "Phone Screen", "Interview", "Offer",
+                           "Rejected", "Withdrawn", "Accepted"}
+        _INTERVIEWING = {"Phone Screen", "Interview"}
+        _OFFERS = {"Offer", "Accepted"}
+        total_applied = sum(n for s, n in status_counts.items() if s in _APPLIED_FUNNEL)
+        total_rejected = status_counts.get("Rejected", 0)
+        total_interviewing = sum(n for s, n in status_counts.items() if s in _INTERVIEWING)
+        total_offers = sum(n for s, n in status_counts.items() if s in _OFFERS)
+
         return {
             "total_jobs": total,
             "matched_jobs": matched,
             "avg_match_score": avg_score,
             "jobs_by_status": status_counts,
+            "total_applied": total_applied,
+            "total_rejected": total_rejected,
+            "total_interviewing": total_interviewing,
+            "total_offers": total_offers,
         }
 
     # ── Runs ──────────────────────────────────────────────────────

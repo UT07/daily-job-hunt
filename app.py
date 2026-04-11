@@ -248,6 +248,7 @@ class ProfileResponse(BaseModel):
     candidate_context: Optional[str] = None
     plan: str = "free"
     created_at: Optional[str] = None
+    gdpr_consent_at: Optional[str] = None
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -1244,6 +1245,7 @@ def get_profile(user: AuthUser = Depends(get_current_user)):
         candidate_context=row.get("candidate_context"),
         plan=row.get("plan", "free"),
         created_at=row.get("created_at"),
+        gdpr_consent_at=row.get("gdpr_consent_at"),
     )
 
 
@@ -1293,6 +1295,7 @@ def update_profile(
         candidate_context=row.get("candidate_context"),
         plan=row.get("plan", "free"),
         created_at=row.get("created_at"),
+        gdpr_consent_at=row.get("gdpr_consent_at"),
     )
 
 
