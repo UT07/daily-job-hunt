@@ -983,11 +983,34 @@ async def main():
                 "action": "status",
                 "status": "login_required",
                 "platform": login_info.get("platform", PLATFORM),
+                "message": "Please log in using the browser stream above",
             }))
-            # Wait for user to log in via the stream
-            # (screenshot loop continues, user types credentials)
+            # Wait for user to log in — poll until login page is gone
+            # Screenshot loop runs concurrently so user sees the login form
+            for _ in range(120):  # 2 min max wait
+                await asyncio.sleep(1)
+                login_check = await page.evaluate(LOGIN_DETECTION_JS)
+                if not login_check.get("login_required"):
+                    break
+            else:
+                await ws.send(json.dumps({
+                    "action": "status", "status": "error",
+                    "message": "Login timed out after 2 minutes",
+                }))
+            # Re-wait for form elements after login redirect
+            try:
+                await page.wait_for_selector(
+                    "form, input:not([type=hidden]), textarea",
+                    timeout=10000,
+                )
+            except Exception:
+                pass
         
         await ws.send(json.dumps({"action": "status", "status": "ready"}))
+        
+        # 6b. Auto-detect fields on initial page load
+        # (populates the Answer Panel immediately without user clicking "Detect")
+        await _detect_and_send_fields(page, ws)
         
         # 6. Start concurrent tasks with a shared stop signal
         # CRITICAL: asyncio.gather(return_exceptions=True) does NOT cancel siblings
@@ -1005,6 +1028,22 @@ async def main():
             Key={"session_id": SESSION_ID}
         ).get("Item", {})
         frontend_conn_id = session_row.get("ws_connection_frontend")
+        if not frontend_conn_id:
+            # Frontend hasn't connected yet — wait up to 30s for it
+            for _ in range(15):
+                await asyncio.sleep(2)
+                session_row = ddb.Table("naukribaba-browser-sessions").get_item(
+                    Key={"session_id": SESSION_ID}
+                ).get("Item", {})
+                frontend_conn_id = session_row.get("ws_connection_frontend")
+                if frontend_conn_id:
+                    break
+            if not frontend_conn_id:
+                logger.error("Frontend never connected — screenshot streaming disabled")
+                await ws.send(json.dumps({
+                    "action": "status", "status": "error",
+                    "message": "Frontend WebSocket not connected. Refresh the page.",
+                }))
         
         async def screenshot_loop():
             """Stream screenshots via API Gateway Management API (not WS frames)."""
@@ -1147,6 +1186,38 @@ async def main():
     logger.info("Browser session ended")
 
 
+async def _detect_and_send_fields(page, ws):
+    """Detect fields in main frame + all iframes, merge, send to frontend."""
+    main_result = await page.evaluate(FORM_DETECTION_JS)
+    all_fields = main_result.get("fields", [])
+    submit_button = main_result.get("submit_button")
+
+    # Scan iframes for forms (Workday, iCIMS, some Greenhouse embeds)
+    for frame in page.frames:
+        if frame == page.main_frame:
+            continue
+        try:
+            frame_result = await frame.evaluate(FORM_DETECTION_JS)
+            frame_fields = frame_result.get("fields", [])
+            if frame_fields:
+                for f in frame_fields:
+                    f["frame_url"] = frame.url
+                all_fields.extend(frame_fields)
+                if not submit_button and frame_result.get("submit_button"):
+                    submit_button = frame_result["submit_button"]
+                    submit_button["frame_url"] = frame.url
+        except Exception:
+            pass  # frame may be cross-origin or detached
+
+    await ws.send(json.dumps({
+        "action": "fields",
+        "fields": all_fields,
+        "submit_button": submit_button,
+        "page_title": main_result.get("page_title", ""),
+        "page_url": main_result.get("page_url", ""),
+    }))
+
+
 async def fill_all_fields(page, answers, ws):
     """Fill all detected form fields with the provided answers."""
     await ws.send(json.dumps({"action": "status", "status": "filling"}))
@@ -1176,6 +1247,22 @@ async def fill_all_fields(page, answers, ws):
                 "success": False,
                 "error": str(e)[:100]
             }))
+    
+    # Auto-upload resume if a file input was detected
+    for field in fields_data.get("fields", []):
+        if field.get("type") == "file" and "resume" in (field.get("label") or "").lower():
+            resume_s3_key = answers.get("_resume_s3_key")  # passed from frontend
+            if resume_s3_key:
+                try:
+                    await upload_resume(page, resume_s3_key)
+                    filled += 1
+                    await ws.send(json.dumps({
+                        "action": "field_filled",
+                        "field_id": field["id"],
+                        "success": True
+                    }))
+                except Exception as e:
+                    logger.warning(f"Resume upload failed: {e}")
     
     await ws.send(json.dumps({
         "action": "status",
@@ -1287,6 +1374,19 @@ async def handle_submit(page, ws):
     confirm_key = f"confirmations/{USER_ID}/{SESSION_ID}.jpg"
     s3.put_object(Bucket=S3_BUCKET, Key=confirm_key, Body=screenshot)
     
+    # Write pending_record to DynamoDB as a safety net.
+    # If the frontend crashes before calling POST /api/apply/record,
+    # a cleanup Lambda can read this flag and write the applications row.
+    ddb = boto3.resource("dynamodb")
+    ddb.Table("naukribaba-browser-sessions").update_item(
+        Key={"session_id": SESSION_ID},
+        UpdateExpression="SET pending_record = :pr, confirmation_key = :ck",
+        ExpressionAttributeValues={
+            ":pr": True,
+            ":ck": confirm_key,
+        },
+    )
+    
     await ws.send(json.dumps({
         "action": "status",
         "status": "submitted",
@@ -1330,6 +1430,13 @@ def start_browser_session(
     if not job:
         raise HTTPException(404)
     
+    # 1b. CHECK PROFILE COMPLETENESS BEFORE LAUNCHING FARGATE
+    # This prevents wasting a $0.02 Fargate session on an incomplete profile.
+    user_row = _db.get_user(user.id) or {}
+    missing = _check_profile_completeness(user_row)
+    if missing:
+        raise HTTPException(412, f"profile_incomplete:{','.join(missing)}")
+    
     # 2. Check for existing active session (reuse if warm)
     # Query DynamoDB for user's active sessions
     # If found and status != 'ended': return existing session
@@ -1338,15 +1445,40 @@ def start_browser_session(
     session_id = str(uuid.uuid4())
     
     # 4. Generate short-lived JWT for WebSocket auth
-    ws_token = _generate_ws_token(user.id, session_id)
+    # The WS token is a standard Supabase JWT with an additional 'session' claim,
+    # short TTL (60 seconds — only needs to survive the WS handshake), and 
+    # audience='ws' to distinguish from regular API tokens.
+    import time as _time
+    ws_payload = {
+        "sub": user.id,
+        "session": session_id,
+        "aud": "ws",
+        "role": "authenticated",
+        "iss": "supabase",
+        "iat": int(_time.time()),
+        "exp": int(_time.time()) + 60,  # 60s TTL — only for WS upgrade
+    }
+    ws_token = jwt.encode(ws_payload, os.environ["SUPABASE_JWT_SECRET"], algorithm="HS256")
     
     # 5. Launch Fargate task
     ecs = boto3.client("ecs")
+    # Subnet IDs are stored as a SAM parameter (discovered once during setup via:
+    #   aws ec2 describe-subnets --filters Name=vpc-id,Values=vpc-0bfb7f8052eb3968b
+    # and added to samconfig.toml as BrowserSubnetIds=subnet-xxx,subnet-yyy)
+    subnet_ids = os.environ.get("BROWSER_SUBNET_IDS", "").split(",")
+    sg_id = os.environ.get("BROWSER_SG_ID", "")  # ScraperSecurityGroup ID
+    
     task = ecs.run_task(
-        cluster="naukribaba-scrapers"  # existing ECS cluster from template.yaml,
+        cluster="naukribaba-scrapers",  # existing ECS cluster from template.yaml
         taskDefinition="naukribaba-browser-session",
         launchType="FARGATE",
-        networkConfiguration={...},  # VPC config
+        networkConfiguration={
+            "awsvpcConfiguration": {
+                "subnets": subnet_ids,
+                "securityGroups": [sg_id],
+                "assignPublicIp": "ENABLED",  # required for internet access
+            }
+        },
         overrides={
             "containerOverrides": [{
                 "name": "browser",
@@ -1569,6 +1701,37 @@ export default function BrowserStream({ wsUrl, sessionId, token, onFieldsDetecte
       tabIndex={0}
     />
   );
+}
+```
+
+### 10.2b Data flow: How AI answers reach the Answer Panel
+
+The frontend makes TWO parallel calls when the user clicks "Apply":
+
+1. `POST /api/apply/start-session` → launches Fargate, returns `session_id` + `ws_url`
+2. `GET /api/apply/preview/{job_id}` → returns AI-generated answers for all expected fields
+
+The preview response includes `custom_questions[].ai_answer` (same endpoint from the Mode 1 spec — it generates answers using the user's profile + tailored resume + job description).
+
+When the Fargate session sends a `{action: "fields", fields: [...]}` message (detected form fields), the frontend **merges** the detected fields with the AI answers from the preview response by matching on `field.label` or `field.id`. The Answer Panel shows the merged result: each detected field with its AI-suggested answer pre-filled.
+
+If a detected field has no matching AI answer (new question not in the preview), it shows as empty and the user fills it manually.
+
+```jsx
+// In the Apply tab component:
+const [preview, setPreview] = useState(null);
+const [detectedFields, setDetectedFields] = useState([]);
+
+useEffect(() => {
+  // Fetch AI answers in parallel with session start
+  getApplyPreview(jobId).then(setPreview);
+}, [jobId]);
+
+function onFieldsDetected(fieldsMsg) {
+  setDetectedFields(fieldsMsg.fields);
+  // Merge AI answers from preview with detected fields
+  // Match by label similarity (fuzzy) since field IDs differ between
+  // our preview's question_ids and the actual DOM field IDs
 }
 ```
 
