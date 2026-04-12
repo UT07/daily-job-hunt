@@ -85,11 +85,12 @@ Embed a **live cloud browser** inside NaukriBaba's Apply tab. A real Chrome inst
 │  2. Check S3 for saved profile: sessions/{user_id}/{platform}/   │
 │     - If exists: download + extract to /tmp/chrome-profile/      │
 │     - If not: create fresh profile directory                     │
-│  3. Launch Chrome:                                               │
-│     chrome --user-data-dir=/tmp/chrome-profile/                  │
-│            --no-first-run --disable-default-apps                 │
-│            --window-size=1280,800                                │
-│  4. Connect Playwright to Chrome via CDP                         │
+│  3. Launch Chrome via Playwright's `launch_persistent_context`:   │
+│     Playwright manages Chrome lifecycle internally.              │
+│     Profile dir: /tmp/chrome-profile/ (loaded from S3 in step 2)│
+│  4. (Playwright handles CDP connection internally — no separate  │
+│     Chrome binary launch needed. launch_persistent_context does  │
+│     both launch + connect atomically.)                           │
 │  5. Connect to WebSocket API Gateway as the "browser" client     │
 │  6. Navigate to job's apply_url                                  │
 │  7. Start screenshot loop (JPEG encode → WS send, 5-10fps)      │
@@ -118,8 +119,11 @@ Embed a **live cloud browser** inside NaukriBaba's Apply tab. A real Chrome inst
 │  - Multiple applies: navigate to next URL, reuse same Chrome     │
 │                                                                  │
 │  Networking:                                                     │
-│  - VPC with public subnet (outbound internet for job sites)      │
-│  - Security group: outbound 443 only, no inbound                 │
+│  - VPC: vpc-0bfb7f8052eb3968b (existing, from template.yaml)    │
+│  - Subnets: MUST be public subnets with auto-assign public IP    │
+│    (discover via: aws ec2 describe-subnets --filters             │
+│     Name=vpc-id,Values=vpc-0bfb7f8052eb3968b)                   │
+│  - Security group: ScraperSecurityGroup (existing, all outbound) │
 │  - Fargate connects OUT to WebSocket API Gateway (no ALB needed) │
 │  - Bright Data proxy optional (for anti-bot on LinkedIn/Workday) │
 └──────────────────────────┬──────────────────────────────────────┘
@@ -170,6 +174,53 @@ DefaultRoute:
     RouteKey: $default
     Target: !Sub "integrations/${DefaultIntegration}"
 
+# Integrations — connect each route to its Lambda handler
+ConnectIntegration:
+  Type: AWS::ApiGatewayV2::Integration
+  Properties:
+    ApiId: !Ref BrowserWebSocketApi
+    IntegrationType: AWS_PROXY
+    IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsConnectFunction.Arn}/invocations"
+
+DisconnectIntegration:
+  Type: AWS::ApiGatewayV2::Integration
+  Properties:
+    ApiId: !Ref BrowserWebSocketApi
+    IntegrationType: AWS_PROXY
+    IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsDisconnectFunction.Arn}/invocations"
+
+DefaultIntegration:
+  Type: AWS::ApiGatewayV2::Integration
+  Properties:
+    ApiId: !Ref BrowserWebSocketApi
+    IntegrationType: AWS_PROXY
+    IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsRouteFunction.Arn}/invocations"
+
+# Lambda permissions — allow API Gateway to invoke the WebSocket Lambdas
+WsConnectPermission:
+  Type: AWS::Lambda::Permission
+  Properties:
+    FunctionName: !Ref WsConnectFunction
+    Action: lambda:InvokeFunction
+    Principal: apigateway.amazonaws.com
+    SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BrowserWebSocketApi}/*/$connect"
+
+WsDisconnectPermission:
+  Type: AWS::Lambda::Permission
+  Properties:
+    FunctionName: !Ref WsDisconnectFunction
+    Action: lambda:InvokeFunction
+    Principal: apigateway.amazonaws.com
+    SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BrowserWebSocketApi}/*/$disconnect"
+
+WsRoutePermission:
+  Type: AWS::Lambda::Permission
+  Properties:
+    FunctionName: !Ref WsRouteFunction
+    Action: lambda:InvokeFunction
+    Principal: apigateway.amazonaws.com
+    SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BrowserWebSocketApi}/*/$default"
+
 # Stage
 BrowserWsStage:
   Type: AWS::ApiGatewayV2::Stage
@@ -177,6 +228,9 @@ BrowserWsStage:
     ApiId: !Ref BrowserWebSocketApi
     StageName: prod
     AutoDeploy: true
+    DefaultRouteSettings:
+      # Disable detailed access logging to prevent JWT leaking in query strings
+      LoggingLevel: ERROR  # not INFO — INFO logs include query params
 ```
 
 ### 5.2 DynamoDB Session Table
@@ -236,10 +290,10 @@ BrowserSessionTaskDef:
   Properties:
     Family: naukribaba-browser-session
     RequiresCompatibilities: [FARGATE]
-    Cpu: '512'        # 0.5 vCPU — enough for Chrome + streaming
-    Memory: '1024'    # 1GB — Chrome needs ~500MB, headroom for Playwright
+    Cpu: '1024'       # 1 vCPU — Chrome needs real CPU for rendering + JS
+    Memory: '3072'    # 3GB — matches existing PlaywrightTaskDef; Chrome uses ~1-1.5GB, headroom for Playwright + profile tar
     NetworkMode: awsvpc
-    ExecutionRoleArn: !GetAtt EcsExecutionRole.Arn
+    ExecutionRoleArn: !GetAtt FargateExecutionRole.Arn  # existing role from template.yaml
     TaskRoleArn: !GetAtt BrowserTaskRole.Arn
     ContainerDefinitions:
       - Name: browser
@@ -306,9 +360,20 @@ BrowserTaskRole:
 
 ## 6. Data Model Changes
 
+### 6.0 PREREQUISITE: Migration from previous spec must be applied first
+
+**CRITICAL**: The `applications` table and the `jobs.apply_platform` / `apply_board_token` / `apply_posting_id` columns do NOT exist yet. The migration `20260411_auto_apply_setup.sql` from the previous spec (§6) must be applied to Supabase before ANY auto-apply code can run. This migration:
+
+1. Creates the `applications` table with all columns, RLS, partial unique indexes, trigger
+2. Adds `first_name`, `last_name`, `default_referral_source`, `salary_expectation_notes`, `notice_period_text` to `users`
+3. Adds `apply_platform`, `apply_board_token`, `apply_posting_id`, `easy_apply_eligible` to `jobs`
+4. Backfills user profile data and first/last name split
+
+The full SQL is in `docs/superpowers/specs/2026-04-11-auto-apply-mode-1-design.md` §6. Apply it as Step 1 of implementation, before writing any code.
+
 ### 6.1 Changes to `applications` table
 
-The existing spec's `applications` table stays identical (§5.1 of the previous spec). Only `submission_method` values expand:
+On top of the base `applications` table from the prerequisite migration, expand the `submission_method` values and add new columns:
 
 ```sql
 -- Update CHECK constraint to include new methods
@@ -353,6 +418,9 @@ ALTER TABLE applications
 { action: "type", text: "Utkarsh Singh" }
 { action: "key", key: "Enter" }
 { action: "key", key: "Tab" }
+{ action: "key", key: "v", modifiers: ["Control"] }  // Ctrl+V (paste)
+{ action: "key", key: "a", modifiers: ["Control"] }  // Ctrl+A (select all)
+{ action: "key", key: "Backspace" }                   // delete
 
 // Commands
 { action: "navigate", url: "https://job-boards.greenhouse.io/..." }
@@ -402,12 +470,24 @@ ALTER TABLE applications
 
 ### 7.3 Screenshot Streaming Protocol
 
-- Format: JPEG, quality 70-80%, resolution 1280x800
+**CRITICAL**: AWS API Gateway WebSocket has a **32KB binary frame limit** and **128KB text frame limit**. Raw JPEG screenshots at 1280x800 are 50-80KB — they CANNOT be sent as binary WebSocket frames through the API Gateway routes.
+
+**Solution**: Fargate sends screenshots directly to the frontend using the **API Gateway Management API** (`POST @connections/{connectionId}`). This has a **128KB payload limit** — sufficient for most frames. No Lambda routing needed.
+
+```
+Fargate → POST https://{api-id}.execute-api.{region}.amazonaws.com/prod/@connections/{frontend_conn_id}
+         Body: raw JPEG bytes (binary)
+         Limit: 128KB per call
+```
+
+- Format: JPEG, resolution 1280x800
+- Quality: **adaptive** — start at 75%, if frame > 120KB auto-reduce to 60%, if still > 120KB reduce to 45%
 - Frame rate: 5fps idle, 10fps during active interaction
-- Bandwidth: ~50KB per frame × 5fps = ~250KB/s (~2Mbps) baseline
-- Delta optimization (future): only send changed regions
-- Binary WebSocket frames for screenshots (avoid base64 overhead)
-- Frontend renders in a `<canvas>` element for smooth playback
+- Bandwidth: ~40-60KB per frame × 5fps = ~200-300KB/s baseline
+- Frontend renders in a `<canvas>` element via `onmessage` binary handler
+- Fargate reads the frontend's `connection_id` from DynamoDB on session start
+- **No Lambda invocation per frame** — Fargate calls the Management API directly (IAM `execute-api:ManageConnections` permission already granted in §5.5)
+- Text messages (commands, field data, status) still go through WebSocket routes (< 32KB, always fit)
 
 ### 7.4 Connection Lifecycle
 
@@ -533,7 +613,8 @@ FORM_DETECTION_JS = """
     );
     
     for (const el of elements) {
-        if (el.offsetParent === null) continue; // skip invisible
+        // Skip invisible elements EXCEPT file inputs (often hidden, triggered by JS/drag-drop)
+        if (el.offsetParent === null && el.type !== 'file') continue;
         
         const rect = el.getBoundingClientRect();
         if (rect.width === 0 || rect.height === 0) continue;
@@ -611,9 +692,52 @@ FORM_DETECTION_JS = """
             selector: submitBtn.id ? '#' + submitBtn.id : null
         } : null,
         page_title: document.title,
-        page_url: window.location.href
+        page_url: window.location.href,
+        has_iframes: document.querySelectorAll('iframe').length
     };
 }
+"""
+
+# NOTE: FORM_DETECTION_JS only scans the main document. Workday, iCIMS, and
+# some Greenhouse embeds put the application form inside an iframe.
+# The caller MUST also scan all iframes:
+#
+# async def _detect_and_send_fields(page, ws):
+#     """Detect fields in main frame + all iframes, merge results."""
+#     main_result = await page.evaluate(FORM_DETECTION_JS)
+#     all_fields = main_result.get("fields", [])
+#     submit_button = main_result.get("submit_button")
+#
+#     # Scan iframes for forms
+#     for frame in page.frames:
+#         if frame == page.main_frame:
+#             continue
+#         try:
+#             frame_result = await frame.evaluate(FORM_DETECTION_JS)
+#             frame_fields = frame_result.get("fields", [])
+#             if frame_fields:
+#                 # Tag each field with its frame URL for targeted filling
+#                 for f in frame_fields:
+#                     f["frame_url"] = frame.url
+#                 all_fields.extend(frame_fields)
+#                 if not submit_button and frame_result.get("submit_button"):
+#                     submit_button = frame_result["submit_button"]
+#                     submit_button["frame_url"] = frame.url
+#         except Exception:
+#             pass  # frame may be cross-origin or detached
+#
+#     await ws.send(json.dumps({
+#         "action": "fields",
+#         "fields": all_fields,
+#         "submit_button": submit_button,
+#         "page_title": main_result.get("page_title", ""),
+#         "page_url": main_result.get("page_url", ""),
+#     }))
+#
+# When filling fields in an iframe, use:
+#   frame = next(f for f in page.frames if f.url == field["frame_url"])
+#   el = await frame.query_selector(f"#{field['id']}")
+
 """
 
 LOGIN_DETECTION_JS = """
@@ -779,22 +903,31 @@ async def solve_captcha(page, captcha_info, ws):
 
 
 async def _inject_captcha_token(page, captcha_type, token):
-    """Inject a solved CAPTCHA token into the page."""
+    """Inject a solved CAPTCHA token into the page.
+    
+    SECURITY: Uses Playwright's parameterized evaluate() to avoid JS injection.
+    The token comes from CapSolver API and could theoretically contain malicious
+    strings — never use f-string interpolation into evaluate().
+    """
     if captcha_type in ("recaptcha_v2", "recaptcha_v3"):
-        await page.evaluate(f"""
-            document.querySelector('#g-recaptcha-response').value = '{token}';
-            document.querySelector('[name=g-recaptcha-response]').value = '{token}';
-        """)
+        await page.evaluate("""(token) => {
+            const el1 = document.querySelector('#g-recaptcha-response');
+            const el2 = document.querySelector('[name=g-recaptcha-response]');
+            if (el1) el1.value = token;
+            if (el2) el2.value = token;
+        }""", token)
     elif captcha_type == "hcaptcha":
-        await page.evaluate(f"""
-            document.querySelector('[name=h-captcha-response]').value = '{token}';
-            document.querySelector('[name=g-recaptcha-response]').value = '{token}';
-        """)
+        await page.evaluate("""(token) => {
+            const el1 = document.querySelector('[name=h-captcha-response]');
+            const el2 = document.querySelector('[name=g-recaptcha-response]');
+            if (el1) el1.value = token;
+            if (el2) el2.value = token;
+        }""", token)
     elif captcha_type == "turnstile":
-        await page.evaluate(f"""
+        await page.evaluate("""(token) => {
             const input = document.querySelector('[name=cf-turnstile-response]');
-            if (input) input.value = '{token}';
-        """)
+            if (input) input.value = token;
+        }""", token)
 ```
 
 ### 8.5 Main Event Loop
@@ -807,15 +940,20 @@ async def main():
     
     # 2. Launch Chrome
     pw = await async_playwright().start()
+    # CRITICAL: Fargate has no display server. headless=False would crash.
+    # Use headless="new" — Chromium's new headless mode renders identically to
+    # headed Chrome but requires no display. Anti-detection checks pass because
+    # the rendering engine is the same as real Chrome.
     browser = await pw.chromium.launch_persistent_context(
         user_data_dir=str(PROFILE_DIR),
-        headless=False,
+        headless=True,  # new headless — screenshots work, no display needed
         viewport=VIEWPORT,
         args=[
             "--no-first-run",
             "--disable-default-apps",
             "--disable-blink-features=AutomationControlled",
             "--disable-infobars",
+            "--hide-scrollbars",
         ],
         ignore_default_args=["--enable-automation"],
     )
@@ -827,6 +965,16 @@ async def main():
         # 4. Navigate to apply URL
         await ws.send(json.dumps({"action": "status", "status": "navigating"}))
         await page.goto(APPLY_URL, wait_until="networkidle", timeout=30000)
+        
+        # SPA forms (Greenhouse Remix, Workday React) render async after navigation.
+        # Wait for form elements to appear before running detection.
+        try:
+            await page.wait_for_selector(
+                "form, input:not([type=hidden]), textarea, [class*=field], [class*=question]",
+                timeout=10000,
+            )
+        except Exception:
+            logger.warning("No form elements found within 10s — page may need login or is non-standard")
         
         # 5. Check for login page
         login_info = await page.evaluate(LOGIN_DETECTION_JS)
@@ -841,105 +989,160 @@ async def main():
         
         await ws.send(json.dumps({"action": "status", "status": "ready"}))
         
-        # 6. Start concurrent tasks
+        # 6. Start concurrent tasks with a shared stop signal
+        # CRITICAL: asyncio.gather(return_exceptions=True) does NOT cancel siblings
+        # when one coroutine returns. Use an Event so all loops check for shutdown.
+        stop_event = asyncio.Event()
         last_activity = time.time()
         session_start = time.time()
+
+        # Management API client for sending screenshots directly (bypasses 32KB WS limit)
+        import httpx as _httpx
+        mgmt_url = WS_URL.replace("wss://", "https://").rstrip("/")
+        # Read frontend connection_id from DynamoDB
+        ddb = boto3.resource("dynamodb")
+        session_row = ddb.Table("naukribaba-browser-sessions").get_item(
+            Key={"session_id": SESSION_ID}
+        ).get("Item", {})
+        frontend_conn_id = session_row.get("ws_connection_frontend")
         
         async def screenshot_loop():
-            """Continuously stream screenshots."""
-            while True:
-                try:
-                    screenshot = await page.screenshot(
-                        type="jpeg", quality=SCREENSHOT_QUALITY
-                    )
-                    await ws.send(screenshot)  # binary frame
-                except Exception as e:
-                    logger.warning(f"Screenshot error: {e}")
-                await asyncio.sleep(1.0 / SCREENSHOT_FPS)
+            """Stream screenshots via API Gateway Management API (not WS frames)."""
+            async with _httpx.AsyncClient() as http:
+                while not stop_event.is_set():
+                    try:
+                        quality = SCREENSHOT_QUALITY
+                        screenshot = await page.screenshot(type="jpeg", quality=quality)
+                        # Auto-reduce quality if frame > 120KB (Management API limit: 128KB)
+                        if len(screenshot) > 120_000:
+                            screenshot = await page.screenshot(type="jpeg", quality=50)
+                        if frontend_conn_id and len(screenshot) <= 128_000:
+                            await http.post(
+                                f"{mgmt_url}/@connections/{frontend_conn_id}",
+                                content=screenshot,
+                                headers={"Content-Type": "application/octet-stream"},
+                            )
+                    except Exception as e:
+                        logger.warning(f"Screenshot error: {e}")
+                    await asyncio.sleep(1.0 / SCREENSHOT_FPS)
         
         async def command_loop():
-            """Listen for commands from the frontend."""
+            """Listen for commands from the frontend via WebSocket."""
             nonlocal last_activity
-            async for message in ws:
-                last_activity = time.time()
-                
-                if isinstance(message, str):
-                    cmd = json.loads(message)
-                    action = cmd.get("action")
-                    
-                    if action == "click":
-                        await page.mouse.click(cmd["x"], cmd["y"])
-                    
-                    elif action == "type":
-                        await page.keyboard.type(cmd["text"], delay=50)
-                    
-                    elif action == "key":
-                        await page.keyboard.press(cmd["key"])
-                    
-                    elif action == "scroll":
-                        await page.mouse.wheel(0, cmd.get("deltaY", 100))
-                    
-                    elif action == "navigate":
-                        await page.goto(cmd["url"], wait_until="networkidle")
-                    
-                    elif action == "fill_all":
-                        await fill_all_fields(page, cmd.get("answers", {}), ws)
-                    
-                    elif action == "fill_field":
-                        await fill_single_field(page, cmd["field_id"], cmd["value"])
-                        await ws.send(json.dumps({
-                            "action": "field_filled",
-                            "field_id": cmd["field_id"],
-                            "success": True
-                        }))
-                    
-                    elif action == "detect_fields":
-                        fields = await page.evaluate(FORM_DETECTION_JS)
-                        await ws.send(json.dumps({"action": "fields", **fields}))
-                    
-                    elif action == "submit":
-                        await handle_submit(page, ws)
-                    
-                    elif action == "upload_resume":
-                        await upload_resume(page, cmd.get("s3_key"))
-                    
-                    elif action == "next_job":
-                        # Navigate to next job URL (reuse session)
-                        await page.goto(cmd["apply_url"], wait_until="networkidle")
-                        await ws.send(json.dumps({"action": "status", "status": "ready"}))
-                    
-                    elif action == "end_session":
+            try:
+                async for message in ws:
+                    if stop_event.is_set():
                         break
+                    last_activity = time.time()
+                    
+                    if isinstance(message, str):
+                        cmd = json.loads(message)
+                        action = cmd.get("action")
+                        
+                        if action == "click":
+                            await page.mouse.click(cmd["x"], cmd["y"])
+                        
+                        elif action == "type":
+                            await page.keyboard.type(cmd["text"], delay=50)
+                        
+                        elif action == "key":
+                            # Support modifier keys: Ctrl+V, Ctrl+A, Backspace, etc.
+                            key = cmd["key"]
+                            modifiers = cmd.get("modifiers", [])  # ["Control", "Shift", etc.]
+                            for mod in modifiers:
+                                await page.keyboard.down(mod)
+                            await page.keyboard.press(key)
+                            for mod in reversed(modifiers):
+                                await page.keyboard.up(mod)
+                        
+                        elif action == "scroll":
+                            await page.mouse.wheel(0, cmd.get("deltaY", 100))
+                        
+                        elif action == "navigate":
+                            await page.goto(cmd["url"], wait_until="networkidle")
+                            # Re-detect fields after navigation (multi-step forms)
+                            await _detect_and_send_fields(page, ws)
+                        
+                        elif action == "fill_all":
+                            await fill_all_fields(page, cmd.get("answers", {}), ws)
+                        
+                        elif action == "fill_field":
+                            await fill_single_field(page, cmd["field_id"], cmd["value"])
+                            await ws.send(json.dumps({
+                                "action": "field_filled",
+                                "field_id": cmd["field_id"],
+                                "success": True
+                            }))
+                        
+                        elif action == "detect_fields":
+                            await _detect_and_send_fields(page, ws)
+                        
+                        elif action == "submit":
+                            await handle_submit(page, ws)
+                            # Re-detect after submit (multi-step: may load next page)
+                            await asyncio.sleep(2)  # wait for navigation
+                            await _detect_and_send_fields(page, ws)
+                        
+                        elif action == "upload_resume":
+                            await upload_resume(page, cmd.get("s3_key"))
+                        
+                        elif action == "next_job":
+                            await page.goto(cmd["apply_url"], wait_until="networkidle")
+                            await _detect_and_send_fields(page, ws)
+                            await ws.send(json.dumps({"action": "status", "status": "ready"}))
+                        
+                        elif action == "end_session":
+                            stop_event.set()
+                            break
+            except websockets.exceptions.ConnectionClosed:
+                logger.info("WebSocket closed by frontend")
+                stop_event.set()
         
         async def idle_monitor():
-            """Terminate session after idle timeout."""
+            """Terminate session after idle or max timeout."""
             nonlocal last_activity
-            while True:
+            while not stop_event.is_set():
                 await asyncio.sleep(30)
                 elapsed = time.time() - last_activity
                 total = time.time() - session_start
                 if elapsed > IDLE_TIMEOUT:
                     logger.info("Idle timeout reached")
+                    stop_event.set()
                     break
                 if total > SESSION_TIMEOUT:
                     logger.info("Max session timeout reached")
+                    stop_event.set()
                     break
         
-        # Run all three concurrently
+        # Run all three concurrently — any can trigger stop_event to end the others
         try:
             await asyncio.gather(
                 screenshot_loop(),
                 command_loop(),
                 idle_monitor(),
-                return_exceptions=True,
             )
         except Exception as e:
             logger.error(f"Session error: {e}")
         
-        # 7. Cleanup
-        save_profile()
+        # 7. Cleanup — CRITICAL: close browser BEFORE saving profile
+        # Otherwise profile contains SingletonLock files that break next session
         await browser.close()
         await pw.stop()
+        
+        # Delete lock files that Chrome leaves behind
+        for lock_file in PROFILE_DIR.glob("**/Singleton*"):
+            lock_file.unlink(missing_ok=True)
+        for lock_file in PROFILE_DIR.glob("**/*.lock"):
+            lock_file.unlink(missing_ok=True)
+        
+        # Strip cache directories to reduce profile size (100MB → 5-10MB)
+        for cache_dir in ["Cache", "Code Cache", "GPUCache", "Service Worker",
+                          "DawnCache", "DawnGraphiteCache", "ShaderCache"]:
+            cache_path = PROFILE_DIR / "Default" / cache_dir
+            if cache_path.exists():
+                shutil.rmtree(cache_path, ignore_errors=True)
+        
+        save_profile()
     
     logger.info("Browser session ended")
 
@@ -981,21 +1184,31 @@ async def fill_all_fields(page, answers, ws):
     }))
 
 
-async def fill_single_field(page, field_id, value, field_type=None):
-    """Fill a single form field."""
+async def fill_single_field(page, field_id, value, field_type=None, frame=None):
+    """Fill a single form field.
+    
+    IMPORTANT for select fields: Greenhouse and other ATS platforms use
+    numeric value IDs (e.g., 545540727) not label text. The Answer Panel
+    stores {label, value} pairs from the detected options. The `value`
+    parameter here should be the OPTION VALUE (numeric ID), not the label.
+    The AI picks labels; the frontend maps label → value before sending
+    the fill command.
+    """
+    target = frame or page
     selector = f"#{field_id}" if not field_id.startswith("#") else field_id
     
     # Try by id first, then by name
-    el = await page.query_selector(selector)
+    el = await target.query_selector(selector)
     if not el:
-        el = await page.query_selector(f"[name='{field_id}']")
+        el = await target.query_selector(f"[name='{field_id}']")
     if not el:
         raise ValueError(f"Field not found: {field_id}")
     
     tag = await el.evaluate("el => el.tagName.toLowerCase()")
     
     if tag == "select":
-        await el.select_option(value=value)
+        # value should be the option's value attribute (numeric ID), not label text
+        await el.select_option(value=str(value))
     elif tag == "textarea":
         await el.fill("")
         await el.fill(value)
@@ -1130,7 +1343,7 @@ def start_browser_session(
     # 5. Launch Fargate task
     ecs = boto3.client("ecs")
     task = ecs.run_task(
-        cluster="default",
+        cluster="naukribaba-scrapers"  # existing ECS cluster from template.yaml,
         taskDefinition="naukribaba-browser-session",
         launchType="FARGATE",
         networkConfiguration={...},  # VPC config
@@ -1253,7 +1466,7 @@ def stop_browser_session(
     # Stop the Fargate task
     ecs = boto3.client("ecs")
     ecs.stop_task(
-        cluster="default",
+        cluster="naukribaba-scrapers"  # existing ECS cluster from template.yaml,
         task=session["fargate_task_arn"],
         reason="User ended session",
     )
@@ -1410,6 +1623,26 @@ export default function AnswerPanel({ fields, aiAnswers, onAnswerChange, onFillA
 }
 ```
 
+## 10.4 Error Recovery — Chrome crash / WebSocket disconnect
+
+If Chrome crashes or Fargate terminates unexpectedly:
+
+1. WebSocket connection drops → frontend's `ws.onclose` fires
+2. Frontend shows **"Session lost"** banner with explanation
+3. **"Restart Session"** button starts a new Fargate task
+4. Old DynamoDB session row expires via TTL (30 min)
+5. Profile may NOT have been saved (crash before cleanup)
+   - Next session starts fresh if no saved profile exists
+   - User may need to re-login to the platform
+
+If the user closes their browser tab:
+1. WebSocket disconnects → $disconnect Lambda fires
+2. Fargate continues running for `IDLE_TIMEOUT` (5 min)
+3. If user reopens within 5 min, frontend reconnects to same session
+4. If idle timeout elapses → profile saved → Fargate terminates
+
+---
+
 ## 11. Mode 3 Fallback (Assisted Manual)
 
 If the cloud browser fails (Fargate unavailable, CDP blocked, etc.), the Apply tab falls back to Mode 3:
@@ -1458,14 +1691,21 @@ The frontend detects the fallback condition:
 
 ## 13. Cost Analysis
 
-| Component | Per application | 100 apps/month |
-|-----------|----------------|-----------------|
-| Fargate (0.5vCPU, 1GB, 5 min) | $0.012 | $1.20 |
-| WebSocket API Gateway (~100 msgs) | $0.0001 | $0.01 |
-| CapSolver (1 CAPTCHA) | $0.01 | $1.00 |
-| S3 (profile 20MB + screenshot) | $0.001 | $0.10 |
-| DynamoDB (session CRUD) | Free tier | $0.00 |
-| **Total** | **~$0.02** | **~$2.31** |
+**Corrected estimates** (accounting for Management API calls, data transfer, and real message counts):
+
+| Component | Per application | 100 apps/month | Notes |
+|-----------|----------------|-----------------|-------|
+| Fargate (1vCPU, 3GB, 5 min) | $0.018 | $1.80 | Matches existing PlaywrightTaskDef sizing |
+| API GW Management API (~1500 POST calls for screenshots) | $0.005 | $0.50 | $3.50/million API calls |
+| API GW WebSocket (text messages ~100) | $0.0001 | $0.01 | Commands + field data only |
+| Data transfer (75MB screenshots per session) | $0.007 | $0.70 | $0.09/GB |
+| CapSolver (1 CAPTCHA avg) | $0.01 | $1.00 | Some jobs have 0, some 2 |
+| S3 (profile 10MB + screenshot) | $0.001 | $0.10 | Profiles cached, not re-uploaded every time |
+| DynamoDB (session CRUD) | Free tier | $0.00 | |
+| Lambda (WS connect/disconnect + start/stop) | Free tier | $0.00 | ~4 invocations per session |
+| **Total** | **~$0.04** | **~$4.11** | |
+
+At 50 applications/month (more realistic), total is ~$2. Still much cheaper than any SaaS alternative ($29-40/month for Simplify/rtrvr.ai).
 
 ## 14. Implementation Plan (High Level)
 
@@ -1486,7 +1726,7 @@ The frontend detects the fallback condition:
 
 ## 15. Success Criteria
 
-- [ ] Cloud Chrome session starts in <20 seconds from button click
+- [ ] Cloud Chrome session starts in <45 seconds from button click (Fargate cold start is 30-60s; warm reuse is <10s)
 - [ ] Screenshot stream renders smoothly at 5fps in the Apply tab
 - [ ] Mouse/keyboard events forwarded with <200ms latency
 - [ ] AI pre-fills 90%+ of form fields correctly
