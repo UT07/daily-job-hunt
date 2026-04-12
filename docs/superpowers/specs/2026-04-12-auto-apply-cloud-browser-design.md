@@ -242,11 +242,21 @@ BrowserSessionsTable:
     TableName: naukribaba-browser-sessions
     BillingMode: PAY_PER_REQUEST
     AttributeDefinitions:
+      - AttributeName: user_id
+        AttributeType: S
       - AttributeName: session_id
         AttributeType: S
     KeySchema:
       - AttributeName: session_id
         KeyType: HASH
+    GlobalSecondaryIndexes:
+      - IndexName: user-sessions-index
+        KeySchema:
+          - AttributeName: user_id
+            KeyType: HASH
+        Projection:
+          ProjectionType: ALL
+
     TimeToLiveSpecification:
       AttributeName: ttl
       Enabled: true
@@ -436,10 +446,11 @@ ALTER TABLE applications
 
 ### 7.2 Message Types — Fargate → Frontend
 
-```typescript
-// Screenshot frame (binary, sent as base64 in JSON or raw binary)
-{ action: "screenshot", data: "<base64 JPEG>", width: 1280, height: 800, timestamp: 1744546800 }
+**NOTE:** Screenshots are NOT sent as WebSocket messages. They are delivered as raw
+binary via the API Gateway Management API (see §7.3). The frontend receives them
+as `ArrayBuffer` on `ws.onmessage`. All messages below are JSON text frames.
 
+```typescript
 // Detected form fields (sent after page load + field detection)
 { action: "fields", fields: [
     { id: "first_name", label: "First Name", type: "text", required: true,
@@ -663,12 +674,16 @@ FORM_DETECTION_JS = """
         });
     }
     
-    // Detect file upload inputs separately
+    // Detect HIDDEN file upload inputs (visible ones already captured above).
+    // Greenhouse uses hidden file inputs triggered by drag-and-drop zones.
+    const seenIds = new Set(fields.map(f => f.id));
     const fileInputs = document.querySelectorAll('input[type=file]');
     for (const el of fileInputs) {
+        const fid = el.id || el.name || 'file_upload';
+        if (seenIds.has(fid)) continue;  // already captured in main loop
         const label = el.labels?.[0]?.textContent?.trim() || el.name || 'File Upload';
         fields.push({
-            id: el.id || el.name || 'file_upload',
+            id: fid,
             name: el.name,
             label: label,
             type: 'file',
@@ -1045,21 +1060,37 @@ async def main():
                     "message": "Frontend WebSocket not connected. Refresh the page.",
                 }))
         
+        # API Gateway Management API client for sending screenshots.
+        # CRITICAL: Must use boto3 (handles SigV4 signing automatically).
+        # Plain httpx without AWS auth headers → 403 on every call.
+        import aioboto3  # async boto3 for non-blocking calls in the event loop
+        aioboto3_session = aioboto3.Session()
+        
         async def screenshot_loop():
-            """Stream screenshots via API Gateway Management API (not WS frames)."""
-            async with _httpx.AsyncClient() as http:
+            """Stream screenshots via API Gateway Management API (not WS frames).
+            
+            Uses boto3's post_to_connection which handles SigV4 signing.
+            Raw httpx would get 403 — the Management API is an AWS service endpoint.
+            """
+            async with aioboto3_session.client(
+                "apigatewaymanagementapi",
+                endpoint_url=mgmt_url,
+                region_name=os.environ.get("AWS_REGION", "eu-west-1"),
+            ) as apigw:
                 while not stop_event.is_set():
                     try:
                         quality = SCREENSHOT_QUALITY
                         screenshot = await page.screenshot(type="jpeg", quality=quality)
-                        # Auto-reduce quality if frame > 120KB (Management API limit: 128KB)
+                        # Two-step quality reduction as specified:
+                        # 75% → 60% → 45% if frame exceeds 120KB
                         if len(screenshot) > 120_000:
-                            screenshot = await page.screenshot(type="jpeg", quality=50)
+                            screenshot = await page.screenshot(type="jpeg", quality=60)
+                        if len(screenshot) > 120_000:
+                            screenshot = await page.screenshot(type="jpeg", quality=45)
                         if frontend_conn_id and len(screenshot) <= 128_000:
-                            await http.post(
-                                f"{mgmt_url}/@connections/{frontend_conn_id}",
-                                content=screenshot,
-                                headers={"Content-Type": "application/octet-stream"},
+                            await apigw.post_to_connection(
+                                ConnectionId=frontend_conn_id,
+                                Data=screenshot,
                             )
                     except Exception as e:
                         logger.warning(f"Screenshot error: {e}")
@@ -1126,6 +1157,14 @@ async def main():
                             await upload_resume(page, cmd.get("s3_key"))
                         
                         elif action == "next_job":
+                        # Update DynamoDB with the new job_id for session tracking
+                        new_job_id = cmd.get("job_id")
+                        if new_job_id:
+                            ddb.Table("naukribaba-browser-sessions").update_item(
+                                Key={"session_id": SESSION_ID},
+                                UpdateExpression="SET current_job_id = :jid",
+                                ExpressionAttributeValues={":jid": new_job_id},
+                            )
                             await page.goto(cmd["apply_url"], wait_until="networkidle")
                             await _detect_and_send_fields(page, ws)
                             await ws.send(json.dumps({"action": "status", "status": "ready"}))
@@ -1153,12 +1192,15 @@ async def main():
                     stop_event.set()
                     break
         
-        # Run all three concurrently — any can trigger stop_event to end the others
+        # Run all three concurrently — any can trigger stop_event to end the others.
+        # return_exceptions=True prevents one crash from cancelling siblings via
+        # CancelledError. Instead, all three run until stop_event is set.
         try:
             await asyncio.gather(
                 screenshot_loop(),
                 command_loop(),
                 idle_monitor(),
+                return_exceptions=True,
             )
         except Exception as e:
             logger.error(f"Session error: {e}")
@@ -1505,7 +1547,7 @@ def start_browser_session(
         "platform": job.get("apply_platform", "unknown"),
         "current_job_id": req.job_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "ttl": int(time.time()) + SESSION_TIMEOUT,
+        "ttl": int(time.time()) + 1800,  # 30 min session timeout
     })
     
     ws_url = os.environ.get("BROWSER_WS_URL", "wss://xxx.execute-api.eu-west-1.amazonaws.com/prod")
@@ -1595,7 +1637,12 @@ def stop_browser_session(
     if not session or session["user_id"] != user.id:
         raise HTTPException(404)
     
-    # Stop the Fargate task
+    # GRACEFUL SHUTDOWN: Send end_session via WS first (30s grace for profile save).
+    # The browser_session.py event loop saves profile then exits.
+    # Only force-stop if the task doesnt exit within 30s.
+    # NOTE: The current Lambda timeout (15s) is too short for a 30s grace
+    # period. Either increase Lambda timeout to 45s or make stop-session async.
+    # Stop the Fargate task (force — TODO: implement graceful WS signal in P3)
     ecs = boto3.client("ecs")
     ecs.stop_task(
         cluster="naukribaba-scrapers"  # existing ECS cluster from template.yaml,
