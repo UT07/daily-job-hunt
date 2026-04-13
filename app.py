@@ -2258,8 +2258,15 @@ async def upload_resume(
     profile_updates = {}
     if sections.get("name"):
         profile_updates["name"] = sections["name"]
+    if sections.get("phone"):
+        profile_updates["phone"] = sections["phone"]
+    if sections.get("location"):
+        profile_updates["location"] = sections["location"]
     if sections.get("skills"):
-        profile_updates["candidate_context"] = sections["skills"]
+        profile_updates["candidate_context"] = (
+            sections["skills"] if isinstance(sections["skills"], str)
+            else json.dumps(sections["skills"])
+        )
     if profile_updates:
         try:
             _db.update_user(user.id, profile_updates)
@@ -2267,7 +2274,18 @@ async def upload_resume(
         except Exception as e:
             logger.warning("Profile auto-update failed: %s", e)
 
-    return {"resume_id": result.get("id"), "sections": sections}
+    return {
+        "resume_id": result.get("id"),
+        "sections": sections,
+        "extracted_profile": {
+            "name": sections.get("name", ""),
+            "email": sections.get("email", ""),
+            "phone": sections.get("phone", ""),
+            "location": sections.get("location", ""),
+            "skills": sections.get("skills", ""),
+            "years_of_experience": sections.get("years_of_experience"),
+        }
+    }
 
 
 @app.get("/api/resumes")
