@@ -40,13 +40,13 @@ export default function App() {
       <AuthProvider>
         <Suspense fallback={<PageLoader />}>
           <Routes>
-            {/* Standalone auth page — outside AuthLayout so recovery session doesn't redirect */}
+            {/* Standalone pages — outside layouts so they don't redirect */}
             <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route path="/onboarding" element={<Onboarding />} />
 
             {/* Auth pages */}
             <Route element={<AuthLayout />}>
               <Route path="/login" element={<LoginPage />} />
-              <Route path="/onboarding" element={<Onboarding />} />
             </Route>
 
             {/* App pages (sidebar layout) */}

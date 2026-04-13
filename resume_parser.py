@@ -67,12 +67,16 @@ def parse_resume_sections(text: str, ai_client=None) -> Dict[str, str]:
 
     prompt = f"""Parse this resume text into structured sections. Return a JSON object with these keys:
 - "name": the person's name
+- "email": their email address (if present)
+- "phone": their phone number (if present)
 - "title_line": their professional title/headline
 - "summary": professional summary (if present)
 - "skills": technical skills section (each category on its own line as "Category: item1, item2")
 - "experience": array of objects [{{"company": "...", "role": "...", "dates": "...", "bullets": "• bullet1\\n• bullet2"}}]
 - "education": array of objects [{{"school": "...", "degree": "...", "dates": "..."}}]
 - "certifications": array of strings
+- "location": their location/city (if present)
+- "years_of_experience": estimated total years of experience (integer, if calculable from dates)
 
 Resume text:
 {text[:6000]}
