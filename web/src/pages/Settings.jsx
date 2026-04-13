@@ -264,6 +264,14 @@ function ProfileSection({ profile, setProfile }) {
               )}
             </div>
           </div>
+
+          <Input label="Salary Expectations" value={profile.salary_expectation_notes || ''}
+            onChange={e => updateField('salary_expectation_notes', e.target.value)}
+            placeholder="e.g. €70-90k base + equity" />
+
+          <Input label="Notice Period" value={profile.notice_period_text || ''}
+            onChange={e => updateField('notice_period_text', e.target.value)}
+            placeholder="e.g. 2 weeks, 1 month" />
         </div>
 
         <div className="mt-5 flex items-center gap-3">
@@ -272,6 +280,56 @@ function ProfileSection({ profile, setProfile }) {
             Save Changes
           </Button>
           <StatusMessage status={status} />
+        </div>
+      </CardBody>
+    </Card>
+  )
+}
+
+function PasswordSection() {
+  const { updatePassword } = useAuth()
+  const [newPass, setNewPass] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const [status, setStatus] = useState({ type: '', message: '' })
+  const [saving, setSaving] = useState(false)
+
+  async function handleChange() {
+    if (newPass.length < 8) {
+      setStatus({ type: 'error', message: 'Password must be at least 8 characters' })
+      return
+    }
+    if (newPass !== confirm) {
+      setStatus({ type: 'error', message: 'Passwords do not match' })
+      return
+    }
+    setSaving(true)
+    setStatus({ type: '', message: '' })
+    try {
+      await updatePassword(newPass)
+      setStatus({ type: 'success', message: 'Password updated successfully' })
+      setNewPass(''); setConfirm('')
+    } catch (err) {
+      setStatus({ type: 'error', message: err.message || 'Failed to update password' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <h2 className="text-lg font-heading font-bold">Change Password</h2>
+      </CardHeader>
+      <CardBody>
+        <div className="space-y-4 max-w-md">
+          <Input label="New Password" type="password" value={newPass}
+            onChange={e => setNewPass(e.target.value)} placeholder="Minimum 8 characters" />
+          <Input label="Confirm New Password" type="password" value={confirm}
+            onChange={e => setConfirm(e.target.value)} placeholder="Re-enter new password" />
+          <StatusMessage status={status} />
+          <Button onClick={handleChange} loading={saving} disabled={!newPass || !confirm}>
+            Update Password
+          </Button>
         </div>
       </CardBody>
     </Card>
@@ -688,6 +746,8 @@ export default function Settings() {
     website: '',
     visa_status: '',
     work_authorizations: [],
+    salary_expectation_notes: '',
+    notice_period_text: '',
   })
 
   const [prefs, setPrefs] = useState({
@@ -716,6 +776,8 @@ export default function Settings() {
           work_authorizations: data.work_authorizations
             ? Object.entries(data.work_authorizations).map(([country, status]) => ({ country, status }))
             : prev.work_authorizations,
+          salary_expectation_notes: data.salary_expectation_notes ?? prev.salary_expectation_notes,
+          notice_period_text: data.notice_period_text ?? prev.notice_period_text,
         }))
       })
       .catch((e) => console.warn('Failed to load profile:', e))
@@ -752,6 +814,7 @@ export default function Settings() {
       <h1 className="text-2xl font-heading font-bold text-black tracking-tight mb-6">Settings</h1>
       <div className="space-y-6">
         <ProfileSection profile={profile} setProfile={setProfile} />
+        <PasswordSection />
         <ResumeSection />
         <JobSourcesSection />
         <PreferencesSection prefs={prefs} setPrefs={setPrefs} />
