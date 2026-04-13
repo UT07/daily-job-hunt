@@ -249,6 +249,9 @@ class ProfileResponse(BaseModel):
     plan: str = "free"
     created_at: Optional[str] = None
     gdpr_consent_at: Optional[str] = None
+    salary_expectation_notes: str = ""
+    notice_period_text: str = ""
+    onboarding_completed_at: Optional[str] = None
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -266,6 +269,9 @@ class ProfileUpdateRequest(BaseModel):
     candidate_context: Optional[str] = None
     target_roles: Optional[list[str]] = None
     target_locations: Optional[list[str]] = None
+    salary_expectation_notes: Optional[str] = None
+    notice_period_text: Optional[str] = None
+    complete_onboarding: Optional[bool] = None
 
 
 # ---------------------------------------------------------------------------
@@ -1246,6 +1252,9 @@ def get_profile(user: AuthUser = Depends(get_current_user)):
         plan=row.get("plan", "free"),
         created_at=row.get("created_at"),
         gdpr_consent_at=row.get("gdpr_consent_at"),
+        salary_expectation_notes=row.get("salary_expectation_notes") or "",
+        notice_period_text=row.get("notice_period_text") or "",
+        onboarding_completed_at=row.get("onboarding_completed_at"),
     )
 
 
@@ -1273,6 +1282,10 @@ def update_profile(
             update_data["github"] = v
         elif k in ("target_roles", "target_locations"):
             continue  # Not in DB schema yet
+        elif k == "complete_onboarding":
+            if v:
+                from datetime import datetime, timezone
+                update_data["onboarding_completed_at"] = datetime.now(timezone.utc).isoformat()
         else:
             update_data[k] = v
     if not update_data:
@@ -1296,6 +1309,9 @@ def update_profile(
         plan=row.get("plan", "free"),
         created_at=row.get("created_at"),
         gdpr_consent_at=row.get("gdpr_consent_at"),
+        salary_expectation_notes=row.get("salary_expectation_notes") or "",
+        notice_period_text=row.get("notice_period_text") or "",
+        onboarding_completed_at=row.get("onboarding_completed_at"),
     )
 
 
