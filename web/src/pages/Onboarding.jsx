@@ -417,7 +417,9 @@ export default function Onboarding() {
 
       await apiPut('/api/search-config', prefs).catch(() => {})
 
-      navigate('/', { replace: true })
+      setSaving(false)
+      next() // Advance to Done screen only after successful save
+      return
     } catch (err) {
       setError(err.message || 'Failed to save. Please try again.')
       setSaving(false)
@@ -463,7 +465,7 @@ export default function Onboarding() {
                 <Button onClick={next}>Next →</Button>
               )}
               {step === 3 && (
-                <Button onClick={() => { next(); handleComplete() }} loading={saving}>
+                <Button onClick={handleComplete} loading={saving}>
                   Complete Setup
                 </Button>
               )}
