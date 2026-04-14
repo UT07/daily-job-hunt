@@ -41,6 +41,14 @@ Parameters:
     Type: String
     NoEcho: true
     Default: ""
+  CapSolverApiKey:
+    Type: String
+    NoEcho: true
+    Default: ""
+  BrowserSubnetIds:
+    Type: CommaDelimitedList
+    Description: Public subnet IDs for Fargate browser tasks (discover via aws ec2 describe-subnets)
+    Default: ""
 
 Resources:
 
@@ -1476,6 +1484,307 @@ Resources:
             Action: s3:GetObject
             Resource: !Sub "${FrontendBucket.Arn}/*"
 
+  # =========================================================================
+  #  Auto-Apply: Cloud Browser Infrastructure
+  # =========================================================================
+
+  # --- DynamoDB Session Table ---
+  BrowserSessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: naukribaba-browser-sessions
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: session_id
+          AttributeType: S
+        - AttributeName: user_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: session_id
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: user-sessions-index
+          KeySchema:
+            - AttributeName: user_id
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  # --- WebSocket API Gateway ---
+  BrowserWebSocketApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: naukribaba-browser-ws
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: "$request.body.action"
+
+  ConnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref BrowserWebSocketApi
+      RouteKey: $connect
+      AuthorizationType: NONE
+      Target: !Sub "integrations/${ConnectIntegration}"
+
+  DisconnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref BrowserWebSocketApi
+      RouteKey: $disconnect
+      Target: !Sub "integrations/${DisconnectIntegration}"
+
+  DefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref BrowserWebSocketApi
+      RouteKey: $default
+      Target: !Sub "integrations/${DefaultIntegration}"
+
+  ConnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref BrowserWebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsConnectFunction.Arn}/invocations"
+
+  DisconnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref BrowserWebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsDisconnectFunction.Arn}/invocations"
+
+  DefaultIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref BrowserWebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsRouteFunction.Arn}/invocations"
+
+  BrowserWsStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref BrowserWebSocketApi
+      StageName: prod
+      AutoDeploy: true
+      DefaultRouteSettings:
+        LoggingLevel: ERROR
+        DataTraceEnabled: false
+
+  # --- WebSocket Lambda Functions (defined BEFORE permissions) ---
+  WsConnectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-ws-connect
+      CodeUri: lambdas/browser/
+      Handler: ws_connect.handler
+      Runtime: python3.11
+      Timeout: 10
+      MemorySize: 128
+      Environment:
+        Variables:
+          SESSIONS_TABLE: !Ref BrowserSessionsTable
+          SUPABASE_URL: !Ref SupabaseUrl
+          SUPABASE_JWT_SECRET: !Ref SupabaseJwtSecret
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BrowserSessionsTable
+
+  WsDisconnectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-ws-disconnect
+      CodeUri: lambdas/browser/
+      Handler: ws_disconnect.handler
+      Runtime: python3.11
+      Timeout: 10
+      MemorySize: 128
+      Environment:
+        Variables:
+          SESSIONS_TABLE: !Ref BrowserSessionsTable
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BrowserSessionsTable
+
+  WsRouteFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-ws-route
+      CodeUri: lambdas/browser/
+      Handler: ws_route.handler
+      Runtime: python3.11
+      Timeout: 5
+      MemorySize: 128
+      Environment:
+        Variables:
+          SESSIONS_TABLE: !Ref BrowserSessionsTable
+          WEBSOCKET_API_ID: !Ref BrowserWebSocketApi
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BrowserSessionsTable
+        - Statement:
+            - Effect: Allow
+              Action: execute-api:ManageConnections
+              Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BrowserWebSocketApi}/*"
+
+  # --- WebSocket Lambda Permissions (AFTER function definitions) ---
+  WsConnectPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WsConnectFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BrowserWebSocketApi}/*/$connect"
+
+  WsDisconnectPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WsDisconnectFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BrowserWebSocketApi}/*/$disconnect"
+
+  WsRoutePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WsRouteFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BrowserWebSocketApi}/*/$default"
+
+  # --- Session Management Lambdas ---
+  StartBrowserFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-start-browser
+      CodeUri: lambdas/browser/
+      Handler: start_session.handler
+      Runtime: python3.11
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          SESSIONS_TABLE: !Ref BrowserSessionsTable
+          CLUSTER_ARN: !GetAtt ScraperCluster.Arn
+          TASK_DEF: !Ref BrowserSessionTaskDef
+          SECURITY_GROUP: !Ref ScraperSecurityGroup
+          WEBSOCKET_URL: !Sub "wss://${BrowserWebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+          S3_BUCKET: utkarsh-job-hunt
+          SUPABASE_URL: !Ref SupabaseUrl
+          SUPABASE_SERVICE_KEY: !Ref SupabaseServiceKey
+          SUPABASE_JWT_SECRET: !Ref SupabaseJwtSecret
+          BROWSER_SUBNET_IDS: !Join [",", !Ref BrowserSubnetIds]
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BrowserSessionsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ecs:RunTask
+                - ecs:DescribeTasks
+              Resource: "*"
+            - Effect: Allow
+              Action: iam:PassRole
+              Resource:
+                - !GetAtt FargateExecutionRole.Arn
+                - !GetAtt BrowserTaskRole.Arn
+
+  StopBrowserFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: naukribaba-stop-browser
+      CodeUri: lambdas/browser/
+      Handler: stop_session.handler
+      Runtime: python3.11
+      Timeout: 15
+      MemorySize: 128
+      Environment:
+        Variables:
+          SESSIONS_TABLE: !Ref BrowserSessionsTable
+          CLUSTER_ARN: !GetAtt ScraperCluster.Arn
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref BrowserSessionsTable
+        - Statement:
+            - Effect: Allow
+              Action: ecs:StopTask
+              Resource: "*"
+
+  # --- Browser Session Fargate ---
+  BrowserLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/naukribaba-browser
+      RetentionInDays: 14
+
+  BrowserTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: BrowserSessionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource:
+                  - "arn:aws:s3:::utkarsh-job-hunt/sessions/*"
+                  - "arn:aws:s3:::utkarsh-job-hunt/confirmations/*"
+              - Effect: Allow
+                Action: execute-api:ManageConnections
+                Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BrowserWebSocketApi}/*"
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                Resource: !GetAtt BrowserSessionsTable.Arn
+
+  BrowserSessionTaskDef:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: naukribaba-browser-session
+      RequiresCompatibilities: [FARGATE]
+      Cpu: '1024'
+      Memory: '3072'
+      NetworkMode: awsvpc
+      ExecutionRoleArn: !GetAtt FargateExecutionRole.Arn
+      TaskRoleArn: !GetAtt BrowserTaskRole.Arn
+      ContainerDefinitions:
+        - Name: browser
+          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/naukribaba-browser:latest"
+          Essential: true
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: S3_BUCKET
+              Value: utkarsh-job-hunt
+            - Name: WEBSOCKET_URL
+              Value: !Sub "wss://${BrowserWebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+            - Name: SUPABASE_URL
+              Value: !Ref SupabaseUrl
+            - Name: SUPABASE_SERVICE_KEY
+              Value: !Ref SupabaseServiceKey
+            - Name: CAPSOLVER_API_KEY
+              Value: !Ref CapSolverApiKey
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref BrowserLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: browser
+
 Outputs:
   ApiUrl:
     Description: API Gateway URL
@@ -1495,3 +1804,12 @@ Outputs:
   SingleJobPipelineArn:
     Description: Single job pipeline state machine ARN
     Value: !GetAtt SingleJobPipelineStateMachine.Arn
+  BrowserWebSocketUrl:
+    Description: WebSocket API URL for browser streaming
+    Value: !Sub "wss://${BrowserWebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+  BrowserSessionsTableName:
+    Description: DynamoDB table for browser sessions
+    Value: !Ref BrowserSessionsTable
+  BrowserTaskDefArn:
+    Description: Fargate task definition for browser sessions
+    Value: !Ref BrowserSessionTaskDef
