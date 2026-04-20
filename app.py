@@ -2386,6 +2386,40 @@ def gdpr_delete(user: AuthUser = Depends(get_current_user)):
 
 
 # ---------------------------------------------------------------------------
+#  Auto-Apply endpoints (stubs — Plan 2/3 will implement)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/apply/eligibility/{job_id}")
+def apply_eligibility(job_id: str, user: AuthUser = Depends(get_current_user)):
+    """Check if a job is eligible for auto-apply. Stub — returns 501."""
+    raise HTTPException(501, "Auto-apply eligibility check not yet implemented")
+
+
+@app.get("/api/apply/preview/{job_id}")
+def apply_preview(job_id: str, user: AuthUser = Depends(get_current_user)):
+    """Preview the application payload before submitting. Stub — returns 501."""
+    raise HTTPException(501, "Auto-apply preview not yet implemented")
+
+
+@app.post("/api/apply/submit/{job_id}")
+def apply_submit(job_id: str, user: AuthUser = Depends(get_current_user)):
+    """Submit an application to the platform. Stub — returns 501."""
+    raise HTTPException(501, "Auto-apply submission not yet implemented")
+
+
+@app.post("/api/apply/start-session")
+def apply_start_session(user: AuthUser = Depends(get_current_user)):
+    """Start a cloud browser session. Stub — returns 501."""
+    raise HTTPException(501, "Browser session management not yet implemented")
+
+
+@app.post("/api/apply/stop-session")
+def apply_stop_session(user: AuthUser = Depends(get_current_user)):
+    """Stop a cloud browser session. Stub — returns 501."""
+    raise HTTPException(501, "Browser session management not yet implemented")
+
+
+# ---------------------------------------------------------------------------
 # Lambda handler (Mangum)
 # ---------------------------------------------------------------------------
 
