@@ -1,6 +1,5 @@
 """WebSocket $connect handler — validates JWT, creates DynamoDB session."""
 
-import json
 import logging
 
 logger = logging.getLogger()
