@@ -1,6 +1,5 @@
 """WebSocket $disconnect handler — cleans up DynamoDB session."""
 
-import json
 import logging
 
 logger = logging.getLogger()

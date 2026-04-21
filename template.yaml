@@ -1343,11 +1343,12 @@ Resources:
 
   ExpiryCheckPermission:
     Type: AWS::Lambda::Permission
+    DependsOn: ExpiryCheckSchedule
     Properties:
       FunctionName: !Ref CheckExpiryFunction
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
-      SourceArn: !GetAtt ExpiryCheckSchedule.Arn
+      SourceArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/naukribaba-expiry-check
 
   StaleNudgeSchedule:
     Type: AWS::Events::Rule
@@ -1362,11 +1363,12 @@ Resources:
 
   StaleNudgePermission:
     Type: AWS::Lambda::Permission
+    DependsOn: StaleNudgeSchedule
     Properties:
       FunctionName: !Ref StaleNudgeFunction
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
-      SourceArn: !GetAtt StaleNudgeSchedule.Arn
+      SourceArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/naukribaba-stale-nudge
 
   FollowUpSchedule:
     Type: AWS::Events::Rule
@@ -1381,11 +1383,12 @@ Resources:
 
   FollowUpPermission:
     Type: AWS::Lambda::Permission
+    DependsOn: FollowUpSchedule
     Properties:
       FunctionName: !Ref FollowUpReminderFunction
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
-      SourceArn: !GetAtt FollowUpSchedule.Arn
+      SourceArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/naukribaba-followup-reminder
 
   # --- Lambda Function (Docker container with tectonic) ---
   JobHuntApi:
