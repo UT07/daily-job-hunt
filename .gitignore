@@ -86,6 +86,7 @@ htmlcov/
 supabase/.branches
 supabase/.temp
 supabase/config.toml
+web/supabase/.temp/
 .superpowers/
 layer/python/
 layer-tectonic/bin/
