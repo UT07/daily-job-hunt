@@ -37,6 +37,13 @@ jobs:
         env:
           AWS_DEFAULT_REGION: eu-west-1
 
+      - name: Build shared-deps layer
+        # Layer is gitignored (layer/python/) and must be built before sam build,
+        # otherwise sam zips only build.sh + requirements.txt (~500 bytes) and
+        # every Lambda that depends on supabase/apify/etc fails with ModuleNotFoundError.
+        # build.sh uses Docker (linux/amd64) to cross-compile for Lambda runtime.
+        run: ./layer/build.sh
+
       - name: SAM Build
         env:
           DOCKER_BUILDKIT: "0"
