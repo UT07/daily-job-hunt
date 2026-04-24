@@ -231,7 +231,13 @@ async def _handle_submit(page, ws) -> None:
 
 # ─── Concurrent loops ────────────────────────────────────────────
 async def _screenshot_loop(page, stop_event: asyncio.Event, frontend_conn_id: str) -> None:
-    """Stream JPEG screenshots to frontend via API Gateway Management API."""
+    """Stream JPEG screenshots to frontend via API Gateway Management API.
+
+    TODO(plan-3): apigw.post_to_connection and the DynamoDB calls inside this
+    module are synchronous boto3 invocations on the async event loop. At 5fps
+    they add jitter and any GoneException / network stall briefly freezes all
+    three loops. Wrap with asyncio.run_in_executor or migrate to aioboto3.
+    """
     mgmt_url = f"https://{os.environ.get('WEBSOCKET_API_ID', '')}.execute-api.{AWS_REGION}.amazonaws.com/prod"
     apigw = boto3.client("apigatewaymanagementapi", endpoint_url=mgmt_url, region_name=AWS_REGION)
     quality = SCREENSHOT_QUALITY_START
@@ -398,10 +404,14 @@ async def main():
     page = browser.pages[0] if browser.pages else await browser.new_page()
 
     # 3. Connect WebSocket
-    ws_full_url = f"{WS_URL}?token={WS_TOKEN}&session={SESSION_ID}&role=browser"
+    # Pass auth + session metadata via headers, NOT query params, so the token
+    # never lands in API Gateway access logs / Fargate stdout / proxy logs.
+    # The WsConnect Lambda (Plan 3) reads these from event["headers"].
+    ws_full_url = f"{WS_URL}?session={SESSION_ID}&role=browser"
+    ws_headers = {"Authorization": f"Bearer {WS_TOKEN}"}
 
     try:
-        async with websockets.connect(ws_full_url) as ws:
+        async with websockets.connect(ws_full_url, additional_headers=ws_headers) as ws:
             # 4. Navigate to apply URL
             _update_session_status("navigating")
             await ws.send(json.dumps({"action": "status", "status": "navigating"}))
@@ -444,15 +454,20 @@ async def main():
             last_activity = [time.time()]
             session_start = time.time()
 
-            try:
-                await asyncio.gather(
-                    _screenshot_loop(page, stop_event, frontend_conn_id),
-                    _command_loop(page, ws, stop_event, last_activity),
-                    _idle_monitor(stop_event, last_activity, session_start),
-                    return_exceptions=True,
-                )
-            except Exception as e:
-                logger.error(f"Session error: {e}")
+            # return_exceptions=True prevents one loop crash from canceling the
+            # other two, but it also means gather() never raises — the outer
+            # try/except would never fire. Explicitly inspect each result so
+            # crashes are logged instead of silently lost.
+            loop_names = ("screenshot_loop", "command_loop", "idle_monitor")
+            results = await asyncio.gather(
+                _screenshot_loop(page, stop_event, frontend_conn_id),
+                _command_loop(page, ws, stop_event, last_activity),
+                _idle_monitor(stop_event, last_activity, session_start),
+                return_exceptions=True,
+            )
+            for name, result in zip(loop_names, results):
+                if isinstance(result, BaseException):
+                    logger.error("Loop %s crashed: %r", name, result)
 
     except Exception as e:
         logger.error(f"Failed to connect or run session: {e}")

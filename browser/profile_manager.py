@@ -27,7 +27,10 @@ def load_profile(s3_bucket: str, user_id: str, platform: str) -> bool:
         obj = s3.get_object(Bucket=s3_bucket, Key=key)
         PROFILE_DIR.mkdir(parents=True, exist_ok=True)
         with tarfile.open(fileobj=BytesIO(obj["Body"].read()), mode="r:gz") as tar:
-            tar.extractall(PROFILE_DIR)
+            # filter="data" (Python 3.12+) rejects absolute paths, `..` traversal,
+            # symlinks pointing outside the extraction dir, device files, etc.
+            # Defends against TarSlip if the S3 object is ever tampered with.
+            tar.extractall(PROFILE_DIR, filter="data")
         logger.info(f"Loaded profile from s3://{s3_bucket}/{key}")
         return True
     except s3.exceptions.NoSuchKey:
