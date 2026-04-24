@@ -115,6 +115,53 @@ def test_find_active_session_returns_none_when_none_active():
         assert find_active_session_for_user("user-1") is None
 
 
+def test_find_session_by_connection_returns_session_and_role_for_frontend_match():
+    ddb, table = _mock_table()
+    session = {"session_id": "sess-1", "ws_connection_frontend": "conn-A", "status": "ready"}
+    table.scan.return_value = {"Items": [session]}
+    with patch("boto3.resource", return_value=ddb):
+        from shared.browser_sessions import find_session_by_connection
+        result = find_session_by_connection("conn-A")
+    assert result is not None
+    returned_session, role = result
+    assert returned_session == session
+    assert role == "frontend"
+    kwargs = table.scan.call_args.kwargs
+    assert kwargs["FilterExpression"] == (
+        "ws_connection_frontend = :c OR ws_connection_browser = :c"
+    )
+    assert kwargs["ExpressionAttributeValues"] == {":c": "conn-A"}
+
+
+def test_find_session_by_connection_returns_session_and_role_for_browser_match():
+    ddb, table = _mock_table()
+    session = {"session_id": "sess-2", "ws_connection_browser": "conn-B", "status": "filling"}
+    table.scan.return_value = {"Items": [session]}
+    with patch("boto3.resource", return_value=ddb):
+        from shared.browser_sessions import find_session_by_connection
+        result = find_session_by_connection("conn-B")
+    assert result is not None
+    returned_session, role = result
+    assert returned_session == session
+    assert role == "browser"
+    kwargs = table.scan.call_args.kwargs
+    assert kwargs["FilterExpression"] == (
+        "ws_connection_frontend = :c OR ws_connection_browser = :c"
+    )
+    assert kwargs["ExpressionAttributeValues"] == {":c": "conn-B"}
+
+
+def test_find_session_by_connection_returns_none_when_no_match():
+    ddb, table = _mock_table()
+    table.scan.return_value = {"Items": []}
+    with patch("boto3.resource", return_value=ddb):
+        from shared.browser_sessions import find_session_by_connection
+        result = find_session_by_connection("conn-Z")
+    assert result is None
+    kwargs = table.scan.call_args.kwargs
+    assert kwargs["ExpressionAttributeValues"] == {":c": "conn-Z"}
+
+
 def test_post_to_connection_uses_management_api():
     mgmt = MagicMock()
     with patch("boto3.client", return_value=mgmt) as m_client:
