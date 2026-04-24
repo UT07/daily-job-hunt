@@ -48,7 +48,9 @@ def test_browser_token_rejected_for_frontend_role():
 def test_ws_token_expires_quickly():
     from shared.ws_auth import issue_ws_token, verify_ws_token
     token = issue_ws_token(user_id="user-1", session_id="sess-9", role="frontend", ttl_seconds=1)
-    time.sleep(1.1)
+    # JWT exp claim is integer-second resolution. Sleep > 2s to guarantee
+    # the integer second has rolled past `iat + ttl_seconds`.
+    time.sleep(2.1)
     with pytest.raises(ValueError, match="expired"):
         verify_ws_token(token, expected_role="frontend")
 
