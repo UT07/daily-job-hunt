@@ -61,6 +61,8 @@ if _env_path.exists():
                     os.environ.setdefault(_key.strip(), _val)
 
 import yaml
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -86,7 +88,39 @@ logger = logging.getLogger(__name__)
 # App setup
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="Job Hunt API", version="1.0.0")
+def _initialize_state() -> None:
+    """Initialize global config, AI client, resumes, and DB.
+
+    Called from the FastAPI lifespan (normal HTTP server startup) and also
+    imperatively from the SQS Lambda handler (which doesn't go through
+    lifespan on cold start). Safe to call multiple times — reassigns globals.
+    """
+    global _ai_client, _config, _resumes, _db
+    _config = _load_config()
+    _resumes = _load_resumes(_config)
+    try:
+        _ai_client = AIClient.from_config(_config)
+    except Exception as e:
+        import traceback
+        logger.error("AI client init failed: %s\n%s", e, traceback.format_exc())
+        _ai_client = None
+    try:
+        _db = SupabaseClient.from_env()
+    except RuntimeError:
+        logger.warning("Supabase not configured — profile endpoints will fail")
+        _db = None
+    # Wire up audit middleware with the DB client (no-ops gracefully if _db is None)
+    set_audit_db(_db)
+    logger.info("API started — %d resumes loaded, AI client ready", len(_resumes))
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    _initialize_state()
+    yield
+
+
+app = FastAPI(title="Job Hunt API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -138,26 +172,6 @@ def _load_resumes(config: dict) -> dict[str, str]:
         else:
             logger.warning("Resume file not found: %s", tex_path)
     return resumes
-
-
-@app.on_event("startup")
-def startup():
-    global _ai_client, _config, _resumes, _db
-    _config = _load_config()
-    _resumes = _load_resumes(_config)
-    try:
-        _ai_client = AIClient.from_config(_config)
-    except Exception as e:
-        import traceback; logger.error("AI client init failed: %s\n%s", e, traceback.format_exc())
-        _ai_client = None
-    try:
-        _db = SupabaseClient.from_env()
-    except RuntimeError:
-        logger.warning("Supabase not configured — profile endpoints will fail")
-        _db = None
-    # Wire up audit middleware with the DB client (no-ops gracefully if _db is None)
-    set_audit_db(_db)
-    logger.info("API started — %d resumes loaded, AI client ready", len(_resumes))
 
 
 # ---------------------------------------------------------------------------
@@ -620,7 +634,7 @@ def _process_sqs_task(event, context):
     are retried rather than the entire batch.
     """
     # Ensure config / AI client / resumes are loaded (cold start)
-    startup()
+    _initialize_state()
 
     batch_item_failures = []
 
