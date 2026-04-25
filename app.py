@@ -2405,32 +2405,348 @@ def gdpr_delete(user: AuthUser = Depends(get_current_user)):
 
 @app.get("/api/apply/eligibility/{job_id}")
 def apply_eligibility(job_id: str, user: AuthUser = Depends(get_current_user)):
-    """Check if a job is eligible for auto-apply. Stub — returns 501."""
-    raise HTTPException(501, "Auto-apply eligibility check not yet implemented")
+    """Per-job eligibility — no AI, no network calls to platforms."""
+    from shared.load_job import load_job
+    from shared.profile_completeness import check_profile_completeness
+
+    if not _db:
+        raise HTTPException(503, "Database not configured")
+
+    job = load_job(job_id, user.id, db=_db)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if not job.get("apply_platform"):
+        return {"eligible": False, "reason": "not_supported_platform"}
+    if not job.get("resume_s3_key"):
+        return {"eligible": False, "reason": "no_resume"}
+
+    canonical = job.get("canonical_hash")
+    if canonical:
+        existing = (
+            _db.client.table("applications")
+            .select("id, status, submitted_at")
+            .eq("user_id", user.id)
+            .eq("canonical_hash", canonical)
+            .not_.in_("status", ["unknown", "failed"])
+            .execute()
+        )
+        if existing.data:
+            return {
+                "eligible": False,
+                "reason": "already_applied",
+                "application_id": existing.data[0]["id"],
+                "applied_at": existing.data[0].get("submitted_at"),
+            }
+
+    missing = check_profile_completeness(_db.get_user(user.id))
+    if missing:
+        return {
+            "eligible": False,
+            "reason": "profile_incomplete",
+            "missing_required_fields": missing,
+        }
+
+    return {
+        "eligible": True,
+        "platform": job["apply_platform"],
+        "board_token": job.get("apply_board_token"),
+        "posting_id": job.get("apply_posting_id"),
+    }
 
 
 @app.get("/api/apply/preview/{job_id}")
 def apply_preview(job_id: str, user: AuthUser = Depends(get_current_user)):
-    """Preview the application payload before submitting. Stub — returns 501."""
-    raise HTTPException(501, "Auto-apply preview not yet implemented")
+    """Apply preview snapshot. Plan 3a returns no AI answers; Plan 3b will
+    populate `questions` (platform metadata) and `answers` (AI-generated)
+    without changing this response shape."""
+    from shared.load_job import load_job
+    from shared.profile_completeness import check_profile_completeness
+
+    if not _db:
+        raise HTTPException(503, "Database not configured")
+
+    job = load_job(job_id, user.id, db=_db)
+    if not job:
+        raise HTTPException(404, "Job not found")
+
+    if not job.get("apply_platform"):
+        return {"eligible": False, "reason": "not_supported_platform"}
+    if not job.get("resume_s3_key"):
+        return {"eligible": False, "reason": "no_resume"}
+
+    canonical = job.get("canonical_hash")
+    if canonical:
+        existing = (
+            _db.client.table("applications")
+            .select("id, status, submitted_at")
+            .eq("user_id", user.id)
+            .eq("canonical_hash", canonical)
+            .not_.in_("status", ["unknown", "failed"])
+            .execute()
+        )
+        if existing.data:
+            return {
+                "eligible": False,
+                "reason": "already_applied",
+                "application_id": existing.data[0]["id"],
+            }
+
+    profile = _db.get_user(user.id) or {}
+    missing = check_profile_completeness(profile)
+    if missing:
+        return {
+            "eligible": False,
+            "reason": "profile_incomplete",
+            "missing_required_fields": missing,
+        }
+
+    return {
+        "eligible": True,
+        "job": {
+            "job_id": job["job_id"],
+            "title": job.get("title"),
+            "company": job.get("company"),
+            "apply_url": job.get("apply_url"),
+            "platform": job.get("apply_platform"),
+        },
+        "profile": {k: profile.get(k) for k in (
+            "first_name", "last_name", "email", "phone", "linkedin",
+            "github", "website", "location", "visa_status",
+        )},
+        "resume": {
+            "s3_key": job.get("resume_s3_key"),
+            "version": job.get("resume_version", 1),
+        },
+        "questions": [],
+        "answers": [],
+        "answers_generated": False,
+    }
 
 
-@app.post("/api/apply/submit/{job_id}")
-def apply_submit(job_id: str, user: AuthUser = Depends(get_current_user)):
-    """Submit an application to the platform. Stub — returns 501."""
-    raise HTTPException(501, "Auto-apply submission not yet implemented")
+class StartSessionRequest(BaseModel):
+    job_id: str
 
 
-@app.post("/api/apply/start-session")
-def apply_start_session(user: AuthUser = Depends(get_current_user)):
-    """Start a cloud browser session. Stub — returns 501."""
-    raise HTTPException(501, "Browser session management not yet implemented")
+class StartSessionResponse(BaseModel):
+    session_id: str
+    ws_url: str
+    ws_token: str       # FRONTEND-audience token
+    status: str
+    reused: bool = False
+
+
+@app.post("/api/apply/start-session", response_model=StartSessionResponse)
+def apply_start_session(
+    req: StartSessionRequest,
+    user: AuthUser = Depends(get_current_user),
+):
+    """Launch a Fargate Chrome task for applying to a job."""
+    from shared.load_job import load_job
+    from shared.profile_completeness import check_profile_completeness
+    import shared.browser_sessions as browser_sessions
+    from shared.ws_auth import issue_ws_token
+
+    if not _db:
+        raise HTTPException(503, "Database not configured")
+
+    job = load_job(req.job_id, user.id, db=_db)
+    if not job:
+        raise HTTPException(404, "Job not found")
+
+    profile = _db.get_user(user.id) or {}
+    missing = check_profile_completeness(profile)
+    if missing:
+        raise HTTPException(412, f"profile_incomplete:{','.join(missing)}")
+
+    existing = browser_sessions.find_active_session_for_user(user.id)
+    if existing:
+        if existing.get("current_job_id") != req.job_id:
+            # Session already active for a different job — frontend must
+            # explicitly stop it before starting a new one. Reusing across
+            # jobs would mean the user watches a Fargate browser pointed at
+            # the wrong apply_url.
+            raise HTTPException(409, f"session_active_for_different_job:{existing.get('current_job_id')}")
+        sid = existing["session_id"]
+        return StartSessionResponse(
+            session_id=sid,
+            ws_url=os.environ.get("BROWSER_WS_URL", ""),
+            ws_token=issue_ws_token(user_id=user.id, session_id=sid, role="frontend"),
+            status=existing.get("status", "ready"),
+            reused=True,
+        )
+
+    session_id = str(uuid.uuid4())
+    frontend_token = issue_ws_token(user_id=user.id, session_id=session_id, role="frontend")
+    browser_token = issue_ws_token(user_id=user.id, session_id=session_id, role="browser")
+
+    subnet_ids = [s for s in os.environ.get("BROWSER_SUBNET_IDS", "").split(",") if s]
+    if not subnet_ids:
+        raise HTTPException(500, "BROWSER_SUBNET_IDS not configured")
+
+    ecs = boto3.client("ecs", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
+    result = ecs.run_task(
+        cluster=os.environ["CLUSTER_ARN"],
+        taskDefinition=os.environ["TASK_DEF"],
+        launchType="FARGATE",
+        networkConfiguration={
+            "awsvpcConfiguration": {
+                "subnets": subnet_ids,
+                "securityGroups": [os.environ.get("SECURITY_GROUP", "")],
+                "assignPublicIp": "ENABLED",
+            }
+        },
+        overrides={
+            "containerOverrides": [{
+                "name": "browser",
+                "environment": [
+                    {"name": "SESSION_ID", "value": session_id},
+                    {"name": "USER_ID", "value": user.id},
+                    {"name": "JOB_ID", "value": req.job_id},
+                    {"name": "APPLY_URL", "value": job.get("apply_url", "")},
+                    {"name": "PLATFORM", "value": job.get("apply_platform", "unknown")},
+                    {"name": "WS_TOKEN", "value": browser_token},
+                ],
+            }],
+        },
+    )
+
+    if result.get("failures") or not result.get("tasks"):
+        logger.error("Fargate run_task failed: %s", result)
+        raise HTTPException(503, "Failed to launch browser session")
+
+    browser_sessions.create_session(
+        session_id=session_id,
+        user_id=user.id,
+        job_id=req.job_id,
+        platform=job.get("apply_platform", "unknown"),
+        fargate_task_arn=result["tasks"][0]["taskArn"],
+    )
+
+    return StartSessionResponse(
+        session_id=session_id,
+        ws_url=os.environ.get("BROWSER_WS_URL", ""),
+        ws_token=frontend_token,
+        status="starting",
+        reused=False,
+    )
+
+
+class StopSessionRequest(BaseModel):
+    session_id: str
 
 
 @app.post("/api/apply/stop-session")
-def apply_stop_session(user: AuthUser = Depends(get_current_user)):
-    """Stop a cloud browser session. Stub — returns 501."""
-    raise HTTPException(501, "Browser session management not yet implemented")
+def apply_stop_session(
+    req: StopSessionRequest,
+    user: AuthUser = Depends(get_current_user),
+):
+    """Stop a cloud browser session — ecs:StopTask + mark session ended."""
+    import shared.browser_sessions as browser_sessions
+
+    session = browser_sessions.get_session(req.session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    if session.get("user_id") != user.id:
+        raise HTTPException(403, "Not your session")
+
+    task_arn = session.get("fargate_task_arn")
+    if task_arn:
+        try:
+            ecs = boto3.client("ecs", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
+            ecs.stop_task(
+                cluster=os.environ["CLUSTER_ARN"],
+                task=task_arn,
+                reason="User ended session",
+            )
+        except Exception as e:
+            logger.warning("ECS stop_task failed for %s: %s", task_arn, e)
+
+    browser_sessions.update_status(req.session_id, "ended")
+    return {"status": "stopped"}
+
+
+class RecordApplicationRequest(BaseModel):
+    session_id: str
+    job_id: str
+    confirmation_screenshot_key: Optional[str] = None
+    form_fields_detected: int = 0
+    form_fields_filled: int = 0
+
+
+@app.post("/api/apply/record")
+def apply_record(
+    req: RecordApplicationRequest,
+    user: AuthUser = Depends(get_current_user),
+):
+    """Record a successful cloud-browser submission. Idempotent: if an
+    active application for the same canonical_hash already exists, return
+    the existing row instead of inserting."""
+    from datetime import datetime, timezone
+    from shared.load_job import load_job
+
+    if not _db:
+        raise HTTPException(503, "Database not configured")
+
+    job = load_job(req.job_id, user.id, db=_db)
+    if not job:
+        raise HTTPException(404, "Job not found")
+
+    canonical = job.get("canonical_hash") or ""
+
+    # Idempotency: only safe to consult when canonical_hash exists. Without
+    # it, eq("canonical_hash", "") would collapse across every job that's
+    # missing a hash for this user, returning a false-positive duplicate.
+    if canonical:
+        existing = (
+            _db.client.table("applications")
+            .select("id, status")
+            .eq("user_id", user.id)
+            .eq("canonical_hash", canonical)
+            .not_.in_("status", ["unknown", "failed"])
+            .execute()
+        )
+        if existing.data:
+            return {
+                "status": "recorded",
+                "application_id": existing.data[0]["id"],
+                "idempotent": True,
+            }
+
+    app_row = {
+        "user_id": user.id,
+        "job_id": req.job_id,
+        "job_hash": job.get("job_hash", ""),
+        "canonical_hash": canonical or None,
+        "submission_method": "cloud_browser",
+        "platform": job.get("apply_platform", "unknown"),
+        "posting_id": job.get("apply_posting_id"),
+        "board_token": job.get("apply_board_token"),
+        "resume_s3_key": job.get("resume_s3_key", ""),
+        "resume_version": job.get("resume_version", 1),
+        "status": "submitted",
+        "browser_session_id": req.session_id,
+        "confirmation_screenshot_s3_key": req.confirmation_screenshot_key,
+        "form_fields_detected": req.form_fields_detected,
+        "form_fields_filled": req.form_fields_filled,
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+        "dry_run": False,
+    }
+    result = _db.client.table("applications").insert(app_row).execute()
+    application_id = (result.data or [{}])[0].get("id")
+
+    if canonical:
+        _db.client.table("jobs").update(
+            {"application_status": "Applied"},
+        ).eq("user_id", user.id).eq("canonical_hash", canonical).execute()
+
+    _db.client.table("application_timeline").insert({
+        "user_id": user.id,
+        "job_id": req.job_id,
+        "status": "Applied",
+        "notes": f"Cloud browser via {job.get('apply_platform', 'unknown')}",
+    }).execute()
+
+    return {"status": "recorded", "application_id": application_id, "idempotent": False}
 
 
 # ---------------------------------------------------------------------------
