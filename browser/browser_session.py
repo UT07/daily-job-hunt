@@ -233,10 +233,8 @@ async def _handle_submit(page, ws) -> None:
 async def _screenshot_loop(page, stop_event: asyncio.Event, frontend_conn_id: str) -> None:
     """Stream JPEG screenshots to frontend via API Gateway Management API.
 
-    TODO(plan-3): apigw.post_to_connection and the DynamoDB calls inside this
-    module are synchronous boto3 invocations on the async event loop. At 5fps
-    they add jitter and any GoneException / network stall briefly freezes all
-    three loops. Wrap with asyncio.run_in_executor or migrate to aioboto3.
+    `apigw.post_to_connection` is sync boto3, so it's run via `asyncio.to_thread`
+    to keep the event loop responsive at 5fps under network jitter.
     """
     mgmt_url = f"https://{os.environ.get('WEBSOCKET_API_ID', '')}.execute-api.{AWS_REGION}.amazonaws.com/prod"
     apigw = boto3.client("apigatewaymanagementapi", endpoint_url=mgmt_url, region_name=AWS_REGION)
@@ -261,7 +259,8 @@ async def _screenshot_loop(page, stop_event: asyncio.Event, frontend_conn_id: st
                 screenshot = await page.screenshot(type="jpeg", quality=quality)
 
             if len(screenshot) <= 128_000:
-                apigw.post_to_connection(
+                await asyncio.to_thread(
+                    apigw.post_to_connection,
                     ConnectionId=frontend_conn_id,
                     Data=screenshot,
                 )
