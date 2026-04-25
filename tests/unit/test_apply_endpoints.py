@@ -295,3 +295,65 @@ def test_stop_session_still_marks_ended_if_ecs_fails(client):
         r = c.post("/api/apply/stop-session", json={"session_id": "sess-1"})
     assert r.status_code == 200
     m_status.assert_called_once_with("sess-1", "ended")
+
+
+# ---- Record Application (idempotent) ----
+
+def test_record_404_when_job_missing(client):
+    c, _ = client
+    with patch("shared.load_job.load_job", return_value=None):
+        r = c.post("/api/apply/record", json={"session_id": "s1", "job_id": "j-gone"})
+    assert r.status_code == 404
+
+
+def test_record_inserts_application_with_cloud_browser_method(client):
+    c, db = client
+    apps = MagicMock()
+    # idempotency check — no existing row
+    chain = apps.select.return_value.eq.return_value.eq.return_value.not_.in_.return_value
+    chain.execute.return_value = MagicMock(data=[])
+    # insert path
+    apps.insert.return_value = apps
+    apps.execute.return_value = MagicMock(data=[{"id": "app-NEW"}])
+    jobs = MagicMock()
+    jobs.update.return_value = jobs; jobs.eq.return_value = jobs
+    jobs.execute.return_value = MagicMock()
+    timeline = MagicMock()
+    timeline.insert.return_value = timeline
+    timeline.execute.return_value = MagicMock(data=[{"id": "t-1"}])
+
+    def router(name):
+        return {"applications": apps, "jobs": jobs, "application_timeline": timeline}.get(name, MagicMock())
+    db.client.table.side_effect = router
+
+    with patch("shared.load_job.load_job", return_value=_job_row()):
+        r = c.post("/api/apply/record", json={
+            "session_id": "sess-1", "job_id": "j1",
+            "confirmation_screenshot_key": "c.png",
+            "form_fields_detected": 12, "form_fields_filled": 11,
+        })
+    assert r.status_code == 200
+    assert r.json() == {"status": "recorded", "application_id": "app-NEW", "idempotent": False}
+    inserted = apps.insert.call_args.args[0]
+    assert inserted["submission_method"] == "cloud_browser"
+    assert inserted["browser_session_id"] == "sess-1"
+    assert inserted["form_fields_detected"] == 12
+    assert inserted["form_fields_filled"] == 11
+
+
+def test_record_is_idempotent_on_duplicate(client):
+    """If canonical_hash already has an active applications row, return
+    existing id instead of double-inserting."""
+    c, db = client
+    apps = MagicMock()
+    chain = apps.select.return_value.eq.return_value.eq.return_value.not_.in_.return_value
+    chain.execute.return_value = MagicMock(data=[{"id": "app-EXISTING", "status": "submitted"}])
+    apps.insert.return_value = apps
+    apps.execute.side_effect = AssertionError("insert must NOT be called on duplicate")
+
+    db.client.table.side_effect = lambda name: apps if name == "applications" else MagicMock()
+
+    with patch("shared.load_job.load_job", return_value=_job_row()):
+        r = c.post("/api/apply/record", json={"session_id": "sess-1", "job_id": "j1"})
+    assert r.status_code == 200
+    assert r.json() == {"status": "recorded", "application_id": "app-EXISTING", "idempotent": True}

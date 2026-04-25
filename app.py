@@ -2655,6 +2655,86 @@ def apply_stop_session(
     return {"status": "stopped"}
 
 
+class RecordApplicationRequest(BaseModel):
+    session_id: str
+    job_id: str
+    confirmation_screenshot_key: Optional[str] = None
+    form_fields_detected: int = 0
+    form_fields_filled: int = 0
+
+
+@app.post("/api/apply/record")
+def apply_record(
+    req: RecordApplicationRequest,
+    user: AuthUser = Depends(get_current_user),
+):
+    """Record a successful cloud-browser submission. Idempotent: if an
+    active application for the same canonical_hash already exists, return
+    the existing row instead of inserting."""
+    from datetime import datetime, timezone
+    from shared.load_job import load_job
+
+    if not _db:
+        raise HTTPException(503, "Database not configured")
+
+    job = load_job(req.job_id, user.id, db=_db)
+    if not job:
+        raise HTTPException(404, "Job not found")
+
+    canonical = job.get("canonical_hash") or ""
+
+    existing = (
+        _db.client.table("applications")
+        .select("id, status")
+        .eq("user_id", user.id)
+        .eq("canonical_hash", canonical)
+        .not_.in_("status", ["unknown", "failed"])
+        .execute()
+    )
+    if existing.data:
+        return {
+            "status": "recorded",
+            "application_id": existing.data[0]["id"],
+            "idempotent": True,
+        }
+
+    app_row = {
+        "user_id": user.id,
+        "job_id": req.job_id,
+        "job_hash": job.get("job_hash", ""),
+        "canonical_hash": canonical or None,
+        "submission_method": "cloud_browser",
+        "platform": job.get("apply_platform", "unknown"),
+        "posting_id": job.get("apply_posting_id"),
+        "board_token": job.get("apply_board_token"),
+        "resume_s3_key": job.get("resume_s3_key", ""),
+        "resume_version": job.get("resume_version", 1),
+        "status": "submitted",
+        "browser_session_id": req.session_id,
+        "confirmation_screenshot_s3_key": req.confirmation_screenshot_key,
+        "form_fields_detected": req.form_fields_detected,
+        "form_fields_filled": req.form_fields_filled,
+        "submitted_at": datetime.now(timezone.utc).isoformat(),
+        "dry_run": False,
+    }
+    result = _db.client.table("applications").insert(app_row).execute()
+    application_id = (result.data or [{}])[0].get("id")
+
+    if canonical:
+        _db.client.table("jobs").update(
+            {"application_status": "Applied"},
+        ).eq("user_id", user.id).eq("canonical_hash", canonical).execute()
+
+    _db.client.table("application_timeline").insert({
+        "user_id": user.id,
+        "job_id": req.job_id,
+        "status": "Applied",
+        "notes": f"Cloud browser via {job.get('apply_platform', 'unknown')}",
+    }).execute()
+
+    return {"status": "recorded", "application_id": application_id, "idempotent": False}
+
+
 # ---------------------------------------------------------------------------
 # Lambda handler (Mangum)
 # ---------------------------------------------------------------------------
