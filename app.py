@@ -2519,16 +2519,106 @@ def apply_preview(job_id: str, user: AuthUser = Depends(get_current_user)):
     }
 
 
-@app.post("/api/apply/submit/{job_id}")
-def apply_submit(job_id: str, user: AuthUser = Depends(get_current_user)):
-    """Submit an application to the platform. Stub — returns 501."""
-    raise HTTPException(501, "Auto-apply submission not yet implemented")
+class StartSessionRequest(BaseModel):
+    job_id: str
 
 
-@app.post("/api/apply/start-session")
-def apply_start_session(user: AuthUser = Depends(get_current_user)):
-    """Start a cloud browser session. Stub — returns 501."""
-    raise HTTPException(501, "Browser session management not yet implemented")
+class StartSessionResponse(BaseModel):
+    session_id: str
+    ws_url: str
+    ws_token: str       # FRONTEND-audience token
+    status: str
+    reused: bool = False
+
+
+@app.post("/api/apply/start-session", response_model=StartSessionResponse)
+def apply_start_session(
+    req: StartSessionRequest,
+    user: AuthUser = Depends(get_current_user),
+):
+    """Launch a Fargate Chrome task for applying to a job."""
+    from shared.load_job import load_job
+    from shared.profile_completeness import check_profile_completeness
+    import shared.browser_sessions as browser_sessions
+    from shared.ws_auth import issue_ws_token
+
+    if not _db:
+        raise HTTPException(503, "Database not configured")
+
+    job = load_job(req.job_id, user.id, db=_db)
+    if not job:
+        raise HTTPException(404, "Job not found")
+
+    profile = _db.get_user(user.id) or {}
+    missing = check_profile_completeness(profile)
+    if missing:
+        raise HTTPException(412, f"profile_incomplete:{','.join(missing)}")
+
+    existing = browser_sessions.find_active_session_for_user(user.id)
+    if existing:
+        sid = existing["session_id"]
+        return StartSessionResponse(
+            session_id=sid,
+            ws_url=os.environ.get("BROWSER_WS_URL", ""),
+            ws_token=issue_ws_token(user_id=user.id, session_id=sid, role="frontend"),
+            status=existing.get("status", "ready"),
+            reused=True,
+        )
+
+    session_id = str(uuid.uuid4())
+    frontend_token = issue_ws_token(user_id=user.id, session_id=session_id, role="frontend")
+    browser_token = issue_ws_token(user_id=user.id, session_id=session_id, role="browser")
+
+    subnet_ids = [s for s in os.environ.get("BROWSER_SUBNET_IDS", "").split(",") if s]
+    if not subnet_ids:
+        raise HTTPException(500, "BROWSER_SUBNET_IDS not configured")
+
+    ecs = boto3.client("ecs", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
+    result = ecs.run_task(
+        cluster=os.environ["CLUSTER_ARN"],
+        taskDefinition=os.environ["TASK_DEF"],
+        launchType="FARGATE",
+        networkConfiguration={
+            "awsvpcConfiguration": {
+                "subnets": subnet_ids,
+                "securityGroups": [os.environ.get("SECURITY_GROUP", "")],
+                "assignPublicIp": "ENABLED",
+            }
+        },
+        overrides={
+            "containerOverrides": [{
+                "name": "browser",
+                "environment": [
+                    {"name": "SESSION_ID", "value": session_id},
+                    {"name": "USER_ID", "value": user.id},
+                    {"name": "JOB_ID", "value": req.job_id},
+                    {"name": "APPLY_URL", "value": job.get("apply_url", "")},
+                    {"name": "PLATFORM", "value": job.get("apply_platform", "unknown")},
+                    {"name": "WS_TOKEN", "value": browser_token},
+                ],
+            }],
+        },
+    )
+
+    if result.get("failures") or not result.get("tasks"):
+        logger.error("Fargate run_task failed: %s", result)
+        raise HTTPException(503, "Failed to launch browser session")
+
+    browser_sessions.create_session(
+        session_id=session_id,
+        user_id=user.id,
+        job_id=req.job_id,
+        platform=job.get("apply_platform", "unknown"),
+        fargate_task_arn=result["tasks"][0]["taskArn"],
+    )
+
+    return StartSessionResponse(
+        session_id=session_id,
+        ws_url=os.environ.get("BROWSER_WS_URL", ""),
+        ws_token=frontend_token,
+        status="starting",
+        reused=False,
+    )
 
 
 @app.post("/api/apply/stop-session")
