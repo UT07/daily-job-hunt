@@ -51,7 +51,9 @@ def test_end_to_end_apply_flow():
     posted: list = []
 
     def fake_create_session(**kw):
-        row = {**kw, "status": "starting"}
+        # Mirror real shared.browser_sessions.create_session: stores
+        # `current_job_id`, not the `job_id` kwarg name.
+        row = {**kw, "status": "starting", "current_job_id": kw.get("job_id")}
         sessions_store[kw["session_id"]] = row
         return row
 

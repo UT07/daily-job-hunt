@@ -194,7 +194,7 @@ def test_start_session_rejects_incomplete_profile(client):
 def test_start_session_reuses_warm_session(client):
     c, db = client
     db.get_user.return_value = _complete_user()
-    existing = {"session_id": "warm-1", "status": "ready", "user_id": "user-1"}
+    existing = {"session_id": "warm-1", "status": "ready", "user_id": "user-1", "current_job_id": "j1"}
     with patch("shared.load_job.load_job", return_value=_job_row()), \
          patch("shared.browser_sessions.find_active_session_for_user", return_value=existing), \
          patch("shared.browser_sessions.create_session") as m_create, \
@@ -357,3 +357,67 @@ def test_record_is_idempotent_on_duplicate(client):
         r = c.post("/api/apply/record", json={"session_id": "sess-1", "job_id": "j1"})
     assert r.status_code == 200
     assert r.json() == {"status": "recorded", "application_id": "app-EXISTING", "idempotent": True}
+
+
+# ---- Review fixes (post-implementation) ----
+
+def test_start_session_409_when_active_session_for_different_job(client):
+    """Reusing a warm session across different job_ids would mean Fargate
+    is pointed at the wrong apply_url. Reject with 409."""
+    c, db = client
+    db.get_user.return_value = _complete_user()
+    existing = {"session_id": "warm-A", "status": "ready", "user_id": "user-1", "current_job_id": "job-A"}
+    with patch("shared.load_job.load_job", return_value=_job_row(job_id="job-B")), \
+         patch("shared.browser_sessions.find_active_session_for_user", return_value=existing):
+        r = c.post("/api/apply/start-session", json={"job_id": "job-B"})
+    assert r.status_code == 409
+    assert "session_active_for_different_job" in r.json()["detail"]
+
+
+def test_start_session_reuses_warm_session_for_same_job(client):
+    """Same-job warm reuse must still work."""
+    c, db = client
+    db.get_user.return_value = _complete_user()
+    existing = {"session_id": "warm-1", "status": "ready", "user_id": "user-1", "current_job_id": "j1"}
+    with patch("shared.load_job.load_job", return_value=_job_row()), \
+         patch("shared.browser_sessions.find_active_session_for_user", return_value=existing):
+        r = c.post("/api/apply/start-session", json={"job_id": "j1"})
+    assert r.status_code == 200
+    assert r.json()["session_id"] == "warm-1"
+    assert r.json()["reused"] is True
+
+
+def test_eligibility_skips_canonical_hash_check_when_empty(client):
+    """A job without canonical_hash must NOT match other no-hash applications."""
+    c, db = client
+    # If the SELECT is consulted, it would collapse across no-hash rows.
+    # Mock the .execute() to RAISE so we know it wasn't called.
+    chain = db.client.table.return_value.select.return_value.eq.return_value.eq.return_value.not_.in_.return_value
+    chain.execute.side_effect = AssertionError("must not query when canonical empty")
+    db.get_user.return_value = _complete_user()
+    with patch("shared.load_job.load_job", return_value=_job_row(canonical_hash=None)):
+        r = c.get("/api/apply/eligibility/j1")
+    # Should reach happy path, not match a stale no-hash row
+    assert r.status_code == 200
+    assert r.json() == {
+        "eligible": True, "platform": "greenhouse",
+        "board_token": "acme", "posting_id": "12345",
+    }
+
+
+def test_record_skips_canonical_hash_idempotency_when_empty(client):
+    """Without canonical_hash, fall through to insert — don't false-positive
+    on other jobs missing a hash."""
+    c, db = client
+    apps = MagicMock()
+    # Idempotency SELECT must NOT be called
+    apps.select.side_effect = AssertionError("must not check idempotency when canonical empty")
+    apps.insert.return_value = apps
+    apps.execute.return_value = MagicMock(data=[{"id": "app-NEW2"}])
+    db.client.table.side_effect = lambda name: apps if name == "applications" else MagicMock()
+
+    with patch("shared.load_job.load_job", return_value=_job_row(canonical_hash=None)):
+        r = c.post("/api/apply/record", json={"session_id": "s1", "job_id": "j1"})
+    assert r.status_code == 200
+    assert r.json()["application_id"] == "app-NEW2"
+    assert r.json()["idempotent"] is False

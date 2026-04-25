@@ -2420,21 +2420,23 @@ def apply_eligibility(job_id: str, user: AuthUser = Depends(get_current_user)):
     if not job.get("resume_s3_key"):
         return {"eligible": False, "reason": "no_resume"}
 
-    existing = (
-        _db.client.table("applications")
-        .select("id, status, submitted_at")
-        .eq("user_id", user.id)
-        .eq("canonical_hash", job.get("canonical_hash") or "")
-        .not_.in_("status", ["unknown", "failed"])
-        .execute()
-    )
-    if existing.data:
-        return {
-            "eligible": False,
-            "reason": "already_applied",
-            "application_id": existing.data[0]["id"],
-            "applied_at": existing.data[0].get("submitted_at"),
-        }
+    canonical = job.get("canonical_hash")
+    if canonical:
+        existing = (
+            _db.client.table("applications")
+            .select("id, status, submitted_at")
+            .eq("user_id", user.id)
+            .eq("canonical_hash", canonical)
+            .not_.in_("status", ["unknown", "failed"])
+            .execute()
+        )
+        if existing.data:
+            return {
+                "eligible": False,
+                "reason": "already_applied",
+                "application_id": existing.data[0]["id"],
+                "applied_at": existing.data[0].get("submitted_at"),
+            }
 
     missing = check_profile_completeness(_db.get_user(user.id))
     if missing:
@@ -2472,20 +2474,22 @@ def apply_preview(job_id: str, user: AuthUser = Depends(get_current_user)):
     if not job.get("resume_s3_key"):
         return {"eligible": False, "reason": "no_resume"}
 
-    existing = (
-        _db.client.table("applications")
-        .select("id, status, submitted_at")
-        .eq("user_id", user.id)
-        .eq("canonical_hash", job.get("canonical_hash") or "")
-        .not_.in_("status", ["unknown", "failed"])
-        .execute()
-    )
-    if existing.data:
-        return {
-            "eligible": False,
-            "reason": "already_applied",
-            "application_id": existing.data[0]["id"],
-        }
+    canonical = job.get("canonical_hash")
+    if canonical:
+        existing = (
+            _db.client.table("applications")
+            .select("id, status, submitted_at")
+            .eq("user_id", user.id)
+            .eq("canonical_hash", canonical)
+            .not_.in_("status", ["unknown", "failed"])
+            .execute()
+        )
+        if existing.data:
+            return {
+                "eligible": False,
+                "reason": "already_applied",
+                "application_id": existing.data[0]["id"],
+            }
 
     profile = _db.get_user(user.id) or {}
     missing = check_profile_completeness(profile)
@@ -2556,6 +2560,12 @@ def apply_start_session(
 
     existing = browser_sessions.find_active_session_for_user(user.id)
     if existing:
+        if existing.get("current_job_id") != req.job_id:
+            # Session already active for a different job — frontend must
+            # explicitly stop it before starting a new one. Reusing across
+            # jobs would mean the user watches a Fargate browser pointed at
+            # the wrong apply_url.
+            raise HTTPException(409, f"session_active_for_different_job:{existing.get('current_job_id')}")
         sid = existing["session_id"]
         return StartSessionResponse(
             session_id=sid,
@@ -2683,20 +2693,24 @@ def apply_record(
 
     canonical = job.get("canonical_hash") or ""
 
-    existing = (
-        _db.client.table("applications")
-        .select("id, status")
-        .eq("user_id", user.id)
-        .eq("canonical_hash", canonical)
-        .not_.in_("status", ["unknown", "failed"])
-        .execute()
-    )
-    if existing.data:
-        return {
-            "status": "recorded",
-            "application_id": existing.data[0]["id"],
-            "idempotent": True,
-        }
+    # Idempotency: only safe to consult when canonical_hash exists. Without
+    # it, eq("canonical_hash", "") would collapse across every job that's
+    # missing a hash for this user, returning a false-positive duplicate.
+    if canonical:
+        existing = (
+            _db.client.table("applications")
+            .select("id, status")
+            .eq("user_id", user.id)
+            .eq("canonical_hash", canonical)
+            .not_.in_("status", ["unknown", "failed"])
+            .execute()
+        )
+        if existing.data:
+            return {
+                "status": "recorded",
+                "application_id": existing.data[0]["id"],
+                "idempotent": True,
+            }
 
     app_row = {
         "user_id": user.id,
