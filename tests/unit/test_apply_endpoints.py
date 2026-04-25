@@ -126,3 +126,55 @@ def test_eligibility_happy_path(client):
         "eligible": True, "platform": "greenhouse",
         "board_token": "acme", "posting_id": "12345",
     }
+
+
+# ---- Preview (minimal, Plan 3b fills AI) ----
+
+def test_preview_job_not_found(client):
+    c, _ = client
+    with patch("shared.load_job.load_job", return_value=None):
+        r = c.get("/api/apply/preview/j1")
+    assert r.status_code == 404
+
+
+def test_preview_returns_ineligible_for_unsupported_platform(client):
+    c, _ = client
+    with patch("shared.load_job.load_job", return_value=_job_row(apply_platform=None)):
+        r = c.get("/api/apply/preview/j1")
+    assert r.status_code == 200
+    assert r.json() == {"eligible": False, "reason": "not_supported_platform"}
+
+
+def test_preview_returns_already_applied(client):
+    """Preview must apply the SAME eligibility gates as /eligibility."""
+    c, db = client
+    _existing_app(db, {"id": "app-1", "status": "submitted"})
+    with patch("shared.load_job.load_job", return_value=_job_row()):
+        r = c.get("/api/apply/preview/j1")
+    assert r.json()["reason"] == "already_applied"
+
+
+def test_preview_returns_profile_incomplete(client):
+    c, db = client
+    _no_existing_apps(db)
+    db.get_user.return_value = {"id": "user-1"}
+    with patch("shared.load_job.load_job", return_value=_job_row()):
+        r = c.get("/api/apply/preview/j1")
+    assert r.json()["reason"] == "profile_incomplete"
+
+
+def test_preview_happy_path_returns_snapshot_without_ai_answers(client):
+    c, db = client
+    _no_existing_apps(db)
+    db.get_user.return_value = _complete_user()
+    with patch("shared.load_job.load_job", return_value=_job_row()):
+        r = c.get("/api/apply/preview/j1")
+    body = r.json()
+    assert r.status_code == 200
+    assert body["eligible"] is True
+    assert body["job"]["job_id"] == "j1"
+    assert body["profile"]["first_name"] == "U"
+    assert body["resume"]["s3_key"] == "users/user-1/resumes/v1.pdf"
+    assert body["answers_generated"] is False
+    assert body["answers"] == []
+    assert body["questions"] == []
