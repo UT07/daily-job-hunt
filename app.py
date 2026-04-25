@@ -2621,10 +2621,38 @@ def apply_start_session(
     )
 
 
+class StopSessionRequest(BaseModel):
+    session_id: str
+
+
 @app.post("/api/apply/stop-session")
-def apply_stop_session(user: AuthUser = Depends(get_current_user)):
-    """Stop a cloud browser session. Stub — returns 501."""
-    raise HTTPException(501, "Browser session management not yet implemented")
+def apply_stop_session(
+    req: StopSessionRequest,
+    user: AuthUser = Depends(get_current_user),
+):
+    """Stop a cloud browser session — ecs:StopTask + mark session ended."""
+    import shared.browser_sessions as browser_sessions
+
+    session = browser_sessions.get_session(req.session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    if session.get("user_id") != user.id:
+        raise HTTPException(403, "Not your session")
+
+    task_arn = session.get("fargate_task_arn")
+    if task_arn:
+        try:
+            ecs = boto3.client("ecs", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
+            ecs.stop_task(
+                cluster=os.environ["CLUSTER_ARN"],
+                task=task_arn,
+                reason="User ended session",
+            )
+        except Exception as e:
+            logger.warning("ECS stop_task failed for %s: %s", task_arn, e)
+
+    browser_sessions.update_status(req.session_id, "ended")
+    return {"status": "stopped"}
 
 
 # ---------------------------------------------------------------------------

@@ -250,3 +250,48 @@ def test_start_session_503_when_ecs_returns_failures(client):
          patch("boto3.client", return_value=ecs):
         r = c.post("/api/apply/start-session", json={"job_id": "j1"})
     assert r.status_code == 503
+
+
+# ---- Stop Session ----
+
+def test_stop_session_404_unknown(client):
+    c, _ = client
+    with patch("shared.browser_sessions.get_session", return_value=None):
+        r = c.post("/api/apply/stop-session", json={"session_id": "sess-x"})
+    assert r.status_code == 404
+
+
+def test_stop_session_403_wrong_user(client):
+    c, _ = client
+    with patch("shared.browser_sessions.get_session", return_value={
+        "session_id": "sess-1", "user_id": "someone-else", "fargate_task_arn": "arn:x",
+    }):
+        r = c.post("/api/apply/stop-session", json={"session_id": "sess-1"})
+    assert r.status_code == 403
+
+
+def test_stop_session_happy_path(client):
+    c, _ = client
+    ecs = MagicMock()
+    with patch("shared.browser_sessions.get_session", return_value={
+        "session_id": "sess-1", "user_id": "user-1", "fargate_task_arn": "arn:x",
+    }), patch("boto3.client", return_value=ecs), \
+         patch("shared.browser_sessions.update_status") as m_status:
+        r = c.post("/api/apply/stop-session", json={"session_id": "sess-1"})
+    assert r.status_code == 200
+    assert r.json()["status"] == "stopped"
+    ecs.stop_task.assert_called_once()
+    m_status.assert_called_once_with("sess-1", "ended")
+
+
+def test_stop_session_still_marks_ended_if_ecs_fails(client):
+    c, _ = client
+    ecs = MagicMock()
+    ecs.stop_task.side_effect = Exception("ECS down")
+    with patch("shared.browser_sessions.get_session", return_value={
+        "session_id": "sess-1", "user_id": "user-1", "fargate_task_arn": "arn:x",
+    }), patch("boto3.client", return_value=ecs), \
+         patch("shared.browser_sessions.update_status") as m_status:
+        r = c.post("/api/apply/stop-session", json={"session_id": "sess-1"})
+    assert r.status_code == 200
+    m_status.assert_called_once_with("sess-1", "ended")
