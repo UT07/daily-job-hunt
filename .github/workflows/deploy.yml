@@ -61,6 +61,8 @@ jobs:
           SB_JWT: ${{ secrets.SUPABASE_JWT_SECRET }}
           SERPER_KEY: ${{ secrets.SERPER_API_KEY }}
           APIFY_KEY: ${{ secrets.APIFY_API_KEY }}
+          CAPSOLVER_KEY: ${{ secrets.CAPSOLVER_API_KEY }}
+          BROWSER_SUBNETS: ${{ secrets.BROWSER_SUBNET_IDS }}
         run: |
           sam deploy \
             --stack-name job-hunt-api \
@@ -81,4 +83,6 @@ jobs:
               "SupabaseServiceKey=${SB_KEY}" \
               "SupabaseJwtSecret=${SB_JWT}" \
               "SerperApiKey=${SERPER_KEY}" \
-              "ApifyApiKey=${APIFY_KEY}"
+              "ApifyApiKey=${APIFY_KEY}" \
+              "CapSolverApiKey=${CAPSOLVER_KEY}" \
+              "BrowserSubnetIds=${BROWSER_SUBNETS}"
