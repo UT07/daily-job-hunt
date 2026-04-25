@@ -2405,8 +2405,51 @@ def gdpr_delete(user: AuthUser = Depends(get_current_user)):
 
 @app.get("/api/apply/eligibility/{job_id}")
 def apply_eligibility(job_id: str, user: AuthUser = Depends(get_current_user)):
-    """Check if a job is eligible for auto-apply. Stub — returns 501."""
-    raise HTTPException(501, "Auto-apply eligibility check not yet implemented")
+    """Per-job eligibility — no AI, no network calls to platforms."""
+    from shared.load_job import load_job
+    from shared.profile_completeness import check_profile_completeness
+
+    if not _db:
+        raise HTTPException(503, "Database not configured")
+
+    job = load_job(job_id, user.id, db=_db)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    if not job.get("apply_platform"):
+        return {"eligible": False, "reason": "not_supported_platform"}
+    if not job.get("resume_s3_key"):
+        return {"eligible": False, "reason": "no_resume"}
+
+    existing = (
+        _db.client.table("applications")
+        .select("id, status, submitted_at")
+        .eq("user_id", user.id)
+        .eq("canonical_hash", job.get("canonical_hash") or "")
+        .not_.in_("status", ["unknown", "failed"])
+        .execute()
+    )
+    if existing.data:
+        return {
+            "eligible": False,
+            "reason": "already_applied",
+            "application_id": existing.data[0]["id"],
+            "applied_at": existing.data[0].get("submitted_at"),
+        }
+
+    missing = check_profile_completeness(_db.get_user(user.id))
+    if missing:
+        return {
+            "eligible": False,
+            "reason": "profile_incomplete",
+            "missing_required_fields": missing,
+        }
+
+    return {
+        "eligible": True,
+        "platform": job["apply_platform"],
+        "board_token": job.get("apply_board_token"),
+        "posting_id": job.get("apply_posting_id"),
+    }
 
 
 @app.get("/api/apply/preview/{job_id}")
