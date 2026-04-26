@@ -1658,64 +1658,6 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BrowserWebSocketApi}/*/$default"
 
-  # --- Session Management Lambdas ---
-  StartBrowserFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: naukribaba-start-browser
-      CodeUri: lambdas/browser/
-      Handler: start_session.handler
-      Runtime: python3.11
-      Timeout: 30
-      MemorySize: 256
-      Environment:
-        Variables:
-          SESSIONS_TABLE: !Ref BrowserSessionsTable
-          CLUSTER_ARN: !GetAtt ScraperCluster.Arn
-          TASK_DEF: !Ref BrowserSessionTaskDef
-          SECURITY_GROUP: !Ref ScraperSecurityGroup
-          WEBSOCKET_URL: !Sub "wss://${BrowserWebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
-          S3_BUCKET: utkarsh-job-hunt
-          SUPABASE_URL: !Ref SupabaseUrl
-          SUPABASE_SERVICE_KEY: !Ref SupabaseServiceKey
-          SUPABASE_JWT_SECRET: !Ref SupabaseJwtSecret
-          BROWSER_SUBNET_IDS: !Join [",", !Ref BrowserSubnetIds]
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref BrowserSessionsTable
-        - Statement:
-            - Effect: Allow
-              Action:
-                - ecs:RunTask
-                - ecs:DescribeTasks
-              Resource: "*"
-            - Effect: Allow
-              Action: iam:PassRole
-              Resource:
-                - !GetAtt FargateExecutionRole.Arn
-                - !GetAtt BrowserTaskRole.Arn
-
-  StopBrowserFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: naukribaba-stop-browser
-      CodeUri: lambdas/browser/
-      Handler: stop_session.handler
-      Runtime: python3.11
-      Timeout: 15
-      MemorySize: 128
-      Environment:
-        Variables:
-          SESSIONS_TABLE: !Ref BrowserSessionsTable
-          CLUSTER_ARN: !GetAtt ScraperCluster.Arn
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref BrowserSessionsTable
-        - Statement:
-            - Effect: Allow
-              Action: ecs:StopTask
-              Resource: "*"
-
   # --- Browser Session Fargate ---
   BrowserLogGroup:
     Type: AWS::Logs::LogGroup
