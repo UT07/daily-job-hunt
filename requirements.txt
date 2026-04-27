@@ -39,5 +39,8 @@ python-multipart>=0.0.9
 # PDF text extraction (resume upload)
 pdfplumber>=0.10.0
 
+# PostHog analytics
+posthog>=3.0.0
+
 # Optional: Anthropic SDK (only needed if using Claude as paid fallback)
 # anthropic>=0.39.0
