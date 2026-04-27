@@ -2415,8 +2415,11 @@ def apply_eligibility(job_id: str, user: AuthUser = Depends(get_current_user)):
     job = load_job(job_id, user.id, db=_db)
     if not job:
         raise HTTPException(404, "Job not found")
-    if not job.get("apply_platform"):
-        return {"eligible": False, "reason": "not_supported_platform"}
+    if not job.get("apply_url"):
+        return {"eligible": False, "reason": "no_apply_url"}
+    # NOTE: resume_s3_key is the implicit ≤B-tier gate — the tailoring pipeline
+    # only writes it for S/A/B per pipeline policy. Do not remove this gate
+    # without re-instating an explicit tier filter.
     if not job.get("resume_s3_key"):
         return {"eligible": False, "reason": "no_resume"}
 
@@ -2448,7 +2451,7 @@ def apply_eligibility(job_id: str, user: AuthUser = Depends(get_current_user)):
 
     return {
         "eligible": True,
-        "platform": job["apply_platform"],
+        "platform": job.get("apply_platform"),
         "board_token": job.get("apply_board_token"),
         "posting_id": job.get("apply_posting_id"),
     }
@@ -2469,8 +2472,8 @@ def apply_preview(job_id: str, user: AuthUser = Depends(get_current_user)):
     if not job:
         raise HTTPException(404, "Job not found")
 
-    if not job.get("apply_platform"):
-        return {"eligible": False, "reason": "not_supported_platform"}
+    if not job.get("apply_url"):
+        return {"eligible": False, "reason": "no_apply_url"}
     if not job.get("resume_s3_key"):
         return {"eligible": False, "reason": "no_resume"}
 

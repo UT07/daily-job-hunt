@@ -269,6 +269,22 @@ These map to the 6 v2 product stages (Discover → Research → Tailor → Apply
                                               (needs data from 3.1-3.4)
 ```
 
+#### Stage 3.4 Apply — Sub-Plan Index (added 2026-04-26)
+
+Stage 3.4 evolved beyond the original "semi-auto Playwright" framing into a cloud-browser auto-apply system. Sub-specs and sub-plans below; consult these (not this row in the table) for current status.
+
+| Doc | Status | Description |
+|---|---|---|
+| Spec: [auto-apply mode 1 design](2026-04-11-auto-apply-mode-1-design.md) | Approved | Original mode-1 design for known-ATS apply |
+| Spec: [auto-apply cloud-browser design](2026-04-12-auto-apply-cloud-browser-design.md) | Approved | Universal cloud-browser approach (Fargate Chrome + WS streaming) — supersedes mode-1 framing |
+| Plan 2: [browser session](../plans/2026-04-20-auto-apply-plan2-browser-session.md) | ✅ Shipped (PR #7) | `browser/browser_session.py` + Fargate task def |
+| Plan 3a: [WebSocket + backend](../plans/2026-04-24-auto-apply-plan3a-websocket-backend.md) | ✅ Shipped (PR #8) | 3 WS Lambdas + 5 `/api/apply/*` endpoints + idempotent record |
+| Spec: [apply platform classifier](2026-04-26-apply-platform-classifier-design.md) | **Current** | URL → platform classifier; flips eligibility gate from `apply_platform` to `apply_url`; backfill 831 jobs. **Unblocks 3a's consumer code (which is dead in prod without this).** |
+| Plan 3b: [AI preview](../plans/2026-04-24-auto-apply-plan3b-preview-ai.md) | Stub (pending) | AI answer prefill, platform metadata fetchers (greenhouse/ashby), question classifier. Depends on classifier. |
+| Plan 3c: [frontend UI](../plans/2026-04-26-auto-apply-plan3c-frontend-ui.md) | Stub (pending) | React UI to actually trigger the backend (Apply button, modal, WS client, screenshot stream). PR #8 shipped backend + WS contract; no UI consumer exists yet. |
+
+**Note on Layer placement:** Stage 3.4 originally lived in Layer 4 (Product Features, AFTER DEPLOY). In practice it's being built in Layer 2 timeframe alongside reliability work — the four-layer ordering in this doc is aspirational, not strict.
+
 ---
 
 ### Phase 3.2 Enhancement: Glassdoor Company Research
