@@ -10,6 +10,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Exercises the deploy-side build pipeline on every PR so deploy.yml
+  # surprises (layer build perms, CFN syntax, missing CodeUri files)
+  # surface BEFORE merge — not after. Added 2026-04-27 after deploy
+  # 24989063876 failed at the layer-build step on a "12/12 green" PR.
+  deploy-readiness:
+    name: "Deploy Readiness"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      AWS_DEFAULT_REGION: eu-west-1
+      SAM_CLI_TELEMETRY: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install SAM CLI
+        run: pip install aws-sam-cli
+      - name: Build shared-deps layer (catches Docker permission / shared/ packaging bugs)
+        run: ./layer/build.sh
+      - name: SAM Validate (CFN template syntax + Ref / GetAtt resolution)
+        run: sam validate --region eu-west-1
+      - name: SAM Build (catches missing CodeUri files, broken Dockerfile, wrong Handlers)
+        env:
+          DOCKER_BUILDKIT: "0"
+        run: sam build
+
   lint-and-build:
     runs-on: ubuntu-latest
     timeout-minutes: 5
