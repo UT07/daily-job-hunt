@@ -95,7 +95,7 @@ def _initialize_state() -> None:
     imperatively from the SQS Lambda handler (which doesn't go through
     lifespan on cold start). Safe to call multiple times — reassigns globals.
     """
-    global _ai_client, _config, _resumes, _db
+    global _ai_client, _config, _resumes, _db, _posthog
     _config = _load_config()
     _resumes = _load_resumes(_config)
     try:
@@ -111,6 +111,20 @@ def _initialize_state() -> None:
         _db = None
     # Wire up audit middleware with the DB client (no-ops gracefully if _db is None)
     set_audit_db(_db)
+    # Initialize PostHog (analytics capture + feature-flag evaluation share one client)
+    _ph_key = os.environ.get("POSTHOG_API_KEY", "")
+    _ph_host = os.environ.get("POSTHOG_HOST", "https://eu.i.posthog.com")
+    if _ph_key:
+        import atexit
+        _posthog = _Posthog(
+            project_api_key=_ph_key,
+            host=_ph_host,
+            enable_exception_autocapture=True,
+        )
+        atexit.register(_posthog.shutdown)
+        logger.info("PostHog analytics enabled")
+    else:
+        logger.warning("POSTHOG_API_KEY not set — analytics disabled")
     logger.info("API started — %d resumes loaded, AI client ready", len(_resumes))
 
 
@@ -138,6 +152,10 @@ _ai_client: Optional[AIClient] = None
 _config: dict = {}
 _resumes: dict[str, str] = {}  # {key: tex_content}
 _db: Optional[SupabaseClient] = None
+
+# PostHog client (instance-based API)
+from posthog import Posthog as _Posthog
+_posthog: Optional[_Posthog] = None
 
 # Task store — Supabase pipeline_tasks table (persistent across cold starts)
 
@@ -375,6 +393,16 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
         )
 
     j = matched[0]
+    if _posthog:
+        _posthog.capture(
+            distinct_id=user.id,
+            event="job_scored",
+            properties={
+                "resume_type": req.resume_type,
+                "avg_score": j.match_score,
+                "jd_length": len(req.job_description),
+            },
+        )
     return ScoreResponse(
         ats_score=j.ats_score,
         hiring_manager_score=j.hiring_manager_score,
@@ -834,6 +862,15 @@ def tailor_job(req: TailorRequest, user: AuthUser = Depends(get_current_user)):
         "resume_type": req.resume_type,
     }
     _enqueue_task(task_id, user.id, "tailor", payload)
+    if _posthog:
+        _posthog.capture(
+            distinct_id=user.id,
+            event="resume_tailor_started",
+            properties={
+                "resume_type": req.resume_type,
+                "jd_length": len(req.job_description),
+            },
+        )
     return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
 
 
@@ -850,6 +887,15 @@ def cover_letter(req: CoverLetterRequest, user: AuthUser = Depends(get_current_u
         "resume_type": req.resume_type,
     }
     _enqueue_task(task_id, user.id, "cover_letter", payload)
+    if _posthog:
+        _posthog.capture(
+            distinct_id=user.id,
+            event="cover_letter_started",
+            properties={
+                "resume_type": req.resume_type,
+                "jd_length": len(req.job_description),
+            },
+        )
     return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
 
 
@@ -862,6 +908,12 @@ def contacts(req: ContactsRequest, user: AuthUser = Depends(get_current_user)):
         "company": req.company,
     }
     _enqueue_task(task_id, user.id, "contacts", payload)
+    if _posthog:
+        _posthog.capture(
+            distinct_id=user.id,
+            event="contacts_search_started",
+            properties={"jd_length": len(req.job_description)},
+        )
     return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
 
 
@@ -1014,6 +1066,12 @@ def generate_email_for_job(
     if not subject or not email_body:
         raise HTTPException(500, "AI returned empty subject or body. Please try again.")
 
+    if _posthog:
+        _posthog.capture(
+            distinct_id=user.id,
+            event="email_template_generated",
+            properties={"template": body.template, "has_contact_name": bool(body.contact_name)},
+        )
     return GenerateEmailResponse(subject=subject, body=email_body)
 
 
@@ -1308,6 +1366,12 @@ def update_profile(
     row = _db.update_user(user.id, update_data)
     if row is None:
         raise HTTPException(404, "User not found")
+    if _posthog:
+        _posthog.capture(
+            distinct_id=user.id,
+            event="profile_updated",
+            properties={"fields_updated": list(update_data.keys())},
+        )
     return ProfileResponse(
         id=row["id"],
         email=row["email"],
@@ -1474,6 +1538,12 @@ def update_job(
             raise ValueError("Not found")
     except ValueError:
         raise HTTPException(404, "Job not found")
+    if _posthog and "application_status" in update_data:
+        _posthog.capture(
+            distinct_id=user.id,
+            event="job_status_updated",
+            properties={"new_status": update_data["application_status"]},
+        )
     return result.data[0]
 
 
@@ -1593,6 +1663,12 @@ def add_timeline_event(
     # Also keep jobs.application_status in sync.
     _db.client.table("jobs").update({"application_status": body.status}).eq("job_id", job_id).eq("user_id", user.id).execute()
 
+    if _posthog:
+        _posthog.capture(
+            distinct_id=user.id,
+            event="timeline_event_added",
+            properties={"status": body.status, "has_notes": bool(body.notes)},
+        )
     return inserted
 
 
@@ -1922,6 +1998,12 @@ def run_pipeline(req: PipelineRunRequest, user: AuthUser = Depends(get_current_u
         }),
     )
 
+    if _posthog:
+        _posthog.capture(
+            distinct_id=user.id,
+            event="pipeline_started",
+            properties={"query_count": len(req.queries)},
+        )
     return {
         "executionArn": execution["executionArn"],
         "startDate": execution["startDate"].isoformat(),
@@ -1949,6 +2031,15 @@ def run_single_job(req: SingleJobRunRequest, user: AuthUser = Depends(get_curren
         }),
     )
 
+    if _posthog:
+        _posthog.capture(
+            distinct_id=user.id,
+            event="pipeline_single_job_started",
+            properties={
+                "resume_type": req.resume_type,
+                "jd_length": len(req.job_description),
+            },
+        )
     return {
         "executionArn": execution["executionArn"],
         "startDate": execution["startDate"].isoformat(),
@@ -2288,6 +2379,16 @@ async def upload_resume(
         except Exception as e:
             logger.warning("Profile auto-update failed: %s", e)
 
+    if _posthog:
+        _posthog.capture(
+            distinct_id=user.id,
+            event="resume_uploaded",
+            properties={
+                "resume_key": resume_key,
+                "has_label": bool(label),
+                "text_length": len(text),
+            },
+        )
     return {
         "resume_id": result.get("id"),
         "sections": sections,
@@ -2350,6 +2451,15 @@ def flag_score(req: FlagScoreRequest, user: AuthUser = Depends(get_current_user)
     except Exception as e:
         logger.error("Failed to record score feedback: %s", e)
         raise HTTPException(500, "Failed to record feedback")
+    if _posthog:
+        _posthog.capture(
+            distinct_id=user.id,
+            event="score_flagged",
+            properties={
+                "feedback_type": req.feedback_type,
+                "has_expected_score": req.expected_score is not None,
+            },
+        )
     return {"status": "ok", "message": "Feedback recorded"}
 
 
