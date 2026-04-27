@@ -125,6 +125,10 @@ def _initialize_state() -> None:
         logger.info("PostHog analytics enabled")
     else:
         logger.warning("POSTHOG_API_KEY not set — analytics disabled")
+    # Wire the (possibly-None) client into the feature-flags wrapper so
+    # is_enabled() / @flag_gated decorators can evaluate flags.
+    from config.feature_flags import set_client as _set_flag_client
+    _set_flag_client(_posthog)
     logger.info("API started — %d resumes loaded, AI client ready", len(_resumes))
 
 
