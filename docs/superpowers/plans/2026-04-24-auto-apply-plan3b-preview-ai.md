@@ -14,6 +14,8 @@ populated. Any frontend code written against 3a keeps working.
 
 ## Expected tasks
 
+0. **URL slug extraction** (prereq added 2026-04-26) — extend `shared/apply_platform.py` (built in [classifier spec](../specs/2026-04-26-apply-platform-classifier-design.md)) with `extract_platform_ids(url) -> {board_token, posting_id} | None`. The greenhouse/ashby fetchers in step 1 cannot construct API URLs without these. Wire the extractor into the same scrape-time + backfill paths as the classifier (one-shot script can re-run since it's additive).
+
 1. **Platform metadata fetchers**
    - `shared/platform_metadata/greenhouse.py` — `GET boards-api.greenhouse.io/v1/boards/{board}/jobs/{id}?questions=true`
    - `shared/platform_metadata/ashby.py` — `GET api.ashbyhq.com/posting-api/job-posting/{uuid}`
@@ -55,6 +57,7 @@ populated. Any frontend code written against 3a keeps working.
 ## Dependencies
 
 - Plan 3a merged (endpoint + response shape exist)
+- **Apply Platform Classifier shipped** (spec [2026-04-26](../specs/2026-04-26-apply-platform-classifier-design.md)) — without it, `apply_platform`/`board_token`/`posting_id` are all NULL and the metadata fetchers in Step 1 have nothing to call
 - `ai_client.py` AI council — used without modification
 - `resume_versions` table (Stage 3.3 Tailor+) for resume metadata
 
