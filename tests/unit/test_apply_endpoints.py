@@ -82,11 +82,30 @@ def test_eligibility_job_not_found(client):
     assert r.status_code == 404
 
 
-def test_eligibility_platform_not_supported(client):
-    c, _ = client
+def test_eligibility_eligible_when_platform_null(client):
+    """After the classifier flip, null platform no longer blocks eligibility.
+
+    Path: apply_url is set → resume_s3_key is set → no existing app → profile complete
+    → eligible=True with platform=None passthrough.
+    """
+    c, db = client
+    _no_existing_apps(db)
+    db.get_user.return_value = _complete_user()
     with patch("shared.load_job.load_job", return_value=_job_row(apply_platform=None)):
         r = c.get("/api/apply/eligibility/j1")
-    assert r.json() == {"eligible": False, "reason": "not_supported_platform"}
+    assert r.json() == {
+        "eligible": True, "platform": None,
+        "board_token": "acme", "posting_id": "12345",
+    }
+
+
+def test_eligibility_blocks_when_apply_url_missing(client):
+    """The new gate: jobs with no apply_url cannot be applied to."""
+    c, _ = client
+    with patch("shared.load_job.load_job", return_value=_job_row(apply_url=None)):
+        r = c.get("/api/apply/eligibility/j1")
+    assert r.status_code == 200
+    assert r.json() == {"eligible": False, "reason": "no_apply_url"}
 
 
 def test_eligibility_no_resume(client):
@@ -137,12 +156,29 @@ def test_preview_job_not_found(client):
     assert r.status_code == 404
 
 
-def test_preview_returns_ineligible_for_unsupported_platform(client):
-    c, _ = client
+def test_preview_passes_through_when_platform_null(client):
+    """Preview no longer blocks on null platform — classifier is informational."""
+    c, db = client
+    _no_existing_apps(db)
+    db.get_user.return_value = _complete_user()
     with patch("shared.load_job.load_job", return_value=_job_row(apply_platform=None)):
         r = c.get("/api/apply/preview/j1")
     assert r.status_code == 200
-    assert r.json() == {"eligible": False, "reason": "not_supported_platform"}
+    body = r.json()
+    # Plan 3a's preview returns a minimal-shape body. After the gate flip we
+    # expect the eligible-true path to be taken — exact response shape is locked
+    # by Plan 3a's existing tests; here we only assert it's NOT a "not_supported"
+    # rejection.
+    assert body.get("eligible") is True
+    assert body.get("reason") != "not_supported_platform"
+
+
+def test_preview_blocks_when_apply_url_missing(client):
+    c, _ = client
+    with patch("shared.load_job.load_job", return_value=_job_row(apply_url=None)):
+        r = c.get("/api/apply/preview/j1")
+    assert r.status_code == 200
+    assert r.json() == {"eligible": False, "reason": "no_apply_url"}
 
 
 def test_preview_returns_already_applied(client):
