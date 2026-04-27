@@ -63,6 +63,7 @@ jobs:
           APIFY_KEY: ${{ secrets.APIFY_API_KEY }}
           CAPSOLVER_KEY: ${{ secrets.CAPSOLVER_API_KEY }}
           BROWSER_SUBNETS: ${{ secrets.BROWSER_SUBNET_IDS }}
+          POSTHOG_KEY: ${{ secrets.POSTHOG_API_KEY }}
         run: |
           sam deploy \
             --stack-name job-hunt-api \
@@ -85,4 +86,6 @@ jobs:
               "SerperApiKey=${SERPER_KEY}" \
               "ApifyApiKey=${APIFY_KEY}" \
               "CapSolverApiKey=${CAPSOLVER_KEY}" \
-              "BrowserSubnetIds=${BROWSER_SUBNETS}"
+              "BrowserSubnetIds=${BROWSER_SUBNETS}" \
+              "PostHogApiKey=${POSTHOG_KEY}" \
+              "PostHogHost=https://eu.i.posthog.com"

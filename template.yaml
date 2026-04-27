@@ -45,6 +45,15 @@ Parameters:
     Type: String
     NoEcho: true
     Default: ""
+  PostHogApiKey:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: PostHog Project API key (phc_*). Empty = analytics disabled.
+  PostHogHost:
+    Type: String
+    Default: "https://eu.i.posthog.com"
+    Description: PostHog ingest endpoint (EU region by default).
   BrowserSubnetIds:
     Type: CommaDelimitedList
     Description: Public subnet IDs for Fargate browser tasks (discover via aws ec2 describe-subnets)
@@ -1419,6 +1428,8 @@ Resources:
           SUPABASE_JWT_SECRET: !Ref SupabaseJwtSecret
           SERPER_API_KEY: !Ref SerperApiKey
           APIFY_API_KEY: !Ref ApifyApiKey
+          POSTHOG_API_KEY: !Ref PostHogApiKey
+          POSTHOG_HOST: !Ref PostHogHost
           TASK_QUEUE_URL: !Ref TaskQueue
           DAILY_PIPELINE_ARN: !GetAtt DailyPipelineStateMachine.Arn
           SINGLE_JOB_PIPELINE_ARN: !GetAtt SingleJobPipelineStateMachine.Arn
