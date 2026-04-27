@@ -24,6 +24,12 @@ COPY resumes/ ${LAMBDA_TASK_ROOT}/resumes/
 COPY templates/ ${LAMBDA_TASK_ROOT}/templates/
 COPY config.yaml ${LAMBDA_TASK_ROOT}/
 
+# `shared/` was missing from the API container until 2026-04-27 — caused
+# silent 500s on /api/apply/* whose lazy imports (`from shared.load_job` etc.)
+# only triggered on first apply-flow request. Layer-based lambdas get shared/
+# via /opt/python; the container lambda needs an explicit COPY.
+COPY shared/ ${LAMBDA_TASK_ROOT}/shared/
+
 RUN chmod -R 755 ${LAMBDA_TASK_ROOT}/
 
 ENV PYTHONDONTWRITEBYTECODE=1
