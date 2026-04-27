@@ -28,7 +28,7 @@ _PATTERNS = [
     ("workable",            re.compile(r"apply\.workable\.com/", re.IGNORECASE)),
     ("taleo",               re.compile(r"\.taleo\.net/", re.IGNORECASE)),
     ("icims",               re.compile(r"\.icims\.com/", re.IGNORECASE)),
-    ("personio",            re.compile(r"\.jobs\.personio\.com/", re.IGNORECASE)),
+    ("personio",            re.compile(r"\.jobs\.personio\.(com|de|eu)/", re.IGNORECASE)),
     ("linkedin_easy_apply", re.compile(r"linkedin\.com/jobs/.*easy.?apply", re.IGNORECASE)),
 ]
 

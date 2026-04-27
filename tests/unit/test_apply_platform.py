@@ -18,6 +18,8 @@ from shared.apply_platform import classify_apply_platform
     ("https://acme.taleo.net/careersection/jobdetail.ftl?job=12345", "taleo"),
     ("https://acme.icims.com/jobs/12345/engineer/job", "icims"),
     ("https://acme.jobs.personio.com/job/123456", "personio"),
+    ("https://acme.jobs.personio.de/job/123456", "personio"),
+    ("https://acme.jobs.personio.eu/job/123456", "personio"),
     ("https://www.linkedin.com/jobs/view/12345?easy_apply=true", "linkedin_easy_apply"),
 ])
 def test_known_platforms(url, expected):

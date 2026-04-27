@@ -16,6 +16,8 @@ docker run --rm -v "$(pwd)":/layer -w /layer \
 # crash at runtime with ModuleNotFoundError — unit tests pass locally only
 # because the repo root is on the local PYTHONPATH.
 cp -r ../shared python/shared
+# Strip local __pycache__ (host's Python version may differ from Lambda's 3.11)
+find python/shared -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 
 echo "Layer built: $(du -sh python/ | cut -f1)"
 echo "shared/ files in layer:"
