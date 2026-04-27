@@ -409,7 +409,7 @@ function ResumeSection() {
             {resumes.map((resume) => (
               <li key={resume.id} className="flex items-center justify-between px-4 py-3 bg-white hover:bg-yellow-light transition-colors">
                 <div>
-                  <p className="text-sm font-bold text-black">{resume.filename || resume.name || `Resume ${resume.id}`}</p>
+                  <p className="text-sm font-bold text-black">{resume.label || resume.filename || resume.name || `Resume ${resume.id}`}</p>
                   {resume.uploaded_at && (
                     <p className="text-xs text-stone-400 mt-0.5 font-mono">
                       {new Date(resume.uploaded_at).toLocaleDateString()}
