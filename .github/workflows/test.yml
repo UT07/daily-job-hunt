@@ -18,6 +18,9 @@ jobs:
     name: "Deploy Readiness"
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      AWS_DEFAULT_REGION: eu-west-1
+      SAM_CLI_TELEMETRY: "0"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -28,11 +31,10 @@ jobs:
       - name: Build shared-deps layer (catches Docker permission / shared/ packaging bugs)
         run: ./layer/build.sh
       - name: SAM Validate (CFN template syntax + Ref / GetAtt resolution)
-        run: sam validate
+        run: sam validate --region eu-west-1
       - name: SAM Build (catches missing CodeUri files, broken Dockerfile, wrong Handlers)
         env:
           DOCKER_BUILDKIT: "0"
-          SAM_CLI_TELEMETRY: "0"
         run: sam build
 
   lint-and-build:
