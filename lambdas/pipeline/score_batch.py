@@ -7,6 +7,7 @@ from datetime import datetime
 
 
 from ai_helper import ai_complete_cached, get_supabase
+from shared.apply_platform import classify_apply_platform
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -150,6 +151,7 @@ def handler(event, context):
             "description": job.get("description"),
             "location": job.get("location"),
             "apply_url": job.get("apply_url"),
+            "apply_platform": classify_apply_platform(job.get("apply_url") or ""),
             "source": job["source"],
             "match_score": match_score,
             "score_tier": score_to_tier(match_score),
@@ -173,7 +175,8 @@ def handler(event, context):
             # Retry without optional columns if they don't exist yet
             if "column" in str(e) and "does not exist" in str(e):
                 for col in ("key_matches", "gaps", "match_reasoning", "score_tier",
-                            "archetype", "seniority", "remote", "requirement_map", "matched_resume"):
+                            "archetype", "seniority", "remote", "requirement_map",
+                            "matched_resume", "apply_platform"):
                     job_record.pop(col, None)
                 try:
                     db.table("jobs").insert(job_record).execute()
