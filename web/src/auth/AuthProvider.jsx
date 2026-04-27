@@ -1,5 +1,6 @@
 import { createContext, useEffect, useState } from 'react'
 import { supabase } from '../lib/supabase'
+import { identifyUser, resetUser } from '../lib/posthog'
 
 export const AuthContext = createContext({
   user: null,
@@ -23,14 +24,20 @@ export default function AuthProvider({ children }) {
     supabase.auth.getSession().then(({ data: { session: currentSession } }) => {
       setSession(currentSession)
       setUser(currentSession?.user ?? null)
+      identifyUser(currentSession?.user)
       setLoading(false)
     })
 
     // Listen for auth state changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, newSession) => {
+      (event, newSession) => {
         setSession(newSession)
         setUser(newSession?.user ?? null)
+        if (event === 'SIGNED_OUT') {
+          resetUser()
+        } else {
+          identifyUser(newSession?.user)
+        }
         setLoading(false)
       }
     )
