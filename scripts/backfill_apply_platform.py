@@ -69,9 +69,12 @@ def main() -> int:
     dist: Counter = Counter()
     for r in rows:
         url = r.get("apply_url") or ""
-        platform = classify_apply_platform(url)
+        ids = extract_platform_ids(url)
+        # Single source of truth: prefer extract_platform_ids' platform when slugs found,
+        # fall back to classify_apply_platform for platforms without slug support
+        # (lever, workday, etc.) so apply_platform remains informative for them.
+        platform = ids["platform"] if ids else classify_apply_platform(url)
         if platform:
-            ids = extract_platform_ids(url)
             update = {
                 "apply_platform": platform,
                 "apply_board_token": ids["board_token"] if ids else None,

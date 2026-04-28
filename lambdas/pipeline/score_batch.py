@@ -142,7 +142,12 @@ def handler(event, context):
         if match_score < min_score:
             continue
 
-        ids = extract_platform_ids(job.get("apply_url") or "")
+        url = job.get("apply_url") or ""
+        ids = extract_platform_ids(url)
+        # Single source of truth: prefer extract_platform_ids' platform when slugs found,
+        # fall back to classify_apply_platform for platforms without slug support
+        # (lever, workday, etc.) so apply_platform remains informative for them.
+        platform_name = ids["platform"] if ids else classify_apply_platform(url)
         job_record = {
             "job_id": str(uuid.uuid4()),
             "user_id": user_id,
@@ -152,7 +157,7 @@ def handler(event, context):
             "description": job.get("description"),
             "location": job.get("location"),
             "apply_url": job.get("apply_url"),
-            "apply_platform": classify_apply_platform(job.get("apply_url") or ""),
+            "apply_platform": platform_name,
             "apply_board_token": ids["board_token"] if ids else None,
             "apply_posting_id": ids["posting_id"] if ids else None,
             "source": job["source"],
