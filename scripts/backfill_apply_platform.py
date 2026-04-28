@@ -23,13 +23,13 @@ from supabase import create_client
 # Make `shared` importable when run from repo root
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from shared.apply_platform import classify_apply_platform  # noqa: E402
+from shared.apply_platform import classify_apply_platform, extract_platform_ids  # noqa: E402
 
 
 CHUNK_SIZE = 100
 
 
-def _chunked(seq: List[tuple[str, str]], n: int) -> Iterable[List[tuple[str, str]]]:
+def _chunked(seq: List[tuple[str, dict]], n: int) -> Iterable[List[tuple[str, dict]]]:
     for i in range(0, len(seq), n):
         yield seq[i : i + n]
 
@@ -65,12 +65,22 @@ def main() -> int:
 
     print(f"Candidates: {len(rows)} jobs with apply_platform IS NULL and apply_url IS NOT NULL")
 
-    classified: list[tuple[str, str]] = []
+    classified: list[tuple[str, dict]] = []
     dist: Counter = Counter()
     for r in rows:
-        platform = classify_apply_platform(r.get("apply_url") or "")
+        url = r.get("apply_url") or ""
+        ids = extract_platform_ids(url)
+        # Single source of truth: prefer extract_platform_ids' platform when slugs found,
+        # fall back to classify_apply_platform for platforms without slug support
+        # (lever, workday, etc.) so apply_platform remains informative for them.
+        platform = ids["platform"] if ids else classify_apply_platform(url)
         if platform:
-            classified.append((r["job_id"], platform))
+            update = {
+                "apply_platform": platform,
+                "apply_board_token": ids["board_token"] if ids else None,
+                "apply_posting_id": ids["posting_id"] if ids else None,
+            }
+            classified.append((r["job_id"], update))
             dist[platform] += 1
 
     dist["<unmatched>"] = len(rows) - len(classified)
@@ -79,14 +89,20 @@ def main() -> int:
         print(f"  {k:<25} {v:>5}")
 
     if not args.commit:
+        # Show a sample of planned updates so dry-run output is informative
+        sample = classified[:5]
+        if sample:
+            print("\nSample updates (first 5):")
+            for job_id, update in sample:
+                print(f"  {job_id}: {update}")
         print(f"\nDry-run complete. {len(classified)} would be updated. Re-run with --commit to write.")
         return 0
 
     print(f"\nWriting {len(classified)} updates in chunks of {CHUNK_SIZE}...")
     written = 0
     for chunk in _chunked(classified, CHUNK_SIZE):
-        for job_id, platform in chunk:
-            sb.table("jobs").update({"apply_platform": platform}).eq("job_id", job_id).execute()
+        for job_id, update in chunk:
+            sb.table("jobs").update(update).eq("job_id", job_id).execute()
             written += 1
         print(f"  wrote {written}/{len(classified)}")
 

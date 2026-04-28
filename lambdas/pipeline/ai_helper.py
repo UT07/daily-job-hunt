@@ -329,7 +329,13 @@ def council_complete(
 # ai_complete_cached — with Supabase cache
 # ---------------------------------------------------------------------------
 
-def ai_complete_cached(prompt: str, system: str = "", cache_hours: int = 72, temperature: float = 0.3) -> dict:
+def ai_complete_cached(
+    prompt: str,
+    system: str = "",
+    cache_hours: int = 72,
+    temperature: float = 0.3,
+    max_tokens: int = 4096,
+) -> dict:
     """AI complete with Supabase cache. Returns dict with content, provider, model."""
     cache_key = hashlib.md5(f"{system}|{prompt}".encode()).hexdigest()
     db = get_supabase()
@@ -344,7 +350,7 @@ def ai_complete_cached(prompt: str, system: str = "", cache_hours: int = 72, tem
             "model": cached.data[0].get("model", "cache"),
         }
 
-    result = ai_complete(prompt, system, temperature=temperature)
+    result = ai_complete(prompt, system, temperature=temperature, max_tokens=max_tokens)
 
     db.table("ai_cache").upsert({
         "cache_key": cache_key,

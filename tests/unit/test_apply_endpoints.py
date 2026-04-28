@@ -157,33 +157,43 @@ def test_preview_job_not_found(client):
 
 
 def test_preview_passes_through_when_platform_null(client):
-    """Preview no longer blocks on null platform — classifier is informational."""
+    """Preview no longer blocks on null platform — classifier is informational.
+
+    With apply_platform=None we skip metadata fetch and degrade to custom_questions=[].
+    The cloud browser handles unknown forms via AI vision at submit time.
+    """
     c, db = client
     _no_existing_apps(db)
     db.get_user.return_value = _complete_user()
-    with patch("shared.load_job.load_job", return_value=_job_row(apply_platform=None)):
+    with patch("shared.load_job.load_job", return_value=_job_row(apply_platform=None)), \
+         patch("shared.preview_cache.get_preview_cache", return_value=None), \
+         patch("shared.preview_cache.set_preview_cache"):
         r = c.get("/api/apply/preview/j1")
     assert r.status_code == 200
     body = r.json()
-    # Plan 3a's preview returns a minimal-shape body. After the gate flip we
-    # expect the eligible-true path to be taken — exact response shape is locked
-    # by Plan 3a's existing tests; here we only assert it's NOT a "not_supported"
-    # rejection.
     assert body.get("eligible") is True
     assert body.get("reason") != "not_supported_platform"
+    assert body["custom_questions"] == []
+    assert body["platform"] == ""
 
 
 def test_preview_blocks_when_apply_url_missing(client):
-    c, _ = client
+    """Plan 3b Option A: profile_incomplete short-circuits BEFORE no_apply_url, so we
+    must stub a complete profile to test the no_apply_url branch directly."""
+    c, db = client
+    db.get_user.return_value = _complete_user()
     with patch("shared.load_job.load_job", return_value=_job_row(apply_url=None)):
         r = c.get("/api/apply/preview/j1")
     assert r.status_code == 200
-    assert r.json() == {"eligible": False, "reason": "no_apply_url"}
+    body = r.json()
+    assert body["eligible"] is False
+    assert body["reason"] == "no_apply_url"
 
 
 def test_preview_returns_already_applied(client):
     """Preview must apply the SAME eligibility gates as /eligibility."""
     c, db = client
+    db.get_user.return_value = _complete_user()
     _existing_app(db, {"id": "app-1", "status": "submitted"})
     with patch("shared.load_job.load_job", return_value=_job_row()):
         r = c.get("/api/apply/preview/j1")
@@ -200,20 +210,160 @@ def test_preview_returns_profile_incomplete(client):
 
 
 def test_preview_happy_path_returns_snapshot_without_ai_answers(client):
+    """Plan 3b: preview with platform=greenhouse and cache miss returns populated payload."""
     c, db = client
     _no_existing_apps(db)
     db.get_user.return_value = _complete_user()
-    with patch("shared.load_job.load_job", return_value=_job_row()):
+    fake_meta = {
+        "platform": "greenhouse", "job_title": "Backend",
+        "questions": [], "cover_letter_field_present": False,
+        "cover_letter_required": False, "cover_letter_max_length": 10000,
+    }
+    with patch("shared.load_job.load_job", return_value=_job_row()), \
+         patch("shared.preview_cache.get_preview_cache", return_value=None), \
+         patch("shared.preview_cache.set_preview_cache"), \
+         patch("shared.platform_metadata.fetch_greenhouse", return_value=fake_meta), \
+         patch("shared.cover_letter_loader.load_cover_letter", return_value=None), \
+         patch("boto3.client"):
         r = c.get("/api/apply/preview/j1")
     body = r.json()
     assert r.status_code == 200
     assert body["eligible"] is True
-    assert body["job"]["job_id"] == "j1"
+    assert body["platform"] == "greenhouse"
     assert body["profile"]["first_name"] == "U"
     assert body["resume"]["s3_key"] == "users/user-1/resumes/v1.pdf"
-    assert body["answers_generated"] is False
-    assert body["answers"] == []
-    assert body["questions"] == []
+    assert body["custom_questions"] == []
+    assert body["cache_hit"] is False
+
+
+def test_apply_preview_returns_questions_and_answers(client):
+    """End-to-end: preview returns populated custom_questions per spec §7.1."""
+    c, db = client
+    _no_existing_apps(db)
+    db.get_user.return_value = _complete_user()
+    fake_meta = {
+        "platform": "greenhouse", "job_title": "Backend",
+        "questions": [
+            {
+                "label": "First Name", "field_name": "first_name",
+                "type": "text", "required": True, "options": [],
+                "description": None,
+            },
+            {
+                "label": "Why do you want to work here?", "field_name": "question_1",
+                "type": "textarea", "required": True, "options": [],
+                "description": None,
+            },
+        ],
+        "cover_letter_field_present": False,
+        "cover_letter_required": False, "cover_letter_max_length": 10000,
+    }
+    with patch("shared.load_job.load_job", return_value=_job_row()), \
+         patch("shared.preview_cache.get_preview_cache", return_value=None), \
+         patch("shared.preview_cache.set_preview_cache"), \
+         patch("shared.platform_metadata.fetch_greenhouse", return_value=fake_meta), \
+         patch("shared.cover_letter_loader.load_cover_letter", return_value=None), \
+         patch("lambdas.pipeline.ai_helper.ai_complete_cached",
+               return_value={"content": "Because mission.", "provider": "p", "model": "m"}), \
+         patch("boto3.client"):
+        r = c.get("/api/apply/preview/j1")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["eligible"] is True
+    assert data["platform"] == "greenhouse"
+    assert len(data["custom_questions"]) == 2
+    fn_q = next(q for q in data["custom_questions"] if q["id"] == "first_name")
+    assert fn_q["ai_answer"] == "U"   # profile first_name is "U"
+    assert fn_q["category"] == "standard"
+    why_q = next(q for q in data["custom_questions"] if q["id"] == "question_1")
+    assert why_q["ai_answer"] == "Because mission."
+    assert why_q["category"] == "custom"
+    assert data["cache_hit"] is False
+
+
+def test_apply_preview_handles_404_from_platform(client):
+    """When platform returns 404 (job pulled), preview returns reason=job_no_longer_available
+    and marks jobs.is_expired=true."""
+    from shared.platform_metadata.greenhouse import GreenhouseFetchError
+    c, db = client
+    _no_existing_apps(db)
+    db.get_user.return_value = _complete_user()
+    # Stub the is_expired update chain
+    db.client.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock()
+    with patch("shared.load_job.load_job", return_value=_job_row()), \
+         patch("shared.preview_cache.get_preview_cache", return_value=None), \
+         patch("shared.platform_metadata.fetch_greenhouse",
+               side_effect=GreenhouseFetchError("gone", "job_no_longer_available")):
+        r = c.get("/api/apply/preview/j1")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["eligible"] is False
+    assert data["reason"] == "job_no_longer_available"
+    # Verify the is_expired update was called
+    update_calls = db.client.table.return_value.update.call_args_list
+    assert any(call.args and call.args[0].get("is_expired") is True for call in update_calls)
+
+
+def test_apply_preview_resilient_when_ai_fails_for_one_question(client):
+    """If generate_answer raises for one question (e.g. AI council exhausted), the
+    preview should still return — that question gets requires_user_action=True,
+    others continue with their AI-prefilled answers."""
+    c, db = client
+    _no_existing_apps(db)
+    db.get_user.return_value = _complete_user()
+    fake_meta = {
+        "platform": "greenhouse", "job_title": "Backend",
+        "questions": [
+            {"label": "First Name", "field_name": "first_name",
+             "type": "text", "required": True, "options": [], "description": None},
+            {"label": "Why?", "field_name": "question_1",
+             "type": "textarea", "required": True, "options": [], "description": None},
+        ],
+        "cover_letter_field_present": False,
+        "cover_letter_required": False, "cover_letter_max_length": 10000,
+    }
+
+    def flaky_answer(q, *args, **kwargs):
+        if q["field_name"] == "question_1":
+            raise RuntimeError("All AI providers exhausted")
+        return {"answer": "U", "category": "standard", "requires_user_action": False}
+
+    with patch("shared.load_job.load_job", return_value=_job_row()), \
+         patch("shared.preview_cache.get_preview_cache", return_value=None), \
+         patch("shared.preview_cache.set_preview_cache"), \
+         patch("shared.platform_metadata.fetch_greenhouse", return_value=fake_meta), \
+         patch("shared.cover_letter_loader.load_cover_letter", return_value=None), \
+         patch("shared.answer_generator.generate_answer", side_effect=flaky_answer), \
+         patch("boto3.client"):
+        r = c.get("/api/apply/preview/j1")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["eligible"] is True
+    assert len(data["custom_questions"]) == 2
+    fn_q = next(q for q in data["custom_questions"] if q["id"] == "first_name")
+    assert fn_q["ai_answer"] == "U"           # standard field unaffected
+    assert fn_q["requires_user_action"] is False
+    failed_q = next(q for q in data["custom_questions"] if q["id"] == "question_1")
+    assert failed_q["ai_answer"] is None      # graceful degradation
+    assert failed_q["requires_user_action"] is True
+
+
+def test_apply_preview_unknown_platform_returns_shell(client):
+    """Job has apply_url but no apply_platform/board_token → degrade gracefully."""
+    c, db = client
+    _no_existing_apps(db)
+    db.get_user.return_value = _complete_user()
+    with patch("shared.load_job.load_job",
+               return_value=_job_row(apply_platform=None, apply_board_token=None, apply_posting_id=None)), \
+         patch("shared.preview_cache.get_preview_cache", return_value=None), \
+         patch("shared.preview_cache.set_preview_cache"), \
+         patch("boto3.client"):
+        r = c.get("/api/apply/preview/j1")
+    data = r.json()
+    assert r.status_code == 200
+    assert data["eligible"] is True
+    assert data["custom_questions"] == []
+    assert data["platform"] in ("", None)
 
 
 # ---- Start Session ----
