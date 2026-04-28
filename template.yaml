@@ -253,6 +253,9 @@ Resources:
       Runtime: python3.11
       Timeout: 60
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -267,6 +270,9 @@ Resources:
       Runtime: python3.11
       Timeout: 300
       MemorySize: 512
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -281,6 +287,9 @@ Resources:
       Runtime: python3.11
       Timeout: 900
       MemorySize: 512
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -305,6 +314,9 @@ Resources:
       Runtime: python3.11
       Timeout: 30
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
 
   TailorResumeFunction:
     Type: AWS::Serverless::Function
@@ -384,6 +396,9 @@ Resources:
       Runtime: python3.11
       Timeout: 120
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -421,6 +436,9 @@ Resources:
       Runtime: python3.11
       Timeout: 60
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -435,6 +453,9 @@ Resources:
       Runtime: python3.11
       Timeout: 60
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -449,6 +470,9 @@ Resources:
       Runtime: python3.11
       Timeout: 300
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -465,6 +489,9 @@ Resources:
       Runtime: python3.11
       Timeout: 300
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Environment:
         Variables:
@@ -498,6 +525,9 @@ Resources:
       Runtime: python3.11
       Timeout: 120
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -513,6 +543,9 @@ Resources:
       Runtime: python3.11
       Timeout: 60
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -527,6 +560,9 @@ Resources:
       Runtime: python3.11
       Timeout: 60
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -722,6 +758,16 @@ Resources:
                   - !Ref CompileLatexFunctionAliaslive
                   - !Ref GenerateCoverLetterFunctionAliaslive
                   - !Ref SaveJobFunctionAliaslive
+                  # --- Phase 2 canary aliases (pipeline tier) ---
+                  - !Ref LoadConfigFunctionAliaslive
+                  - !Ref MergeDedupFunctionAliaslive
+                  - !Ref ScoreBatchFunctionAliaslive
+                  - !Ref AggregateScoresFunctionAliaslive
+                  - !Ref FindContactsFunctionAliaslive
+                  - !Ref SaveMetricsFunctionAliaslive
+                  - !Ref SendEmailFunctionAliaslive
+                  - !Ref PostScoreFunctionAliaslive
+                  - !Ref SelfImproveFunctionAliaslive
         - PolicyName: RunFargateTasks
           PolicyDocument:
             Version: "2012-10-17"
@@ -767,7 +813,7 @@ Resources:
           "States": {
             "LoadUserConfig": {
               "Type": "Task",
-              "Resource": "${LoadConfigFunction.Arn}",
+              "Resource": "${LoadConfigFunction.Alias}",
               "ResultPath": "$",
               "Next": "RunScrapers",
               "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyError"}]
@@ -952,7 +998,7 @@ Resources:
             },
             "MergeAndDedup": {
               "Type": "Task",
-              "Resource": "${MergeDedupFunction.Arn}",
+              "Resource": "${MergeDedupFunction.Alias}",
               "ResultPath": "$.dedup_result",
               "Next": "ChunkJobHashes",
               "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyError"}]
@@ -983,7 +1029,7 @@ Resources:
                 "States": {
                   "ScoreChunk": {
                     "Type": "Task",
-                    "Resource": "${ScoreBatchFunction.Arn}",
+                    "Resource": "${ScoreBatchFunction.Alias}",
                     "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 1, "BackoffRate": 2}],
                     "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "ScoreChunkFailed"}],
                     "End": true
@@ -998,7 +1044,7 @@ Resources:
             },
             "AggregateScores": {
               "Type": "Task",
-              "Resource": "${AggregateScoresFunction.Arn}",
+              "Resource": "${AggregateScoresFunction.Alias}",
               "Parameters": {
                 "score_chunks.$": "$.score_chunks"
               },
@@ -1089,7 +1135,7 @@ Resources:
                   },
                   "FindContacts": {
                     "Type": "Task",
-                    "Resource": "${FindContactsFunction.Arn}",
+                    "Resource": "${FindContactsFunction.Alias}",
                     "Parameters": {
                       "job_hash.$": "$.job_hash",
                       "user_id.$": "$.user_id",
@@ -1127,7 +1173,7 @@ Resources:
                 "States": {
                   "PostScoreJob": {
                     "Type": "Task",
-                    "Resource": "${PostScoreFunction.Arn}",
+                    "Resource": "${PostScoreFunction.Alias}",
                     "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PostScoreFailed"}],
                     "End": true
                   },
@@ -1141,7 +1187,7 @@ Resources:
             },
             "SavePipelineMetrics": {
               "Type": "Task",
-              "Resource": "${SaveMetricsFunction.Arn}",
+              "Resource": "${SaveMetricsFunction.Alias}",
               "Parameters": {
                 "user_id.$": "$.user_id",
                 "scraper_results.$": "$.scraper_results",
@@ -1154,7 +1200,7 @@ Resources:
             },
             "SendEmailSummary": {
               "Type": "Task",
-              "Resource": "${SendEmailFunction.Arn}",
+              "Resource": "${SendEmailFunction.Alias}",
               "Parameters": {
                 "user_id.$": "$.user_id",
                 "matched_count.$": "$.score_result.matched_count"
@@ -1165,7 +1211,7 @@ Resources:
             },
             "SelfImprove": {
               "Type": "Task",
-              "Resource": "${SelfImproveFunction.Arn}",
+              "Resource": "${SelfImproveFunction.Alias}",
               "Parameters": {
                 "user_id.$": "$.user_id",
                 "execution_name.$": "$$.Execution.Name",
@@ -1225,7 +1271,7 @@ Resources:
             },
             "ScoreSingleJob": {
               "Type": "Task",
-              "Resource": "${ScoreBatchFunction.Arn}",
+              "Resource": "${ScoreBatchFunction.Alias}",
               "Parameters": {
                 "user_id.$": "$.user_id",
                 "new_job_hashes.$": "States.Array($.job_hash)",
@@ -1301,7 +1347,7 @@ Resources:
             },
             "FindContacts": {
               "Type": "Task",
-              "Resource": "${FindContactsFunction.Arn}",
+              "Resource": "${FindContactsFunction.Alias}",
               "Parameters": {
                 "job_hash.$": "$.job_hash",
                 "user_id.$": "$.user_id"
@@ -1350,7 +1396,7 @@ Resources:
       ScheduleExpression: "cron(0 6 ? * SUN *)"
       State: ENABLED
       Targets:
-        - Arn: !GetAtt CheckExpiryFunction.Arn
+        - Arn: !Ref CheckExpiryFunctionAliaslive
           Id: ExpiryCheckTarget
 
   EventBridgeRole:
@@ -1378,7 +1424,7 @@ Resources:
     Type: AWS::Lambda::Permission
     DependsOn: ExpiryCheckSchedule
     Properties:
-      FunctionName: !Ref CheckExpiryFunction
+      FunctionName: !Ref CheckExpiryFunctionAliaslive
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/naukribaba-expiry-check
@@ -1391,14 +1437,14 @@ Resources:
       ScheduleExpression: "cron(0 9 ? * MON *)"
       State: ENABLED
       Targets:
-        - Arn: !GetAtt StaleNudgeFunction.Arn
+        - Arn: !Ref StaleNudgeFunctionAliaslive
           Id: StaleNudgeTarget
 
   StaleNudgePermission:
     Type: AWS::Lambda::Permission
     DependsOn: StaleNudgeSchedule
     Properties:
-      FunctionName: !Ref StaleNudgeFunction
+      FunctionName: !Ref StaleNudgeFunctionAliaslive
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/naukribaba-stale-nudge
@@ -1411,14 +1457,14 @@ Resources:
       ScheduleExpression: "cron(0 10 ? * MON-FRI *)"
       State: ENABLED
       Targets:
-        - Arn: !GetAtt FollowUpReminderFunction.Arn
+        - Arn: !Ref FollowUpReminderFunctionAliaslive
           Id: FollowUpTarget
 
   FollowUpPermission:
     Type: AWS::Lambda::Permission
     DependsOn: FollowUpSchedule
     Properties:
-      FunctionName: !Ref FollowUpReminderFunction
+      FunctionName: !Ref FollowUpReminderFunctionAliaslive
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/naukribaba-followup-reminder
