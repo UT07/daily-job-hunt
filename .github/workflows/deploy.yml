@@ -6,7 +6,7 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -85,6 +85,7 @@ jobs:
             --s3-prefix sam-artifacts \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \
+            --no-disable-rollback \
             --parameter-overrides \
               "GroqApiKey=${GROQ_KEY}" \
               "OpenRouterApiKey=${OR_KEY}" \
