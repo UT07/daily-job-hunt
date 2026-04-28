@@ -10,7 +10,6 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
 
-from config import feature_flags
 from config.feature_flags import flag_gated, is_enabled, set_client
 
 
