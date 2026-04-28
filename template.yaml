@@ -125,6 +125,9 @@ Resources:
       Runtime: python3.11
       Timeout: 600
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -139,6 +142,9 @@ Resources:
       Runtime: python3.11
       Timeout: 120
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -153,6 +159,9 @@ Resources:
       Runtime: python3.11
       Timeout: 120
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -167,6 +176,9 @@ Resources:
       Runtime: python3.11
       Timeout: 120
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -183,6 +195,9 @@ Resources:
       Runtime: python3.11
       Timeout: 300
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -197,6 +212,9 @@ Resources:
       Runtime: python3.11
       Timeout: 300
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -211,6 +229,9 @@ Resources:
       Runtime: python3.11
       Timeout: 300
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -225,6 +246,9 @@ Resources:
       Runtime: python3.11
       Timeout: 300
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -239,6 +263,9 @@ Resources:
       Runtime: python3.11
       Timeout: 120
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -253,6 +280,9 @@ Resources:
       Runtime: python3.11
       Timeout: 120
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -267,6 +297,9 @@ Resources:
       Runtime: python3.11
       Timeout: 300
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -333,6 +366,9 @@ Resources:
       Runtime: python3.11
       Timeout: 10
       MemorySize: 128
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
 
   AggregateScoresFunction:
     Type: AWS::Serverless::Function
@@ -541,6 +577,9 @@ Resources:
       Runtime: python3.11
       Timeout: 60
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -798,6 +837,20 @@ Resources:
                   - !Ref SendEmailFunctionAliaslive
                   - !Ref PostScoreFunctionAliaslive
                   - !Ref SelfImproveFunctionAliaslive
+                  # --- Phase 2 canary aliases (read-only / idempotent tier) ---
+                  - !Ref ScrapeApifyFunctionAliaslive
+                  - !Ref ScrapeAdzunaFunctionAliaslive
+                  - !Ref ScrapeHNFunctionAliaslive
+                  - !Ref ScrapeYCFunctionAliaslive
+                  - !Ref ScrapeLinkedInFunctionAliaslive
+                  - !Ref ScrapeIndeedFunctionAliaslive
+                  - !Ref ScrapeGlassdoorFunctionAliaslive
+                  - !Ref ScrapeIrishFunctionAliaslive
+                  - !Ref ScrapeGreenhouseFunctionAliaslive
+                  - !Ref ScrapeAshbyFunctionAliaslive
+                  - !Ref ScrapeContactsFunctionAliaslive
+                  - !Ref ChunkHashesFunctionAliaslive
+                  - !Ref NotifyErrorFunctionAliaslive
         - PolicyName: RunFargateTasks
           PolicyDocument:
             Version: "2012-10-17"
@@ -859,7 +912,7 @@ Resources:
                   "States": {
                     "ScrapeLinkedIn": {
                       "Type": "Task",
-                      "Resource": "${ScrapeLinkedInFunction.Arn}",
+                      "Resource": "${ScrapeLinkedInFunction.Alias}",
                       "Parameters": {
                         "queries.$": "$.queries",
                         "location": "Ireland",
@@ -882,7 +935,7 @@ Resources:
                   "States": {
                     "ScrapeIndeed": {
                       "Type": "Task",
-                      "Resource": "${ScrapeIndeedFunction.Arn}",
+                      "Resource": "${ScrapeIndeedFunction.Alias}",
                       "Parameters": {
                         "queries.$": "$.queries",
                         "location": "Ireland",
@@ -916,7 +969,7 @@ Resources:
                   "States": {
                     "ScrapeHN": {
                       "Type": "Task",
-                      "Resource": "${ScrapeHNFunction.Arn}",
+                      "Resource": "${ScrapeHNFunction.Alias}",
                       "Parameters": {
                         "query_hash.$": "$.query_hash"
                       },
@@ -936,7 +989,7 @@ Resources:
                   "States": {
                     "ScrapeYC": {
                       "Type": "Task",
-                      "Resource": "${ScrapeYCFunction.Arn}",
+                      "Resource": "${ScrapeYCFunction.Alias}",
                       "Parameters": {
                         "queries.$": "$.queries",
                         "query_hash.$": "$.query_hash"
@@ -968,7 +1021,7 @@ Resources:
                   "States": {
                     "ScrapeIrish": {
                       "Type": "Task",
-                      "Resource": "${ScrapeIrishFunction.Arn}",
+                      "Resource": "${ScrapeIrishFunction.Alias}",
                       "Parameters": {
                         "queries.$": "$.queries",
                         "query_hash.$": "$.query_hash"
@@ -989,7 +1042,7 @@ Resources:
                   "States": {
                     "ScrapeGreenhouse": {
                       "Type": "Task",
-                      "Resource": "${ScrapeGreenhouseFunction.Arn}",
+                      "Resource": "${ScrapeGreenhouseFunction.Alias}",
                       "Parameters": {
                         "query_hash.$": "$.query_hash"
                       },
@@ -1009,7 +1062,7 @@ Resources:
                   "States": {
                     "ScrapeAshby": {
                       "Type": "Task",
-                      "Resource": "${ScrapeAshbyFunction.Arn}",
+                      "Resource": "${ScrapeAshbyFunction.Alias}",
                       "Parameters": {
                         "query_hash.$": "$.query_hash"
                       },
@@ -1035,7 +1088,7 @@ Resources:
             },
             "ChunkJobHashes": {
               "Type": "Task",
-              "Resource": "${ChunkHashesFunction.Arn}",
+              "Resource": "${ChunkHashesFunction.Alias}",
               "Parameters": {
                 "new_job_hashes.$": "$.dedup_result.new_job_hashes",
                 "user_id.$": "$.user_id",
@@ -1254,7 +1307,7 @@ Resources:
             },
             "NotifyError": {
               "Type": "Task",
-              "Resource": "${NotifyErrorFunction.Arn}",
+              "Resource": "${NotifyErrorFunction.Alias}",
               "Parameters": {
                 "user_id.$": "$.user_id",
                 "error.$": "$.error",
