@@ -182,6 +182,7 @@ class ScoreRequest(BaseModel):
     job_description: str = Field(..., min_length=20)
     job_title: str = "Software Engineer"
     company: str = "Unknown"
+    location: str = Field("", description="Job location (city/country/Remote)")
     resume_type: str = Field("sre_devops", description="Resume key from config")
 
 
@@ -198,6 +199,7 @@ class TailorRequest(BaseModel):
     job_description: str = Field(..., min_length=20)
     job_title: str = "Software Engineer"
     company: str = "Unknown"
+    location: str = Field("", description="Job location (city/country/Remote)")
     resume_type: str = "sre_devops"
 
 
@@ -213,6 +215,7 @@ class CoverLetterRequest(BaseModel):
     job_description: str = Field(..., min_length=20)
     job_title: str = "Software Engineer"
     company: str = "Unknown"
+    location: str = Field("", description="Job location (city/country/Remote)")
     resume_type: str = "sre_devops"
 
 
@@ -224,6 +227,7 @@ class ContactsRequest(BaseModel):
     job_description: str = Field(..., min_length=20)
     job_title: str = "Software Engineer"
     company: str = "Unknown"
+    location: str = Field("", description="Job location (city/country/Remote)")
 
 
 class Contact(BaseModel):
@@ -295,12 +299,12 @@ class ProfileUpdateRequest(BaseModel):
 class _Job:
     """Lightweight job object compatible with pipeline modules."""
 
-    def __init__(self, title: str, company: str, description: str):
+    def __init__(self, title: str, company: str, description: str, location: str = ""):
         self.job_id = f"web-{hash(title + company + description[:50]) & 0xFFFFFFFF:08x}"
         self.title = title
         self.company = company
         self.description = description
-        self.location = ""
+        self.location = location or ""
         self.apply_url = ""
         self.source = "web"
         self.posted_date = ""
@@ -359,7 +363,7 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
     if req.resume_type not in _resumes:
         raise HTTPException(400, f"Unknown resume type: {req.resume_type}. Available: {list(_resumes.keys())}")
 
-    job = _Job(req.job_title, req.company, req.job_description)
+    job = _Job(req.job_title, req.company, req.job_description, location=req.location)
     resumes = {req.resume_type: _resumes[req.resume_type]}
 
     try:
@@ -512,6 +516,7 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
     company = payload.get("company", "Unknown")
     title = payload.get("job_title", "Software Engineer")
     description = payload.get("job_description", "")
+    location = payload.get("location", "") or ""
 
     # Compute canonical hash for dedup
     chash = canonical_hash(company, title, description)
@@ -557,6 +562,7 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
         "title": title,
         "company": company,
         "description": description,
+        "location": location,
         "source": "manual",
         "application_status": "New",
         "first_seen": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -584,6 +590,7 @@ def _dispatch_task(task_type: str, payload: dict, user_id: str = "") -> dict:
         title=payload.get("job_title", "Software Engineer"),
         company=payload.get("company", "Unknown"),
         description=payload.get("job_description", ""),
+        location=payload.get("location", ""),
     )
 
     # Find or create job in dashboard — use explicit job_id if provided (from dashboard endpoints)
@@ -831,6 +838,7 @@ def tailor_job(req: TailorRequest, user: AuthUser = Depends(get_current_user)):
         "job_description": req.job_description,
         "job_title": req.job_title,
         "company": req.company,
+        "location": req.location,
         "resume_type": req.resume_type,
     }
     _enqueue_task(task_id, user.id, "tailor", payload)
@@ -847,6 +855,7 @@ def cover_letter(req: CoverLetterRequest, user: AuthUser = Depends(get_current_u
         "job_description": req.job_description,
         "job_title": req.job_title,
         "company": req.company,
+        "location": req.location,
         "resume_type": req.resume_type,
     }
     _enqueue_task(task_id, user.id, "cover_letter", payload)
@@ -860,6 +869,7 @@ def contacts(req: ContactsRequest, user: AuthUser = Depends(get_current_user)):
         "job_description": req.job_description,
         "job_title": req.job_title,
         "company": req.company,
+        "location": req.location,
     }
     _enqueue_task(task_id, user.id, "contacts", payload)
     return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
@@ -1887,6 +1897,7 @@ class SingleJobRunRequest(BaseModel):
     job_description: str = Field(..., min_length=20)
     job_title: str = "Software Engineer"
     company: str = "Unknown"
+    location: str = Field("", description="Job location (city/country/Remote)")
     resume_type: str = "sre_devops"
 
 
@@ -1944,6 +1955,7 @@ def run_single_job(req: SingleJobRunRequest, user: AuthUser = Depends(get_curren
             "job_description": req.job_description,
             "job_title": req.job_title,
             "company": req.company,
+            "location": req.location,
             "resume_type": req.resume_type,
             "skip_scoring": False,
         }),
