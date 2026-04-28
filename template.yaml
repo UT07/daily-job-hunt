@@ -1663,6 +1663,13 @@ Resources:
       Runtime: python3.11
       Timeout: 5
       MemorySize: 128
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Canary10Percent5Minutes
+        Alarms:
+          - !Ref WsRouteFunctionErrorsAlarm
+          - !Ref WsRouteFunctionThrottlesAlarm
+          - !Ref WsRouteFunctionDurationP99Alarm
       Environment:
         Variables:
           SESSIONS_TABLE: !Ref BrowserSessionsTable
@@ -1937,6 +1944,68 @@ Resources:
             }
           ]
         }
+
+  # --- Phase B.2 canary alarms (sourced from monitoring/alarms.yaml) ---
+  # Critical-tier functions x 3 alarms each (Errors, Throttles, p99 Duration).
+  # These trip the CodeDeploy traffic shift if a canary deploy goes bad.
+  # Edits must be mirrored to monitoring/alarms.yaml (canonical source).
+
+  WsRouteFunctionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-ws-route-Errors
+      AlarmDescription: Trips canary if any errors during traffic shift
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: naukribaba-ws-route
+        - Name: Resource
+          Value: naukribaba-ws-route:live
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  WsRouteFunctionThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-ws-route-Throttles
+      AlarmDescription: Trips canary on any concurrency throttling during shift
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: naukribaba-ws-route
+        - Name: Resource
+          Value: naukribaba-ws-route:live
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  WsRouteFunctionDurationP99Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-ws-route-DurationP99
+      AlarmDescription: Trips canary if p99 duration exceeds 30s over 5min - catches death spiral
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: naukribaba-ws-route
+        - Name: Resource
+          Value: naukribaba-ws-route:live
+      ExtendedStatistic: p99
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 30000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
 
 Outputs:
   ApiUrl:
