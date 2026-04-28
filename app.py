@@ -2457,13 +2457,44 @@ def apply_eligibility(job_id: str, user: AuthUser = Depends(get_current_user)):
     }
 
 
+def _build_shell_response(reason: str, missing: list, **extra) -> dict:
+    """Build a minimal ApplyPreviewResponse-compatible payload for ineligible/error cases."""
+    base = {
+        "eligible": False,
+        "reason": reason,
+        "profile_complete": not missing,
+        "missing_required_fields": missing,
+        "job": {}, "platform": "", "platform_metadata": {},
+        "resume": {}, "profile": {}, "cover_letter": {},
+        "custom_questions": [],
+        "already_applied": False,
+        "existing_application_id": None,
+        "cache_hit": False,
+    }
+    base.update(extra)
+    return base
+
+
 @app.get("/api/apply/preview/{job_id}")
 def apply_preview(job_id: str, user: AuthUser = Depends(get_current_user)):
-    """Apply preview snapshot. Plan 3a returns no AI answers; Plan 3b will
-    populate `questions` (platform metadata) and `answers` (AI-generated)
-    without changing this response shape."""
+    """Apply preview snapshot — full AI-driven payload per spec §7.3.
+
+    Ordering decision (Option A — profile-first short-circuit):
+      profile_incomplete -> no_apply_url -> no_resume -> already_applied -> success.
+    Rationale: profile is the global precondition that gates ALL apply attempts;
+    forcing users to complete it once unlocks every job. See backlog_profile_autofill
+    for the future autofill plan that lowers this gate's friction.
+    """
     from shared.load_job import load_job
     from shared.profile_completeness import check_profile_completeness
+    from shared.platform_metadata import fetch_metadata
+    from shared.platform_metadata.greenhouse import GreenhouseFetchError
+    from shared.platform_metadata.ashby import AshbyFetchError
+    from shared.cover_letter_loader import load_cover_letter
+    from shared.answer_generator import generate_answer
+    from shared.preview_cache import get_preview_cache, set_preview_cache
+    from shared.apply_models import ApplyPreviewResponse
+    from lambdas.pipeline.ai_helper import ai_complete_cached
 
     if not _db:
         raise HTTPException(503, "Database not configured")
@@ -2472,10 +2503,16 @@ def apply_preview(job_id: str, user: AuthUser = Depends(get_current_user)):
     if not job:
         raise HTTPException(404, "Job not found")
 
+    profile = _db.get_user(user.id) or {}
+    missing = check_profile_completeness(profile)
+
+    # Option A ordering: profile-first → job-specific → already-applied
+    if missing:
+        return _build_shell_response("profile_incomplete", missing)
     if not job.get("apply_url"):
-        return {"eligible": False, "reason": "no_apply_url"}
+        return _build_shell_response("no_apply_url", missing)
     if not job.get("resume_s3_key"):
-        return {"eligible": False, "reason": "no_resume"}
+        return _build_shell_response("no_resume", missing)
 
     canonical = job.get("canonical_hash")
     if canonical:
@@ -2488,42 +2525,130 @@ def apply_preview(job_id: str, user: AuthUser = Depends(get_current_user)):
             .execute()
         )
         if existing.data:
-            return {
-                "eligible": False,
-                "reason": "already_applied",
-                "application_id": existing.data[0]["id"],
+            return _build_shell_response(
+                "already_applied",
+                missing,
+                already_applied=True,
+                existing_application_id=existing.data[0]["id"],
+            )
+
+    resume_version = int(job.get("resume_version") or 1)
+
+    # Cache check (10min TTL via Supabase ai_cache table per spec §7.7)
+    cached = get_preview_cache(_db.client, job_id, resume_version)
+    if cached:
+        cached["cache_hit"] = True
+        return cached
+
+    # Fresh presigned URLs for resume / CL
+    _refresh_s3_urls([job])
+    is_default_resume = (job.get("resume_s3_key") or "").endswith("default_base.pdf")
+
+    platform = job.get("apply_platform") or ""
+    board_token = job.get("apply_board_token")
+    posting_id = job.get("apply_posting_id")
+    custom_questions: list = []
+    cover_letter_payload = {
+        "text": "", "editable": True, "max_length": 10000,
+        "source": "not_generated", "include_by_default": False,
+    }
+
+    # Only fetch platform metadata + generate answers when we have all 3 slugs.
+    # When missing, we degrade to questions=[] (frontend cloud browser handles
+    # form fields via AI vision at submit time).
+    if platform and board_token and posting_id:
+        try:
+            metadata = fetch_metadata(platform, board_token, posting_id)
+        except (GreenhouseFetchError, AshbyFetchError) as e:
+            if e.reason == "job_no_longer_available":
+                # Side effect per spec §7.3 step 4: mark expired so it stops
+                # appearing in dashboard "Easy Apply" lists
+                try:
+                    _db.client.table("jobs").update({"is_expired": True}).eq("job_id", job_id).execute()
+                except Exception:
+                    logger.warning(f"[apply_preview] Failed to mark job {job_id} expired")
+                return _build_shell_response("job_no_longer_available", missing)
+            if "timeout" in (e.reason or ""):
+                return _build_shell_response("metadata_unavailable", missing)
+            return _build_shell_response("platform_error", missing)
+        except ValueError:
+            # Unsupported platform — degrade gracefully
+            metadata = None
+
+        if metadata:
+            cl = load_cover_letter(
+                user_id=user.id, job_hash=job.get("job_hash", ""),
+                s3_client=_get_s3(),
+                bucket=os.environ.get("S3_BUCKET", os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt")),
+            )
+            score_tier = (job.get("score_tier") or "").upper()
+            cover_letter_payload = {
+                "text": (cl or {}).get("text", ""),
+                "editable": True,
+                "max_length": metadata.get("cover_letter_max_length", 10000),
+                "source": (cl or {}).get("source", "not_generated"),
+                "include_by_default": bool(
+                    metadata.get("cover_letter_required", False)
+                    or score_tier in ("S", "A")
+                ),
             }
 
-    profile = _db.get_user(user.id) or {}
-    missing = check_profile_completeness(profile)
-    if missing:
-        return {
-            "eligible": False,
-            "reason": "profile_incomplete",
-            "missing_required_fields": missing,
-        }
+            resume_text = job.get("resume_plaintext", "") or ""
+            for q in metadata["questions"]:
+                ans = generate_answer(q, profile, job, resume_text,
+                                       cover_letter_payload["text"], ai_complete_cached)
+                custom_questions.append({
+                    "id": q["field_name"],
+                    "label": q["label"],
+                    "type": q["type"],
+                    "required": q["required"],
+                    "options": q.get("options") or None,
+                    "max_length": q.get("max_length"),
+                    "ai_answer": ans["answer"],
+                    "requires_user_action": ans["requires_user_action"],
+                    "category": ans["category"],
+                })
 
-    return {
+    response = {
         "eligible": True,
+        "profile_complete": True,
+        "missing_required_fields": [],
         "job": {
-            "job_id": job["job_id"],
             "title": job.get("title"),
             "company": job.get("company"),
+            "location": job.get("location"),
             "apply_url": job.get("apply_url"),
-            "platform": job.get("apply_platform"),
+        },
+        "platform": platform,
+        "platform_metadata": {
+            "board_token": board_token,
+            "posting_id": posting_id,
+        },
+        "resume": {
+            "s3_url": job.get("resume_s3_url"),
+            "filename": (job.get("resume_s3_key") or "").rsplit("/", 1)[-1] or "resume.pdf",
+            "resume_version": resume_version,
+            "s3_key": job.get("resume_s3_key"),
+            "is_default": is_default_resume,
         },
         "profile": {k: profile.get(k) for k in (
-            "first_name", "last_name", "email", "phone", "linkedin",
-            "github", "website", "location", "visa_status",
+            "first_name", "last_name", "email", "phone",
+            "linkedin", "github", "website", "location",
         )},
-        "resume": {
-            "s3_key": job.get("resume_s3_key"),
-            "version": job.get("resume_version", 1),
-        },
-        "questions": [],
-        "answers": [],
-        "answers_generated": False,
+        "cover_letter": cover_letter_payload,
+        "custom_questions": custom_questions,
+        "already_applied": False,
+        "existing_application_id": None,
+        "cache_hit": False,
     }
+
+    # Validate response shape (raises if drifted from spec §7.1)
+    ApplyPreviewResponse(**response)
+
+    # Write cache (10min TTL per spec §7.7)
+    set_preview_cache(_db.client, job_id, resume_version, response, ttl_minutes=10)
+
+    return response
 
 
 class StartSessionRequest(BaseModel):

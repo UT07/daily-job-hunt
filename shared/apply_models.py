@@ -26,8 +26,13 @@ class CustomQuestion(BaseModel):
     max_length: Optional[int] = None
     ai_answer: Union[str, bool, None] = None
     requires_user_action: bool = False
+    # Spec §7.1 lists 5 categories assuming all questions go through AI.
+    # Our answer_generator extends with "standard" (profile-pulled fields:
+    # first_name, email, phone, etc.) and "file" (resume/cover_letter upload
+    # markers). These bypass AI for efficiency. Frontend treats them the
+    # same as "custom" for rendering — they just have ai_answer pre-populated.
     category: Literal["custom", "eeo", "confirmation",
-                      "marketing", "referral"] = "custom"
+                      "marketing", "referral", "standard", "file"] = "custom"
 
 
 class ApplyPreviewResponse(BaseModel):
