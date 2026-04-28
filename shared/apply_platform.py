@@ -50,10 +50,9 @@ _GREENHOUSE_STANDARD = re.compile(
     r"boards\.greenhouse\.io/(?P<board>[^/?]+)/jobs/(?P<posting>\d+)",
     re.IGNORECASE,
 )
-_GREENHOUSE_EMBED = re.compile(
-    r"boards\.greenhouse\.io/embed/job_app\?[^#]*?for=(?P<board>[^&]+)[^#]*?token=(?P<posting>\d+)",
-    re.IGNORECASE,
-)
+_GREENHOUSE_EMBED_PATH = re.compile(r"boards\.greenhouse\.io/embed/job_app", re.IGNORECASE)
+_GREENHOUSE_EMBED_FOR = re.compile(r"[?&]for=(?P<board>[^&#]+)", re.IGNORECASE)
+_GREENHOUSE_EMBED_TOKEN = re.compile(r"[?&]token=(?P<posting>\d+)", re.IGNORECASE)
 _ASHBY_STANDARD = re.compile(
     r"jobs\.ashbyhq\.com/(?P<board>[^/?]+)/(?P<posting>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
     re.IGNORECASE,
@@ -79,13 +78,15 @@ def extract_platform_ids(url: Optional[str]) -> Optional[dict]:
             "posting_id": m.group("posting"),
         }
 
-    m = _GREENHOUSE_EMBED.search(url)
-    if m:
-        return {
-            "platform": "greenhouse",
-            "board_token": m.group("board"),
-            "posting_id": m.group("posting"),
-        }
+    if _GREENHOUSE_EMBED_PATH.search(url):
+        m_board = _GREENHOUSE_EMBED_FOR.search(url)
+        m_posting = _GREENHOUSE_EMBED_TOKEN.search(url)
+        if m_board and m_posting:
+            return {
+                "platform": "greenhouse",
+                "board_token": m_board.group("board"),
+                "posting_id": m_posting.group("posting"),
+            }
 
     m = _ASHBY_STANDARD.search(url)
     if m:

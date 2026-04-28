@@ -51,6 +51,15 @@ class TestExtractPlatformIds:
         assert extract_platform_ids("") is None
         assert extract_platform_ids(123) is None  # type: ignore[arg-type]
 
+    def test_greenhouse_embed_url_reversed_query_order(self):
+        # Spec requires both query orders to work
+        url = "https://boards.greenhouse.io/embed/job_app?token=7649441&for=airbnb"
+        result = extract_platform_ids(url)
+        assert result is not None
+        assert result["platform"] == "greenhouse"
+        assert result["board_token"] == "airbnb"
+        assert result["posting_id"] == "7649441"
+
     def test_malformed_greenhouse_url_returns_none(self):
         assert extract_platform_ids("https://boards.greenhouse.io/airbnb") is None
         assert extract_platform_ids("https://boards.greenhouse.io/") is None
