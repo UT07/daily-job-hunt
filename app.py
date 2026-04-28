@@ -2104,27 +2104,49 @@ def pipeline_status(user: AuthUser = Depends(get_current_user)):
     }
 
 
+def _state_machine_arn_to_execution_arn(state_machine_arn: str, execution_name: str) -> str:
+    """Convert a state-machine ARN + execution name into a valid execution ARN.
+
+    State machine: arn:aws:states:REGION:ACCT:stateMachine:STATE_MACHINE_NAME
+    Execution:     arn:aws:states:REGION:ACCT:execution:STATE_MACHINE_NAME:EXECUTION_NAME
+
+    The previous implementation (`rsplit(":", 1)[0] + ":" + execution_name`) produced
+    an invalid `arn:...:stateMachine:EXECUTION_NAME` and made every poll 404.
+    """
+    return state_machine_arn.replace(":stateMachine:", ":execution:") + f":{execution_name}"
+
+
 @app.get("/api/pipeline/status/{execution_name}")
 def pipeline_execution_status(execution_name: str, user: AuthUser = Depends(get_current_user)):
-    """Poll a specific Step Functions execution by name."""
-    daily_arn = os.environ.get("DAILY_PIPELINE_ARN", "")
-    single_arn = os.environ.get("SINGLE_JOB_PIPELINE_ARN", "")
+    """Poll a specific Step Functions execution by name.
 
-    # Reconstruct full ARN from execution name (try both state machines)
-    base_arn = daily_arn.rsplit(":", 1)[0] if daily_arn else ""
-    execution_arn = f"{base_arn}:{execution_name}" if base_arn else ""
+    Tries the daily-pipeline state machine first, then the single-job state machine.
+    Returns 404 only after both lookups fail.
+    """
+    candidates = [
+        arn for arn in (
+            os.environ.get("DAILY_PIPELINE_ARN", ""),
+            os.environ.get("SINGLE_JOB_PIPELINE_ARN", ""),
+        ) if arn
+    ]
+    if not candidates:
+        raise HTTPException(500, "Pipeline ARNs not configured")
 
     sfn = _get_sfn()
-    try:
-        result = sfn.describe_execution(executionArn=execution_arn)
-    except Exception:
-        # Try single-job pipeline ARN
-        base_arn = single_arn.rsplit(":", 1)[0] if single_arn else ""
-        execution_arn = f"{base_arn}:{execution_name}" if base_arn else ""
+    result = None
+    last_err = None
+    for sm_arn in candidates:
+        execution_arn = _state_machine_arn_to_execution_arn(sm_arn, execution_name)
         try:
             result = sfn.describe_execution(executionArn=execution_arn)
+            break
         except Exception as e:
-            raise HTTPException(404, f"Execution not found: {execution_name}")
+            last_err = e
+            continue
+
+    if result is None:
+        logger.warning("pipeline_execution_status: %s not found in any state machine: %s", execution_name, last_err)
+        raise HTTPException(404, f"Execution not found: {execution_name}")
 
     output = None
     if result.get("output"):
