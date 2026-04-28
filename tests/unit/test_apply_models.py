@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 from shared.apply_models import (
-    PlatformInfo, CustomQuestion, CustomAnswer, ApplyPreviewResponse,
+    PlatformInfo, CustomQuestion, ApplyPreviewResponse,
 )
 
 

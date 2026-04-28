@@ -1,5 +1,4 @@
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from shared.answer_generator import generate_answer, DEFAULT_CANDIDATE_CONTEXT
 
 

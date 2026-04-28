@@ -1,4 +1,3 @@
-import pytest
 from shared.apply_platform import extract_platform_ids
 
 

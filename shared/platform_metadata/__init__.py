@@ -26,7 +26,7 @@ a normalized payload:
 Fetchers raise the platform-specific Error class on failure with a `.reason`
 attribute that maps to the preview endpoint's `reason` field.
 """
-from typing import Tuple, Type, Union
+from typing import Tuple, Type
 from .greenhouse import fetch_greenhouse, GreenhouseFetchError
 from .ashby import fetch_ashby, AshbyFetchError
 

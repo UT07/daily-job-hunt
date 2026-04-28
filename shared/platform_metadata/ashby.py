@@ -21,7 +21,6 @@ A null jobPosting in the response (HTTP 200) means the job is no longer availabl
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import httpx
 

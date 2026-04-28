@@ -2595,8 +2595,15 @@ def apply_preview(job_id: str, user: AuthUser = Depends(get_current_user)):
 
             resume_text = job.get("resume_plaintext", "") or ""
             for q in metadata["questions"]:
-                ans = generate_answer(q, profile, job, resume_text,
-                                       cover_letter_payload["text"], ai_complete_cached)
+                try:
+                    ans = generate_answer(q, profile, job, resume_text,
+                                           cover_letter_payload["text"], ai_complete_cached)
+                except Exception as e:
+                    # AI council exhausted / provider error / unexpected raise — degrade
+                    # this single question gracefully rather than 500-ing the whole preview.
+                    # User fills it manually; rest of the form stays AI-prefilled.
+                    logger.warning(f"[apply_preview] generate_answer failed for q={q.get('field_name')}: {e}")
+                    ans = {"answer": None, "category": "custom", "requires_user_action": True}
                 custom_questions.append({
                     "id": q["field_name"],
                     "label": q["label"],

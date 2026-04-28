@@ -292,7 +292,7 @@ def test_apply_preview_handles_404_from_platform(client):
     db.client.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock()
     with patch("shared.load_job.load_job", return_value=_job_row()), \
          patch("shared.preview_cache.get_preview_cache", return_value=None), \
-         patch("shared.platform_metadata.greenhouse.fetch_greenhouse",
+         patch("shared.platform_metadata.fetch_greenhouse",
                side_effect=GreenhouseFetchError("gone", "job_no_longer_available")):
         r = c.get("/api/apply/preview/j1")
     assert r.status_code == 200
@@ -302,6 +302,50 @@ def test_apply_preview_handles_404_from_platform(client):
     # Verify the is_expired update was called
     update_calls = db.client.table.return_value.update.call_args_list
     assert any(call.args and call.args[0].get("is_expired") is True for call in update_calls)
+
+
+def test_apply_preview_resilient_when_ai_fails_for_one_question(client):
+    """If generate_answer raises for one question (e.g. AI council exhausted), the
+    preview should still return — that question gets requires_user_action=True,
+    others continue with their AI-prefilled answers."""
+    c, db = client
+    _no_existing_apps(db)
+    db.get_user.return_value = _complete_user()
+    fake_meta = {
+        "platform": "greenhouse", "job_title": "Backend",
+        "questions": [
+            {"label": "First Name", "field_name": "first_name",
+             "type": "text", "required": True, "options": [], "description": None},
+            {"label": "Why?", "field_name": "question_1",
+             "type": "textarea", "required": True, "options": [], "description": None},
+        ],
+        "cover_letter_field_present": False,
+        "cover_letter_required": False, "cover_letter_max_length": 10000,
+    }
+
+    def flaky_answer(q, *args, **kwargs):
+        if q["field_name"] == "question_1":
+            raise RuntimeError("All AI providers exhausted")
+        return {"answer": "U", "category": "standard", "requires_user_action": False}
+
+    with patch("shared.load_job.load_job", return_value=_job_row()), \
+         patch("shared.preview_cache.get_preview_cache", return_value=None), \
+         patch("shared.preview_cache.set_preview_cache"), \
+         patch("shared.platform_metadata.fetch_greenhouse", return_value=fake_meta), \
+         patch("shared.cover_letter_loader.load_cover_letter", return_value=None), \
+         patch("shared.answer_generator.generate_answer", side_effect=flaky_answer), \
+         patch("boto3.client"):
+        r = c.get("/api/apply/preview/j1")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["eligible"] is True
+    assert len(data["custom_questions"]) == 2
+    fn_q = next(q for q in data["custom_questions"] if q["id"] == "first_name")
+    assert fn_q["ai_answer"] == "U"           # standard field unaffected
+    assert fn_q["requires_user_action"] is False
+    failed_q = next(q for q in data["custom_questions"] if q["id"] == "question_1")
+    assert failed_q["ai_answer"] is None      # graceful degradation
+    assert failed_q["requires_user_action"] is True
 
 
 def test_apply_preview_unknown_platform_returns_shell(client):
