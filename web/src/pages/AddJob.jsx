@@ -285,8 +285,9 @@ export default function AddJob() {
             loading={actionLoading.score}
             disabled={!jd.trim() || !!activeKey}
             onClick={() => runLegacy('/api/score', 'score')}
+            title="Score this JD against your base resume — also saves the job to your dashboard."
           >
-            Score Resume
+            Save &amp; Score
           </Button>
           <Button
             variant="accent"
