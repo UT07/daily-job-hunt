@@ -17,8 +17,6 @@ These tests pin the helper's contract so the regression can't slip back.
 """
 from __future__ import annotations
 
-import pytest
-
 from app import _state_machine_arn_to_execution_arn
 
 REGION = "eu-west-1"
