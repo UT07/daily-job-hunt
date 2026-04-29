@@ -271,6 +271,13 @@ class SupabaseClient:
         Uses minimal SELECT (only 2 columns) for speed.
         Returns dict with total_jobs, matched_jobs, avg_match_score,
         and jobs_by_status counts.
+
+        Funnel metrics (`total_applied`, `total_interviewing`, `total_offers`,
+        `total_rejected`) are computed from the application_timeline table so
+        they reflect "anything that ever reached this stage" rather than
+        the current bucket. Without that, marking Applied → New (or any
+        non-funnel status) silently resets the Applied count to 0 — the
+        F5 bug from the comprehensive prod-health initiative.
         """
         all_jobs = (
             self.client.table("jobs")
@@ -291,17 +298,65 @@ class SupabaseClient:
             s = r.get("application_status", "New")
             status_counts[s] = status_counts.get(s, 0) + 1
 
-        # Funnel metrics — "applied" counts anything that ever reached Applied,
-        # not just the current-state Applied bucket. Fixes the bug where changing
-        # status Applied→Rejected would drop the Applied count.
-        _APPLIED_FUNNEL = {"Applied", "Phone Screen", "Interview", "Offer",
+        # Funnel metrics — count distinct jobs that ever reached each stage,
+        # via the application_timeline event log. Fall back to current-status
+        # counts only when the timeline read fails (e.g. table missing in
+        # local dev) so the dashboard still renders something useful.
+        _APPLIED_STAGES = {"Applied", "Phone Screen", "Interview", "Offer",
                            "Rejected", "Withdrawn", "Accepted"}
-        _INTERVIEWING = {"Phone Screen", "Interview"}
-        _OFFERS = {"Offer", "Accepted"}
-        total_applied = sum(n for s, n in status_counts.items() if s in _APPLIED_FUNNEL)
-        total_rejected = status_counts.get("Rejected", 0)
-        total_interviewing = sum(n for s, n in status_counts.items() if s in _INTERVIEWING)
-        total_offers = sum(n for s, n in status_counts.items() if s in _OFFERS)
+        _INTERVIEWING_STAGES = {"Phone Screen", "Interview"}
+        _OFFER_STAGES = {"Offer", "Accepted"}
+        _REJECTED_STAGES = {"Rejected"}
+
+        try:
+            timeline = (
+                self.client.table("application_timeline")
+                .select("job_id, status")
+                .eq("user_id", user_id)
+                .execute()
+            )
+            events = timeline.data or []
+        except Exception as e:  # pragma: no cover - belt-and-suspenders fallback
+            logger.warning("application_timeline read failed: %s; using current-status fallback", e)
+            events = None
+
+        if events is not None:
+            # Build per-job set of statuses ever reached, then derive funnel.
+            jobs_to_stages: Dict[str, set] = {}
+            for ev in events:
+                jid = ev.get("job_id")
+                stage = ev.get("status")
+                if not jid or not stage:
+                    continue
+                jobs_to_stages.setdefault(jid, set()).add(stage)
+
+            # Also fold in the current status — older jobs may have a current
+            # status without any matching timeline event (e.g. PATCH-only
+            # updates from StatusDropdown that bypass the timeline insert).
+            jobs_with_status = (
+                self.client.table("jobs")
+                .select("job_id, application_status")
+                .eq("user_id", user_id)
+                .execute()
+            )
+            for r in jobs_with_status.data or []:
+                jid = r.get("job_id")
+                cur = r.get("application_status")
+                if jid and cur:
+                    jobs_to_stages.setdefault(jid, set()).add(cur)
+
+            def _count(stages: set) -> int:
+                return sum(1 for st in jobs_to_stages.values() if st & stages)
+
+            total_applied = _count(_APPLIED_STAGES)
+            total_interviewing = _count(_INTERVIEWING_STAGES)
+            total_offers = _count(_OFFER_STAGES)
+            total_rejected = _count(_REJECTED_STAGES)
+        else:
+            total_applied = sum(n for s, n in status_counts.items() if s in _APPLIED_STAGES)
+            total_interviewing = sum(n for s, n in status_counts.items() if s in _INTERVIEWING_STAGES)
+            total_offers = sum(n for s, n in status_counts.items() if s in _OFFER_STAGES)
+            total_rejected = status_counts.get("Rejected", 0)
 
         return {
             "total_jobs": total,

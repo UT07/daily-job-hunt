@@ -1459,7 +1459,14 @@ def update_job(
     body: dict,
     user: AuthUser = Depends(get_current_user),
 ):
-    """Update a job's fields (status, location, apply_url)."""
+    """Update a job's fields (status, location, apply_url).
+
+    When `application_status` is included, also append a row to
+    `application_timeline` so the dashboard funnel counts (Applied /
+    Interviewing / Offers) survive subsequent status changes. Without
+    this, marking Applied → New via the inline StatusDropdown silently
+    drops the job out of the Applied count (F5 in comprehensive prod-health).
+    """
     if _db is None:
         raise HTTPException(503, "Database not configured")
 
@@ -1484,6 +1491,22 @@ def update_job(
             raise ValueError("Not found")
     except ValueError:
         raise HTTPException(404, "Job not found")
+
+    # Mirror status changes to the timeline log so funnel stats stay correct.
+    if "application_status" in update_data:
+        try:
+            _db.client.table("application_timeline").insert({
+                "user_id": user.id,
+                "job_id": job_id,
+                "status": update_data["application_status"],
+                "notes": None,
+            }).execute()
+        except Exception as e:  # pragma: no cover - non-fatal
+            logger.warning(
+                "Timeline mirror failed for job %s status=%s: %s",
+                job_id, update_data["application_status"], e,
+            )
+
     return result.data[0]
 
 
