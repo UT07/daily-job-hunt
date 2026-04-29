@@ -40,6 +40,7 @@ import io
 import json
 import logging
 import os
+import re
 import tempfile
 import threading
 import uuid
@@ -397,8 +398,47 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
 TASK_QUEUE_URL = os.environ.get("TASK_QUEUE_URL", "")
 
 
+# AWS credential / token redaction patterns. Defense-in-depth: when a Lambda's
+# IAM role temp creds expire mid-task and a boto3 ClientError leaks into a
+# str(e), the AWS error body can contain the leaked STS session token (IQoJ...)
+# verbatim. Sanitize before persisting to user-readable fields.
+_AWS_CRED_PATTERNS = [
+    # STS session tokens — start with IQoJ and are long base64 strings
+    (re.compile(r"IQoJ[A-Za-z0-9+/=]{16,}"), "<REDACTED_STS_TOKEN>"),
+    # AWS access key IDs
+    (re.compile(r"\b(?:A[SK]IA|ASIA)[0-9A-Z]{16}\b"), "<REDACTED_AWS_KEY>"),
+    # XML token-bearing tags from S3/STS error bodies
+    (re.compile(r"<Token>[^<]+</Token>", re.IGNORECASE), "<Token>REDACTED</Token>"),
+    (re.compile(r"<SessionToken>[^<]+</SessionToken>", re.IGNORECASE), "<SessionToken>REDACTED</SessionToken>"),
+    (re.compile(r"<AccessKeyId>[^<]+</AccessKeyId>", re.IGNORECASE), "<AccessKeyId>REDACTED</AccessKeyId>"),
+    (re.compile(r"<SecretAccessKey>[^<]+</SecretAccessKey>", re.IGNORECASE), "<SecretAccessKey>REDACTED</SecretAccessKey>"),
+]
+
+
+def _sanitize_aws_creds(value):
+    """Recursively redact AWS credentials/tokens from a string or nested
+    container before persisting to user-visible fields (pipeline_tasks.result,
+    .error, .payload). Non-string scalars pass through unchanged.
+    """
+    if isinstance(value, str):
+        out = value
+        for pattern, replacement in _AWS_CRED_PATTERNS:
+            out = pattern.sub(replacement, out)
+        return out
+    if isinstance(value, dict):
+        return {k: _sanitize_aws_creds(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_aws_creds(v) for v in value]
+    return value
+
+
 def _save_task(task_id: str, user_id: str, data: dict):
-    """Persist task state to Supabase pipeline_tasks table."""
+    """Persist task state to Supabase pipeline_tasks table.
+
+    Sanitizes `result` and `error` for AWS credential leakage before write —
+    boto3 ClientError str(e) can include the failing request's STS session
+    token verbatim, which would otherwise be exposed via GET /api/tasks/{id}.
+    """
     if not _db:
         logger.warning("_save_task: database not configured, skipping persist for %s", task_id)
         return
@@ -406,8 +446,8 @@ def _save_task(task_id: str, user_id: str, data: dict):
         "task_id": task_id,
         "user_id": user_id,
         "status": data.get("status", "running"),
-        "result": data.get("result"),
-        "error": data.get("error"),
+        "result": _sanitize_aws_creds(data.get("result")),
+        "error": _sanitize_aws_creds(data.get("error")),
         "payload": data.get("payload"),
     }
     _db.client.table("pipeline_tasks").upsert(row, on_conflict="task_id").execute()
