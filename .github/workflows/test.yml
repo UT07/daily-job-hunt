@@ -51,10 +51,15 @@ jobs:
             exit 0
           fi
           echo "Smoke-testing import resolution inside $IMAGE"
-          docker run --rm --entrypoint /var/lang/bin/python "$IMAGE" -c '
-          import os
-          os.environ.setdefault("SUPABASE_URL", "http://localhost")
-          os.environ.setdefault("SUPABASE_SERVICE_KEY", "fake")
+          # Real Lambda runtime sets AWS_DEFAULT_REGION automatically; bare
+          # `docker run` does not. ai_helper.py creates boto3 SSM client at
+          # module-load time, which explodes with NoRegionError without it.
+          # Env vars below mimic the deployed Lambda env minimally.
+          docker run --rm \
+            -e AWS_DEFAULT_REGION=eu-west-1 \
+            -e SUPABASE_URL=http://localhost \
+            -e SUPABASE_SERVICE_KEY=fake \
+            --entrypoint /var/lang/bin/python "$IMAGE" -c '
           import app
           from shared.load_job import load_job
           from shared.profile_completeness import check_profile_completeness
