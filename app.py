@@ -1398,6 +1398,7 @@ def get_dashboard_jobs(
     min_score: Optional[float] = None,
     source: Optional[str] = None,
     company: Optional[str] = None,
+    title: Optional[str] = None,
     tailored: Optional[str] = None,
     tier: Optional[str] = None,
     hide_expired: Optional[str] = None,
@@ -1427,6 +1428,8 @@ def get_dashboard_jobs(
         filters["source"] = source
     if company:
         filters["company"] = company
+    if title:
+        filters["title"] = title
     if tailored:
         filters["tailored"] = tailored
     if tier:
