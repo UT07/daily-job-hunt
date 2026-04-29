@@ -46,6 +46,10 @@ export default function ResetPasswordPage() {
     e.preventDefault();
     setError(null);
 
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters.');
+      return;
+    }
     if (password !== confirm) {
       setError('Passwords do not match.');
       return;
@@ -116,8 +120,8 @@ export default function ResetPasswordPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              minLength={6}
-              placeholder="At least 6 characters"
+              minLength={8}
+              placeholder="At least 8 characters"
             />
             <Input
               label="Confirm password"
@@ -125,7 +129,7 @@ export default function ResetPasswordPage() {
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
               required
-              minLength={6}
+              minLength={8}
               placeholder="Type it again"
             />
             <Button

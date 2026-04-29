@@ -22,6 +22,9 @@ export default function LoginPage() {
         await resetPassword(email);
         setSuccess('Password reset link sent. Check your email.');
       } else if (isSignUp) {
+        if (password.length < 8) {
+          throw new Error('Password must be at least 8 characters.');
+        }
         await signUp(email, password);
         setSuccess('Account created. Check your email to confirm, then sign in.');
       } else {
@@ -122,8 +125,8 @@ export default function LoginPage() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               required
-              minLength={6}
-              placeholder="At least 6 characters"
+              minLength={8}
+              placeholder="At least 8 characters"
             />
           )}
           {!isForgot && !isSignUp && (
