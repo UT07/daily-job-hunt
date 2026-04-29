@@ -1931,16 +1931,46 @@ def run_pipeline(req: PipelineRunRequest, user: AuthUser = Depends(get_current_u
 
 @app.post("/api/pipeline/run-single", status_code=202)
 def run_single_job(req: SingleJobRunRequest, user: AuthUser = Depends(get_current_user)):
-    """Start a single-job pipeline (Add Job) via Step Functions."""
+    """Start a single-job pipeline (Add Job) via Step Functions.
+
+    Computes the canonical job_hash server-side and upserts a jobs_raw row
+    BEFORE starting the execution. The state machine references $.job_hash
+    in every state and ScoreBatchFunction reads jobs_raw by job_hash, so
+    skipping either step would fail the execution immediately.
+    """
     single_arn = os.environ.get("SINGLE_JOB_PIPELINE_ARN")
     if not single_arn:
         raise HTTPException(500, "Pipeline not configured")
+
+    # Compute canonical hash so the SFN can address the job consistently.
+    job_hash = canonical_hash(req.company, req.job_title, req.job_description)
+
+    # Upsert into jobs_raw so ScoreBatchFunction can find the row.
+    # Without this, ScoreSingleJob queries jobs_raw by job_hash and gets 0 rows,
+    # which collapses to matched_count=0 and CheckScoreExists routes to JobFailed.
+    if _db is not None:
+        try:
+            _db.client.table("jobs_raw").upsert({
+                "job_hash": job_hash,
+                "title": req.job_title[:500],
+                "company": req.company[:200],
+                "description": req.job_description,
+                "location": "",
+                "apply_url": "",
+                "source": "manual",
+            }, on_conflict="job_hash").execute()
+        except Exception as e:
+            logger.warning(
+                "jobs_raw upsert failed for job_hash=%s: %s; SFN will likely fail at ScoreSingleJob",
+                job_hash, e,
+            )
 
     sfn = _get_sfn()
     execution = sfn.start_execution(
         stateMachineArn=single_arn,
         input=json.dumps({
             "user_id": user.id,
+            "job_hash": job_hash,
             "job_description": req.job_description,
             "job_title": req.job_title,
             "company": req.company,
