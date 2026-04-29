@@ -14,7 +14,9 @@ from jose import JWTError, jwt
 
 _ALG = "HS256"
 _ROLES = ("frontend", "browser")
-_DEFAULT_TTL = 60
+# 5 minutes. Fargate cloud-browser cold-start can take 30-90s; the prior 60s
+# default was racing the boot and rejecting tokens before the worker connected.
+_DEFAULT_TTL = 300
 
 
 def _aud_for(role: str) -> str:
