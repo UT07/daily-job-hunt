@@ -4,6 +4,7 @@ import { useAuth } from '../auth/useAuth'
 import { apiPut, apiUpload, apiGet } from '../api'
 import Input, { Textarea, Select } from '../components/ui/Input'
 import Button from '../components/ui/Button'
+import useApiMutation from '../hooks/useApiMutation'
 
 // ─── Step Indicator ─────────────────────────────────────────────
 function StepIndicator({ current, steps }) {
@@ -106,6 +107,9 @@ function StepWelcome() {
 function StepResume({ resumeFile, setResumeFile, uploadStatus, setUploadStatus, onExtracted }) {
   const fileRef = useRef(null)
   const [dragOver, setDragOver] = useState(false)
+  // useApiMutation surfaces the upload error message instead of just toggling
+  // uploadStatus to 'error' with no detail — users couldn't tell *why*.
+  const upload = useApiMutation((file) => apiUpload('/api/resumes/upload', file))
 
   function handleFile(file) {
     if (file && file.type === 'application/pdf') {
@@ -121,22 +125,22 @@ function StepResume({ resumeFile, setResumeFile, uploadStatus, setUploadStatus, 
   async function handleUpload() {
     if (!resumeFile) return
     setUploadStatus('uploading')
-    try {
-      const res = await apiUpload('/api/resumes/upload', resumeFile)
-      setUploadStatus('done')
-      if (res.extracted_profile) {
-        onExtracted(res.extracted_profile)
-      } else if (res.sections) {
-        onExtracted({
-          name: res.sections.name || '',
-          email: res.sections.email || '',
-          phone: res.sections.phone || '',
-          location: res.sections.location || '',
-          skills: res.sections.skills || '',
-        })
-      }
-    } catch (err) {
+    const res = await upload.run(resumeFile)
+    if (!res) {
       setUploadStatus('error')
+      return
+    }
+    setUploadStatus('done')
+    if (res.extracted_profile) {
+      onExtracted(res.extracted_profile)
+    } else if (res.sections) {
+      onExtracted({
+        name: res.sections.name || '',
+        email: res.sections.email || '',
+        phone: res.sections.phone || '',
+        location: res.sections.location || '',
+        skills: res.sections.skills || '',
+      })
     }
   }
 
@@ -168,7 +172,9 @@ function StepResume({ resumeFile, setResumeFile, uploadStatus, setUploadStatus, 
         <p className="text-green-700 font-bold">Resume parsed successfully! Click Next to review.</p>
       )}
       {uploadStatus === 'error' && (
-        <p className="text-red-600">Upload failed. Try again or skip this step.</p>
+        <p className="text-red-600">
+          Upload failed{upload.error ? `: ${upload.error}` : ''}. Try again or skip this step.
+        </p>
       )}
     </div>
   )
@@ -415,7 +421,16 @@ export default function Onboarding() {
         complete_onboarding: true,
       })
 
-      await apiPut('/api/search-config', prefs).catch(() => {})
+      // Surface search-config save errors instead of silently dropping them.
+      // We still let onboarding "complete" if only search-config fails (the
+      // profile is the critical piece) but the user gets a warning toast.
+      try {
+        await apiPut('/api/search-config', prefs)
+      } catch (cfgErr) {
+        setError(`Profile saved, but search preferences failed to save: ${cfgErr.message}. Update them later in Settings.`)
+        setSaving(false)
+        return
+      }
 
       setSaving(false)
       next() // Advance to Done screen only after successful save
