@@ -90,13 +90,38 @@ def _validate_macro_arities(tex: str) -> list[str]:
 
 _REQUIRED_SECTIONS = ["experience", "skills", "education", "projects", "certifications"]
 
-# Header markers that MUST survive tailoring — contact info is essential.
-_HEADER_MARKERS = ["Utkarsh Singh", "254utkarsh@gmail.com"]
+
+def _derive_header_markers(profile: dict | None) -> list[str]:
+    """Return per-user header markers from the profile, with safe fallbacks.
+
+    Priority: full_name + email from `users` table. If either is missing,
+    drop just that marker (don't reject — base resume's contact line may
+    legitimately use a different format). If both are missing, return [] —
+    skip the header check entirely rather than fail every tailor.
+
+    Multi-tenant fix: was previously hardcoded
+    `["Utkarsh Singh", "254utkarsh@gmail.com"]`; this caused validation
+    failure → fallback to base resume for ANY user other than Utkarsh AND
+    for Utkarsh whenever the AI rewrapped his name across lines.
+    """
+    if not profile:
+        return []
+    markers = []
+    name = (profile.get("full_name") or profile.get("name") or "").strip()
+    if name:
+        markers.append(name)
+    email = (profile.get("email") or "").strip()
+    if email:
+        markers.append(email)
+    return markers
 
 
-def _check_header_present(tex: str) -> list[str]:
-    """Return list of header markers missing from the tex. Empty = all present."""
-    return [m for m in _HEADER_MARKERS if m not in tex]
+def _check_header_present(tex: str, markers: list[str]) -> list[str]:
+    """Return list of header markers missing from the tex. Empty = all present
+    (or no markers configured, in which case the check is a no-op)."""
+    if not markers:
+        return []
+    return [m for m in markers if m not in tex]
 
 
 def _check_required_sections(tex: str) -> list[str]:
@@ -366,6 +391,14 @@ def handler(event, context):
         return {"error": "No resume found"}
     base_tex = resume.data[0].get("tex_content", "")
 
+    # Read user profile so the header-marker validation uses THIS user's
+    # name + email, not hardcoded "Utkarsh Singh / 254utkarsh@gmail.com".
+    # Multi-tenant fix: previously failed for any other user; now per-user.
+    user_profile_resp = db.table("users").select("full_name, name, email") \
+        .eq("id", user_id).limit(1).execute()
+    user_profile = user_profile_resp.data[0] if user_profile_resp.data else None
+    header_markers = _derive_header_markers(user_profile)
+
     base_preamble, base_body = _split_tex(base_tex)
     if not base_preamble:
         logger.error(f"[tailor] base resume missing \\begin{{document}} for user {user_id}")
@@ -493,7 +526,7 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
     missing = _check_required_sections(tailored_tex)
     if missing:
         validation_errors.append(f"missing sections: {missing}")
-    missing_header = _check_header_present(tailored_tex)
+    missing_header = _check_header_present(tailored_tex, header_markers)
     if missing_header:
         validation_errors.append(f"missing header markers: {missing_header}")
 
