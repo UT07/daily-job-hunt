@@ -88,7 +88,7 @@ export default function ResumeEditor({ job }) {
     setUploading(true);
     setUploadError(null);
     try {
-      const result = await apiUpload('/api/resume/upload-pdf', file);
+      const result = await apiUpload('/api/resumes/upload', file);
       const newUrl = result?.pdf_url || result?.resume_s3_url || null;
       if (newUrl) {
         setPdfUrl(newUrl);
