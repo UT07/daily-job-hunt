@@ -36,6 +36,43 @@ jobs:
         env:
           DOCKER_BUILDKIT: "0"
         run: sam build
+      # Runtime-import smoke — catches the PR #12 / 2026-04-29 class of bug where
+      # `sam build` succeeds but a module the container Lambda imports lazily
+      # (e.g. `from lambdas.pipeline.ai_helper import ...`) is missing from the
+      # image. `sam build` validates the image builds; this step actually loads
+      # app.py inside the built image to exercise import resolution.
+      # Uses no untrusted GitHub event inputs.
+      - name: Runtime import smoke (API container)
+        run: |
+          set -eo pipefail
+          IMAGE=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E 'jobhuntapi|JobHuntApi' | head -1)
+          if [ -z "$IMAGE" ]; then
+            echo "::warning::No API container image found from sam build; skipping import smoke"
+            exit 0
+          fi
+          echo "Smoke-testing import resolution inside $IMAGE"
+          # Real Lambda runtime sets AWS_DEFAULT_REGION automatically; bare
+          # `docker run` does not. ai_helper.py creates boto3 SSM client at
+          # module-load time, which explodes with NoRegionError without it.
+          # Env vars below mimic the deployed Lambda env minimally.
+          docker run --rm \
+            -e AWS_DEFAULT_REGION=eu-west-1 \
+            -e SUPABASE_URL=http://localhost \
+            -e SUPABASE_SERVICE_KEY=fake \
+            --entrypoint /var/lang/bin/python "$IMAGE" -c '
+          import app
+          from shared.load_job import load_job
+          from shared.profile_completeness import check_profile_completeness
+          from shared.platform_metadata import fetch_metadata
+          from shared.platform_metadata.greenhouse import GreenhouseFetchError
+          from shared.platform_metadata.ashby import AshbyFetchError
+          from shared.cover_letter_loader import load_cover_letter
+          from shared.answer_generator import generate_answer
+          from shared.preview_cache import get_preview_cache, set_preview_cache
+          from shared.apply_models import ApplyPreviewResponse
+          from lambdas.pipeline.ai_helper import ai_complete_cached
+          print("All apply_preview imports resolved")
+          '
 
   lint-and-build:
     runs-on: ubuntu-latest

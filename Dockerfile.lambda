@@ -30,6 +30,17 @@ COPY config.yaml ${LAMBDA_TASK_ROOT}/
 # via /opt/python; the container lambda needs an explicit COPY.
 COPY shared/ ${LAMBDA_TASK_ROOT}/shared/
 
+# `lambdas/` was missing from the API container until 2026-04-29 — same
+# shape of bug as `shared/` above. PR #17's apply_preview lazily imports
+# `from lambdas.pipeline.ai_helper import ai_complete_cached` (the multi-
+# provider AI council with Supabase cache). The function lives there
+# historically because pipeline lambdas use it for scoring/tailoring;
+# the API now uses it too for AI answer generation in apply preview.
+# Pipeline lambdas get `ai_helper` via their working directory; the
+# container lambda needs an explicit COPY of the package tree.
+# (~400KB; negligible vs. the AI/crypto deps.)
+COPY lambdas/ ${LAMBDA_TASK_ROOT}/lambdas/
+
 RUN chmod -R 755 ${LAMBDA_TASK_ROOT}/
 
 ENV PYTHONDONTWRITEBYTECODE=1
