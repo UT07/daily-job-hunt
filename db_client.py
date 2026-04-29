@@ -181,6 +181,7 @@ class SupabaseClient:
             min_score    — match_score >= value
             status       — exact match on application_status
             company      — substring match on company name
+            title        — substring match on job title
             tailored     — if "true", only return jobs with resume_s3_url
             tier         — exact match on score_tier (S, A, B, C, D) or comma-separated (S,A)
             hide_expired — if True, exclude expired jobs
@@ -200,6 +201,8 @@ class SupabaseClient:
                 query = query.eq("application_status", filters["status"])
             if "company" in filters:
                 query = query.ilike("company", f"%{filters['company']}%")
+            if "title" in filters:
+                query = query.ilike("title", f"%{filters['title']}%")
             if filters.get("tailored") == "true":
                 query = query.neq("resume_s3_url", None).neq("resume_s3_url", "")
             if "tier" in filters:

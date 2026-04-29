@@ -167,6 +167,7 @@ const FILTER_DEFAULTS = {
   source: 'All',
   min_score: 60,
   company: '',
+  title: '',
   tailored: false,
   tier: 'S',
   hide_expired: true,
@@ -215,6 +216,7 @@ export default function Dashboard() {
   const [sourceFilter, setSourceFilter] = useState(() => readFilterFromParams(searchParams, 'source', FILTER_DEFAULTS.source));
   const [minScore, setMinScore] = useState(() => readFilterFromParams(searchParams, 'min_score', FILTER_DEFAULTS.min_score));
   const [companySearch, setCompanySearch] = useState(() => readFilterFromParams(searchParams, 'company', FILTER_DEFAULTS.company));
+  const [titleSearch, setTitleSearch] = useState(() => readFilterFromParams(searchParams, 'title', FILTER_DEFAULTS.title));
   const [tailoredOnly, setTailoredOnly] = useState(() => readFilterFromParams(searchParams, 'tailored', FILTER_DEFAULTS.tailored));
   const [tierFilter, setTierFilter] = useState(() => readFilterFromParams(searchParams, 'tier', FILTER_DEFAULTS.tier));
   const [hideExpired, setHideExpired] = useState(() => readFilterFromParams(searchParams, 'hide_expired', FILTER_DEFAULTS.hide_expired));
@@ -240,8 +242,8 @@ export default function Dashboard() {
   const [filterVersion, setFilterVersion] = useState(0);
 
   // Use refs for filter values so fetchJobs stays stable across filter changes
-  const filtersRef = useRef({ statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter });
-  filtersRef.current = { statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter };
+  const filtersRef = useRef({ statusFilter, sourceFilter, minScore, companySearch, titleSearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter });
+  filtersRef.current = { statusFilter, sourceFilter, minScore, companySearch, titleSearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter };
 
   // Sync the URL query string to current filter state. Only writes the keys
   // whose values differ from the defaults so the URL stays clean for the
@@ -253,6 +255,7 @@ export default function Dashboard() {
       source: sourceFilter,
       min_score: minScore,
       company: companySearch,
+      title: titleSearch,
       tailored: tailoredOnly,
       tier: tierFilter,
       hide_expired: hideExpired,
@@ -275,7 +278,7 @@ export default function Dashboard() {
     setSearchParams(next, { replace: true });
     // Intentionally exclude setSearchParams to keep the effect single-source-of-truth.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter, showAdvanced, sortBy, sortOrder, page]);
+  }, [statusFilter, sourceFilter, minScore, companySearch, titleSearch, tailoredOnly, tierFilter, hideExpired, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter, showAdvanced, sortBy, sortOrder, page]);
 
   const fetchJobs = useCallback(async () => {
     setLoading(true);
@@ -289,6 +292,7 @@ export default function Dashboard() {
       if (f.sourceFilter !== 'All') params.set('source', f.sourceFilter);
       if (f.minScore > 0) params.set('min_score', String(f.minScore));
       if (f.companySearch.trim()) params.set('company', f.companySearch.trim());
+      if (f.titleSearch && f.titleSearch.trim()) params.set('title', f.titleSearch.trim());
       if (f.tailoredOnly) params.set('tailored', 'true');
       if (f.tierFilter !== 'All') params.set('tier', f.tierFilter);
       if (f.hideExpired) params.set('hide_expired', 'true');
@@ -439,6 +443,19 @@ export default function Dashboard() {
               value={minScore}
               onChange={(e) => setMinScore(Number(e.target.value))}
               className="w-32 accent-black"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider mb-1.5">Title</label>
+            <input
+              value={titleSearch}
+              onChange={(e) => setTitleSearch(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleFilterApply(); }}
+              placeholder="Search title..."
+              className="bg-white border-2 border-black px-4 py-2.5 font-body text-sm text-black
+                placeholder:text-stone-400 focus:outline-none focus:shadow-brutal-yellow
+                transition-shadow w-40"
             />
           </div>
 
