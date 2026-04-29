@@ -8,6 +8,7 @@ from datetime import datetime
 
 from ai_helper import ai_complete_cached, get_supabase
 from shared.apply_platform import classify_apply_platform, extract_platform_ids
+from shared.work_auth import apply_geo_score_cap
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -124,6 +125,21 @@ def handler(event, context):
         logger.warning(f"[score_batch] Resume tex_content is empty for user {user_id}")
         return {"matched_items": [], "matched_count": 0, "error": "no_resume"}
 
+    # Load user profile for geo / work-auth cap (cheap, single row)
+    try:
+        user_row = (
+            db.table("users")
+            .select("work_authorizations,location")
+            .eq("id", user_id)
+            .single()
+            .execute()
+            .data
+        ) or {}
+    except Exception as e:
+        logger.warning(f"[score_batch] Could not load user row for cap: {e}")
+        user_row = {}
+    user_work_auth = user_row.get("work_authorizations") or {}
+
     matched_items = []
     skipped_count = 0
     for job in jobs:
@@ -137,6 +153,11 @@ def handler(event, context):
 
         if score_result is None:
             continue
+
+        # Geo + work-auth aware cap. Caps non-IE jobs at A-tier max (89);
+        # caps IE-only candidates' US/UK jobs without sponsor signal at
+        # B-tier max (70). See shared/work_auth.py for full rules.
+        score_result = apply_geo_score_cap(score_result, job, user_work_auth)
 
         match_score = score_result.get("match_score", 0)
         if match_score < min_score:
