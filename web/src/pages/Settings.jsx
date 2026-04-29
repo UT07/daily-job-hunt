@@ -123,11 +123,7 @@ function ProfileSection({ profile, setProfile }) {
       })
       setStatus({ type: 'success', message: 'Profile saved.' })
     } catch (e) {
-      if (e.message.includes('404') || e.message.includes('Not Found')) {
-        setStatus({ type: 'info', message: 'Profile API coming soon. Changes saved locally.' })
-      } else {
-        setStatus({ type: 'error', message: `Save failed: ${e.message}` })
-      }
+      setStatus({ type: 'error', message: `Save failed: ${e.message}` })
     } finally {
       setSaving(false)
     }
@@ -385,11 +381,7 @@ function ResumeSection() {
       const data = await apiGet('/api/resumes').catch(() => null)
       if (data) setResumes(Array.isArray(data) ? data : data.resumes || [])
     } catch (e) {
-      if (e.message.includes('404') || e.message.includes('Not Found')) {
-        setUploadStatus({ type: 'info', message: 'Resume upload API coming soon. Your file has been saved locally.' })
-      } else {
-        setUploadStatus({ type: 'error', message: `Upload failed: ${e.message}` })
-      }
+      setUploadStatus({ type: 'error', message: `Upload failed: ${e.message}` })
     } finally {
       setUploading(false)
     }
@@ -499,11 +491,7 @@ function PreferencesSection({ prefs, setPrefs }) {
       await apiPut('/api/search-config', prefs)
       setStatus({ type: 'success', message: 'Search preferences saved.' })
     } catch (e) {
-      if (e.message.includes('404') || e.message.includes('Not Found')) {
-        setStatus({ type: 'info', message: 'Search config API coming soon. Changes saved locally.' })
-      } else {
-        setStatus({ type: 'error', message: `Save failed: ${e.message}` })
-      }
+      setStatus({ type: 'error', message: `Save failed: ${e.message}` })
     } finally {
       setSaving(false)
     }
@@ -633,7 +621,6 @@ function JobSourcesSection() {
   )
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState(null)
-  const [loadedOnce, setLoadedOnce] = useState(false)
 
   useEffect(() => {
     apiGet('/api/search-config')
@@ -641,9 +628,8 @@ function JobSourcesSection() {
         if (data.enabled_sources && Array.isArray(data.enabled_sources)) {
           setEnabledSources(data.enabled_sources)
         }
-        setLoadedOnce(true)
       })
-      .catch(() => setLoadedOnce(true))
+      .catch((e) => console.warn('Failed to load enabled sources:', e))
   }, [])
 
   function toggleSource(sourceId) {
@@ -661,11 +647,7 @@ function JobSourcesSection() {
       await apiPut('/api/search-config', { enabled_sources: enabledSources })
       setStatus({ type: 'success', message: 'Job sources saved.' })
     } catch (e) {
-      if (e.message.includes('404') || e.message.includes('Not Found')) {
-        setStatus({ type: 'info', message: 'Source config API coming soon. Changes saved locally.' })
-      } else {
-        setStatus({ type: 'error', message: `Save failed: ${e.message}` })
-      }
+      setStatus({ type: 'error', message: `Save failed: ${e.message}` })
     } finally {
       setSaving(false)
     }
