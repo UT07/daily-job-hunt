@@ -1938,6 +1938,7 @@ class SingleJobRunRequest(BaseModel):
     job_title: str = "Software Engineer"
     company: str = "Unknown"
     location: str = Field("", description="Job location (city/country/Remote)")
+    apply_url: str = Field("", description="Direct apply URL (used by auto-apply)")
     resume_type: str = "sre_devops"
 
 
@@ -2006,8 +2007,8 @@ def run_single_job(req: SingleJobRunRequest, user: AuthUser = Depends(get_curren
                 "title": req.job_title[:500],
                 "company": req.company[:200],
                 "description": req.job_description,
-                "location": "",
-                "apply_url": "",
+                "location": req.location or "",
+                "apply_url": req.apply_url or "",
                 "source": "manual",
             }, on_conflict="job_hash").execute()
         except Exception as e:
@@ -2026,6 +2027,7 @@ def run_single_job(req: SingleJobRunRequest, user: AuthUser = Depends(get_curren
             "job_title": req.job_title,
             "company": req.company,
             "location": req.location,
+            "apply_url": req.apply_url,
             "resume_type": req.resume_type,
             "skip_scoring": False,
         }),
