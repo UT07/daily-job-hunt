@@ -1,0 +1,8 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.0
+    hooks:
+      - id: ruff
+        args: [--no-fix, app.py, tests/, lambdas/]
+      - id: ruff-format
+        args: [--check, app.py, tests/, lambdas/]

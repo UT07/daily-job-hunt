@@ -73,6 +73,11 @@ python scripts/test_drive_connection.py
 python self_improver.py
 ```
 
+### Pre-commit hooks
+
+Install once: `pip install pre-commit && pre-commit install`. Catches the
+"unused pytest import" class of CI failures locally before push.
+
 ## Deployment
 
 - **Frontend**: Netlify (`netlify.toml` configured, set `VITE_API_URL` env var)
