@@ -323,3 +323,33 @@ class TestAiCompleteCached:
         expected_min = before + timedelta(hours=48)
         expected_max = after + timedelta(hours=48)
         assert expected_min <= expires_at <= expected_max
+
+
+# ---------------------------------------------------------------------------
+# Lazy SSM client init (caught 2026-04-29 by Deploy Readiness CI gate)
+# ---------------------------------------------------------------------------
+
+class TestLazySsmInit:
+    """Module-level boto3.client('ssm') was forcing AWS_DEFAULT_REGION on every
+    importer including the new docker-run import smoke. Lazy-init defers it."""
+
+    def test_module_does_not_create_ssm_at_import(self):
+        # Reload the module fresh; the only side effect must be that _ssm is None.
+        import importlib
+        import ai_helper
+        importlib.reload(ai_helper)
+        assert ai_helper._ssm is None, "module-level ssm should not be eagerly created"
+
+    def test_get_param_creates_ssm_lazily(self):
+        import importlib
+        import ai_helper
+        importlib.reload(ai_helper)
+        with patch("ai_helper.boto3.client") as mock_client:
+            mock_client.return_value.get_parameter.return_value = {
+                "Parameter": {"Value": "secret"}
+            }
+            ai_helper.get_param("/foo")
+            assert mock_client.call_count == 1
+            # Second call reuses the same client (no second create)
+            ai_helper.get_param("/foo")
+            assert mock_client.call_count == 1, "ssm client should be reused, not recreated"
