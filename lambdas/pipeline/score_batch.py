@@ -296,9 +296,15 @@ def score_single_job(job: dict, resume_tex: str, temperature: float = 0) -> dict
     temperature:
         Sampling temperature for the AI call. Default 0 for deterministic scoring.
     """
+    location = job.get("location") or "Not specified"
+    remote_value = job.get("remote")
+    remote_str = "Not specified" if remote_value in (None, "") else str(remote_value)
+
     prompt = f"""Score this job against the candidate's resume.
 
 Job: {job['title']} at {job['company']}
+Location: {location}
+Remote: {remote_str}
 Description: {job.get('description', '')}
 
 Resume (LaTeX): {resume_tex}"""

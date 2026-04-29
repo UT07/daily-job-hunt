@@ -524,3 +524,80 @@ def test_model_ab_empty_providers():
     """With no providers, returns None."""
     from lambdas.pipeline.score_batch import assign_model_for_ab_test
     assert assign_model_for_ab_test([]) is None
+
+
+# ── Bug 5: score_single_job prompt must include Location and Remote ──
+
+
+def _capture_prompt(captured):
+    """Build a mock ai_complete_cached that records the prompt and returns a valid response."""
+    def _mock(prompt, system=None, temperature=0):
+        captured["prompt"] = prompt
+        captured["system"] = system
+        return {"content": json.dumps(VALID_AI_SCORE), "provider": "groq", "model": "llama"}
+    return _mock
+
+
+def test_score_single_job_prompt_contains_location_and_remote_when_present():
+    """When job dict has location and remote fields, prompt renders them."""
+    job = {
+        **SAMPLE_JOB,
+        "location": "Dublin, Ireland",
+        "remote": True,
+    }
+    captured = {}
+
+    with patch("score_batch.ai_complete_cached", side_effect=_capture_prompt(captured)):
+        import score_batch
+        score_batch.score_single_job(job, SAMPLE_RESUME_TEX)
+
+    assert "prompt" in captured
+    prompt = captured["prompt"]
+    assert "Location: Dublin, Ireland" in prompt, (
+        f"Prompt missing populated location:\n{prompt}"
+    )
+    assert "Remote: True" in prompt, (
+        f"Prompt missing populated remote:\n{prompt}"
+    )
+
+
+def test_score_single_job_prompt_handles_empty_location_and_remote():
+    """Empty/None location and remote render as 'Not specified', mirroring matcher.py."""
+    job = {
+        **SAMPLE_JOB,
+        "location": "",
+        "remote": None,
+    }
+    captured = {}
+
+    with patch("score_batch.ai_complete_cached", side_effect=_capture_prompt(captured)):
+        import score_batch
+        score_batch.score_single_job(job, SAMPLE_RESUME_TEX)
+
+    prompt = captured["prompt"]
+    assert "Location: Not specified" in prompt, (
+        f"Empty location should render as 'Not specified':\n{prompt}"
+    )
+    assert "Remote: Not specified" in prompt, (
+        f"None remote should render as 'Not specified':\n{prompt}"
+    )
+
+
+def test_score_single_job_prompt_omits_no_location_phrase_when_location_present():
+    """Regression: prompt with populated location should not produce 'no location' reasoning input."""
+    job = {
+        **SAMPLE_JOB,
+        "location": "Dublin",
+        "remote": False,
+    }
+    captured = {}
+
+    with patch("score_batch.ai_complete_cached", side_effect=_capture_prompt(captured)):
+        import score_batch
+        score_batch.score_single_job(job, SAMPLE_RESUME_TEX)
+
+    prompt = captured["prompt"]
+    # The literal label "Location:" must be followed by the value, never "Not specified"
+    # when a value is present.
+    assert "Location: Dublin" in prompt
+    assert "Location: Not specified" not in prompt
