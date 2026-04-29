@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 /**
  * useApiMutation — small async-action hook that surfaces loading + error state.
@@ -38,9 +38,12 @@ export default function useApiMutation(fn) {
   // a newer call's state when it eventually resolves.
   const callIdRef = useRef(0);
   // Keep `fn` in a ref so `run` is stable and consumers don't need useCallback
-  // around their function passed in.
+  // around their function passed in. Update via effect (not during render —
+  // see react-hooks/refs lint rule) so concurrent rendering stays safe.
   const fnRef = useRef(fn);
-  fnRef.current = fn;
+  useEffect(() => {
+    fnRef.current = fn;
+  }, [fn]);
 
   const run = useCallback(async (arg) => {
     const id = ++callIdRef.current;
