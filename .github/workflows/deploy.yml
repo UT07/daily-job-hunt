@@ -63,7 +63,12 @@ jobs:
           APIFY_KEY: ${{ secrets.APIFY_API_KEY }}
           CAPSOLVER_KEY: ${{ secrets.CAPSOLVER_API_KEY }}
           BROWSER_SUBNETS: ${{ secrets.BROWSER_SUBNET_IDS }}
+          DAILY_USER_ID: ${{ secrets.DAILY_PIPELINE_USER_ID }}
         run: |
+          if [ -z "${DAILY_USER_ID}" ]; then
+            echo "::error::DAILY_PIPELINE_USER_ID secret is not set. Set it to the real Supabase user UUID under which the daily pipeline should run." >&2
+            exit 1
+          fi
           sam deploy \
             --stack-name job-hunt-api \
             --region eu-west-1 \
@@ -85,4 +90,5 @@ jobs:
               "SerperApiKey=${SERPER_KEY}" \
               "ApifyApiKey=${APIFY_KEY}" \
               "CapSolverApiKey=${CAPSOLVER_KEY}" \
-              "BrowserSubnetIds=${BROWSER_SUBNETS}"
+              "BrowserSubnetIds=${BROWSER_SUBNETS}" \
+              "DailyPipelineUserId=${DAILY_USER_ID}"
