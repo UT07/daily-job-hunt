@@ -67,7 +67,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from auth import AuthUser, get_current_user
 from audit_middleware import AuditMiddleware, set_db as set_audit_db
@@ -180,6 +180,7 @@ def _load_resumes(config: dict) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 class ScoreRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     job_description: str = Field(..., min_length=20)
     job_title: str = "Software Engineer"
     company: str = "Unknown"
@@ -197,6 +198,7 @@ class ScoreResponse(BaseModel):
 
 
 class TailorRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     job_description: str = Field(..., min_length=20)
     job_title: str = "Software Engineer"
     company: str = "Unknown"
@@ -213,6 +215,7 @@ class TailorResponse(BaseModel):
 
 
 class CoverLetterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     job_description: str = Field(..., min_length=20)
     job_title: str = "Software Engineer"
     company: str = "Unknown"
@@ -225,6 +228,7 @@ class CoverLetterResponse(BaseModel):
 
 
 class ContactsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     job_description: str = Field(..., min_length=20)
     job_title: str = "Software Engineer"
     company: str = "Unknown"
@@ -247,6 +251,7 @@ class ContactsResponse(BaseModel):
 
 
 class FlagScoreRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     job_id: str = Field(..., min_length=1, description="ID of the job whose score is being flagged")
     feedback_type: str = Field("score_inaccurate", description="Type of feedback")
     expected_score: Optional[int] = Field(None, ge=0, le=100, description="What the user thinks the score should be")
@@ -274,6 +279,7 @@ class ProfileResponse(BaseModel):
 
 
 class ProfileUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: Optional[str] = None
     full_name: Optional[str] = None  # alias
     phone: Optional[str] = None
@@ -916,6 +922,7 @@ def contacts(req: ContactsRequest, user: AuthUser = Depends(get_current_user)):
 
 
 class GenerateEmailRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     template: str = Field(..., description="cold_outreach | follow_up | thank_you")
     contact_name: Optional[str] = None
 
@@ -1068,6 +1075,7 @@ def generate_email_for_job(
 
 
 class SuggestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     section: str
     current_content: str = ""
 
@@ -1591,6 +1599,7 @@ def get_single_job(
 
 
 class TimelineEventRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     status: str
     notes: Optional[str] = None
 
@@ -1778,6 +1787,7 @@ def restore_resume_version(
 # ---------------------------------------------------------------------------
 
 class SectionsBuildRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     sections: dict
 
 
@@ -1956,10 +1966,14 @@ def _get_sfn():
 
 
 class PipelineRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     queries: list[str] = Field(default=["software engineer"], description="Search queries")
 
 
 class SingleJobRunRequest(BaseModel):
+    # TODO: known drift between client and model — frontend sends apply_url
+    # which is not declared here (audit cluster A is adding the field).
+    # Re-enable extra='forbid' once cluster A merges the apply_url addition.
     job_description: str = Field(..., min_length=20)
     job_title: str = "Software Engineer"
     company: str = "Unknown"
@@ -2067,6 +2081,7 @@ def run_single_job(req: SingleJobRunRequest, user: AuthUser = Depends(get_curren
 
 
 class RetailorRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     tier: str = "S"  # S, A, or SA for both
     max_jobs: int = 50
 
@@ -2340,6 +2355,7 @@ def re_tailor_job(job_id: str, user: AuthUser = Depends(get_current_user)):
 
 
 class CompileLatexRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     tex_source: str = Field(..., min_length=10)
 
 
@@ -2791,6 +2807,7 @@ def apply_preview(job_id: str, user: AuthUser = Depends(get_current_user)):
 
 
 class StartSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     job_id: str
 
 
@@ -2899,6 +2916,7 @@ def apply_start_session(
 
 
 class StopSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     session_id: str
 
 
@@ -2933,6 +2951,7 @@ def apply_stop_session(
 
 
 class RecordApplicationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     session_id: str
     job_id: str
     confirmation_screenshot_key: Optional[str] = None
