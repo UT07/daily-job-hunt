@@ -10,11 +10,24 @@ import boto3
 import httpx
 
 logger = logging.getLogger()
-ssm = boto3.client("ssm")
+
+# Lazy SSM client — created on first call, reused thereafter.
+# Module-level boto3.client("ssm") forces AWS_DEFAULT_REGION on every importer
+# (incl. test harnesses + the Deploy Readiness CI smoke step) even when SSM
+# isn't actually used. Lazy init defers credential/region resolution until
+# we need it.
+_ssm = None
+
+
+def _get_ssm():
+    global _ssm
+    if _ssm is None:
+        _ssm = boto3.client("ssm")
+    return _ssm
 
 
 def get_param(name):
-    return ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
+    return _get_ssm().get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
 
 
 def get_supabase():
