@@ -26,6 +26,43 @@ def test_get_preview_cache_miss():
     assert result is None
 
 
+def test_get_preview_cache_handles_string_response():
+    """Supabase returns JSONB as serialized string in some client versions.
+    Caught by 2026-04-29 prod 500 with `'str' object does not support item assignment`."""
+    import json
+    db = MagicMock()
+    payload = {"eligible": True, "custom_questions": []}
+    db.table.return_value.select.return_value.eq.return_value.gte.return_value.execute.return_value.data = [
+        {"response": json.dumps(payload)}  # serialized, not dict
+    ]
+
+    result = get_preview_cache(db, "job-1", resume_version=1)
+    assert result == payload
+    assert isinstance(result, dict)
+
+
+def test_get_preview_cache_handles_corrupt_string():
+    """If the cached string is not valid JSON, treat as miss rather than crash."""
+    db = MagicMock()
+    db.table.return_value.select.return_value.eq.return_value.gte.return_value.execute.return_value.data = [
+        {"response": "not valid json {{{"}
+    ]
+
+    result = get_preview_cache(db, "job-1", resume_version=1)
+    assert result is None
+
+
+def test_get_preview_cache_handles_unexpected_shape():
+    """If cached value is neither dict nor string (e.g. integer), treat as miss."""
+    db = MagicMock()
+    db.table.return_value.select.return_value.eq.return_value.gte.return_value.execute.return_value.data = [
+        {"response": 12345}
+    ]
+
+    result = get_preview_cache(db, "job-1", resume_version=1)
+    assert result is None
+
+
 def test_set_preview_cache_writes_with_10min_ttl():
     db = MagicMock()
     payload = {"eligible": True}
