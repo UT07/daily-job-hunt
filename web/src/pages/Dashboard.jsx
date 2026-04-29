@@ -323,12 +323,18 @@ export default function Dashboard() {
     }
   }, []);
 
-  // Fetch available skills for filter dropdown
+  // Fetch available skills for filter dropdown.
+  // Was silently swallowed (.catch(() => {})) — if the endpoint failed the
+  // skills filter just stayed empty with no clue why. Downgrade to a warn
+  // so devs at least see it in the console; it's a filter convenience, so
+  // we don't gate the rest of the dashboard on it.
   useEffect(() => {
     if (user) {
       apiGet('/api/dashboard/skills').then((data) => {
         if (data?.skills) setAvailableSkills(data.skills);
-      }).catch(() => {});
+      }).catch((err) => {
+        console.warn('Failed to load skills filter:', err.message);
+      });
     }
   }, [user]);
 
@@ -767,8 +773,8 @@ export default function Dashboard() {
             </button>
           ))}
           <button
-            onClick={() => setPage((p) => p + 1)}
-            disabled={jobs.length < perPage}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page >= totalPages || jobs.length < perPage}
             className="border-2 border-black bg-white text-black px-3 py-1.5 text-sm font-heading font-bold
               hover:bg-stone-100 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           >
