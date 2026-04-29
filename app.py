@@ -143,6 +143,19 @@ _db: Optional[SupabaseClient] = None
 # Task store — Supabase pipeline_tasks table (persistent across cold starts)
 
 
+def require_db() -> SupabaseClient:
+    """FastAPI dependency: 503 if DB not configured, else returns the client.
+
+    Use via ``db: SupabaseClient = Depends(require_db)`` to consolidate the
+    ``if _db is None: raise HTTPException(503, ...)`` boilerplate that is
+    duplicated across many endpoints. Endpoints retrofitted to this pattern
+    can drop the manual guard and reference ``db`` directly.
+    """
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+    return _db
+
+
 def _resolve_env(value: str) -> str:
     """Resolve ${ENV_VAR} references in config values."""
     if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
@@ -1300,14 +1313,14 @@ def find_contacts_for_job(job_id: str, user: AuthUser = Depends(get_current_user
 
 
 @app.get("/api/profile", response_model=ProfileResponse)
-def get_profile(user: AuthUser = Depends(get_current_user)):
-    if _db is None:
-        raise HTTPException(503, "Database not configured")
-
-    row = _db.get_user(user.id)
+def get_profile(
+    user: AuthUser = Depends(get_current_user),
+    db: SupabaseClient = Depends(require_db),
+):
+    row = db.get_user(user.id)
     if row is None:
         # Auto-create user on first profile fetch (just-in-time provisioning)
-        row = _db.create_user({"id": user.id, "email": user.email})
+        row = db.create_user({"id": user.id, "email": user.email})
 
     return ProfileResponse(
         id=row["id"],
@@ -1332,15 +1345,14 @@ def get_profile(user: AuthUser = Depends(get_current_user)):
 
 @app.put("/api/profile", response_model=ProfileResponse)
 def update_profile(
-    req: ProfileUpdateRequest, user: AuthUser = Depends(get_current_user)
+    req: ProfileUpdateRequest,
+    user: AuthUser = Depends(get_current_user),
+    db: SupabaseClient = Depends(require_db),
 ):
-    if _db is None:
-        raise HTTPException(503, "Database not configured")
-
     # Ensure user row exists (JIT provisioning for first-time users)
-    existing = _db.get_user(user.id)
+    existing = db.get_user(user.id)
     if existing is None:
-        _db.create_user({"id": user.id, "email": user.email})
+        db.create_user({"id": user.id, "email": user.email})
 
     # Normalize field names (frontend may use aliases)
     raw = req.model_dump(exclude_none=True)
@@ -1363,7 +1375,7 @@ def update_profile(
     if not update_data:
         raise HTTPException(400, "No fields to update")
 
-    row = _db.update_user(user.id, update_data)
+    row = db.update_user(user.id, update_data)
     if row is None:
         raise HTTPException(404, "User not found")
     return ProfileResponse(
@@ -1440,6 +1452,7 @@ _VALID_STATUSES = {"New", "Applied", "Phone Screen", "Interview", "Offer", "Reje
 @app.get("/api/dashboard/jobs")
 def get_dashboard_jobs(
     user: AuthUser = Depends(get_current_user),
+    db: SupabaseClient = Depends(require_db),
     page: int = 1,
     per_page: int = 25,
     status: Optional[str] = None,
@@ -1458,15 +1471,12 @@ def get_dashboard_jobs(
     level_fit: Optional[str] = None,
     skill: Optional[str] = None,
 ):
-    """Paginated, filterable job list."""
-    if _db is None:
-        return {
-            "jobs": [],
-            "page": page,
-            "per_page": per_page,
-            "message": "Database not configured",
-        }
+    """Paginated, filterable job list.
 
+    With ``Depends(require_db)`` this endpoint now returns 503 (instead of an
+    empty success payload) when the DB isn't configured — so the frontend can
+    render a real error rather than silently treating "no jobs" as success.
+    """
     filters = {}
     if status:
         filters["status"] = status
@@ -1499,7 +1509,7 @@ def get_dashboard_jobs(
     if skill:
         filters["skill"] = skill
 
-    jobs, total = _db.get_jobs(user.id, filters=filters, page=page, per_page=per_page)
+    jobs, total = db.get_jobs(user.id, filters=filters, page=page, per_page=per_page)
     _refresh_s3_urls(jobs)
     return {"jobs": jobs, "page": page, "per_page": per_page, "total": total}
 
@@ -1923,18 +1933,17 @@ def get_dashboard_skills(user: AuthUser = Depends(get_current_user)):
 
 
 @app.get("/api/dashboard/stats")
-def get_dashboard_stats(user: AuthUser = Depends(get_current_user)):
-    """Aggregate metrics for the dashboard KPI cards."""
-    if _db is None:
-        return {
-            "total_jobs": 0,
-            "matched_jobs": 0,
-            "avg_match_score": 0,
-            "jobs_by_status": {},
-            "message": "Database not configured",
-        }
+def get_dashboard_stats(
+    user: AuthUser = Depends(get_current_user),
+    db: SupabaseClient = Depends(require_db),
+):
+    """Aggregate metrics for the dashboard KPI cards.
 
-    return _db.get_job_stats(user.id)
+    With ``Depends(require_db)`` this returns 503 when DB is unavailable
+    instead of an empty success payload that the frontend can't distinguish
+    from a real "zero jobs" state.
+    """
+    return db.get_job_stats(user.id)
 
 
 @app.get("/api/dashboard/runs")
@@ -2451,11 +2460,12 @@ async def upload_resume(
 
 
 @app.get("/api/resumes")
-def list_resumes(user: AuthUser = Depends(get_current_user)):
+def list_resumes(
+    user: AuthUser = Depends(get_current_user),
+    db: SupabaseClient = Depends(require_db),
+):
     """List all resumes for the authenticated user."""
-    if not _db:
-        raise HTTPException(503, "Database not configured")
-    resumes = _db.get_resumes(user.id)
+    resumes = db.get_resumes(user.id)
     return {"resumes": resumes}
 
 
