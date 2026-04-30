@@ -2,3 +2,7 @@ apify-client>=1.6.0
 supabase>=2.0.0
 httpx>=0.27.0
 pyyaml>=6.0
+# PostHog analytics — used by app.py and shared/posthog wrapper.
+# Required in the shared-deps layer because the API container imports
+# `posthog` at module load time (runtime-import smoke test in CI).
+posthog>=3.0.0
