@@ -44,6 +44,13 @@ jobs:
         # build.sh uses Docker (linux/amd64) to cross-compile for Lambda runtime.
         run: ./layer/build.sh
 
+      - name: Build tectonic layer
+        # layer-tectonic/bin/ is gitignored — this download must run before
+        # sam build, otherwise SAM zips only build.sh (~400 bytes) and
+        # compile_latex falls back to "tectonic_not_available" silently.
+        # Symptom: pipeline runs succeed, jobs land with score but no PDF.
+        run: ./layer-tectonic/build.sh
+
       - name: SAM Build
         env:
           DOCKER_BUILDKIT: "0"
