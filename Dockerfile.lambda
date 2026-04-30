@@ -41,6 +41,14 @@ COPY shared/ ${LAMBDA_TASK_ROOT}/shared/
 # (~400KB; negligible vs. the AI/crypto deps.)
 COPY lambdas/ ${LAMBDA_TASK_ROOT}/lambdas/
 
+# `config/` (PostHog feature-flags wrapper) was missing from the API
+# container until 2026-04-30 — same shape of bug as `shared/` and
+# `lambdas/` above. PR #40's lifespan calls
+# `from config.feature_flags import set_client` at startup, which
+# explodes with ModuleNotFoundError → Mangum LifespanFailure → every
+# request returns 500. Adding the COPY here fixes it.
+COPY config/ ${LAMBDA_TASK_ROOT}/config/
+
 RUN chmod -R 755 ${LAMBDA_TASK_ROOT}/
 
 ENV PYTHONDONTWRITEBYTECODE=1
