@@ -6,6 +6,11 @@ Globals:
   Function:
     Timeout: 900
     MemorySize: 1024
+    # Phase B.6: X-Ray Active tracing on every SAM Lambda. Captures
+    # downstream calls (S3, SSM, Supabase via httpx, etc.) so we can
+    # see WHERE a Lambda is slow / erroring without adding logging
+    # everywhere. Adds ~$0.50/month at our volume.
+    Tracing: Active
 
 Parameters:
   GroqApiKey:
@@ -1816,6 +1821,122 @@ Resources:
       ComparisonOperator: LessThanThreshold
       TreatMissingData: breaching
       AlarmActions: [!Ref PipelineAlarmTopicArn]
+
+  # --- Phase B.6: single CloudWatch dashboard for pipeline + API health ---
+  # The "is everything OK?" page. Grouped: pipeline funnel (top), Step
+  # Function execution counts, Lambda errors across the pipeline tier, then
+  # API Gateway health + WebSocket auto-apply activity.
+  PipelineHealthDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: naukribaba-pipeline-health
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric", "x": 0, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Pipeline funnel — daily counts",
+                "view": "timeSeries", "stacked": false, "region": "${AWS::Region}",
+                "metrics": [
+                  ["Naukribaba/Pipeline", "PipelineRun", {"stat": "Sum", "label": "Pipeline runs"}],
+                  [".", "JobsMatched", {"stat": "Sum", "label": "Jobs matched"}],
+                  [".", "ArtifactsCompiled", "DocType", "resume", {"stat": "Sum", "label": "Resume PDFs"}],
+                  [".", "ArtifactsCompiled", "DocType", "cover_letter", {"stat": "Sum", "label": "Cover letter PDFs"}]
+                ],
+                "period": 86400, "yAxis": {"left": {"min": 0}}
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Daily Step Function executions",
+                "view": "timeSeries", "stacked": false, "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/States", "ExecutionsStarted", "StateMachineArn", "${DailyPipelineStateMachine.Arn}", {"label": "Started"}],
+                  [".", "ExecutionsSucceeded", ".", ".", {"label": "Succeeded"}],
+                  [".", "ExecutionsFailed", ".", ".", {"label": "Failed (B.5)"}],
+                  [".", "ExecutionsTimedOut", ".", "."],
+                  [".", "ExecutionsAborted", ".", "."]
+                ],
+                "period": 3600, "yAxis": {"left": {"min": 0}}
+              }
+            },
+            {
+              "type": "metric", "x": 0, "y": 6, "width": 12, "height": 6,
+              "properties": {
+                "title": "Lambda errors — pipeline tier",
+                "view": "timeSeries", "stacked": true, "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/Lambda", "Errors", "FunctionName", "naukribaba-tailor-resume"],
+                  [".", ".", ".", "naukribaba-compile-latex"],
+                  [".", ".", ".", "naukribaba-save-job"],
+                  [".", ".", ".", "naukribaba-save-metrics"],
+                  [".", ".", ".", "naukribaba-score-batch"],
+                  [".", ".", ".", "naukribaba-self-improve"],
+                  [".", ".", ".", "naukribaba-find-contacts"]
+                ],
+                "period": 3600, "stat": "Sum", "yAxis": {"left": {"min": 0}}
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 6, "width": 12, "height": 6,
+              "properties": {
+                "title": "Lambda duration p99 — pipeline tier",
+                "view": "timeSeries", "stacked": false, "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/Lambda", "Duration", "FunctionName", "naukribaba-tailor-resume"],
+                  [".", ".", ".", "naukribaba-compile-latex"],
+                  [".", ".", ".", "naukribaba-score-batch"],
+                  [".", ".", ".", "naukribaba-find-contacts"],
+                  [".", ".", ".", "naukribaba-generate-cover-letter"]
+                ],
+                "period": 3600, "stat": "p99"
+              }
+            },
+            {
+              "type": "metric", "x": 0, "y": 12, "width": 8, "height": 6,
+              "properties": {
+                "title": "API Gateway 5xx + 4xx",
+                "view": "timeSeries", "stacked": false, "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/ApiGateway", "5XXError", "ApiId", "${HttpApi}", {"stat": "Sum"}],
+                  [".", "4XXError", ".", ".", {"stat": "Sum"}],
+                  [".", "Count", ".", ".", {"stat": "Sum", "label": "Requests"}]
+                ],
+                "period": 300, "yAxis": {"left": {"min": 0}}
+              }
+            },
+            {
+              "type": "metric", "x": 8, "y": 12, "width": 8, "height": 6,
+              "properties": {
+                "title": "API Gateway latency",
+                "view": "timeSeries", "stacked": false, "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/ApiGateway", "Latency", "ApiId", "${HttpApi}", {"stat": "Average"}],
+                  [".", ".", ".", ".", {"stat": "p99"}],
+                  [".", "IntegrationLatency", ".", ".", {"stat": "p99", "label": "Backend p99"}]
+                ],
+                "period": 300
+              }
+            },
+            {
+              "type": "metric", "x": 16, "y": 12, "width": 8, "height": 6,
+              "properties": {
+                "title": "Auto-apply WebSocket + Lambda errors",
+                "view": "timeSeries", "stacked": false, "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/Lambda", "Invocations", "FunctionName", "naukribaba-ws-connect", {"stat": "Sum"}],
+                  [".", ".", ".", "naukribaba-ws-route", {"stat": "Sum"}],
+                  [".", ".", ".", "naukribaba-ws-disconnect", {"stat": "Sum"}],
+                  [".", "Errors", ".", "naukribaba-ws-connect", {"stat": "Sum", "label": "WsConnect errors"}],
+                  [".", ".", ".", "naukribaba-ws-route", {"stat": "Sum", "label": "WsRoute errors"}]
+                ],
+                "period": 3600
+              }
+            }
+          ]
+        }
 
 Outputs:
   ApiUrl:
