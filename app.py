@@ -220,6 +220,9 @@ class ScoreRequest(BaseModel):
     job_title: str = "Software Engineer"
     company: str = "Unknown"
     location: str = Field("", description="Job location (city/country/Remote)")
+    # AddJob.jsx getPayload() always sends apply_url; extra='forbid' would
+    # 422 every Save & Score click without this field declared.
+    apply_url: str = Field("", description="Direct apply URL (used by auto-apply)")
     resume_type: str = Field("sre_devops", description="Resume key from config")
 
 
@@ -238,6 +241,7 @@ class TailorRequest(BaseModel):
     job_title: str = "Software Engineer"
     company: str = "Unknown"
     location: str = Field("", description="Job location (city/country/Remote)")
+    apply_url: str = Field("", description="Direct apply URL (used by auto-apply)")
     resume_type: str = "sre_devops"
 
 
@@ -255,6 +259,7 @@ class CoverLetterRequest(BaseModel):
     job_title: str = "Software Engineer"
     company: str = "Unknown"
     location: str = Field("", description="Job location (city/country/Remote)")
+    apply_url: str = Field("", description="Direct apply URL (used by auto-apply)")
     resume_type: str = "sre_devops"
 
 
@@ -268,6 +273,8 @@ class ContactsRequest(BaseModel):
     job_title: str = "Software Engineer"
     company: str = "Unknown"
     location: str = Field("", description="Job location (city/country/Remote)")
+    apply_url: str = Field("", description="Direct apply URL (used by auto-apply)")
+    resume_type: str = Field("sre_devops", description="Resume key (frontend sends this from AddJob)")
 
 
 class Contact(BaseModel):
