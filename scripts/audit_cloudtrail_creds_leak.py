@@ -1,17 +1,30 @@
 #!/usr/bin/env python
-"""Audit CloudTrail for suspicious activity from a Lambda execution role.
+"""Audit CloudTrail for suspicious activity related to a Lambda execution role.
 
 Phase A.1.1 from the grand plan. Companion to
 docs/runbooks/2026-04-30-creds-leak-response.md.
 
-Pulls every CloudTrail event whose `userIdentity.sessionContext.sessionIssuer.userName`
-matches the named role since `--since`, groups by (eventName, sourceIPAddress,
-userAgent), and flags entries matching configurable suspicion patterns. Writes a
-JSON report the operator reviews end-to-end before deciding to escalate to a
-trust-policy revoke (Step 3 of the runbook).
-
 Read-only — calls only `cloudtrail:LookupEvents`. Caller needs that permission
 on the account where the Lambda runs.
+
+Scope and limitation
+--------------------
+
+CloudTrail's basic LookupEvents API supports a small set of LookupAttributes,
+and `ResourceName=<role-name>` matches events that *operated on* the role —
+e.g. `AssumeRole` calls naming it as their target, `UpdateAssumeRolePolicy`,
+deletions, etc. It does NOT cover events whose principal was a session
+*issued from* that role (e.g. `s3:PutObject` made by a Lambda after
+assuming the role). For full session-principal filtering, use CloudTrail
+Lake (SQL) or Athena over the trail's S3 export.
+
+This script is intentionally narrow: it surfaces (a) every AssumeRole into
+the role, broken down by source IP / user agent / time, and (b) flags any
+event hitting that role from a non-AWS-service caller. That's enough to
+detect "someone replayed a leaked STS token to assume the role again" or
+"the role's trust policy was tampered with". It is NOT enough to detect
+"someone replayed a leaked STS token and made S3 calls"; for that, the
+operator needs to escalate to Athena/Lake (see runbook).
 
 Usage:
     python scripts/audit_cloudtrail_creds_leak.py \
@@ -21,7 +34,8 @@ Usage:
 
 Optional:
     --region eu-west-1            # defaults to AWS_REGION / eu-west-1
-    --bucket-allowlist a,b,c      # S3 buckets we expect (default utkarsh-job-hunt)
+    --bucket-allowlist a,b,c      # accepted by the bucket-write rule
+    --known-ips 1.2.3.4,5.6.7.8   # safe IPs / non-AWS callers (no flag)
     --max-events 50000            # safety cap (default 50k)
 """
 from __future__ import annotations
@@ -41,17 +55,10 @@ import boto3
 # are reported as `flagged: false` and rolled up into the summary group.
 
 _IAM_WRITE_PREFIXES = ("Create", "Put", "Attach", "Detach", "Delete", "Update")
-_EXPECTED_S3_BUCKETS_DEFAULT = {"utkarsh-job-hunt"}
 
-# AWS IPv4/IPv6 service prefixes are too long to inline; instead we pass through any
-# IP that boto3 normally records as an AWS service principal (`amazonaws.com` user
-# agent) and flag only IPs that look "external" — i.e., any IPv4/IPv6 that isn't
-# an AWS service. Operator can override with --known-ips.
+# Tag events whose user agent ends in `.amazonaws.com` as AWS-service-originated
+# so the unknown-IP rule doesn't false-flag them.
 _AWS_SERVICE_USER_AGENT_RE = re.compile(r"\.amazonaws\.com$")
-
-
-def _is_iam_write(event_name: str) -> bool:
-    return event_name.startswith("IAM") and any(event_name.startswith(p, 3) for p in _IAM_WRITE_PREFIXES)
 
 
 def _is_unexpected_iam(event_name: str, event_source: str) -> bool:

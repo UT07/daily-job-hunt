@@ -39,7 +39,8 @@ def issue_ws_token(*, user_id: str, session_id: str, role: str, ttl_seconds: int
         user_id: Supabase user UUID.
         session_id: Browser session ID linking frontend and Fargate worker.
         role: Either "frontend" or "browser" — determines the aud claim.
-        ttl_seconds: Token lifetime in seconds (default 60).
+        ttl_seconds: Token lifetime in seconds (default 300, i.e. 5 min,
+            sized to outlast Fargate cold-start of 30-90s).
 
     Returns:
         Signed JWT string.

@@ -18,7 +18,7 @@ The leaked tokens are **STS session credentials**, not permanent IAM access keys
 
 What IS at risk: any window between leak and expiry during which a third party (browser dev tools, network capture, frontend logging) intercepted a live token and used it. CloudTrail is the ground truth for whether that happened.
 
-### Step 2 — Run the CloudTrail audit
+### Step 2 — Run the CloudTrail audit (basic pass)
 
 ```bash
 cd /Users/ut/code/naukribaba && source .venv/bin/activate
@@ -28,16 +28,48 @@ python scripts/audit_cloudtrail_creds_leak.py \
   --output audit_report_2026-04-30.json
 ```
 
-The script (see `scripts/audit_cloudtrail_creds_leak.py`) pulls every CloudTrail event made by sessions assumed from the role, then groups by `eventName + sourceIPAddress + userAgent` and flags anything matching one of these patterns:
+**Important — what this script can and can't see.** CloudTrail's basic
+`LookupEvents` API only filters by a few attributes. With
+`ResourceName=<role>`, it returns events that *operated on* the role —
+`AssumeRole` calls naming it, `UpdateAssumeRolePolicy`, deletions, etc.
+It does **NOT** return events whose principal was a session *issued from*
+the role (e.g. an `s3:PutObject` made after assuming the role). For full
+session-principal filtering, you need CloudTrail Lake (SQL) or Athena
+over the trail's S3 export — see Step 2.5.
 
-- IAM writes (`iam:Create*`, `iam:Put*`, `iam:Attach*`, `iam:Delete*`)
-- STS calls outside of `AssumeRole` (e.g. `GetCallerIdentity` from non-AWS-SDK user agents)
-- Any S3 write outside the project bucket (`utkarsh-job-hunt`)
-- Any call from a `sourceIPAddress` outside the Lambda service IPs / your own IPs
+So this basic script catches:
 
-Review the `flagged` list in the report. If empty → no abuse detected, you're done with Step 2.
+- Someone replaying a leaked STS token to call `AssumeRole` again
+- Anyone tampering with the role's trust policy (`UpdateAssumeRolePolicy`)
+- Calls from a `sourceIPAddress` not on `--known-ips` (operator-supplied)
 
-If non-empty → escalate (Step 3).
+It does **not** catch session-issued S3/SQS/SNS calls. Run Step 2.5 if
+you suspect deeper abuse.
+
+Review the `flagged` list in the report. If empty → basic pass clean.
+
+### Step 2.5 — Optional deeper pass (CloudTrail Lake / Athena)
+
+Only needed if Step 2 turned up suspicious AssumeRole calls or you want
+belt-and-suspenders coverage of session-principal events.
+
+In CloudTrail Lake or Athena, run a query of the form:
+
+```sql
+SELECT eventTime, eventName, eventSource, sourceIPAddress, userAgent,
+       userIdentity.sessionContext.sessionIssuer.userName AS issuing_role
+FROM cloudtrail_logs
+WHERE eventTime >= '2026-04-22T00:00:00Z'
+  AND userIdentity.sessionContext.sessionIssuer.userName = '<Lambda-execution-role-name>'
+  AND eventName NOT IN ('AssumeRole', 'GetCallerIdentity')
+ORDER BY eventTime DESC
+LIMIT 1000
+```
+
+Look for any rows whose `sourceIPAddress` is not Lambda's expected
+service range, any unexpected `eventName` outside the pipeline's normal
+S3/Supabase/SES surface, or any user agents that aren't `botocore` or
+`aws-cli`.
 
 ### Step 3 — Only if Step 2 finds abuse
 
@@ -70,8 +102,9 @@ This runbook only addresses the **leaked-STS-token** scenario. If you suspect th
 
 ## Done criteria
 
-- [ ] CloudTrail audit script run, report saved
-- [ ] `flagged` list reviewed; empty OR escalated per Step 3
+- [ ] CloudTrail audit script (Step 2) run, report saved
+- [ ] If Step 2 flagged anything OR risk appetite demands it: Step 2.5 deeper pass run via CloudTrail Lake / Athena
+- [ ] All flagged events reviewed; empty OR escalated per Step 3
 - [ ] PR #26 merged
-- [ ] Post-deploy filter-log-events shows zero `IQoJ` strings
+- [ ] Post-deploy `filter-log-events` shows zero `IQoJ` strings (Step 4)
 - [ ] This runbook closed out in the grand plan Phase A.1.1
