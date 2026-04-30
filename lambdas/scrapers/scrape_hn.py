@@ -258,6 +258,10 @@ def handler(event, context):
         comment_url = f"https://news.ycombinator.com/item?id={c.get('objectID', '')}"
         job = parse_hn_comment(text, comment_url=comment_url)
         if job:
+            # Algolia returns the comment's posting time as epoch seconds in
+            # `created_at_i`. normalize_job picks this up via its field
+            # alias list and converts to UTC ISO.
+            job["created_at_i"] = c.get("created_at_i")
             parsed.append(job)
 
     jobs = normalize_hn(parsed, query_hash)

@@ -124,6 +124,13 @@ def handler(event, context):
                 # also returns organizationName at the top level of the response.
                 company_name = (data.get("organizationName") or company.replace("-", " ").title())
 
+                # Ashby's job-board API exposes posting timestamp as
+                # `publishedAt` (canonical) or `updatedAt` (fallback).
+                from normalizers import _parse_posted_date
+                posted_date = _parse_posted_date(
+                    j.get("publishedAt") or j.get("updatedAt") or j.get("createdAt")
+                )
+
                 all_jobs.append({
                     "title": title[:500],
                     "company": company_name[:200],
@@ -135,6 +142,7 @@ def handler(event, context):
                     "query_hash": query_hash,
                     "posting_id": str(j.get("id", "")),
                     "company_slug": company,
+                    "posted_date": posted_date,
                 })
 
         except Exception as e:

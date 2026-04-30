@@ -352,3 +352,99 @@ class TestNormalizeGenericWeb:
         results = normalize_generic_web(items, source="jobs_ie", query_hash="q4")
         assert len(results) == 1
         assert results[0]["company"] == "Corp"
+
+
+class TestParsePostedDate:
+    """_parse_posted_date — coerces the dozens of date shapes scrapers send
+    into a single ISO string for the freshness filter."""
+
+    def test_iso_string_passthrough(self):
+        from normalizers import _parse_posted_date
+        result = _parse_posted_date("2026-04-22T08:30:00+00:00")
+        assert result is not None
+        assert result.startswith("2026-04-22T08:30:00")
+
+    def test_iso_with_z_suffix(self):
+        from normalizers import _parse_posted_date
+        result = _parse_posted_date("2026-04-22T08:30:00Z")
+        assert result is not None
+        assert "+00:00" in result
+
+    def test_naive_iso_treated_as_utc(self):
+        from normalizers import _parse_posted_date
+        result = _parse_posted_date("2026-04-22T08:30:00")
+        assert result is not None
+        assert "+00:00" in result
+
+    def test_iso_with_non_utc_offset_preserved(self):
+        # Greenhouse returns ET-style offsets; helper preserves them
+        from normalizers import _parse_posted_date
+        result = _parse_posted_date("2026-04-22T08:30:00-04:00")
+        assert result is not None
+        assert "-04:00" in result
+
+    def test_bare_date(self):
+        from normalizers import _parse_posted_date
+        result = _parse_posted_date("2026-04-22")
+        assert result is not None
+        assert "2026-04-22" in result
+
+    def test_epoch_milliseconds(self):
+        # LinkedIn-style: epoch ms
+        from normalizers import _parse_posted_date
+        result = _parse_posted_date(1777000000000)
+        assert result is not None
+        assert result.startswith("2026-")
+
+    def test_epoch_seconds_algolia_hn(self):
+        from normalizers import _parse_posted_date
+        result = _parse_posted_date(1777000000)
+        assert result is not None
+        assert result.startswith("2026-")
+
+    def test_none_and_empty_return_none(self):
+        from normalizers import _parse_posted_date
+        assert _parse_posted_date(None) is None
+        assert _parse_posted_date("") is None
+        assert _parse_posted_date("   ") is None
+
+    def test_garbage_string_returns_none(self):
+        from normalizers import _parse_posted_date
+        assert _parse_posted_date("not a date") is None
+        assert _parse_posted_date("2026-99-99") is None
+
+    def test_too_old_to_be_real_returns_none(self):
+        # < 10^9 (before Sept 2001) is almost certainly junk
+        from normalizers import _parse_posted_date
+        assert _parse_posted_date(12345) is None
+        assert _parse_posted_date(0) is None
+
+
+class TestPostedDateInNormalizeJob:
+    """End-to-end: per-source date alias list must populate posted_date."""
+
+    def test_linkedin_listed_at_ms(self):
+        results = normalize_linkedin([{
+            "title": "SRE", "companyName": "Acme",
+            "description": "x" * 250, "location": "Dublin",
+            "listedAt": 1777000000000,
+        }], query_hash="q")
+        assert results[0]["posted_date"] is not None
+        assert results[0]["posted_date"].startswith("2026-")
+
+    def test_adzuna_created_field(self):
+        results = normalize_adzuna([{
+            "title": "Dev", "company": {"display_name": "Acme"},
+            "description": "x" * 250, "location": {"display_name": "Dublin"},
+            "created": "2026-04-22T08:30:00Z",
+            "redirect_url": "https://x.com/jobs",
+        }], query_hash="q")
+        assert results[0]["posted_date"] is not None
+        assert "2026-04-22" in results[0]["posted_date"]
+
+    def test_no_date_field_returns_null(self):
+        results = normalize_linkedin([{
+            "title": "SRE", "companyName": "Acme",
+            "description": "x" * 250, "location": "Dublin",
+        }], query_hash="q")
+        assert results[0]["posted_date"] is None
