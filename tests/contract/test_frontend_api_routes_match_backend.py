@@ -44,14 +44,7 @@ FRONTEND_PARAM_RE = re.compile(r"\$\{[^}]+\}|:[A-Za-z_][A-Za-z0-9_]*")
 # Known frontend bugs the orchestrator is tracking. Each entry is a frontend
 # URL (already normalized) and the reason it's exempt. New entries should
 # always link to a tracking branch/issue.
-KNOWN_FRONTEND_BUGS: dict[str, str] = {
-    # TYPO: should be /api/resumes/upload (plural). Source:
-    # web/src/components/ResumeEditor.jsx — handleUploadPdf calls
-    # apiUpload('/api/resume/upload-pdf'). Backend declares /api/resumes/upload.
-    # Cluster B is fixing this on fix/audit-cluster-b-ui-hardening; remove this
-    # entry once that branch merges into main.
-    "/api/resume/upload-pdf": "tracked: cluster-b fix in flight",
-}
+KNOWN_FRONTEND_BUGS: dict[str, str] = {}
 
 
 def _normalize(path: str) -> str:
