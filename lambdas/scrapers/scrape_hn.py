@@ -148,6 +148,10 @@ def handler(event, context):
             continue
         job = parse_hn_comment(text)
         if job:
+            # Algolia returns the comment's posting time as epoch seconds in
+            # `created_at_i`. normalize_job picks this up via its field
+            # alias list and converts to UTC ISO.
+            job["created_at_i"] = c.get("created_at_i")
             parsed.append(job)
 
     jobs = normalize_hn(parsed, query_hash)

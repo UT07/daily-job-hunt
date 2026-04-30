@@ -2,9 +2,11 @@
 
 Reads from jobs_raw (shared pool) and scrape_runs (output contract).
 Applies 3-tier dedup (exact hash + exact company+title + fuzzy) and
-relevance pre-filter before passing job hashes to score_batch.
+relevance pre-filter (incl. freshness) before passing job hashes to
+score_batch.
 """
 import logging
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
@@ -19,6 +21,14 @@ ssm = boto3.client("ssm")
 
 # Pre-filter: seniority keywords that indicate too-senior roles
 REJECT_TITLE_KEYWORDS = {"director", "vp", "vice president", "head of", "chief", "principal architect", "cto", "cio"}
+
+# Freshness pre-filter — drop jobs whose posted_date is older than this many
+# days at scrape time. Configurable via JOB_MAX_AGE_DAYS env var. Default 14:
+# strikes a balance between "first-mover advantage" (the user's goal: apply
+# ASAP) and tolerating sources that update posted_date only weekly. Jobs
+# where posted_date is None pass through this filter unchanged — we don't
+# want to throw away rows just because the source didn't supply it.
+JOB_MAX_AGE_DAYS = int(os.environ.get("JOB_MAX_AGE_DAYS", "14"))
 
 # Pre-filter: minimum tech skill keywords to match against JD
 DEFAULT_USER_SKILLS = {
@@ -117,11 +127,41 @@ def cross_run_check(existing_job: dict | None, max_age_days: int = 7) -> dict:
     }
 
 
-def _prefilter_job(job: dict, user_skills: set) -> tuple[bool, str]:
-    """Apply relevance pre-filter. Returns (pass, reason)."""
+def _job_age_days(job: dict, now: datetime | None = None) -> float | None:
+    """Days since the job was posted, or None when posted_date is missing.
+
+    Centralised so the freshness rule and any future "fresh-only" sort can
+    share the same parsing rules.
+    """
+    posted = job.get("posted_date")
+    if not posted:
+        return None
+    s = posted.replace("Z", "+00:00") if isinstance(posted, str) else posted
+    try:
+        dt = datetime.fromisoformat(s) if isinstance(s, str) else s
+    except (ValueError, TypeError):
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    if now is None:
+        now = datetime.now(timezone.utc)
+    return (now - dt).total_seconds() / 86400.0
+
+
+def _prefilter_job(job: dict, user_skills: set, max_age_days: int = JOB_MAX_AGE_DAYS) -> tuple[bool, str]:
+    """Apply relevance pre-filter. Returns (pass, reason).
+
+    Freshness (rule 0) runs first — cheapest to check and the most user-
+    impactful (a stale posting wastes every downstream cycle).
+    """
     title = (job.get("title") or "").lower()
     desc = job.get("description") or ""
     location = (job.get("location") or "").lower()
+
+    # Rule 0: Freshness — apply ASAP from posting is the entire goal
+    age = _job_age_days(job)
+    if age is not None and age > max_age_days:
+        return False, f"stale:{int(age)}d_old"
 
     # Rule 1: Seniority filter
     for kw in REJECT_TITLE_KEYWORDS:
@@ -163,7 +203,7 @@ def handler(event, context):
         logger.info(f"[merge_dedup] scrape_runs: {len(fargate_hashes)} hashes from Fargate tasks")
 
     # --- Source 2: Get today's scraped jobs from jobs_raw ---
-    result = db.table("jobs_raw").select("job_hash, title, company, source, description, location") \
+    result = db.table("jobs_raw").select("job_hash, title, company, source, description, location, posted_date") \
         .gte("scraped_at", today).execute()
 
     all_jobs = result.data or []
@@ -172,7 +212,7 @@ def handler(event, context):
     # If the pipeline failed mid-run or was offline, jobs sit in jobs_raw
     # but never make it to the scored 'jobs' table. Pick them up within 7 days.
     lookback = (datetime.now(timezone.utc).date() - timedelta(days=7)).isoformat()
-    recent = db.table("jobs_raw").select("job_hash, title, company, source, description, location") \
+    recent = db.table("jobs_raw").select("job_hash, title, company, source, description, location, posted_date") \
         .gte("scraped_at", lookback).lt("scraped_at", today).execute()
     if recent.data:
         today_hashes = {j["job_hash"] for j in all_jobs}

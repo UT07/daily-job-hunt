@@ -295,3 +295,96 @@ def test_cross_run_check_missing_artifact_fields():
     assert result["reuse_artifacts"]["base_ats_score"] == 75
     assert result["reuse_artifacts"]["resume_s3_url"] is None
     assert result["reuse_artifacts"]["writing_quality_score"] is None
+
+
+# ---------------------------------------------------------------------------
+# Freshness pre-filter (Rule 0) — rejects jobs whose posted_date is older
+# than JOB_MAX_AGE_DAYS at scrape time. Prevents "scraped today but
+# posted 3 weeks ago" wasting downstream cycles.
+# ---------------------------------------------------------------------------
+
+def _fresh_job_with_posted(days_ago, **extra):
+    """Build a minimal-but-passing job dict with a posted_date N days old."""
+    posted = (datetime.now(timezone.utc) - timedelta(days=days_ago)).isoformat()
+    base = {
+        "title": "Software Engineer",
+        # Long-enough description with skill keywords to clear other rules
+        "description": ("We use python and aws every day building cloud "
+                        "services for our customers. " * 15),
+        "location": "Dublin, Ireland",
+        "posted_date": posted,
+    }
+    base.update(extra)
+    return base
+
+
+def test_prefilter_passes_fresh_job():
+    import merge_dedup
+    job = _fresh_job_with_posted(days_ago=2)
+    user_skills = {"python", "aws", "kubernetes"}
+    passes, reason = merge_dedup._prefilter_job(job, user_skills)
+    assert passes is True
+    assert reason == "pass"
+
+
+def test_prefilter_rejects_stale_job():
+    import merge_dedup
+    # Default max_age_days = 14
+    job = _fresh_job_with_posted(days_ago=30)
+    user_skills = {"python", "aws", "kubernetes"}
+    passes, reason = merge_dedup._prefilter_job(job, user_skills)
+    assert passes is False
+    assert reason.startswith("stale:")
+    assert "30d_old" in reason
+
+
+def test_prefilter_passes_job_with_null_posted_date():
+    """Sources that don't supply posted_date pass this rule — we don't
+    reject for missing data. Other rules still apply."""
+    import merge_dedup
+    job = _fresh_job_with_posted(days_ago=0)
+    job["posted_date"] = None
+    user_skills = {"python", "aws", "kubernetes"}
+    passes, reason = merge_dedup._prefilter_job(job, user_skills)
+    assert passes is True
+
+
+def test_prefilter_freshness_runs_before_other_rules():
+    """Stale job fails with 'stale:Xd_old' even when it would also fail
+    seniority/description/skill rules. Freshness is rule 0 (cheapest)."""
+    import merge_dedup
+    job = _fresh_job_with_posted(
+        days_ago=99,
+        title="VP of Engineering",   # would fail rule 1
+        description="too short",     # would fail rule 2
+    )
+    passes, reason = merge_dedup._prefilter_job(job, {"python"})
+    assert passes is False
+    assert reason.startswith("stale:")
+
+
+def test_prefilter_custom_max_age():
+    """Stricter age threshold rejects less-stale jobs."""
+    import merge_dedup
+    job = _fresh_job_with_posted(days_ago=10)
+    user_skills = {"python", "aws", "kubernetes"}
+    passes, reason = merge_dedup._prefilter_job(job, user_skills, max_age_days=7)
+    assert passes is False
+    assert "10d_old" in reason
+
+
+def test_job_age_days_handles_z_suffix():
+    import merge_dedup
+    job = {"posted_date": "2026-04-22T08:30:00Z"}
+    age = merge_dedup._job_age_days(
+        job, now=datetime(2026, 4, 25, 8, 30, 0, tzinfo=timezone.utc)
+    )
+    assert age is not None
+    assert 2.9 < age < 3.1
+
+
+def test_job_age_days_returns_none_for_missing():
+    import merge_dedup
+    assert merge_dedup._job_age_days({}) is None
+    assert merge_dedup._job_age_days({"posted_date": None}) is None
+    assert merge_dedup._job_age_days({"posted_date": "garbage"}) is None

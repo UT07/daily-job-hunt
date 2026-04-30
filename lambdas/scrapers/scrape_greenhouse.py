@@ -102,6 +102,13 @@ def handler(event, context):
                 if not title:
                     continue
 
+                # Greenhouse exposes the posting timestamp as `updated_at`
+                # in their public boards API (no separate posted_at). It's
+                # the right signal — gets bumped when a posting is edited
+                # AND on initial create.
+                from normalizers import _parse_posted_date
+                posted_date = _parse_posted_date(j.get("updated_at") or j.get("created_at"))
+
                 all_jobs.append({
                     "title": title[:500],
                     "company": slug.replace("-", " ").title()[:200],
@@ -113,6 +120,7 @@ def handler(event, context):
                     "query_hash": query_hash,
                     "posting_id": str(j.get("id", "")),
                     "board_token": slug,
+                    "posted_date": posted_date,
                 })
 
         except Exception as e:
