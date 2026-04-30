@@ -51,11 +51,11 @@ async function pollTask(pollUrl, { intervalMs = 2000, maxWaitMs = 240000, onProg
  * @param {string} pollUrl - e.g. '/api/pipeline/status/exec-name'
  * @param {object} options
  * @param {number} options.intervalMs - poll interval (default 5000)
- * @param {number} options.maxWaitMs - timeout (default 300000 = 5 min)
+ * @param {number} options.maxWaitMs - timeout (default 900000 = 15 min, sized for single-job pipeline which takes 6-9 min in practice)
  * @param {function} options.onStatus - called with { status, output } on each poll
  * @returns {object} the parsed output on SUCCEEDED
  */
-export async function pollPipeline(pollUrl, { intervalMs = 5000, maxWaitMs = 300000, onStatus } = {}) {
+export async function pollPipeline(pollUrl, { intervalMs = 5000, maxWaitMs = 900000, onStatus } = {}) {
   const deadline = Date.now() + maxWaitMs;
   while (Date.now() < deadline) {
     await new Promise(r => setTimeout(r, intervalMs));

@@ -118,9 +118,13 @@ export default function AddJob() {
       setProgressKey('RUNNING');
 
       // Poll until terminal state
+      // Single-job pipeline takes 6-9 min in practice (tailor → compile →
+      // cover letter → find contacts). 5 min was timing out before the SFN
+      // finished — user saw "Tailor Resume doesn't work" while the backend
+      // was actually succeeding silently. 15 min gives margin.
       const output = await pollPipeline(pollUrl, {
         intervalMs: 5000,
-        maxWaitMs: 300000,
+        maxWaitMs: 900000,
         onStatus: (data) => {
           if (data.status === 'SUCCEEDED') {
             setProgressKey('SUCCEEDED');
