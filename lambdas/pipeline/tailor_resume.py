@@ -306,16 +306,27 @@ RULES:
    - Skills: reorder CATEGORIES to put the most relevant first. PRESERVE ALL 8 CATEGORIES from the base resume — do NOT merge or drop any. Keep the parenthetical details (e.g., "AWS (EC2, ECS/Fargate, EKS, Lambda, RDS, S3, API Gateway, SQS/SNS, CloudFront, Route 53)"). You may reorder items within a category to front-load JD-relevant technologies
    - Experience bullets: reorder within each job; tweak wording to match the job listing's terminology
    - Projects: EXACTLY 3 PROJECTS. No more, no less.
-     * ALWAYS KEEP "Purrrfect Keys" (candidate's largest project, shows end-to-end ownership).
-     * SELECT 2 more from: WhatsTheCraic, Genomic Benchmarking, NaukriBaba, UTWorld — pick the 2 most relevant to the JD.
-     * COMPLETELY DELETE the other 2 projects. Remove their \projectentry/\projectentryurl AND their \begin{itemize}...\end{itemize} blocks entirely. Do NOT leave empty project shells.
-     * If you output 4 or 5 projects, the resume will overflow to 3 pages and be REJECTED.
-     * Rewrite ALL 3 project descriptions to emphasize aspects matching the JD.
+     * ALWAYS KEEP BOTH "Purrrfect Keys" AND "NaukriBaba" — these two are
+       the candidate's largest, most extensive projects and cover every
+       domain (mobile/AI/Firebase + Python/AWS/SaaS). Tailoring strategy:
+       reword bullets to emphasize the JD-relevant aspects, never remove.
+     * SELECT 1 more from: WhatsTheCraic, Genomic Benchmarking, UTWorld —
+       pick the single most relevant to the JD.
+     * COMPLETELY DELETE the other unselected projects. Remove their
+       \projectentry/\projectentryurl AND their \begin{itemize}...\end{itemize}
+       blocks entirely. Do NOT leave empty project shells.
+     * If you output 4 or 5 projects, the resume will overflow to 3 pages
+       and be REJECTED.
+     * Rewrite ALL 3 project descriptions to emphasize aspects matching
+       the JD; the two pinned projects (Purrrfect Keys, NaukriBaba) get
+       JD-tailored bullets but their identity, dates, and tech stack
+       headers stay intact.
 4. The resume must remain truthful.
 5. PAGE LAYOUT (CRITICAL):
    - The resume MUST be exactly TWO PAGES. No more, no less.
    - Page 1: Header, Summary, Technical Skills, Clover IT Services (7 bullets), and Seattle Kraken (3 bullets).
-   - Page 2: 3 selected Projects (Purrrfect Keys always + 2 others), Education, Certifications.
+   - Page 2: 3 selected Projects (Purrrfect Keys + NaukriBaba pinned + 1 other), Education, Certifications.
+   - The base template inserts \clearpage before \section*{Featured Projects} so the section header always lands on page 2 — DO NOT remove that \clearpage from the body you return.
    - If content overflows to page 3, CUT bullet points (trim Clover to 6, Kraken to 2).
    - Do NOT add extra bullets to any section. Keep Clover at 7, Kraken at 3.
 6. Prominently place technologies the candidate has used that the job mentions.
