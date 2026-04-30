@@ -1980,9 +1980,7 @@ class PipelineRunRequest(BaseModel):
 
 
 class SingleJobRunRequest(BaseModel):
-    # TODO: known drift between client and model — frontend sends apply_url
-    # which is not declared here (audit cluster A is adding the field).
-    # Re-enable extra='forbid' once cluster A merges the apply_url addition.
+    model_config = ConfigDict(extra="forbid")
     job_description: str = Field(..., min_length=20)
     job_title: str = "Software Engineer"
     company: str = "Unknown"
