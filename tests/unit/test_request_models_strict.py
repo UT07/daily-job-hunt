@@ -16,11 +16,8 @@ import app as app_module
 from pydantic import BaseModel
 
 # name -> short reason. Each entry should describe a tracked follow-up.
-REQUEST_MODEL_EXEMPTIONS: dict[str, str] = {
-    # Cluster A is adding apply_url to this model. Re-enable forbid once it
-    # merges.
-    "SingleJobRunRequest": "cluster-a-pending: apply_url field being added",
-}
+# Empty by default — every Request model is expected to use extra='forbid'.
+REQUEST_MODEL_EXEMPTIONS: dict[str, str] = {}
 
 
 def _all_request_models() -> list[type[BaseModel]]:
