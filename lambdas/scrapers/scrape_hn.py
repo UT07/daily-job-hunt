@@ -26,6 +26,87 @@ _COMMENTS_PAGE_SIZE = 200
 # Max pages to paginate (safety cap: 5 * 200 = 1000 comments)
 _MAX_COMMENT_PAGES = 5
 
+# Match a bare URL (greedy until whitespace/quote/bracket). We strip
+# trailing sentence punctuation (".,;:)]") in `_strip_url_punctuation`
+# rather than excluding it in the regex — excluding it as a lookahead
+# also rejects in-domain dots (e.g. acme.com).
+_URL_RE = re.compile(r"https?://[^\s<>\"']+", re.IGNORECASE)
+_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_TRAILING_PUNCT = ".,;:)]>}"
+
+
+def _strip_url_punctuation(url: str) -> str:
+    """Remove trailing sentence punctuation that almost always isn't part
+    of the URL: 'https://x.com/jobs.' -> 'https://x.com/jobs'."""
+    return url.rstrip(_TRAILING_PUNCT)
+
+
+def _find_urls(text: str) -> list[str]:
+    """All URLs in text, with trailing punctuation stripped."""
+    return [_strip_url_punctuation(u) for u in _URL_RE.findall(text)]
+
+# Comments often introduce the apply path with one of these prefixes. Lines
+# matching these get URL preference even if the URL itself is generic.
+_APPLY_PREFIX_RE = re.compile(
+    r"\b(apply|application[s]?|to\s+apply|how\s+to\s+apply|details?|more\s+info|jobs?|careers?|"
+    r"submit|email\s+(?:me|us)|contact|reach\s+out|hiring|opening[s]?|opportunit(?:y|ies))\b"
+    r"\s*[:\-]",
+    re.IGNORECASE,
+)
+
+# Strong-signal substrings inside the URL itself — preferred when picking
+# from a list of bare URLs.
+_URL_HINT_RE = re.compile(
+    r"/(apply|jobs?|careers?|hiring|positions?|openings?|workable|greenhouse|lever|ashby"
+    r"|workday|smartrecruiters|breezy|recruitee|workatastartup)\b",
+    re.IGNORECASE,
+)
+
+
+def extract_apply_url(text: str) -> str:
+    """Pick the best apply URL from a HN hiring comment body.
+
+    Priority (highest first):
+        1. URL on the same line as "apply:" / "jobs:" / similar prefix
+        2. URL whose path contains a hiring-related segment
+           (e.g. /careers, /jobs, /apply)
+        3. mailto: + first email address (so the user can at least cold-email)
+        4. First plain http(s) URL anywhere in the body
+        5. Empty string (caller falls back to "")
+
+    HN comments are ~90% in patterns 1+2; the email fallback covers the
+    "small bootstrapped startup, just email me" case which is otherwise
+    uncovered.
+    """
+    if not text:
+        return ""
+
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
+
+    # Pass 1: prefix-introduced URLs ("Apply: https://...")
+    for line in lines:
+        if _APPLY_PREFIX_RE.search(line):
+            urls = _find_urls(line)
+            if urls:
+                return urls[0]
+
+    # Pass 2: URLs whose path screams "hiring page"
+    body_urls = _find_urls(text)
+    for url in body_urls:
+        if _URL_HINT_RE.search(url):
+            return url
+
+    # Pass 3: email fallback
+    emails = _EMAIL_RE.findall(text)
+    if emails:
+        return f"mailto:{emails[0]}"
+
+    # Pass 4: first URL anywhere
+    if body_urls:
+        return body_urls[0]
+
+    return ""
+
 
 def get_param(name):
     return ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
@@ -36,9 +117,19 @@ def get_supabase():
     return create_client(get_param("/naukribaba/SUPABASE_URL"), get_param("/naukribaba/SUPABASE_SERVICE_KEY"))
 
 
-def parse_hn_comment(text: str) -> dict:
-    """Parse a HN hiring comment into job fields."""
+def parse_hn_comment(text: str, comment_url: str = "") -> dict:
+    """Parse a HN hiring comment into job fields.
+
+    `comment_url` (when supplied by the caller — typically the Algolia hit's
+    permalink) is used as a last-resort apply URL so the row at least
+    points at the HN comment if no better URL was extractable.
+    """
     import html as html_mod
+    # Capture <a href="..."> links before stripping tags — HN renders most
+    # apply URLs as anchor tags; the visible href is often shortened in the
+    # text but the actual href has the full destination.
+    href_urls = re.findall(r'<a\s+href="([^"]+)"', text or "", flags=re.IGNORECASE)
+
     text = html_mod.unescape(text)
     text = re.sub(r'<[^>]+>', '\n', text).strip()
     lines = [line.strip() for line in text.split('\n') if line.strip()]
@@ -56,11 +147,27 @@ def parse_hn_comment(text: str) -> dict:
     if not company or not title:
         return None
 
+    # Apply-URL extraction: prefer href tag-attributes from the original
+    # comment HTML (most reliable), then fall back to text-based heuristics,
+    # and finally to the comment permalink (so the row is at least usable).
+    apply_url = ""
+    for href in href_urls:
+        if _URL_HINT_RE.search(href):
+            apply_url = html_mod.unescape(href)
+            break
+    if not apply_url and href_urls:
+        apply_url = html_mod.unescape(href_urls[0])
+    if not apply_url:
+        apply_url = extract_apply_url(description)
+    if not apply_url and comment_url:
+        apply_url = comment_url
+
     return {
         "title": title,
         "company": company,
         "description": description,
         "location": location,
+        "url": apply_url,
     }
 
 
@@ -146,7 +253,10 @@ def handler(event, context):
         text = c.get("comment_text", "")
         if not text or len(text) < 50:
             continue
-        job = parse_hn_comment(text)
+        # HN permalink — used as last-resort apply URL when the comment
+        # body has no extractable link or email.
+        comment_url = f"https://news.ycombinator.com/item?id={c.get('objectID', '')}"
+        job = parse_hn_comment(text, comment_url=comment_url)
         if job:
             parsed.append(job)
 

@@ -313,3 +313,97 @@ def test_find_latest_thread_returns_none_when_no_hits():
 
     result = scrape_hn._find_latest_thread()
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# apply-URL extraction (regression for hn_hiring 17%-coverage bug)
+# ---------------------------------------------------------------------------
+
+class TestExtractApplyUrl:
+    def test_apply_prefix_takes_priority_over_random_url(self):
+        from scrape_hn import extract_apply_url
+        text = (
+            "Acme | SRE | Dublin\n"
+            "We're great. https://acme.com is our marketing site.\n"
+            "Apply: https://acme.com/jobs/sre-2026"
+        )
+        # The "Apply:" prefix wins even though a generic acme.com URL appears
+        # earlier in the body.
+        assert extract_apply_url(text) == "https://acme.com/jobs/sre-2026"
+
+    def test_url_path_hint_used_when_no_prefix(self):
+        from scrape_hn import extract_apply_url
+        text = (
+            "Acme | SRE | Dublin\n"
+            "Visit https://blog.acme.com for our blog\n"
+            "https://acme.com/careers/sre to learn more about us"
+        )
+        assert extract_apply_url(text) == "https://acme.com/careers/sre"
+
+    def test_email_fallback_when_no_url(self):
+        from scrape_hn import extract_apply_url
+        text = "Tiny Co | Founding Engineer | Remote\nEmail me: founder@tiny.co"
+        assert extract_apply_url(text) == "mailto:founder@tiny.co"
+
+    def test_first_url_when_nothing_better(self):
+        from scrape_hn import extract_apply_url
+        text = "Some company. https://www.example.com — that's all"
+        assert extract_apply_url(text) == "https://www.example.com"
+
+    def test_returns_empty_when_no_signal(self):
+        from scrape_hn import extract_apply_url
+        assert extract_apply_url("plain text with no url or email") == ""
+        assert extract_apply_url("") == ""
+
+    def test_handles_trailing_punctuation(self):
+        from scrape_hn import extract_apply_url
+        text = "Apply at https://acme.com/jobs."
+        # The trailing period should NOT be part of the URL
+        assert extract_apply_url(text) == "https://acme.com/jobs"
+
+    def test_picks_workable_or_greenhouse_paths(self):
+        from scrape_hn import extract_apply_url
+        text = "Acme | Engineer\nhttps://www.workable.com/jobs/abc-co/eng-12345"
+        assert "workable.com" in extract_apply_url(text)
+
+
+class TestParseHnCommentApplyUrl:
+    def test_href_anchor_preferred_over_text_url(self):
+        """HN comments render apply links as <a href="...">. The href is the
+        canonical destination; the text often shows a shortened version."""
+        from scrape_hn import parse_hn_comment
+        text = (
+            "<p>Acme | Senior SRE | Dublin\n"
+            "Join us. <a href=\"https://acme.com/careers/sre-2026\" rel=\"nofollow\">acme.com/careers/sre</a></p>"
+        )
+        job = parse_hn_comment(text)
+        assert job is not None
+        assert job["url"] == "https://acme.com/careers/sre-2026"
+
+    def test_falls_back_to_comment_url_when_nothing_extractable(self):
+        from scrape_hn import parse_hn_comment
+        text = (
+            "Acme | Engineer | Dublin\n"
+            "We are hiring. No URL or email at all in this body."
+        )
+        job = parse_hn_comment(text, comment_url="https://news.ycombinator.com/item?id=42")
+        assert job is not None
+        assert job["url"] == "https://news.ycombinator.com/item?id=42"
+
+    def test_apply_url_field_populated_when_email_only(self):
+        from scrape_hn import parse_hn_comment
+        text = (
+            "Tiny Co | Founding Engineer | Remote\n"
+            "Two-person team. Email founder@tinyco.io to apply."
+        )
+        job = parse_hn_comment(text, comment_url="https://news.ycombinator.com/item?id=42")
+        assert job is not None
+        # Email beats the comment-permalink fallback
+        assert job["url"] == "mailto:founder@tinyco.io"
+
+    def test_no_url_or_comment_url_returns_empty_string(self):
+        from scrape_hn import parse_hn_comment
+        text = "Acme | Engineer | Dublin\nNo links anywhere."
+        job = parse_hn_comment(text)
+        assert job is not None
+        assert job["url"] == ""
