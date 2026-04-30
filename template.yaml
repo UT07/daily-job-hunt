@@ -62,14 +62,17 @@ Parameters:
       GitHub secret in deploy.yml.
     AllowedPattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
     ConstraintDescription: must be a valid UUID (8-4-4-4-12 hex)
-  AlarmEmail:
+  PipelineAlarmTopicArn:
     Type: String
     Description: |
-      Email address subscribed to Phase B.5 pipeline alarm SNS topic.
-      Receives notifications from DailyPipelineExecutionsFailedAlarm and
-      DailyPipelineNoArtifactsAlarm. Subscription confirmation email is
-      sent on first deploy — click the link to start receiving alerts.
-    Default: 254utkarsh@gmail.com
+      ARN of an existing SNS topic that receives Phase B.5 alarm
+      notifications (created out-of-band because the deploy IAM role
+      lacks sns:CreateTopic). Topic + email subscription were created
+      manually once: 'aws sns create-topic --name
+      naukribaba-pipeline-alarms' + 'aws sns subscribe ...'.
+      The deploy role only needs cloudwatch:* (which it has) to wire
+      the alarms to this ARN.
+    Default: "arn:aws:sns:eu-west-1:385017713886:naukribaba-pipeline-alarms"
 
 Resources:
 
@@ -1767,19 +1770,9 @@ Resources:
   # --- Phase B.5 observability: pipeline silent-success alarms ---
   # Pair these with the FailState introduced at PipelineFailedAfterError and
   # the ArtifactsCompiled custom metric emitted from save_metrics.py.
-
-  PipelineAlarmTopic:
-    Type: AWS::SNS::Topic
-    Properties:
-      TopicName: naukribaba-pipeline-alarms
-      DisplayName: NaukriBaba Pipeline Alarms
-
-  PipelineAlarmEmailSubscription:
-    Type: AWS::SNS::Subscription
-    Properties:
-      TopicArn: !Ref PipelineAlarmTopic
-      Protocol: email
-      Endpoint: !Ref AlarmEmail
+  #
+  # SNS topic is pre-created out-of-band (see PipelineAlarmTopicArn parameter
+  # comment) because the deploy IAM role lacks sns:CreateTopic.
 
   DailyPipelineExecutionsFailedAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -1799,7 +1792,7 @@ Resources:
       Threshold: 0
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
-      AlarmActions: [!Ref PipelineAlarmTopic]
+      AlarmActions: [!Ref PipelineAlarmTopicArn]
 
   DailyPipelineNoArtifactsAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -1822,7 +1815,7 @@ Resources:
       Threshold: 1
       ComparisonOperator: LessThanThreshold
       TreatMissingData: breaching
-      AlarmActions: [!Ref PipelineAlarmTopic]
+      AlarmActions: [!Ref PipelineAlarmTopicArn]
 
 Outputs:
   ApiUrl:
