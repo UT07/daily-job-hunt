@@ -60,7 +60,15 @@ jobs:
             -e SUPABASE_URL=http://localhost \
             -e SUPABASE_SERVICE_KEY=fake \
             --entrypoint /var/lang/bin/python "$IMAGE" -c '
-          import app
+          # Lifespan-execution smoke. The 2026-04-30 incident (PR #42 hotfix)
+          # showed that "import app" alone is insufficient — `_initialize_state`
+          # runs LAZY imports during FastAPI lifespan startup that bare module
+          # imports never trigger. `config/`, and future top-level packages,
+          # only get exercised by actually running the lifespan.
+          import asyncio
+          import app as app_module
+          # Eager-import guard: catches module-load-time regressions in shared/
+          # and lambdas/ that the lifespan path does NOT exercise.
           from shared.load_job import load_job
           from shared.profile_completeness import check_profile_completeness
           from shared.platform_metadata import fetch_metadata
@@ -71,7 +79,14 @@ jobs:
           from shared.preview_cache import get_preview_cache, set_preview_cache
           from shared.apply_models import ApplyPreviewResponse
           from lambdas.pipeline.ai_helper import ai_complete_cached
-          print("All apply_preview imports resolved")
+          # Lifespan-startup probe: exercises lazy imports inside
+          # _initialize_state (e.g. `from config.feature_flags import set_client`)
+          # so missing Dockerfile.lambda COPY directives fail CI, not prod.
+          async def _run_lifespan():
+              async with app_module.app.router.lifespan_context(app_module.app):
+                  pass
+          asyncio.run(_run_lifespan())
+          print("All apply_preview imports + lifespan startup resolved")
           '
 
   lint-and-build:
