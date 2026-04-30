@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import AuthProvider from './auth/AuthProvider';
 import AppLayout from './layouts/AppLayout';
 import AuthLayout from './layouts/AuthLayout';
+import PreviewBanner from './components/PreviewBanner';
 
 // Lazy-loaded pages
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -37,6 +38,7 @@ function PageLoader() {
 export default function App() {
   return (
     <BrowserRouter>
+      <PreviewBanner />
       <AuthProvider>
         <Suspense fallback={<PageLoader />}>
           <Routes>
