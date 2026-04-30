@@ -314,6 +314,11 @@ CONNECTION MESSAGE RULES (CRITICAL):
 - Do NOT use generic phrases like "I came across your profile" or "I would love to connect"
 - Be specific about what you can offer or discuss
 - Write as a human, not as an AI. Short, direct, conversational.
+- Begin the message with EXACTLY "Hi [First Name], " — that exact token
+  string. Post-processing substitutes [First Name] with the actual contact's
+  first name once the LinkedIn profile is found. Never use other placeholder
+  styles like {name}, [their name], or [contact name] — they will not be
+  substituted and the user will see them verbatim.
 
 Return ONLY valid JSON:
 {
@@ -372,12 +377,32 @@ The candidate is applying for this role and wants to network at {job.company}.""
 
         if profiles:
             p = profiles[0]
+            # Substitute [First Name] / [first name] / {first_name} placeholders
+            # the AI generated. Step 1 (AI) doesn't know whose profile will be
+            # found in Step 2 — it produces templated messages that need to
+            # be hydrated here. Without this, the user sees "Hi [First Name],"
+            # in the UI even though we know the contact is Conor / Federica.
+            actual_first = p["name"].split()[0] if p.get("name") else ""
+            msg = role_info["message"] or ""
+            if actual_first:
+                msg = (
+                    msg.replace("[First Name]", actual_first)
+                       .replace("[first name]", actual_first)
+                       .replace("[FIRST_NAME]", actual_first)
+                       .replace("{first_name}", actual_first)
+                       .replace("{First Name}", actual_first)
+                )
+            # Profile title may be unusably short (e.g. "Helping large" — a
+            # cut-off LinkedIn tagline). Fall back to the AI's intended role
+            # title when the profile title is missing or shorter than 15 chars.
+            profile_title = (p.get("title") or "").strip()
+            role_label = profile_title if len(profile_title) >= 15 else title
             contacts.append({
                 "name": p["name"],
-                "role": p.get("title") or title,
+                "role": role_label,
                 "role_type": role_info["role_type"],
                 "why": role_info["why"],
-                "message": role_info["message"],
+                "message": msg,
                 "profile_url": p["url"],
                 "search_url": "",
                 "google_url": "",
