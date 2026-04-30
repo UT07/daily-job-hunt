@@ -11,3 +11,35 @@
   from = "/*"
   to = "/index.html"
   status = 200
+
+# --- Phase B.3 staging: deploy previews for every PR ---
+# Production builds (main branch) get VITE_BUILD_LABEL=production.
+# Deploy previews (PR branches) and branch deploys (any non-main push)
+# get VITE_BUILD_LABEL=preview/branch so the UI can show a banner and
+# carry an X-Robots-Tag noindex header so search engines don't crawl
+# preview URLs.
+#
+# This is the "lean staging" approach — frontend regressions are caught
+# per-PR via Netlify's automatic deploy previews while the backend stays
+# single-tenant prod. Full Supabase-staging + parallel SAM stack is
+# documented in docs/runbooks/2026-04-30-staging-environment.md as a
+# future expansion if frontend-only previews aren't enough.
+
+[context.production.environment]
+  VITE_BUILD_LABEL = "production"
+
+[context.deploy-preview.environment]
+  VITE_BUILD_LABEL = "preview"
+
+[context.branch-deploy.environment]
+  VITE_BUILD_LABEL = "branch"
+
+[[context.deploy-preview.headers]]
+  for = "/*"
+  [context.deploy-preview.headers.values]
+    X-Robots-Tag = "noindex, nofollow"
+
+[[context.branch-deploy.headers]]
+  for = "/*"
+  [context.branch-deploy.headers.values]
+    X-Robots-Tag = "noindex, nofollow"
