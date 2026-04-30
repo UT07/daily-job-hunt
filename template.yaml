@@ -125,6 +125,9 @@ Resources:
       Runtime: python3.11
       Timeout: 600
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -139,6 +142,9 @@ Resources:
       Runtime: python3.11
       Timeout: 120
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -153,6 +159,9 @@ Resources:
       Runtime: python3.11
       Timeout: 120
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -167,6 +176,9 @@ Resources:
       Runtime: python3.11
       Timeout: 120
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -183,6 +195,9 @@ Resources:
       Runtime: python3.11
       Timeout: 300
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -197,6 +212,9 @@ Resources:
       Runtime: python3.11
       Timeout: 300
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -211,6 +229,9 @@ Resources:
       Runtime: python3.11
       Timeout: 300
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -225,6 +246,9 @@ Resources:
       Runtime: python3.11
       Timeout: 300
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -239,6 +263,9 @@ Resources:
       Runtime: python3.11
       Timeout: 120
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -253,6 +280,9 @@ Resources:
       Runtime: python3.11
       Timeout: 120
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -267,6 +297,9 @@ Resources:
       Runtime: python3.11
       Timeout: 300
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -282,6 +315,9 @@ Resources:
       Runtime: python3.11
       Timeout: 60
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -296,6 +332,9 @@ Resources:
       Runtime: python3.11
       Timeout: 300
       MemorySize: 512
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -310,6 +349,9 @@ Resources:
       Runtime: python3.11
       Timeout: 900
       MemorySize: 512
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -324,6 +366,9 @@ Resources:
       Runtime: python3.11
       Timeout: 10
       MemorySize: 128
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
 
   AggregateScoresFunction:
     Type: AWS::Serverless::Function
@@ -334,6 +379,9 @@ Resources:
       Runtime: python3.11
       Timeout: 30
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
 
   TailorResumeFunction:
     Type: AWS::Serverless::Function
@@ -344,6 +392,13 @@ Resources:
       Runtime: python3.11
       Timeout: 600
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Canary10Percent5Minutes
+        Alarms:
+          - !Ref TailorResumeFunctionErrorsAlarm
+          - !Ref TailorResumeFunctionThrottlesAlarm
+          - !Ref TailorResumeFunctionDurationP99Alarm
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -360,6 +415,13 @@ Resources:
       Runtime: python3.11
       Timeout: 60
       MemorySize: 512
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Canary10Percent5Minutes
+        Alarms:
+          - !Ref CompileLatexFunctionErrorsAlarm
+          - !Ref CompileLatexFunctionThrottlesAlarm
+          - !Ref CompileLatexFunctionDurationP99Alarm
       Layers: [!Ref SharedDepsLayer, !Ref TectonicLayer]
       Policies:
         - S3CrudPolicy:
@@ -376,6 +438,13 @@ Resources:
       Runtime: python3.11
       Timeout: 600
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Canary10Percent5Minutes
+        Alarms:
+          - !Ref GenerateCoverLetterFunctionErrorsAlarm
+          - !Ref GenerateCoverLetterFunctionThrottlesAlarm
+          - !Ref GenerateCoverLetterFunctionDurationP99Alarm
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -392,6 +461,9 @@ Resources:
       Runtime: python3.11
       Timeout: 120
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -406,6 +478,13 @@ Resources:
       Runtime: python3.11
       Timeout: 300
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Canary10Percent5Minutes
+        Alarms:
+          - !Ref SaveJobFunctionErrorsAlarm
+          - !Ref SaveJobFunctionThrottlesAlarm
+          - !Ref SaveJobFunctionDurationP99Alarm
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -422,6 +501,9 @@ Resources:
       Runtime: python3.11
       Timeout: 60
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -437,6 +519,9 @@ Resources:
       Runtime: python3.11
       Timeout: 60
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -451,6 +536,9 @@ Resources:
       Runtime: python3.11
       Timeout: 300
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -467,6 +555,9 @@ Resources:
       Runtime: python3.11
       Timeout: 300
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Environment:
         Variables:
@@ -486,6 +577,9 @@ Resources:
       Runtime: python3.11
       Timeout: 60
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -500,6 +594,9 @@ Resources:
       Runtime: python3.11
       Timeout: 120
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -515,6 +612,9 @@ Resources:
       Runtime: python3.11
       Timeout: 60
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -529,6 +629,9 @@ Resources:
       Runtime: python3.11
       Timeout: 60
       MemorySize: 256
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -719,6 +822,35 @@ Resources:
                   - !GetAtt SelfImproveFunction.Arn
                   - !GetAtt NotifyErrorFunction.Arn
                   - !GetAtt CheckExpiryFunction.Arn
+                  # --- Phase 2 canary aliases (critical tier) ---
+                  - !Ref TailorResumeFunctionAliaslive
+                  - !Ref CompileLatexFunctionAliaslive
+                  - !Ref GenerateCoverLetterFunctionAliaslive
+                  - !Ref SaveJobFunctionAliaslive
+                  # --- Phase 2 canary aliases (pipeline tier) ---
+                  - !Ref LoadConfigFunctionAliaslive
+                  - !Ref MergeDedupFunctionAliaslive
+                  - !Ref ScoreBatchFunctionAliaslive
+                  - !Ref AggregateScoresFunctionAliaslive
+                  - !Ref FindContactsFunctionAliaslive
+                  - !Ref SaveMetricsFunctionAliaslive
+                  - !Ref SendEmailFunctionAliaslive
+                  - !Ref PostScoreFunctionAliaslive
+                  - !Ref SelfImproveFunctionAliaslive
+                  # --- Phase 2 canary aliases (read-only / idempotent tier) ---
+                  - !Ref ScrapeApifyFunctionAliaslive
+                  - !Ref ScrapeAdzunaFunctionAliaslive
+                  - !Ref ScrapeHNFunctionAliaslive
+                  - !Ref ScrapeYCFunctionAliaslive
+                  - !Ref ScrapeLinkedInFunctionAliaslive
+                  - !Ref ScrapeIndeedFunctionAliaslive
+                  - !Ref ScrapeGlassdoorFunctionAliaslive
+                  - !Ref ScrapeIrishFunctionAliaslive
+                  - !Ref ScrapeGreenhouseFunctionAliaslive
+                  - !Ref ScrapeAshbyFunctionAliaslive
+                  - !Ref ScrapeContactsFunctionAliaslive
+                  - !Ref ChunkHashesFunctionAliaslive
+                  - !Ref NotifyErrorFunctionAliaslive
         - PolicyName: RunFargateTasks
           PolicyDocument:
             Version: "2012-10-17"
@@ -764,7 +896,7 @@ Resources:
           "States": {
             "LoadUserConfig": {
               "Type": "Task",
-              "Resource": "${LoadConfigFunction.Arn}",
+              "Resource": "${LoadConfigFunction.Alias}",
               "ResultPath": "$",
               "Next": "RunScrapers",
               "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyError"}]
@@ -780,7 +912,7 @@ Resources:
                   "States": {
                     "ScrapeLinkedIn": {
                       "Type": "Task",
-                      "Resource": "${ScrapeLinkedInFunction.Arn}",
+                      "Resource": "${ScrapeLinkedInFunction.Alias}",
                       "Parameters": {
                         "queries.$": "$.queries",
                         "location": "Ireland",
@@ -803,7 +935,7 @@ Resources:
                   "States": {
                     "ScrapeIndeed": {
                       "Type": "Task",
-                      "Resource": "${ScrapeIndeedFunction.Arn}",
+                      "Resource": "${ScrapeIndeedFunction.Alias}",
                       "Parameters": {
                         "queries.$": "$.queries",
                         "location": "Ireland",
@@ -837,7 +969,7 @@ Resources:
                   "States": {
                     "ScrapeHN": {
                       "Type": "Task",
-                      "Resource": "${ScrapeHNFunction.Arn}",
+                      "Resource": "${ScrapeHNFunction.Alias}",
                       "Parameters": {
                         "query_hash.$": "$.query_hash"
                       },
@@ -857,7 +989,7 @@ Resources:
                   "States": {
                     "ScrapeYC": {
                       "Type": "Task",
-                      "Resource": "${ScrapeYCFunction.Arn}",
+                      "Resource": "${ScrapeYCFunction.Alias}",
                       "Parameters": {
                         "queries.$": "$.queries",
                         "query_hash.$": "$.query_hash"
@@ -889,7 +1021,7 @@ Resources:
                   "States": {
                     "ScrapeIrish": {
                       "Type": "Task",
-                      "Resource": "${ScrapeIrishFunction.Arn}",
+                      "Resource": "${ScrapeIrishFunction.Alias}",
                       "Parameters": {
                         "queries.$": "$.queries",
                         "query_hash.$": "$.query_hash"
@@ -910,7 +1042,7 @@ Resources:
                   "States": {
                     "ScrapeGreenhouse": {
                       "Type": "Task",
-                      "Resource": "${ScrapeGreenhouseFunction.Arn}",
+                      "Resource": "${ScrapeGreenhouseFunction.Alias}",
                       "Parameters": {
                         "query_hash.$": "$.query_hash"
                       },
@@ -930,7 +1062,7 @@ Resources:
                   "States": {
                     "ScrapeAshby": {
                       "Type": "Task",
-                      "Resource": "${ScrapeAshbyFunction.Arn}",
+                      "Resource": "${ScrapeAshbyFunction.Alias}",
                       "Parameters": {
                         "query_hash.$": "$.query_hash"
                       },
@@ -949,14 +1081,14 @@ Resources:
             },
             "MergeAndDedup": {
               "Type": "Task",
-              "Resource": "${MergeDedupFunction.Arn}",
+              "Resource": "${MergeDedupFunction.Alias}",
               "ResultPath": "$.dedup_result",
               "Next": "ChunkJobHashes",
               "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyError"}]
             },
             "ChunkJobHashes": {
               "Type": "Task",
-              "Resource": "${ChunkHashesFunction.Arn}",
+              "Resource": "${ChunkHashesFunction.Alias}",
               "Parameters": {
                 "new_job_hashes.$": "$.dedup_result.new_job_hashes",
                 "user_id.$": "$.user_id",
@@ -980,7 +1112,7 @@ Resources:
                 "States": {
                   "ScoreChunk": {
                     "Type": "Task",
-                    "Resource": "${ScoreBatchFunction.Arn}",
+                    "Resource": "${ScoreBatchFunction.Alias}",
                     "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 30, "MaxAttempts": 1, "BackoffRate": 2}],
                     "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "ScoreChunkFailed"}],
                     "End": true
@@ -995,7 +1127,7 @@ Resources:
             },
             "AggregateScores": {
               "Type": "Task",
-              "Resource": "${AggregateScoresFunction.Arn}",
+              "Resource": "${AggregateScoresFunction.Alias}",
               "Parameters": {
                 "score_chunks.$": "$.score_chunks"
               },
@@ -1018,7 +1150,7 @@ Resources:
                 "States": {
                   "TailorResume": {
                     "Type": "Task",
-                    "Resource": "${TailorResumeFunction.Arn}",
+                    "Resource": "${TailorResumeFunction.Alias}",
                     "ResultPath": "$.tailor_result",
                     "Next": "CompileResume",
                     "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 10, "MaxAttempts": 1, "BackoffRate": 2}],
@@ -1026,7 +1158,7 @@ Resources:
                   },
                   "CompileResume": {
                     "Type": "Task",
-                    "Resource": "${CompileLatexFunction.Arn}",
+                    "Resource": "${CompileLatexFunction.Alias}",
                     "Parameters": {
                       "tex_s3_key.$": "$.tailor_result.tex_s3_key",
                       "job_hash.$": "$.job_hash",
@@ -1050,7 +1182,7 @@ Resources:
                   },
                   "GenerateCoverLetter": {
                     "Type": "Task",
-                    "Resource": "${GenerateCoverLetterFunction.Arn}",
+                    "Resource": "${GenerateCoverLetterFunction.Alias}",
                     "Parameters": {
                       "job_hash.$": "$.job_hash",
                       "user_id.$": "$.user_id",
@@ -1062,7 +1194,7 @@ Resources:
                   },
                   "CompileCoverLetter": {
                     "Type": "Task",
-                    "Resource": "${CompileLatexFunction.Arn}",
+                    "Resource": "${CompileLatexFunction.Alias}",
                     "Parameters": {
                       "tex_s3_key.$": "$.cover_letter_result.tex_s3_key",
                       "job_hash.$": "$.job_hash",
@@ -1086,7 +1218,7 @@ Resources:
                   },
                   "FindContacts": {
                     "Type": "Task",
-                    "Resource": "${FindContactsFunction.Arn}",
+                    "Resource": "${FindContactsFunction.Alias}",
                     "Parameters": {
                       "job_hash.$": "$.job_hash",
                       "user_id.$": "$.user_id",
@@ -1098,13 +1230,13 @@ Resources:
                   },
                   "SaveJob": {
                     "Type": "Task",
-                    "Resource": "${SaveJobFunction.Arn}",
+                    "Resource": "${SaveJobFunction.Alias}",
                     "End": true,
                     "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SaveJobAfterError"}]
                   },
                   "SaveJobAfterError": {
                     "Type": "Task",
-                    "Resource": "${SaveJobFunction.Arn}",
+                    "Resource": "${SaveJobFunction.Alias}",
                     "End": true
                   }
                 }
@@ -1124,7 +1256,7 @@ Resources:
                 "States": {
                   "PostScoreJob": {
                     "Type": "Task",
-                    "Resource": "${PostScoreFunction.Arn}",
+                    "Resource": "${PostScoreFunction.Alias}",
                     "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PostScoreFailed"}],
                     "End": true
                   },
@@ -1138,7 +1270,7 @@ Resources:
             },
             "SavePipelineMetrics": {
               "Type": "Task",
-              "Resource": "${SaveMetricsFunction.Arn}",
+              "Resource": "${SaveMetricsFunction.Alias}",
               "Parameters": {
                 "user_id.$": "$.user_id",
                 "scraper_results.$": "$.scraper_results",
@@ -1152,7 +1284,7 @@ Resources:
             },
             "SendEmailSummary": {
               "Type": "Task",
-              "Resource": "${SendEmailFunction.Arn}",
+              "Resource": "${SendEmailFunction.Alias}",
               "Parameters": {
                 "user_id.$": "$.user_id",
                 "matched_count.$": "$.score_result.matched_count"
@@ -1163,7 +1295,7 @@ Resources:
             },
             "SelfImprove": {
               "Type": "Task",
-              "Resource": "${SelfImproveFunction.Arn}",
+              "Resource": "${SelfImproveFunction.Alias}",
               "Parameters": {
                 "user_id.$": "$.user_id",
                 "execution_name.$": "$$.Execution.Name",
@@ -1175,7 +1307,7 @@ Resources:
             },
             "NotifyError": {
               "Type": "Task",
-              "Resource": "${NotifyErrorFunction.Arn}",
+              "Resource": "${NotifyErrorFunction.Alias}",
               "Parameters": {
                 "user_id.$": "$.user_id",
                 "error.$": "$.error",
@@ -1228,7 +1360,7 @@ Resources:
             },
             "ScoreSingleJob": {
               "Type": "Task",
-              "Resource": "${ScoreBatchFunction.Arn}",
+              "Resource": "${ScoreBatchFunction.Alias}",
               "Parameters": {
                 "user_id.$": "$.user_id",
                 "new_job_hashes.$": "States.Array($.job_hash)",
@@ -1260,14 +1392,14 @@ Resources:
             },
             "TailorResume": {
               "Type": "Task",
-              "Resource": "${TailorResumeFunction.Arn}",
+              "Resource": "${TailorResumeFunction.Alias}",
               "ResultPath": "$.tailor_result",
               "Next": "CompileResume",
               "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "JobFailed"}]
             },
             "CompileResume": {
               "Type": "Task",
-              "Resource": "${CompileLatexFunction.Arn}",
+              "Resource": "${CompileLatexFunction.Alias}",
               "Parameters": {
                 "tex_s3_key.$": "$.tailor_result.tex_s3_key",
                 "job_hash.$": "$.job_hash",
@@ -1280,7 +1412,7 @@ Resources:
             },
             "GenerateCoverLetter": {
               "Type": "Task",
-              "Resource": "${GenerateCoverLetterFunction.Arn}",
+              "Resource": "${GenerateCoverLetterFunction.Alias}",
               "Parameters": {
                 "job_hash.$": "$.job_hash",
                 "user_id.$": "$.user_id"
@@ -1291,7 +1423,7 @@ Resources:
             },
             "CompileCoverLetter": {
               "Type": "Task",
-              "Resource": "${CompileLatexFunction.Arn}",
+              "Resource": "${CompileLatexFunction.Alias}",
               "Parameters": {
                 "tex_s3_key.$": "$.cover_letter_result.tex_s3_key",
                 "job_hash.$": "$.job_hash",
@@ -1304,7 +1436,7 @@ Resources:
             },
             "FindContacts": {
               "Type": "Task",
-              "Resource": "${FindContactsFunction.Arn}",
+              "Resource": "${FindContactsFunction.Alias}",
               "Parameters": {
                 "job_hash.$": "$.job_hash",
                 "user_id.$": "$.user_id"
@@ -1315,12 +1447,12 @@ Resources:
             },
             "SaveJobComplete": {
               "Type": "Task",
-              "Resource": "${SaveJobFunction.Arn}",
+              "Resource": "${SaveJobFunction.Alias}",
               "End": true
             },
             "SaveJobWithoutCL": {
               "Type": "Task",
-              "Resource": "${SaveJobFunction.Arn}",
+              "Resource": "${SaveJobFunction.Alias}",
               "End": true
             },
             "JobFailed": {
@@ -1353,7 +1485,7 @@ Resources:
       ScheduleExpression: "cron(0 6 ? * SUN *)"
       State: ENABLED
       Targets:
-        - Arn: !GetAtt CheckExpiryFunction.Arn
+        - Arn: !Ref CheckExpiryFunctionAliaslive
           Id: ExpiryCheckTarget
 
   EventBridgeRole:
@@ -1381,7 +1513,7 @@ Resources:
     Type: AWS::Lambda::Permission
     DependsOn: ExpiryCheckSchedule
     Properties:
-      FunctionName: !Ref CheckExpiryFunction
+      FunctionName: !Ref CheckExpiryFunctionAliaslive
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/naukribaba-expiry-check
@@ -1394,7 +1526,7 @@ Resources:
       ScheduleExpression: "cron(0 9 ? * MON *)"
       State: ENABLED
       Targets:
-        - Arn: !GetAtt StaleNudgeFunction.Arn
+        - Arn: !Ref StaleNudgeFunctionAliaslive
           Id: StaleNudgeTarget
           # Without Input, send_stale_nudges falls back to user_id="default"
           # and matches zero rows. Use the same operator user as the daily pipeline.
@@ -1404,7 +1536,7 @@ Resources:
     Type: AWS::Lambda::Permission
     DependsOn: StaleNudgeSchedule
     Properties:
-      FunctionName: !Ref StaleNudgeFunction
+      FunctionName: !Ref StaleNudgeFunctionAliaslive
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/naukribaba-stale-nudge
@@ -1417,7 +1549,7 @@ Resources:
       ScheduleExpression: "cron(0 10 ? * MON-FRI *)"
       State: ENABLED
       Targets:
-        - Arn: !GetAtt FollowUpReminderFunction.Arn
+        - Arn: !Ref FollowUpReminderFunctionAliaslive
           Id: FollowUpTarget
           # Same fix as StaleNudgeSchedule: send_followup_reminders falls back
           # to literal "default" without an explicit Input.
@@ -1427,7 +1559,7 @@ Resources:
     Type: AWS::Lambda::Permission
     DependsOn: FollowUpSchedule
     Properties:
-      FunctionName: !Ref FollowUpReminderFunction
+      FunctionName: !Ref FollowUpReminderFunctionAliaslive
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !Sub arn:${AWS::Partition}:events:${AWS::Region}:${AWS::AccountId}:rule/naukribaba-followup-reminder
@@ -1593,21 +1725,21 @@ Resources:
     Properties:
       ApiId: !Ref BrowserWebSocketApi
       IntegrationType: AWS_PROXY
-      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsConnectFunction.Arn}/invocations"
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsConnectFunction.Alias}/invocations"
 
   DisconnectIntegration:
     Type: AWS::ApiGatewayV2::Integration
     Properties:
       ApiId: !Ref BrowserWebSocketApi
       IntegrationType: AWS_PROXY
-      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsDisconnectFunction.Arn}/invocations"
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsDisconnectFunction.Alias}/invocations"
 
   DefaultIntegration:
     Type: AWS::ApiGatewayV2::Integration
     Properties:
       ApiId: !Ref BrowserWebSocketApi
       IntegrationType: AWS_PROXY
-      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsRouteFunction.Arn}/invocations"
+      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsRouteFunction.Alias}/invocations"
 
   BrowserWsStage:
     Type: AWS::ApiGatewayV2::Stage
@@ -1629,6 +1761,9 @@ Resources:
       Runtime: python3.11
       Timeout: 10
       MemorySize: 128
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Environment:
         Variables:
           SESSIONS_TABLE: !Ref BrowserSessionsTable
@@ -1647,6 +1782,9 @@ Resources:
       Runtime: python3.11
       Timeout: 10
       MemorySize: 128
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: AllAtOnce
       Environment:
         Variables:
           SESSIONS_TABLE: !Ref BrowserSessionsTable
@@ -1663,6 +1801,13 @@ Resources:
       Runtime: python3.11
       Timeout: 5
       MemorySize: 128
+      AutoPublishAlias: live
+      DeploymentPreference:
+        Type: Canary10Percent5Minutes
+        Alarms:
+          - !Ref WsRouteFunctionErrorsAlarm
+          - !Ref WsRouteFunctionThrottlesAlarm
+          - !Ref WsRouteFunctionDurationP99Alarm
       Environment:
         Variables:
           SESSIONS_TABLE: !Ref BrowserSessionsTable
@@ -1679,7 +1824,7 @@ Resources:
   WsConnectPermission:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !Ref WsConnectFunction
+      FunctionName: !Ref WsConnectFunctionAliaslive
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BrowserWebSocketApi}/*/$connect"
@@ -1687,7 +1832,7 @@ Resources:
   WsDisconnectPermission:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !Ref WsDisconnectFunction
+      FunctionName: !Ref WsDisconnectFunctionAliaslive
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BrowserWebSocketApi}/*/$disconnect"
@@ -1695,7 +1840,7 @@ Resources:
   WsRoutePermission:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !Ref WsRouteFunction
+      FunctionName: !Ref WsRouteFunctionAliaslive
       Action: lambda:InvokeFunction
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BrowserWebSocketApi}/*/$default"
@@ -1937,6 +2082,296 @@ Resources:
             }
           ]
         }
+
+  # --- Phase B.2 canary alarms (sourced from monitoring/alarms.yaml) ---
+  # Critical-tier functions x 3 alarms each (Errors, Throttles, p99 Duration).
+  # These trip the CodeDeploy traffic shift if a canary deploy goes bad.
+  # Edits must be mirrored to monitoring/alarms.yaml (canonical source).
+
+  WsRouteFunctionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-ws-route-Errors
+      AlarmDescription: Trips canary if any errors during traffic shift
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: naukribaba-ws-route
+        - Name: Resource
+          Value: naukribaba-ws-route:live
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  WsRouteFunctionThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-ws-route-Throttles
+      AlarmDescription: Trips canary on any concurrency throttling during shift
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: naukribaba-ws-route
+        - Name: Resource
+          Value: naukribaba-ws-route:live
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  WsRouteFunctionDurationP99Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-ws-route-DurationP99
+      AlarmDescription: Trips canary if p99 duration exceeds 30s over 5min - catches death spiral
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: naukribaba-ws-route
+        - Name: Resource
+          Value: naukribaba-ws-route:live
+      ExtendedStatistic: p99
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 30000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  TailorResumeFunctionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-tailor-resume-Errors
+      AlarmDescription: Trips canary if any errors during traffic shift
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: naukribaba-tailor-resume
+        - Name: Resource
+          Value: naukribaba-tailor-resume:live
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  TailorResumeFunctionThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-tailor-resume-Throttles
+      AlarmDescription: Trips canary on any concurrency throttling during shift
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: naukribaba-tailor-resume
+        - Name: Resource
+          Value: naukribaba-tailor-resume:live
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  TailorResumeFunctionDurationP99Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-tailor-resume-DurationP99
+      AlarmDescription: Trips canary if p99 duration exceeds 30s over 5min - catches death spiral
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: naukribaba-tailor-resume
+        - Name: Resource
+          Value: naukribaba-tailor-resume:live
+      ExtendedStatistic: p99
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 30000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  CompileLatexFunctionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-compile-latex-Errors
+      AlarmDescription: Trips canary if any errors during traffic shift
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: naukribaba-compile-latex
+        - Name: Resource
+          Value: naukribaba-compile-latex:live
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  CompileLatexFunctionThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-compile-latex-Throttles
+      AlarmDescription: Trips canary on any concurrency throttling during shift
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: naukribaba-compile-latex
+        - Name: Resource
+          Value: naukribaba-compile-latex:live
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  CompileLatexFunctionDurationP99Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-compile-latex-DurationP99
+      AlarmDescription: Trips canary if p99 duration exceeds 30s over 5min - catches death spiral
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: naukribaba-compile-latex
+        - Name: Resource
+          Value: naukribaba-compile-latex:live
+      ExtendedStatistic: p99
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 30000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  GenerateCoverLetterFunctionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-generate-cover-letter-Errors
+      AlarmDescription: Trips canary if any errors during traffic shift
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: naukribaba-generate-cover-letter
+        - Name: Resource
+          Value: naukribaba-generate-cover-letter:live
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  GenerateCoverLetterFunctionThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-generate-cover-letter-Throttles
+      AlarmDescription: Trips canary on any concurrency throttling during shift
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: naukribaba-generate-cover-letter
+        - Name: Resource
+          Value: naukribaba-generate-cover-letter:live
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  GenerateCoverLetterFunctionDurationP99Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-generate-cover-letter-DurationP99
+      AlarmDescription: Trips canary if p99 duration exceeds 30s over 5min - catches death spiral
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: naukribaba-generate-cover-letter
+        - Name: Resource
+          Value: naukribaba-generate-cover-letter:live
+      ExtendedStatistic: p99
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 30000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  SaveJobFunctionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-save-job-Errors
+      AlarmDescription: Trips canary if any errors during traffic shift
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: naukribaba-save-job
+        - Name: Resource
+          Value: naukribaba-save-job:live
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  SaveJobFunctionThrottlesAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-save-job-Throttles
+      AlarmDescription: Trips canary on any concurrency throttling during shift
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: naukribaba-save-job
+        - Name: Resource
+          Value: naukribaba-save-job:live
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  SaveJobFunctionDurationP99Alarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-save-job-DurationP99
+      AlarmDescription: Trips canary if p99 duration exceeds 30s over 5min - catches death spiral
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: naukribaba-save-job
+        - Name: Resource
+          Value: naukribaba-save-job:live
+      ExtendedStatistic: p99
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 30000
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
 
 Outputs:
   ApiUrl:
