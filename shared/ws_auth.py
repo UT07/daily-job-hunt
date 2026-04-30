@@ -14,7 +14,9 @@ from jose import JWTError, jwt
 
 _ALG = "HS256"
 _ROLES = ("frontend", "browser")
-_DEFAULT_TTL = 60
+# 5 minutes. Fargate cloud-browser cold-start can take 30-90s; the prior 60s
+# default was racing the boot and rejecting tokens before the worker connected.
+_DEFAULT_TTL = 300
 
 
 def _aud_for(role: str) -> str:
@@ -37,7 +39,8 @@ def issue_ws_token(*, user_id: str, session_id: str, role: str, ttl_seconds: int
         user_id: Supabase user UUID.
         session_id: Browser session ID linking frontend and Fargate worker.
         role: Either "frontend" or "browser" — determines the aud claim.
-        ttl_seconds: Token lifetime in seconds (default 60).
+        ttl_seconds: Token lifetime in seconds (default 300, i.e. 5 min,
+            sized to outlast Fargate cold-start of 30-90s).
 
     Returns:
         Signed JWT string.

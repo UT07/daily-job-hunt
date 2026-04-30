@@ -103,3 +103,120 @@ def test_no_pdfs_still_saves_status_only():
     # Should still update status to 'scored' even without PDFs (SaveJobAfterError path)
     update_payload = db.table.return_value.update.call_args_list[0][0][0]
     assert update_payload["application_status"] == "scored"
+
+
+def test_compile_error_marks_job_failed():
+    """Bug X1 fix: compile_latex error dict (no pdf_s3_key) sets status='failed' + failure_reason."""
+    event = {
+        **BASE_EVENT,
+        "compile_result": {
+            "error": "compilation_failed",
+            "stderr": "! LaTeX Error: Undefined control sequence \\foo",
+            "tex_s3_key": "tex/hash-abc.tex",
+        },
+    }
+    s3 = _make_s3_mock()
+    db = _make_supabase()
+
+    with patch("save_job.boto3", _make_boto3_mock(s3)), \
+         patch("save_job.get_supabase", return_value=db):
+        import save_job
+        result = save_job.handler(event, None)
+
+    assert result["saved"] is True
+    assert result["failed"] is True
+    assert result["has_resume"] is False
+    s3.generate_presigned_url.assert_not_called()
+
+    update_payload = db.table.return_value.update.call_args_list[0][0][0]
+    assert update_payload["application_status"] == "failed"
+    assert update_payload["failure_reason"].startswith("compilation_failed: ")
+    assert "Undefined control sequence" in update_payload["failure_reason"]
+    assert "resume_s3_url" not in update_payload
+
+
+def test_compile_no_pdf_output_marks_job_failed():
+    """no_pdf_output (tectonic exit 0 but PDF missing) also marks the job failed."""
+    event = {
+        **BASE_EVENT,
+        "compile_result": {"error": "no_pdf_output", "tex_s3_key": "tex/hash-abc.tex"},
+    }
+    s3 = _make_s3_mock()
+    db = _make_supabase()
+
+    with patch("save_job.boto3", _make_boto3_mock(s3)), \
+         patch("save_job.get_supabase", return_value=db):
+        import save_job
+        save_job.handler(event, None)
+
+    update_payload = db.table.return_value.update.call_args_list[0][0][0]
+    assert update_payload["application_status"] == "failed"
+    assert update_payload["failure_reason"] == "no_pdf_output"
+
+
+def test_tectonic_not_available_does_not_mark_failed():
+    """Local-dev tectonic-missing error is NOT a failure — pipeline can still save partial state."""
+    event = {
+        **BASE_EVENT,
+        "compile_result": {"error": "tectonic_not_available", "pdf_s3_key": None},
+    }
+    s3 = _make_s3_mock()
+    db = _make_supabase()
+
+    with patch("save_job.boto3", _make_boto3_mock(s3)), \
+         patch("save_job.get_supabase", return_value=db):
+        import save_job
+        result = save_job.handler(event, None)
+
+    assert result["failed"] is False
+    update_payload = db.table.return_value.update.call_args_list[0][0][0]
+    # Falls through to "no PDFs" path → 'scored', not 'failed'.
+    assert update_payload["application_status"] == "scored"
+    assert "failure_reason" not in update_payload
+
+
+def test_successful_compile_clears_prior_failure_reason():
+    """Re-running compile after a fix clears the stale failure_reason."""
+    event = {
+        **BASE_EVENT,
+        "compile_result": {"pdf_s3_key": "resumes/hash-abc.pdf"},
+    }
+    s3 = _make_s3_mock()
+    db = _make_supabase()
+
+    with patch("save_job.boto3", _make_boto3_mock(s3)), \
+         patch("save_job.get_supabase", return_value=db):
+        import save_job
+        save_job.handler(event, None)
+
+    update_payload = db.table.return_value.update.call_args_list[0][0][0]
+    assert update_payload["application_status"] == "ready"
+    assert update_payload["failure_reason"] is None
+
+
+def test_cover_letter_compile_failure_does_not_fail_job():
+    """Cover letter compile failure is non-fatal — resume PDF still saved, status='ready'."""
+    event = {
+        **BASE_EVENT,
+        "compile_result": {"pdf_s3_key": "resumes/hash-abc.pdf"},
+        "cover_compile_result": {
+            "error": "compilation_failed",
+            "stderr": "! Missing $",
+            "tex_s3_key": "tex/cl-hash-abc.tex",
+        },
+    }
+    s3 = _make_s3_mock()
+    db = _make_supabase()
+
+    with patch("save_job.boto3", _make_boto3_mock(s3)), \
+         patch("save_job.get_supabase", return_value=db):
+        import save_job
+        result = save_job.handler(event, None)
+
+    assert result["failed"] is False
+    assert result["has_resume"] is True
+
+    update_payload = db.table.return_value.update.call_args_list[0][0][0]
+    assert update_payload["application_status"] == "ready"
+    assert "cover_letter_s3_url" not in update_payload
+    assert "failure_reason" not in update_payload or update_payload["failure_reason"] is None

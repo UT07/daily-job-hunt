@@ -1,94 +1,81 @@
 # NaukriBaba — Unified Grand Plan
 
-**Date**: 2026-04-03 (last updated 2026-04-06)
-**Status**: Approved
+**Date**: 2026-04-03 (last updated 2026-04-30)
+**Status**: Approved · Layer 1 + Layer 2 (Reliability) + Layer 3 (Deploy) ✅ complete · Layer 2.5 (Stabilization & Deploy Safety) IN PROGRESS · Layer 4 (Product Features) partial — auto-apply backend live, frontend pending
 **Supersedes**: Individual phase numbering from v2 design spec (2A-2G)
 **Integration**: career-ops (github.com/santifer/career-ops) — adopted as reference architecture
+**Active operational sequence**: see `~/.claude/projects/-Users-ut-code-naukribaba/memory/grand_plan_2026_04_30.md` (this doc owns the architectural narrative; the memory doc owns the current sprint's Phase A→B→C tasks).
 
 ---
 
-## Status Snapshot — 2026-04-06
+## Status Snapshot — 2026-04-30
 
-### ✅ Done today (Apr 6)
-- **3.0 Deploy**: SAM deployed (4x), EventBridge ENABLED (weekdays 07:00 UTC), Step Functions pipeline tested end-to-end
-- **ScoreBatch Map batching**: 421 jobs split into 25-job chunks, 5 parallel, no timeout
-- **Data quality audit**: 149 scores fixed, 59 expired, 205 dupes removed, 117 tiers realigned, 18 descriptions backfilled
-- **IrishJobs JSON-LD**: Detail page descriptions now extracted via structured data
-- **API 500 fix**: `utils/` added to Dockerfile.lambda
-- **Page length validation**: Fallback to base if AI output too short (1 page)
+### Production state
 
-### 🔴 Issues found
-- **Lambda tailoring quality**: Cut-off summaries, incomplete education, missing certifications — Lambda `tailor_resume.py` lacks guards from local `tailorer.py`
-- **190 cross-source dupes**: Same job from LinkedIn+Indeed gets different hash → Tier 0 dedup needed
-- **687→467 jobs in DB**: Still too many — user wants only top matches (filter, not firehose)
-- **Cover letters**: Only 99/467 jobs have cover letters
+- **Backend**: Live in `eu-west-1` since 2026-04-21. SAM deploys via `deploy.yml` from `main` after Deploy Readiness gate. Daily pipeline runs weekdays 07:00 UTC via EventBridge → Step Functions.
+- **Frontend**: Live on Netlify, auto-deployed from `main`.
+- **Database**: Supabase prod with RLS; ~850 jobs across all sources; auto-apply tables in place.
+- **Auto-apply backend**: Cloud-browser pipeline shipped through Plan 3b (PR #17). Plan 3c frontend not started.
 
-### 🎯 Immediate next (Priority 0 from career-ops integration plan)
-1. Fix cross-source dedup (Tier 0 exact company+title match)
-2. Port tailoring guards to Lambda
-3. Dashboard declutter (tier filter, hide expired/C/D)
-4. Greenhouse + Lever API scrapers
-5. Update grand plan with career-ops A-F evaluation framework
+### Done since the last snapshot (2026-04-06 → 2026-04-30)
 
----
+**Auto-apply / cloud-browser pipeline (Phase 3.4 sub-plans):**
 
-## Career-Ops Integration Map
+- PR #5 (Apr 21) — CFN EventBridge ARN fix that unblocked the deploy workflow
+- PR #7 (Apr 22) — **Plan 2 browser session** + Fargate task def
+- PR #8 (Apr 24) — **Plan 3a WebSocket + apply endpoints** (3 WS Lambdas, 5 `/api/apply/*` endpoints, idempotent record)
+- PRs #10/11/12 (Apr 27) — **Apply platform classifier** + Deploy Readiness CI gate + `Dockerfile.lambda` `shared/`/`lambdas/` COPY fix; eligibility gate flipped from `apply_platform` to `apply_url`; 831 jobs backfilled; live eligibility >0 for the first time
+- PR #17 (Apr 29) — **Plan 3b backend**: AI preview, platform metadata fetchers (Greenhouse/Ashby), question classifier
+- PR #21, #22 (Apr 29) — Plan 3b hotfixes (`lambdas/` COPY, JSONB string handling in `get_preview_cache`)
 
-Reference: github.com/santifer/career-ops — 740+ job evaluations, 100+ tailored CVs.
+**Backlog clearances:**
 
-Philosophy: **"A filter, not spray-and-pray."** Only top matches get full treatment.
+- PR #23 (Apr 29) — Lazy boto3 SSM client in `ai_helper`, drops AWS_DEFAULT_REGION import-time dependency
+- PR #24 (Apr 29) — Geography + work-auth aware score cap; demotes wrongly-S-tier UK/US-visa-required jobs
 
-| Our Phase | Career-Ops Feature | Integration |
-|-----------|-------------------|-------------|
-| 2.6 Writing Quality | ATS keyword injection, proof-point extraction | Extract 15-20 JD keywords → inject into existing bullets (never fabricate) |
-| 2.7 Data Quality | Cross-source dedup | Description-independent `dedup_hash`, Tier 0 exact match |
-| 2.10 Tiering | "Don't apply below 4.0" | D-tier never enters DB, C-tier no artifacts, S+A get full treatment |
-| 3.1 Discover+ | 3-tier scanning (Playwright→API→WebSearch), 60+ companies | Greenhouse API + Lever API + company watchlist |
-| 3.2 Research | A-F Evaluation (10 dimensions), compensation data | Multi-dimension scoring: role fit, CV alignment, seniority, compensation, personalization plan, interview prep |
-| 3.3 Tailor+ | ATS-optimized PDF, template system | Keyword-first tailoring, regen button per job |
-| **3.4 Apply** | **Semi-auto apply: Playwright extracts form → AI generates STAR answers → user confirms** | **NEW FEATURE: Smart form-filling with human-in-the-loop** |
-| 3.5 Interview Prep | STAR+Reflection stories, behavioral mapping | Story bank in Supabase, per-job prep auto-generated |
-| 3.6 Analytics | Application outcome tracking → feedback loop | Ground truth feeds scoring accuracy |
+**Deploy-safety + prod-health initiative (parallel session):**
 
----
+- PR #14 (Apr 28) — **Deployment-safety roadmap**: master spec + 6 phase sub-plans (canary, staging, observability, auto-rollback)
+- PR #16 (Apr 29) — Bug 1: pipeline status ARN reconstruction (kills "Poll failed: HTTP 404")
+- PR #18 (Apr 29) — Bug 3+4: JD location plumbing through 5 request models + `_Job`
+- PR #19 (Apr 29) — Bug 2: rename "Score Resume" → "Save & Score"
+- PR #20 (Apr 29) — Bug 5+6: SFN `job_hash` plumbing + `score_batch` prompt fields
+- PR #25 (in review, Apr 29) — Postmortem of Apr 22-29 prod-health incident (doc-only)
 
-## Status Snapshot — 2026-04-05 evening
+### Findings still open (priority order)
 
-### ✅ Done this week
-- **2.5b Scraper Fixes (partial)**: OpenRouter 404 fixed (dead Gemini model replaced with 5 verified free models); AI council expanded 18→32 providers; DeepSeek left disabled (accessible via NVIDIA NIM anyway).
-- **2.7 Data Quality**: Canonical hash dedup live (18 duplicates removed from 177→159 jobs); deterministic 3-call median scoring rolled out; `score_version=2` set on all 159 live jobs; `score_status` tracking.
-- **2.10 Score Tiering**: `score_tier` column + CHECK constraint + filter index shipped; all 159 jobs tiered from backfill SQL. Distribution: S=14 (8.8%), A=41 (25.8%), B=26 (16.4%), C=51 (32.1%), D=27 (17.0%).
-- **Council retry logic**: `council_generate()` now retries with fresh providers after dead ones are marked (was failing when top-2 were both Groq during IP block).
-- **Hard gate relaxed**: `check_section_completeness` now accepts substring matches ("Technical Skills" satisfies "skills") so AI-generated resumes with reasonable headings aren't rejected.
+1. **🔴 P0 SECURITY — AWS STS tokens leaked into `pipeline_tasks.error`** via `str(e)` flattening of boto3 `ClientError`; tokens were user-visible via `GET /api/tasks/{id}` and rendered as resume content. Code fix (creds sanitizer F1) is in `fix/comprehensive-prod-health/artifact-pipeline` branch. **Operator action required**: rotate Lambda execution-role creds + audit CloudTrail since 2026-04-22.
+2. **🔴 EventBridge cron `Input` fix** — `template.yaml` daily cron uses `Input: {"user_id":"default"}`. New jobs land under synthetic user; real user never sees them. Root cause of "no artifacts since Apr 22." **Operator + template.yaml fix.**
+3. **🔴 Bug X1 — silent `compile_latex` failures**: returns error dict (no `pdf_s3_key`) on tectonic failure → `save_job` silently sets `application_status="scored"` with no `resume_s3_url`. Pairs with Bug X2 (header-marker validation falling back to base resume) for "regenerate produces same resume." **Code fix not yet shipped.**
+4. **8 cross-cutting bug patterns** documented in Session B's audit (`docs/audit/2026-04-29-deep-pass-2.md`, 45 findings: 11 P0, 25 P1):
+   1. Pydantic `extra='ignore'` field-strip-on-undeclared
+   2. `str(e)` AWS error body leakage into user-visible fields
+   3. Frontend↔backend route drift (e.g. `ResumeEditor.jsx` typo'd `/api/resume/upload-pdf`)
+   4. Silent UI error swallows (`.catch(err => console.error)` 12+ sites)
+   5. Lambda↔local code drift (Lambda `tailor_resume` lacks guards from local `tailorer`)
+   6. Hardcoded user info ("Utkarsh / Stamp 1G / 254utkarsh@gmail.com" in 3+ places — multi-tenant blockers)
+   7. EventBridge↔SFN input-contract drift
+   8. Missing IAM policies (`ecs:RunTask`, `ecs:StopTask`, `iam:PassRole`)
+5. **Infrastructure follow-ups**: `JobHuntApi` IAM, `WsDisconnect` `ecs:StopTask` (Fargate task leak / cost runaway), `resume_versions` `UNIQUE(user_id, job_id, version_number)`, WS auth token TTL 60s → 5min.
 
-### 🔴 Newly discovered this session (add to 2.6 Writing Quality)
-- **AI-generated LaTeX produces invalid output**: Tailoring outputs use undefined custom commands like `\projectentryurl` not in base template, and produce unbalanced `\begin{itemize}` / `\end{itemize}` blocks. `\iffalse` left unclosed at line 76 of one generated resume. Compilation blocked at hard gate; pdflatex fallback also fails.
-- **Tailoring prompt drops sections**: One A-tier job generated a resume with dropped `\section` entirely; hard gate (now relaxed) was the backstop.
-- **Groq API key appears IP-blocked**: 403 "Access denied. Please check your network settings" — not rate-limit, not auth. May require new API key or different egress IP.
+### Active sequence
 
-### ⏸️ Known blockers
-- **SAM deploy**: Docker Desktop daemon stuck/unresponsive. Need to restart Docker or run from a working docker host.
-- **Apify budget exhausted**: contact_finder.py old path no longer usable. Serper rejected as an alt (quality concerns). **Plan**: build Bright Data–based contact finder (reuse existing proxy infra from scrapers).
-
-### 🎯 Immediate next tasks
-1. **Fix tailoring prompt quality** (2.6): constrain AI to only use commands defined in base template; validate brace balance before output; reject outputs with undefined macros.
-2. **Bright Data contact finder** (3.4 prep): build new module that searches google.com for LinkedIn profiles via Web Unlocker proxy, add quality tests (profile accuracy, message personalisation).
-3. **Regenerate 60 artifacts** (blocked on #1): resumes + cover letters for all jobs with `match_score >= 75` (14 jobs at 90+, 40 at 85-89, 6 at 75-84). Skip the 99 jobs <75; they stay with user's default artifacts.
-4. **GradIreland scraper fix** (2.5b): Drupal template changed, 0 jobs returned. Needs fresh HTML inspection + selector update.
+Layer 2.5 Phase A (Stabilization) → Layer 2.5 Phase B (Deploy Safety, B.1–B.7) → Layer 4 / Plan 3c (Frontend Auto-Apply UI). See **Layer 2.5** below for the architectural form; see `memory/grand_plan_2026_04_30.md` for tactical task breakdown.
 
 ---
 
 ## Why This Document Exists
 
-Multiple overlapping specs existed with inconsistent phase numbering:
-- v2 design spec (2026-03-30) defined phases 2A-2G
+Multiple overlapping specs accumulated with inconsistent phase numbering:
+
+- v2 design spec (2026-03-30) defined phases 2A–2G
 - Testing spec (2026-03-31) defined 7 QA tiers
 - Playwright migration spec (2026-04-01) defined Phase 2.5
-- Quality pipeline spec (2026-04-03) defined Phases 2.6-2.9
+- Quality pipeline spec (2026-04-03) defined Phases 2.6–2.9
+- Cloud-browser auto-apply spec (2026-04-12) added Plan 2/3a/3b/3c
+- Deployment-safety spec (2026-04-28, PR #14) added Phases B.1–B.7
 
-Actual work diverged from the original 2A-2G plan because the pipeline needed reliability
-fixes before features made sense. This document is the single source of truth for what's
-done, what's next, and how it all connects.
+Actual work diverged from the original 2A–2G plan because the pipeline needed reliability fixes before features made sense, then a deploy-safety net before more product features could land safely. This document is the single source of truth for what's done, what's next, and how it all connects.
 
 ---
 
@@ -96,25 +83,25 @@ done, what's next, and how it all connects.
 
 ```
 React Frontend (Netlify)
-       │ REST API
+       │ REST + WebSocket
 AWS Step Functions (orchestration)
        │
-Lambda Functions (compute) ──── Fargate (Glassdoor only)
+Lambda Functions (compute) ──── Fargate (cloud-browser auto-apply)
        │
 Supabase PostgreSQL + S3 Storage
 ```
 
 - No n8n. Step Functions orchestrates the daily pipeline.
 - Lambda for all compute (scrapers, AI, compilation).
-- Fargate only for Glassdoor (JS rendering behind login wall).
-- main.py for local development runs.
-- GitHub Actions for CI/CD.
+- Fargate hosts the cloud-browser auto-apply task; was originally scoped for Glassdoor scraping (deprioritized).
+- `main.py` for local development runs.
+- GitHub Actions for CI/CD; SAM-based deploy via `deploy.yml`.
 
 ---
 
 ## Grand Phase Structure
 
-### Layer 1: Foundation — COMPLETE
+### Layer 1: Foundation — ✅ COMPLETE
 
 | Phase | Name | Status | What Was Built |
 |-------|------|--------|----------------|
@@ -122,75 +109,44 @@ Supabase PostgreSQL + S3 Storage
 | 2.0 | Landing Page | ✅ Done | FastAPI backend, React frontend, SAM template, GCP/Drive integration |
 | 2.5 | Web Unlocker | ✅ Done | LinkedIn, Indeed, Irish portals via Bright Data Web Unlocker on Lambda |
 
-**Result**: Working pipeline that scrapes 7 sources, scores jobs, tailors resumes, compiles PDFs.
-177 jobs in dashboard, 123 scraped in last run, 58 matched.
-
 ---
 
-### Layer 2: Reliability — CURRENT
+### Layer 2: Reliability — ✅ COMPLETE (2026-04-29)
 
-All phases defined in: `2026-04-03-quality-pipeline-design.md`
+| Sub-phase | What shipped | When |
+|-----------|--------------|------|
+| 2.5b Scraper fixes | OpenRouter free models (5 verified), AI council expanded 18 → 32 providers, IrishJobs JSON-LD descriptions, Groq IP-block workaround. GradIreland fix deferred. Glassdoor deprioritized (Greenhouse/Ashby/LinkedIn cover). | 2026-04-05 → ongoing |
+| 2.6 Writing quality | Compilation fallback (page-length validation, header-marker check), AI council retry on dead providers, hard-gate substring matching, LaTeX brace/macro sanitization | 2026-04-09 (PR #2 marathon) |
+| 2.7 Data quality | Canonical hash dedup (177 → 159 jobs), deterministic 3-call median scoring, `score_status` tracking, cross-source dedup audit | 2026-04-05 → 2026-04-06 |
+| 2.8 QA foundation | 712+ tests in CI, fixtures, golden dataset; Tier 4b/4c data + writing tests | 2026-04-09 |
+| 2.9 Self-improvement | Council retry logic, prompt versioning, pipeline metrics → Supabase, score recalibration | 2026-04-09 |
+| 2.10 Score tiering | `score_tier` column + thresholds + index, downstream Lambda gating, **geography + work-auth post-score cap** | 2026-04-05 → 2026-04-29 (PR #24) |
+
+Some sub-phases continue to receive incremental hardening as patterns surface (e.g. Lambda↔local code drift caught in Session B's audit lands in Layer 2.5 Phase A.2). The original Layer 2 parallel-execution diagram is preserved below for historical reference.
 
 ```
 ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐
 │  2.7 Data        │  │  2.6 Writing     │  │  2.8 QA          │
-│  Quality         │  │  Quality         │  │  Foundation      │
-│                  │  │                  │  │                  │
-│  • Unified hash  │  │  • Prompt v2     │  │  • Tier 4b data  │
-│  • Deterministic │  │  • Keyword       │  │  • Tier 4c write │
-│    scoring       │  │    analysis      │  │  • Tier 4d self  │
-│  • Before/after  │  │  • PDF validate  │  │  • CI pipeline   │
-│  • No truncation │  │  • Dynamic depth │  │                  │
-│  • seen_jobs     │  │  • Cover letter  │  │  Validates 2.6   │
-│    → Supabase    │  │    early check   │  │  and 2.7 as      │
-│  • Skip bad data │  │  • LaTeX sanit.  │  │  they're built   │
-│                  │  │  • Compilation   │  │                  │
-│                  │  │    rollback      │  │                  │
+│  Quality ✅      │  │  Quality ✅      │  │  Foundation ✅   │
 └────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘
          │  PARALLEL           │  PARALLEL           │  PARALLEL
          └────────────┬────────┘─────────────────────┘
                       ▼
          ┌─────────────────────┐
          │  2.9 Self-           │
-         │  Improvement         │
-         │                      │
-         │  • Tiered risk       │
-         │  • Prompt versioning │
-         │  • Rollback          │
-         │  • Cooldown          │
-         │  • User feedback     │
-         │  • Base resume sug.  │
-         │  • Model A/B test    │
-         │  • Query optimization│
-         │  • Pipeline metrics  │
-         │    → Supabase        │
+         │  Improvement ✅      │
          └──────────────────────┘
 
          ┌─────────────────────┐
-         │  2.5b Scraper Fixes  │  ← INDEPENDENT (anytime)
-         │                      │
-         │  • Glassdoor Fargate │
-         │  • IrishJobs 403     │
-         │  • GradIreland fix   │
-         │  • DeepSeek removal  │
-         │  • OpenRouter fix    │
+         │  2.5b Scraper Fixes  │  ← INDEPENDENT — partial ✅
          └──────────────────────┘
 ```
 
-**Execution order**:
-1. 2.7 + 2.6 + 2.8 in parallel (data quality + writing quality + QA tests)
-2. 2.9 after 2.7 + 2.6 complete (self-improvement needs quality metrics to analyze)
-3. 2.5b independent (can run anytime, no dependencies)
-
 ---
 
-### Phase 2.10: Score-Based Job Tiering & Prioritization (NEW)
+### Phase 2.10: Score-Based Job Tiering & Prioritization — ✅ COMPLETE
 
-**Status**: ✅ Complete 2026-04-05 — column shipped, backfilled, score_batch+rescore_batch write tier. Tier-gating in downstream lambdas (tailor/cover/contacts) still TODO.
-
-**Why**: After Phase 2.9 deterministic rescoring produced calibrated scores, we
-need to prioritize artifact generation (tailored resumes, cover letters) to avoid
-burning AI credits on low-value jobs. Not every job deserves a tailored resume.
+**Status**: Column shipped 2026-04-05 (backfilled, `score_batch`+`rescore_batch` write tier). Downstream Lambda gating (tailor/cover/contacts) shipped 2026-04-09. **Geography + work-auth post-score cap shipped 2026-04-29 (PR #24)** — prevents wrongly-S-tier UK/US visa-required jobs.
 
 **Score Tiers**:
 
@@ -202,65 +158,100 @@ burning AI credits on low-value jobs. Not every job deserves a tailored resume.
 | C — Long Shot | 60-69 | Score only, no artifacts | Minimal |
 | D — Skip | <60 | Score only, hide from default dashboard view | Minimal |
 
-**Tier thresholds are user-configurable** per-user via `user_profiles.score_tier_config` JSON column:
-```json
-{
-  "must_apply_min": 90,
-  "strong_match_min": 80,
-  "worth_trying_min": 70,
-  "long_shot_min": 60
-}
+**Tier thresholds are user-configurable** per-user via `user_profiles.score_tier_config` JSON column.
+
+**Self-improvement integration**: When thresholds shift (e.g. 80% of jobs below 70), Phase 2.9 generates a medium-risk adjustment to recalibrate.
+
+---
+
+### Layer 2.5: Stabilization & Deploy Safety — IN PROGRESS (2026-04-29 → ongoing)
+
+**Why this layer exists.** Two forces made it necessary in late April:
+
+1. **Stabilization (Phase A)** — by 2026-04-29, two parallel Claude sessions in one day shipped 10 PRs: 5 Plan 3b PRs from Session A and 5 prod-health PRs from Session B. The work surfaced a P0 security finding (AWS STS tokens in user-visible fields), the actual root cause of "no artifacts since Apr 22" (EventBridge cron `Input: {"user_id":"default"}`), and 45 audit findings across 8 cross-cutting bug patterns. Session B has 4 unmerged branches (3 fix branches + 1 audit doc). Phase A consolidates all of this.
+2. **Deploy Safety (Phase B)** — PR #14 (2026-04-28) defined a 6-phase deploy-safety roadmap. With 3 prod 500s caught only by *manual* smoke testing on 2026-04-29 and 8 bug-class patterns discovered post-merge, ad-hoc smoke + CI green is no longer enough. Phase B turns the patterns into PR-time gates so the next 50 findings become predictable AND blocked.
+
+The user's verbatim instruction (2026-04-30): *"integrate the other spec of other agent for deployment safety in the grand plan preferably after 3.2 is done as it is very important to catch the bugs on the website."* Plan 3b ≈ "3.2" in the user's numbering.
+
+```
+Plan 3a (done) → Plan 3b "3.2" (done 2026-04-29) → Layer 2.5 → Layer 4 / Plan 3c
+                                                   ──────────
+                                                   Phase A → Phase B
 ```
 
-**Implementation**:
+#### Phase A — Stabilization
 
-- Add `score_tier` TEXT column to `jobs` table (values: S, A, B, C, D)
-- Compute tier from `match_score` at score time in `score_batch.py`
-- Dashboard filters by tier (default: show S + A + B, hide C + D unless "Show all" toggled)
-- `tailor_resume` Lambda checks tier before processing — skips if C or D
-- `generate_cover_letter` Lambda checks tier — only runs for S and A
-- `find_contacts` Lambda only runs for S
+| Sub-task | Type | Status | Notes |
+|----------|------|--------|-------|
+| A.1.1 Rotate Lambda exec-role creds + CloudTrail audit since 2026-04-22 | 🔴 P0 operator | Pending | Closes the STS-token leak window |
+| A.1.2 Fix EventBridge cron `Input` to real user UUID (not "default") | 🔴 operator + `template.yaml` | Pending | Root cause of "no artifacts since Apr 22" |
+| A.1.3 Run 3 Plan-3b backfills (eligibility recompute, apply slug, geo+work-auth cap) | 🟡 operator | Pending | Scripts in `scripts/`; commit-mode |
+| A.1.4 Add IAM: `JobHuntApi` (`ecs:RunTask`/`StopTask`/`iam:PassRole`), `WsDisconnect` (`ecs:StopTask`) | 🟡 `template.yaml` | Pending | Apply session start/stop currently fail silently; Fargate task leak risk on disconnect |
+| A.1.5 Add `UNIQUE(user_id, job_id, version_number)` to `resume_versions` | 🟡 DB migration | Pending | Root cause of "multiple v1 entries" |
+| A.1.6 Extend WS auth token TTL 60s → 5min | 🟡 code | Pending | Token expires before Fargate cold-start completes |
+| A.1.7 Run `scripts/backfill_missing_artifacts.py` reassign + retailor | 🟢 operator | Pending | Run after A.1.2 unblocks |
+| A.2 Consolidate Session B's 4 branches into single `fix/comprehensive-prod-health` PR | 🟡 code | Pending | `artifact-pipeline` (3 commits: F1 creds sanitizer, X2 header markers, A1 apply_url backfill); `dashboard-state` (3 commits: F5 applied count, F6 URL filter persistence, F7 title search); `cluster-bc-cleanup` (12 commits: useApiMutation, Pydantic strict mode, contract route diff, require_db, pre-commit hook); `deep-audit-2` (audit doc — separate doc-only PR) |
+| A.3 **Bug X1 fix** — `compile_latex` raises instead of returns error dict; `save_job` marks `application_status="failed"` with `failure_reason` | 🔴 code | Pending | **Highest remaining priority.** Pairs with X2 header-marker fix already in `artifact-pipeline` branch |
+| A.4 PR #25 postmortem review + merge | 🟢 doc | In review | Doc-only, mergeable |
+| A.5 Verify PR #23 (lazy SSM) unblocks Session B's F4 work on rebase | 🟢 verify | Pending | PR #23 already merged |
 
-**Self-improvement integration**: When thresholds shift (e.g., 80% of jobs below 70),
-Phase 2.9 generates a medium-risk adjustment to recalibrate tier thresholds.
+**Phase A exit criteria:** prod is healthy, no silent failures, backfills complete, all today's branches merged, no open PRs except deferred (#13 PostHog, #15 canary).
 
-**Scripts** (already implemented):
-- `scripts/rescore_sample.py` — rescore N jobs with deterministic scoring
-- `scripts/dedup_canonical_hashes.py` — remove duplicate job rows by canonical_hash
+#### Phase B — Deploy Safety (PR #14 phase numbering)
+
+| Sub-phase | What | Status | Source |
+|-----------|------|--------|--------|
+| **B.1** | Deploy Readiness CI gate (`sam validate` + `sam build` + layer build), runtime-import smoke (`docker run --entrypoint python` exercises lazy imports), `shared/` and `lambdas/` COPY in `Dockerfile.lambda` | ✅ Shipped | PRs #11/12/21 |
+| **B.2** | Lambda canary deploys (CodeDeploy AllAtOnce/LinearShift on 13 read-only Lambdas, 12 pipeline-tier, 3 critical-tier WS Lambdas; CloudWatch alarms + auto-rollback) | Held | PR #15, blocked on Phase A clearing PR queue |
+| **B.3** | Staging environment: Supabase staging project + SAM stack stage variable + Netlify branch deploys; E2E smoke against staging gates every PR | Pending | PR #14 Phase 3 |
+| **B.4** | Pattern-catching CI gates: Pydantic `extra='forbid'` globally, contract route diff test, `useApiMutation` hook, `require_db` helper, pre-commit hook | Branch ready | Session B `cluster-bc-cleanup` (consolidates into A.2 PR) |
+| **B.5** | Pipeline observability: Step Function ASL change `Catch → SucceedState` → `Catch → FailState`; alarm on `pipeline_metrics.artifacts_compiled = 0` for 24h; weekly email funnel summary | Pending | Backlog `pipeline_silent_success`; surfaced in Session A 2026-04-29 |
+| **B.6** | Trimmed observability: structlog throughout pipeline lambdas, X-Ray on the API container, CloudWatch dashboard for the 5 most-watched infra metrics. **Note:** infra-dashboards only; PR #13 PostHog covers business analytics — no overlap. | Pending | PR #14 Phase 4 (trimmed) |
+| **B.7** | Auto-rollback wiring: failing alarm during canary → CodeDeploy reverts; staging smoke gates prod deploy | Pending | PR #14 Phase 6 |
+
+**Phase B exit criteria:** an engineer (or Claude) can ship a feature and have CI catch what would have been a prod incident. The 3 prod 500s on 2026-04-29 (PR #17 + 2 hotfixes) would never have hit prod with Phase B in place.
+
+**Held PRs gating on this layer:**
+
+- **PR #13** — PostHog full integration (analytics + flags + frontend), held until prod health is stable enough for the new event volume
+- **PR #15** — Phase 2 Lambda canary deploys, held pending PR queue clear (consolidates into B.2)
 
 ---
 
-### Layer 3: Deploy — AFTER LAYER 2 (partial overlap OK)
+### Layer 3: Deploy — ✅ LIVE (since 2026-04-21)
 
-| Phase | Name | Status | What Needs to Happen |
-|-------|------|--------|---------------------|
-| 3.0 | Go Live | Pending | SAM deploy (needs Docker), Netlify CD, GitHub Actions wired |
+| Phase | Name | Status | Notes |
+|-------|------|--------|-------|
+| 3.0 | Go Live | ✅ Live | SAM deploys via `deploy.yml` from `main` after Deploy Readiness gate; EventBridge weekday cron 07:00 UTC; Netlify auto-deploys frontend; daily pipeline tested end-to-end |
 
-**Details**:
-- SAM deploy: Start Docker Desktop → `sam build && sam deploy --guided` to eu-west-1
-- Netlify: Configure GitHub → Netlify auto-deploy for `web/` directory
-- GitHub Actions: Wire `daily_job_hunt.yml` to trigger deployed Step Functions
-- Email template: Update to include score deltas, writing quality metrics
-- Dashboard UI: Add "Flag score" button, "Pending Adjustments" card, before/after display, "Missing data" badges, writing quality scores
+What's actually running in prod:
 
-**Can partially overlap with Layer 2**: Deploy current code first, then deploy quality fixes incrementally as they land. Don't wait for all of Layer 2 to finish.
+- **30+ Lambdas**: scrapers (LinkedIn, Indeed, Adzuna, YC, HN, Irish portals); pipeline (`ScrapeRouter`, `ScoreBatch`, `MergeDedup`, `TailorResume`, `GenerateCoverLetter`, `FindContacts`, `EmailNotifier`, `NotifyError`); API (`JobHuntApi` container image); WS (`WsConnect`, `WsRoute`, `WsDisconnect`); auto-apply preview Lambdas
+- **Step Functions**: `naukribaba-daily-pipeline` (orchestrator), `naukribaba-run-single-job` (manual JD)
+- **API Gateway**: REST + WebSocket
+- **Fargate**: cloud-browser auto-apply task definition
+- **Supabase**: prod project with RLS on all user tables
+- **S3**: artifact storage (resumes, cover letters, screenshots)
+
+**Deploy-safety hardening for the deploy itself** (canary, staging, auto-rollback, observability) lives in Layer 2.5 above.
 
 ---
 
-### Layer 4: Product Features — AFTER DEPLOY
+### Layer 4: Product Features — IN PROGRESS
 
 These map to the 6 v2 product stages (Discover → Research → Tailor → Apply → Interview → Analytics).
 
 | Phase | Name | v2 Stage | Was (old) | Key Features | Feeds From |
-|-------|------|----------|-----------|-------------|------------|
+|-------|------|----------|-----------|--------------|------------|
 | 3.1 | Discover+ | Stage 1 | Part of 2A | Manual JD submission, "+Add Job" button, enhanced dedup | 2.7 unified hash |
 | 3.2 | Research | Stage 2 | 2D | CompanyLens, GDELT news, salary data, red flags, deeper AI job analysis | 2.6 keyword analysis |
 | 3.3 | Tailor+ | Stage 3 | 2B + 2C | PDF-to-LaTeX conversion, Overleaf-style split-pane editor, resume version history | 2.6 quality gates, PDF validation |
-| 3.4 | Apply | Stage 4 | Part of 2A | **Semi-auto apply** (Playwright form extraction → AI STAR answers → user confirms), contact finder, email templates, follow-ups, application outcome tracking → feeds 2.9 | 2.9 user feedback, career-ops apply mode |
+| 3.4 | Apply | Stage 4 | Part of 2A | **Cloud-browser auto-apply** (Fargate Chrome + WS streaming + AI prefill), contact finder, follow-ups, outcome tracking → feeds 2.9 | 2.9 user feedback, career-ops apply mode. **Backend ✅; frontend (3c) pending.** |
 | 3.5 | Interview Prep | Stage 5 | 2F | Coding bank (Blind 75), system design rubrics, STAR stories, mock AI | — |
 | 3.6 | Analytics | Stage 6 | 2G | Funnel viz, score trends, scraper health dashboard, self-improvement viz | 2.9 pipeline_runs data |
 
 **Dependency chain within Layer 4**:
+
 ```
 3.1 Discover+ ──→ 3.2 Research ──→ 3.3 Tailor+ ──→ 3.4 Apply
                                                         │
@@ -269,29 +260,30 @@ These map to the 6 v2 product stages (Discover → Research → Tailor → Apply
                                               (needs data from 3.1-3.4)
 ```
 
-#### Stage 3.4 Apply — Sub-Plan Index (added 2026-04-26)
+#### Stage 3.4 Apply — Sub-Plan Index (updated 2026-04-30)
 
-Stage 3.4 evolved beyond the original "semi-auto Playwright" framing into a cloud-browser auto-apply system. Sub-specs and sub-plans below; consult these (not this row in the table) for current status.
+Stage 3.4 evolved beyond the original "semi-auto Playwright" framing into a cloud-browser auto-apply system. Sub-specs and sub-plans below; consult these (not the row in the Layer 4 table) for current status.
 
 | Doc | Status | Description |
-|---|---|---|
-| Spec: [auto-apply mode 1 design](2026-04-11-auto-apply-mode-1-design.md) | Approved | Original mode-1 design for known-ATS apply |
+|-----|--------|-------------|
+| Spec: [auto-apply mode 1 design](2026-04-11-auto-apply-mode-1-design.md) | Approved (superseded) | Original mode-1 design for known-ATS apply |
 | Spec: [auto-apply cloud-browser design](2026-04-12-auto-apply-cloud-browser-design.md) | Approved | Universal cloud-browser approach (Fargate Chrome + WS streaming) — supersedes mode-1 framing |
-| Plan 2: [browser session](../plans/2026-04-20-auto-apply-plan2-browser-session.md) | ✅ Shipped (PR #7) | `browser/browser_session.py` + Fargate task def |
-| Plan 3a: [WebSocket + backend](../plans/2026-04-24-auto-apply-plan3a-websocket-backend.md) | ✅ Shipped (PR #8) | 3 WS Lambdas + 5 `/api/apply/*` endpoints + idempotent record |
-| Spec: [apply platform classifier](2026-04-26-apply-platform-classifier-design.md) | **Current** | URL → platform classifier; flips eligibility gate from `apply_platform` to `apply_url`; backfill 831 jobs. **Unblocks 3a's consumer code (which is dead in prod without this).** |
-| Plan 3b: [AI preview](../plans/2026-04-24-auto-apply-plan3b-preview-ai.md) | Stub (pending) | AI answer prefill, platform metadata fetchers (greenhouse/ashby), question classifier. Depends on classifier. |
-| Plan 3c: [frontend UI](../plans/2026-04-26-auto-apply-plan3c-frontend-ui.md) | Stub (pending) | React UI to actually trigger the backend (Apply button, modal, WS client, screenshot stream). PR #8 shipped backend + WS contract; no UI consumer exists yet. |
+| Plan 2: [browser session](../plans/2026-04-20-auto-apply-plan2-browser-session.md) | ✅ Shipped (PR #7, 2026-04-22) | `browser/browser_session.py` + Fargate task def |
+| Plan 3a: [WebSocket + backend](../plans/2026-04-24-auto-apply-plan3a-websocket-backend.md) | ✅ Shipped (PR #8, 2026-04-24) | 3 WS Lambdas + 5 `/api/apply/*` endpoints + idempotent record |
+| Spec: [apply platform classifier](2026-04-26-apply-platform-classifier-design.md) | ✅ Shipped (PRs #10/11/12, 2026-04-27) | URL → platform classifier; eligibility flag flipped from `apply_platform` to `apply_url`; 831 jobs backfilled; live eligibility >0 for the first time |
+| Plan 3b: [AI preview](../plans/2026-04-24-auto-apply-plan3b-preview-ai.md) | ✅ Shipped (PR #17 + #21/#22 hotfixes, 2026-04-29) | AI answer prefill, platform metadata fetchers (greenhouse/ashby), question classifier |
+| Plan 3c: [frontend UI](../plans/2026-04-26-auto-apply-plan3c-frontend-ui.md) | Stub (pending — **next after Layer 2.5**) | React UI: Apply button, modal, WS client, screenshot stream. Backend + WS contract live; no UI consumer yet. **Open product fork**: 3c.0 minimal (backend generates, user copy-pastes) vs 3c.full (cloud-browser supervision + WS streaming + screenshot updates) — re-ask at start of Layer 4 / Plan 3c. |
 
-**Note on Layer placement:** Stage 3.4 originally lived in Layer 4 (Product Features, AFTER DEPLOY). In practice it's being built in Layer 2 timeframe alongside reliability work — the four-layer ordering in this doc is aspirational, not strict.
+**Note on Layer placement:** Stage 3.4 originally lived in Layer 4 (AFTER DEPLOY). In practice it was built in Layer 2/3 timeframe alongside reliability work — the four-layer ordering in this doc is a logical narrative, not a strict execution schedule.
 
 ---
 
 ### Phase 3.2 Enhancement: Glassdoor Company Research
 
-**Status**: Backlog — Glassdoor job scraping deprioritized (covered by LinkedIn/Greenhouse/Ashby), but their **company data** is unique and valuable.
+**Status**: Backlog — Glassdoor *job* scraping deprioritized (covered by LinkedIn/Greenhouse/Ashby), but their **company data** is unique.
 
 **What Glassdoor uniquely provides**:
+
 - Company ratings (overall, culture, compensation, career opportunities)
 - Salary ranges by role and location
 - Interview reviews and difficulty ratings
@@ -299,43 +291,61 @@ Stage 3.4 evolved beyond the original "semi-auto Playwright" framing into a clou
 - CEO approval ratings
 
 **Integration plan** (Phase 3.2 Research):
+
 - Use Bright Data's Glassdoor dataset API or Web Unlocker for company pages
 - Store company data in `company_intel` Supabase table
 - Display on job cards as "Company Intel" section
 - Feed into the A-F evaluation framework (Section D: compensation + market demand)
-
-**Not needed for job scraping** — Greenhouse (650+ Dublin jobs), Ashby (Anthropic, Linear, etc.), LinkedIn, Indeed provide sufficient job coverage.
 
 ---
 
 ### Cross-Cutting Concerns (Not Phases)
 
 | Concern | How It's Handled |
-|---------|-----------------|
+|---------|------------------|
 | **UI Revamp** (was 2A) | Neo-Brutalist styling applied incrementally as each feature ships. Not a standalone phase. Design tokens already defined in Tailwind v4 `@theme`. |
-| **Testing** (was 2E) | QA foundation (CI config, fixtures, golden dataset) built in 2.8. Tiers 4b/4c tests written incrementally alongside 2.6/2.7. Tier 4d tests written during/after 2.9. Each Layer 4 phase adds its own tests. |
-| **Security** | RLS policies exist. Each new table gets RLS. API auth tests in Tier 2. |
-| **Multi-tenancy** | Built for single user now. RLS ensures isolation when multi-tenant. |
+| **Testing** (was 2E) | QA foundation (CI config, fixtures, golden dataset) shipped in 2.8. Tier 4b/4c tests with 2.6/2.7. Tier 4d tests with 2.9. Layer 2.5 Phase B.4 adds pattern-catching gates (Pydantic strict, contract route diff, `useApiMutation`). |
+| **Security** | RLS on every user table. Layer 2.5 Phase A.1.1 closes the AWS STS token leak. Pydantic `extra='forbid'` (B.4) prevents future field-strip drift. |
+| **Multi-tenancy** | Built for single user now. Hardcoded user info (Pattern #6 from the audit) cleared piecewise in Layer 2.5 A.2; cover-letter and matcher prompts still pending. RLS ensures isolation when multi-tenant. |
+| **Career-ops integration** | Reference architecture from github.com/santifer/career-ops. ATS keyword extraction in 2.6, A-F evaluation framework feeds 3.2 Research, "filter not firehose" philosophy drives 2.10 tiering. |
+
+---
+
+## Career-Ops Integration Map
+
+Reference: `github.com/santifer/career-ops` — 740+ job evaluations, 100+ tailored CVs.
+
+Philosophy: **"A filter, not spray-and-pray."** Only top matches get full treatment.
+
+| Our Phase | Career-Ops Feature | Integration | Status |
+|-----------|-------------------|-------------|--------|
+| 2.6 Writing Quality | ATS keyword injection, proof-point extraction | Extract 15-20 JD keywords → inject into existing bullets (never fabricate) | Partial |
+| 2.7 Data Quality | Cross-source dedup | Description-independent `dedup_hash`, Tier 0 exact match | ✅ |
+| 2.10 Tiering | "Don't apply below 4.0" | D-tier hidden, C-tier no artifacts, S+A get full treatment | ✅ |
+| 3.1 Discover+ | 3-tier scanning (Playwright→API→WebSearch), 60+ companies | Greenhouse API + Lever API + company watchlist | Pending |
+| 3.2 Research | A-F Evaluation (10 dimensions), compensation data | Multi-dimension scoring | Pending |
+| 3.3 Tailor+ | ATS-optimized PDF, template system | Keyword-first tailoring, regen button | Partial |
+| 3.4 Apply | Cloud-browser auto-apply | Fargate Chrome + WS streaming + AI prefill | Backend ✅, frontend pending |
+| 3.5 Interview Prep | STAR+Reflection stories, behavioral mapping | Story bank in Supabase, per-job prep auto-generated | Pending |
+| 3.6 Analytics | Application outcome tracking → feedback loop | Ground truth feeds scoring accuracy | Pending |
 
 ---
 
 ## How Current Spec Feeds Into Future Phases
 
 | This Spec | Feeds Into | How |
-|-----------|-----------|-----|
+|-----------|------------|-----|
 | 2.7 Unified hash | 3.1 Discover+ | Manual JD submission uses same canonical dedup |
 | 2.7 Before/after scoring | 3.3 Tailor+ | Resume version comparison in editor workspace |
 | 2.6 Keyword analysis | 3.2 Research | Structured JD extraction feeds company intel |
 | 2.6 PDF validation | 3.3 Tailor+ | Quality gates carry into editor + PDF-to-LaTeX |
-| 2.6 Writing quality score | 3.6 Analytics | Tracked over time in analytics dashboard |
+| 2.10 Geo + work-auth cap | 3.4 Apply | Eligibility-aware tier prevents wasting AI on ineligible jobs |
+| 2.5 (Layer 2.5) Phase A creds sanitizer | All future Lambda error paths | F1 sanitizer in shared error handler closes the str(e) leakage class |
+| 2.5 (Layer 2.5) Phase B.4 gates | All future PRs | Pydantic strict + contract route diff + useApiMutation catch the 8 patterns at PR time |
 | 2.9 Self-improvement loop | 3.6 Analytics | Scraper health + score trends power dashboard |
 | 2.9 User feedback | 3.4 Apply | "Flag score" feeds back from application tracking |
-| 2.9 Pipeline metrics | 3.6 Analytics | pipeline_runs table powers funnel visualization |
+| 2.9 Pipeline metrics | 3.6 Analytics | `pipeline_runs` table powers funnel viz |
 | 2.8 QA tiers | All phases | Test infrastructure scales as stages are added |
-| 2.5b Glassdoor Fargate | 3.1 Discover+ | More complete job discovery |
-| Contact finder (backlog) | 3.4 Apply | Quality fix for contacts + intro messages |
-| App outcome feedback (backlog) | 3.4 → 2.9 | Ground truth for scoring accuracy |
-| Deeper AI job analysis (backlog) | 3.2 Research | Structured JD data feeds company intel |
 
 ---
 
@@ -354,47 +364,109 @@ For reference, how the original v2 phases map to the new structure:
 | 2G: Analytics | Funnel, trends, health | 3.6 Analytics | Unchanged |
 
 **New additions** (not in original 2A-2G):
-- 2.5b: Scraper fixes + Glassdoor Fargate
+
+- 2.5b: Scraper fixes
 - 2.6: Writing quality
 - 2.7: Data quality
 - 2.9: Self-improvement loop
+- 2.10: Score-based tiering
+- **2.5 (Layer 2.5): Stabilization & Deploy Safety**
 - 3.0: Deploy
 - 3.1: Discover+ (manual JD)
-- 3.4: Apply (contacts, email, follow-ups)
+- 3.4: Apply (now cloud-browser auto-apply)
 
 ---
 
 ## Success Criteria Per Layer
 
-**Layer 2 (Reliability) is done when**:
-- Zero duplicate jobs in dashboard for same company+title
-- Same job scored twice produces scores within +/-2
-- Every tailored resume has before/after score delta
-- Writing quality score >= 6/10 on all dimensions
-- Self-improvement loop running with tiered adjustments
-- QA tiers 4b/4c/4d passing in CI
-- Glassdoor returning jobs via Fargate
+**Layer 2 (Reliability) — ✅ MET (2026-04-29)**:
 
-**Layer 3 (Deploy) is done when**:
-- Lambda functions deployed and responding
-- Frontend live on Netlify with production API URL
-- Daily pipeline triggered via GitHub Actions → Step Functions
-- Email notifications sending with score deltas
+- ✅ Zero duplicate jobs in dashboard for same company+title (canonical hash dedup live)
+- ✅ Same job scored twice within ±2 (deterministic 3-call median scoring)
+- 🟡 Every tailored resume has before/after score delta — deferred to Layer 4 / 3.3 Tailor+
+- ✅ Writing quality fallback gate prevents broken AI output reaching users
+- ✅ Self-improvement loop running with tiered adjustments
+- ✅ QA suite 712+ tests in CI
+- 🟡 Glassdoor returning jobs via Fargate — deprioritized (Greenhouse/Ashby/LinkedIn cover)
 
-**Layer 4 (Features) is done when**:
-- User can paste a JD and get same pipeline treatment (3.1)
-- Company intel card on each job (3.2)
-- Split-pane LaTeX editor working (3.3)
-- Application tracking with outcome feedback (3.4)
-- Interview prep for any job (3.5)
-- Analytics dashboard with funnel + trends (3.6)
+**Layer 2.5 (Stabilization & Deploy Safety) — IN PROGRESS**:
+
+- 🟡 Phase A.1 operator actions complete (creds rotation, EventBridge cron, IAM, DB constraints, WS TTL)
+- 🟡 Phase A.2 Session B branch consolidation merged
+- 🟡 Phase A.3 Bug X1 + X2 fixed (compile_latex visibility, header-marker fallback)
+- ✅ Phase B.1 Deploy Readiness CI gate live (PRs #11/12/21)
+- 🟡 Phase B.2 Lambda canary live for read-only + pipeline tier
+- 🟡 Phase B.3 Staging environment: Supabase + SAM + Netlify branch deploys; E2E smoke gating prod
+- 🟡 Phase B.4 Pattern-catching CI gates merged (Pydantic strict, contract route test, useApiMutation, require_db, pre-commit)
+- 🟡 Phase B.5 Pipeline silent-success eliminated (Step Function ASL `FailState` + alarm on 0 artifacts)
+- 🟡 Phase B.6 structlog + X-Ray + infra dashboards live
+- 🟡 Phase B.7 Auto-rollback wired
+
+**Layer 3 (Deploy) — ✅ MET (2026-04-21)**:
+
+- ✅ Lambda functions deployed and responding
+- ✅ Frontend live on Netlify with production API URL
+- ✅ Daily pipeline triggered via EventBridge → Step Functions
+- ✅ Email notifications (per-run summary)
+
+**Layer 4 (Features) — partial**:
+
+- 🟡 User can paste a JD and get same pipeline treatment (3.1 Discover+) — `run_single_job` SFN exists; UI partial
+- 🟡 Company intel card on each job (3.2)
+- 🟡 Split-pane LaTeX editor (3.3 Tailor+) — basic editor in dashboard, no split-pane yet
+- 🟡 Application tracking with outcome feedback (3.4 Apply) — backend ✅, frontend (3c) pending
+- 🟡 Interview prep for any job (3.5)
+- 🟡 Analytics dashboard with funnel + trends (3.6)
 
 ---
 
 ## Cost Projection
 
 | Layer | Monthly Cost | Notes |
-|-------|-------------|-------|
-| Current (Layer 1) | ~$1 | Free AI tiers, local pipeline, no infra |
-| After Layer 2+3 | ~$15-25 | Lambda (free tier), Fargate (~$5), Supabase (free), S3 (<$1), Netlify (free) |
-| After Layer 4 | ~$25-40 | More AI calls (interview prep), CompanyLens API, additional Lambda invocations |
+|-------|--------------|-------|
+| Foundation (Layer 1) | ~$1 | Free AI tiers, local pipeline, no infra |
+| Layers 2 + 3 (current state) | ~$15-25 | Lambda (free tier mostly), Fargate (~$5 — auto-apply task on demand), Supabase (free), S3 (<$1), Netlify (free), Bright Data Web Unlocker (~$5-10) |
+| After Layer 2.5 | +$5-10 | Staging Supabase project, CloudWatch dashboards, X-Ray traces. Largely free-tier eligible. |
+| After Layer 4 | ~$30-50 | More AI calls (interview prep, deeper research), CompanyLens API, additional Lambda invocations from frontend Auto-Apply |
+
+---
+
+## Historical Status Snapshots
+
+Preserved for reference — current state is in the "Status Snapshot — 2026-04-30" section at the top of this document.
+
+### Status Snapshot — 2026-04-06 (historical)
+
+**✅ Done that day:**
+- 3.0 Deploy: SAM deployed (4×), EventBridge ENABLED (weekdays 07:00 UTC), Step Functions pipeline tested end-to-end
+- ScoreBatch Map batching: 421 jobs split into 25-job chunks, 5 parallel, no timeout
+- Data quality audit: 149 scores fixed, 59 expired, 205 dupes removed, 117 tiers realigned, 18 descriptions backfilled
+- IrishJobs JSON-LD: detail page descriptions extracted via structured data
+- API 500 fix: `utils/` added to `Dockerfile.lambda`
+- Page length validation: fallback to base if AI output too short
+
+**🔴 Issues found (since resolved unless noted):**
+- Lambda tailoring quality gaps (Lambda↔local code drift) — became audit Pattern #5, ongoing in Layer 2.5
+- 190 cross-source dupes — addressed via canonical hash dedup
+- 687 → 467 jobs in DB — score-tier filtering shipped
+- Cover letters: 99/467 jobs only — gating + S/A-tier focus shipped
+
+**🎯 Immediate-next list at the time** (all addressed): cross-source dedup, port tailoring guards to Lambda (still partial — Layer 2.5 A.2 finishes), dashboard declutter, Greenhouse/Lever scrapers, career-ops A-F framework integration.
+
+### Status Snapshot — 2026-04-05 evening (historical)
+
+**✅ Done that week:**
+- 2.5b Scraper Fixes (partial): OpenRouter 404 fixed (5 verified free models); AI council 18 → 32 providers; DeepSeek disabled (NVIDIA NIM alternative)
+- 2.7 Data Quality: canonical hash dedup live (177 → 159 jobs); deterministic 3-call median scoring; `score_version=2`; `score_status` tracking
+- 2.10 Score Tiering: `score_tier` column + CHECK + index shipped; all 159 jobs tiered (S=14, A=41, B=26, C=51, D=27)
+- Council retry logic with fresh-provider failover
+- Hard gate relaxed: substring matching for section completeness
+
+**🔴 Discovered then (since addressed in Apr 9 marathon):**
+- AI-generated LaTeX produced invalid output (undefined macros, unbalanced env blocks) — fixed via brace/macro sanitizer
+- Tailoring prompt drops sections — fixed via prompt v2
+- Groq IP-block from Singapore VPN — deprioritized in council
+
+**⏸️ Blockers at the time:**
+- SAM deploy: Docker daemon stuck — resolved (deploy live since 2026-04-21)
+- Apify budget exhausted — Bright Data contact finder approach taken

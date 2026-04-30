@@ -49,6 +49,19 @@ Parameters:
     Type: CommaDelimitedList
     Description: Public subnet IDs for Fargate browser tasks (discover via aws ec2 describe-subnets)
     Default: ""
+  DailyPipelineUserId:
+    Type: String
+    Description: |
+      Supabase auth user UUID under which the EventBridge cron rules run
+      (DailyPipelineSchedule, StaleNudgeSchedule, FollowUpSchedule).
+      Previously hardcoded as "default" / unset, which meant nudges and
+      reminders matched zero rows and the daily pipeline landed jobs
+      under whichever user load_config's "default" lookup picked first
+      (root cause of "no artifacts since Apr 22, 2026").
+      Required — UUID format enforced. Set via the DAILY_PIPELINE_USER_ID
+      GitHub secret in deploy.yml.
+    AllowedPattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+    ConstraintDescription: must be a valid UUID (8-4-4-4-12 hex)
 
 Resources:
 
@@ -1307,7 +1320,7 @@ Resources:
         - Arn: !GetAtt DailyPipelineStateMachine.Arn
           Id: DailyPipelineTarget
           RoleArn: !GetAtt EventBridgeRole.Arn
-          Input: '{"user_id": "default"}'
+          Input: !Sub '{"user_id": "${DailyPipelineUserId}"}'
 
   ExpiryCheckSchedule:
     Type: AWS::Events::Rule
@@ -1360,6 +1373,9 @@ Resources:
       Targets:
         - Arn: !GetAtt StaleNudgeFunction.Arn
           Id: StaleNudgeTarget
+          # Without Input, send_stale_nudges falls back to user_id="default"
+          # and matches zero rows. Use the same operator user as the daily pipeline.
+          Input: !Sub '{"user_id": "${DailyPipelineUserId}"}'
 
   StaleNudgePermission:
     Type: AWS::Lambda::Permission
@@ -1380,6 +1396,9 @@ Resources:
       Targets:
         - Arn: !GetAtt FollowUpReminderFunction.Arn
           Id: FollowUpTarget
+          # Same fix as StaleNudgeSchedule: send_followup_reminders falls back
+          # to literal "default" without an explicit Input.
+          Input: !Sub '{"user_id": "${DailyPipelineUserId}"}'
 
   FollowUpPermission:
     Type: AWS::Lambda::Permission
