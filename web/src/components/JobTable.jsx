@@ -217,14 +217,19 @@ function isValidUrl(str) {
 function DeleteButton({ jobId, onDelete }) {
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // Surface delete failures inline — previously they were console.error'd
+  // and the row stayed in place with no feedback, so the user clicked
+  // "Yes" again and again. Tooltip + small "!" indicator makes it obvious.
+  const [deleteError, setDeleteError] = useState(null);
 
   async function handleDelete() {
     setDeleting(true);
+    setDeleteError(null);
     try {
       await apiDelete(`/api/dashboard/jobs/${jobId}`);
       onDelete(jobId);
     } catch (err) {
-      console.error('Delete failed:', err);
+      setDeleteError(err.message || 'Delete failed');
     } finally {
       setDeleting(false);
       setConfirming(false);
@@ -248,6 +253,19 @@ function DeleteButton({ jobId, onDelete }) {
           No
         </button>
       </div>
+    );
+  }
+
+  if (deleteError) {
+    return (
+      <button
+        onClick={() => { setDeleteError(null); setConfirming(true); }}
+        title={`Delete failed: ${deleteError}. Click to retry.`}
+        className="inline-flex items-center justify-center text-error w-5 h-5 transition-colors cursor-pointer"
+      >
+        <Trash2 size={13} />
+        <span className="ml-0.5 text-[9px] font-bold">!</span>
+      </button>
     );
   }
 

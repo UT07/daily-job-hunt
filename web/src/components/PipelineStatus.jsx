@@ -24,10 +24,16 @@ export default function PipelineStatus({ onComplete }) {
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState(null);
   const [pollStatus, setPollStatus] = useState(null);
+  // User's configured search queries — fetched from /api/search-config so we
+  // don't ship hardcoded keywords that have nothing to do with the user's
+  // profile. Empty array means "let the backend pick up the user's saved
+  // config server-side"; we surface a hint to the user if so.
+  const [userQueries, setUserQueries] = useState([]);
   const pollRef = useRef(null);
 
   useEffect(() => {
     fetchStatus();
+    fetchUserQueries();
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
 
@@ -42,6 +48,19 @@ export default function PipelineStatus({ onComplete }) {
     }
   }
 
+  async function fetchUserQueries() {
+    try {
+      const data = await apiGet('/api/search-config');
+      const queries = Array.isArray(data?.queries) ? data.queries.filter(Boolean) : [];
+      setUserQueries(queries);
+    } catch (err) {
+      // Non-fatal — backend will fall back to user's saved config when we
+      // post an empty queries array, and we'll just disable the run button
+      // with a "configure search first" hint.
+      console.warn('Failed to load search config for pipeline run:', err);
+    }
+  }
+
   async function handleRunPipeline() {
     setRunning(true);
     setRunError(null);
@@ -49,7 +68,7 @@ export default function PipelineStatus({ onComplete }) {
 
     try {
       const data = await apiCall('/api/pipeline/run', {
-        queries: ['software engineer', 'python developer', 'backend developer'],
+        queries: userQueries,
       });
 
       const execName = data.pollUrl?.split('/').pop();
@@ -152,6 +171,13 @@ export default function PipelineStatus({ onComplete }) {
       {runError && (
         <div className="px-4 py-2 bg-error-light text-error text-xs font-bold">
           {runError}
+        </div>
+      )}
+      {!runError && !running && userQueries.length === 0 && !loading && (
+        <div className="px-4 py-2 bg-yellow-light text-stone-700 text-xs">
+          No search queries configured.{' '}
+          <a href="/settings" className="font-bold underline">Set them in Settings</a>{' '}
+          before running the pipeline.
         </div>
       )}
 

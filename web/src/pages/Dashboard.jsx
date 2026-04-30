@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
 import { apiGet } from '../api';
 import { LayoutList, LayoutGrid, ArrowUpDown } from 'lucide-react';
@@ -159,8 +159,43 @@ function CardView({ jobs, onStatusChange, onDelete }) {
   );
 }
 
+// Filters that persist to ?key=value query params on the URL so navigating
+// away and back (or sharing a link) preserves the active filter set.
+// (F6 from comprehensive-prod-health plan; UC-1 option A — URL query params.)
+const FILTER_DEFAULTS = {
+  status: 'All',
+  source: 'All',
+  min_score: 60,
+  company: '',
+  title: '',
+  tailored: false,
+  tier: 'S',
+  hide_expired: true,
+  archetype: 'All',
+  seniority: 'All',
+  remote: 'All',
+  level_fit: 'All',
+  skill: '',
+  show_advanced: false,
+  sort_by: 'first_seen',
+  sort_order: 'desc',
+  page: 1,
+};
+
+function readFilterFromParams(params, key, fallback) {
+  const raw = params.get(key);
+  if (raw === null) return fallback;
+  if (typeof fallback === 'boolean') return raw === 'true';
+  if (typeof fallback === 'number') {
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : fallback;
+  }
+  return raw;
+}
+
 export default function Dashboard() {
   const { user, loading: authLoading } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [jobs, setJobs] = useState([]);
   const [stats, setStats] = useState({
@@ -169,29 +204,31 @@ export default function Dashboard() {
     avg_match_score: 0,
     jobs_by_status: {},
   });
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useState(() => readFilterFromParams(searchParams, 'page', FILTER_DEFAULTS.page));
   const [perPage] = useState(25);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Filters
-  const [statusFilter, setStatusFilter] = useState('All');
-  const [sourceFilter, setSourceFilter] = useState('All');
-  const [minScore, setMinScore] = useState(60);
-  const [companySearch, setCompanySearch] = useState('');
-  const [tailoredOnly, setTailoredOnly] = useState(false);
-  const [tierFilter, setTierFilter] = useState('S');
-  const [hideExpired, setHideExpired] = useState(true);
-  const [archetypeFilter, setArchetypeFilter] = useState('All');
-  const [seniorityFilter, setSeniorityFilter] = useState('All');
-  const [remoteFilter, setRemoteFilter] = useState('All');
-  const [levelFitFilter, setLevelFitFilter] = useState('All');
-  const [skillFilter, setSkillFilter] = useState('');
+  // Filters — initial values hydrated from URL query params so deep links
+  // and browser-back restore the prior filter set.
+  const [statusFilter, setStatusFilter] = useState(() => readFilterFromParams(searchParams, 'status', FILTER_DEFAULTS.status));
+  const [sourceFilter, setSourceFilter] = useState(() => readFilterFromParams(searchParams, 'source', FILTER_DEFAULTS.source));
+  const [minScore, setMinScore] = useState(() => readFilterFromParams(searchParams, 'min_score', FILTER_DEFAULTS.min_score));
+  const [companySearch, setCompanySearch] = useState(() => readFilterFromParams(searchParams, 'company', FILTER_DEFAULTS.company));
+  const [titleSearch, setTitleSearch] = useState(() => readFilterFromParams(searchParams, 'title', FILTER_DEFAULTS.title));
+  const [tailoredOnly, setTailoredOnly] = useState(() => readFilterFromParams(searchParams, 'tailored', FILTER_DEFAULTS.tailored));
+  const [tierFilter, setTierFilter] = useState(() => readFilterFromParams(searchParams, 'tier', FILTER_DEFAULTS.tier));
+  const [hideExpired, setHideExpired] = useState(() => readFilterFromParams(searchParams, 'hide_expired', FILTER_DEFAULTS.hide_expired));
+  const [archetypeFilter, setArchetypeFilter] = useState(() => readFilterFromParams(searchParams, 'archetype', FILTER_DEFAULTS.archetype));
+  const [seniorityFilter, setSeniorityFilter] = useState(() => readFilterFromParams(searchParams, 'seniority', FILTER_DEFAULTS.seniority));
+  const [remoteFilter, setRemoteFilter] = useState(() => readFilterFromParams(searchParams, 'remote', FILTER_DEFAULTS.remote));
+  const [levelFitFilter, setLevelFitFilter] = useState(() => readFilterFromParams(searchParams, 'level_fit', FILTER_DEFAULTS.level_fit));
+  const [skillFilter, setSkillFilter] = useState(() => readFilterFromParams(searchParams, 'skill', FILTER_DEFAULTS.skill));
   const [availableSkills, setAvailableSkills] = useState([]);
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [sortBy, setSortBy] = useState('first_seen');
-  const [sortOrder, setSortOrder] = useState('desc');
+  const [showAdvanced, setShowAdvanced] = useState(() => readFilterFromParams(searchParams, 'show_advanced', FILTER_DEFAULTS.show_advanced));
+  const [sortBy, setSortBy] = useState(() => readFilterFromParams(searchParams, 'sort_by', FILTER_DEFAULTS.sort_by));
+  const [sortOrder, setSortOrder] = useState(() => readFilterFromParams(searchParams, 'sort_order', FILTER_DEFAULTS.sort_order));
 
   // View mode: 'list' or 'card'
   const [viewMode, setViewMode] = useState(getViewPreference);
@@ -205,8 +242,43 @@ export default function Dashboard() {
   const [filterVersion, setFilterVersion] = useState(0);
 
   // Use refs for filter values so fetchJobs stays stable across filter changes
-  const filtersRef = useRef({ statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter });
-  filtersRef.current = { statusFilter, sourceFilter, minScore, companySearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter };
+  const filtersRef = useRef({ statusFilter, sourceFilter, minScore, companySearch, titleSearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter });
+  filtersRef.current = { statusFilter, sourceFilter, minScore, companySearch, titleSearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter };
+
+  // Sync the URL query string to current filter state. Only writes the keys
+  // whose values differ from the defaults so the URL stays clean for the
+  // common case (one-click links from elsewhere in the app).
+  useEffect(() => {
+    const next = new URLSearchParams();
+    const currentValues = {
+      status: statusFilter,
+      source: sourceFilter,
+      min_score: minScore,
+      company: companySearch,
+      title: titleSearch,
+      tailored: tailoredOnly,
+      tier: tierFilter,
+      hide_expired: hideExpired,
+      archetype: archetypeFilter,
+      seniority: seniorityFilter,
+      remote: remoteFilter,
+      level_fit: levelFitFilter,
+      skill: skillFilter,
+      show_advanced: showAdvanced,
+      sort_by: sortBy,
+      sort_order: sortOrder,
+      page,
+    };
+    for (const [key, value] of Object.entries(currentValues)) {
+      const fallback = FILTER_DEFAULTS[key];
+      if (value === fallback || value === '' || value === null || value === undefined) continue;
+      next.set(key, String(value));
+    }
+    // Use replace to avoid spamming history with every keystroke.
+    setSearchParams(next, { replace: true });
+    // Intentionally exclude setSearchParams to keep the effect single-source-of-truth.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [statusFilter, sourceFilter, minScore, companySearch, titleSearch, tailoredOnly, tierFilter, hideExpired, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter, showAdvanced, sortBy, sortOrder, page]);
 
   const fetchJobs = useCallback(async () => {
     setLoading(true);
@@ -220,6 +292,7 @@ export default function Dashboard() {
       if (f.sourceFilter !== 'All') params.set('source', f.sourceFilter);
       if (f.minScore > 0) params.set('min_score', String(f.minScore));
       if (f.companySearch.trim()) params.set('company', f.companySearch.trim());
+      if (f.titleSearch && f.titleSearch.trim()) params.set('title', f.titleSearch.trim());
       if (f.tailoredOnly) params.set('tailored', 'true');
       if (f.tierFilter !== 'All') params.set('tier', f.tierFilter);
       if (f.hideExpired) params.set('hide_expired', 'true');
@@ -250,12 +323,18 @@ export default function Dashboard() {
     }
   }, []);
 
-  // Fetch available skills for filter dropdown
+  // Fetch available skills for filter dropdown.
+  // Was silently swallowed (.catch(() => {})) — if the endpoint failed the
+  // skills filter just stayed empty with no clue why. Downgrade to a warn
+  // so devs at least see it in the console; it's a filter convenience, so
+  // we don't gate the rest of the dashboard on it.
   useEffect(() => {
     if (user) {
       apiGet('/api/dashboard/skills').then((data) => {
         if (data?.skills) setAvailableSkills(data.skills);
-      }).catch(() => {});
+      }).catch((err) => {
+        console.warn('Failed to load skills filter:', err.message);
+      });
     }
   }, [user]);
 
@@ -370,6 +449,19 @@ export default function Dashboard() {
               value={minScore}
               onChange={(e) => setMinScore(Number(e.target.value))}
               className="w-32 accent-black"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-bold text-stone-500 uppercase tracking-wider mb-1.5">Title</label>
+            <input
+              value={titleSearch}
+              onChange={(e) => setTitleSearch(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleFilterApply(); }}
+              placeholder="Search title..."
+              className="bg-white border-2 border-black px-4 py-2.5 font-body text-sm text-black
+                placeholder:text-stone-400 focus:outline-none focus:shadow-brutal-yellow
+                transition-shadow w-40"
             />
           </div>
 
@@ -681,8 +773,8 @@ export default function Dashboard() {
             </button>
           ))}
           <button
-            onClick={() => setPage((p) => p + 1)}
-            disabled={jobs.length < perPage}
+            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+            disabled={page >= totalPages || jobs.length < perPage}
             className="border-2 border-black bg-white text-black px-3 py-1.5 text-sm font-heading font-bold
               hover:bg-stone-100 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
           >

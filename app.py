@@ -40,6 +40,7 @@ import io
 import json
 import logging
 import os
+import re
 import tempfile
 import threading
 import uuid
@@ -66,7 +67,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from auth import AuthUser, get_current_user
 from audit_middleware import AuditMiddleware, set_db as set_audit_db
@@ -142,6 +143,19 @@ _db: Optional[SupabaseClient] = None
 # Task store — Supabase pipeline_tasks table (persistent across cold starts)
 
 
+def require_db() -> SupabaseClient:
+    """FastAPI dependency: 503 if DB not configured, else returns the client.
+
+    Use via ``db: SupabaseClient = Depends(require_db)`` to consolidate the
+    ``if _db is None: raise HTTPException(503, ...)`` boilerplate that is
+    duplicated across many endpoints. Endpoints retrofitted to this pattern
+    can drop the manual guard and reference ``db`` directly.
+    """
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+    return _db
+
+
 def _resolve_env(value: str) -> str:
     """Resolve ${ENV_VAR} references in config values."""
     if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
@@ -179,6 +193,7 @@ def _load_resumes(config: dict) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 class ScoreRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     job_description: str = Field(..., min_length=20)
     job_title: str = "Software Engineer"
     company: str = "Unknown"
@@ -196,6 +211,7 @@ class ScoreResponse(BaseModel):
 
 
 class TailorRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     job_description: str = Field(..., min_length=20)
     job_title: str = "Software Engineer"
     company: str = "Unknown"
@@ -212,6 +228,7 @@ class TailorResponse(BaseModel):
 
 
 class CoverLetterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     job_description: str = Field(..., min_length=20)
     job_title: str = "Software Engineer"
     company: str = "Unknown"
@@ -224,6 +241,7 @@ class CoverLetterResponse(BaseModel):
 
 
 class ContactsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     job_description: str = Field(..., min_length=20)
     job_title: str = "Software Engineer"
     company: str = "Unknown"
@@ -246,6 +264,7 @@ class ContactsResponse(BaseModel):
 
 
 class FlagScoreRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     job_id: str = Field(..., min_length=1, description="ID of the job whose score is being flagged")
     feedback_type: str = Field("score_inaccurate", description="Type of feedback")
     expected_score: Optional[int] = Field(None, ge=0, le=100, description="What the user thinks the score should be")
@@ -273,6 +292,7 @@ class ProfileResponse(BaseModel):
 
 
 class ProfileUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: Optional[str] = None
     full_name: Optional[str] = None  # alias
     phone: Optional[str] = None
@@ -397,8 +417,47 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
 TASK_QUEUE_URL = os.environ.get("TASK_QUEUE_URL", "")
 
 
+# AWS credential / token redaction patterns. Defense-in-depth: when a Lambda's
+# IAM role temp creds expire mid-task and a boto3 ClientError leaks into a
+# str(e), the AWS error body can contain the leaked STS session token (IQoJ...)
+# verbatim. Sanitize before persisting to user-readable fields.
+_AWS_CRED_PATTERNS = [
+    # STS session tokens — start with IQoJ and are long base64 strings
+    (re.compile(r"IQoJ[A-Za-z0-9+/=]{16,}"), "<REDACTED_STS_TOKEN>"),
+    # AWS access key IDs
+    (re.compile(r"\b(?:A[SK]IA|ASIA)[0-9A-Z]{16}\b"), "<REDACTED_AWS_KEY>"),
+    # XML token-bearing tags from S3/STS error bodies
+    (re.compile(r"<Token>[^<]+</Token>", re.IGNORECASE), "<Token>REDACTED</Token>"),
+    (re.compile(r"<SessionToken>[^<]+</SessionToken>", re.IGNORECASE), "<SessionToken>REDACTED</SessionToken>"),
+    (re.compile(r"<AccessKeyId>[^<]+</AccessKeyId>", re.IGNORECASE), "<AccessKeyId>REDACTED</AccessKeyId>"),
+    (re.compile(r"<SecretAccessKey>[^<]+</SecretAccessKey>", re.IGNORECASE), "<SecretAccessKey>REDACTED</SecretAccessKey>"),
+]
+
+
+def _sanitize_aws_creds(value):
+    """Recursively redact AWS credentials/tokens from a string or nested
+    container before persisting to user-visible fields (pipeline_tasks.result,
+    .error, .payload). Non-string scalars pass through unchanged.
+    """
+    if isinstance(value, str):
+        out = value
+        for pattern, replacement in _AWS_CRED_PATTERNS:
+            out = pattern.sub(replacement, out)
+        return out
+    if isinstance(value, dict):
+        return {k: _sanitize_aws_creds(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_sanitize_aws_creds(v) for v in value]
+    return value
+
+
 def _save_task(task_id: str, user_id: str, data: dict):
-    """Persist task state to Supabase pipeline_tasks table."""
+    """Persist task state to Supabase pipeline_tasks table.
+
+    Sanitizes `result` and `error` for AWS credential leakage before write —
+    boto3 ClientError str(e) can include the failing request's STS session
+    token verbatim, which would otherwise be exposed via GET /api/tasks/{id}.
+    """
     if not _db:
         logger.warning("_save_task: database not configured, skipping persist for %s", task_id)
         return
@@ -406,8 +465,8 @@ def _save_task(task_id: str, user_id: str, data: dict):
         "task_id": task_id,
         "user_id": user_id,
         "status": data.get("status", "running"),
-        "result": data.get("result"),
-        "error": data.get("error"),
+        "result": _sanitize_aws_creds(data.get("result")),
+        "error": _sanitize_aws_creds(data.get("error")),
         "payload": data.get("payload"),
     }
     _db.client.table("pipeline_tasks").upsert(row, on_conflict="task_id").execute()
@@ -876,6 +935,7 @@ def contacts(req: ContactsRequest, user: AuthUser = Depends(get_current_user)):
 
 
 class GenerateEmailRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     template: str = Field(..., description="cold_outreach | follow_up | thank_you")
     contact_name: Optional[str] = None
 
@@ -1028,6 +1088,7 @@ def generate_email_for_job(
 
 
 class SuggestRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     section: str
     current_content: str = ""
 
@@ -1252,14 +1313,14 @@ def find_contacts_for_job(job_id: str, user: AuthUser = Depends(get_current_user
 
 
 @app.get("/api/profile", response_model=ProfileResponse)
-def get_profile(user: AuthUser = Depends(get_current_user)):
-    if _db is None:
-        raise HTTPException(503, "Database not configured")
-
-    row = _db.get_user(user.id)
+def get_profile(
+    user: AuthUser = Depends(get_current_user),
+    db: SupabaseClient = Depends(require_db),
+):
+    row = db.get_user(user.id)
     if row is None:
         # Auto-create user on first profile fetch (just-in-time provisioning)
-        row = _db.create_user({"id": user.id, "email": user.email})
+        row = db.create_user({"id": user.id, "email": user.email})
 
     return ProfileResponse(
         id=row["id"],
@@ -1284,15 +1345,14 @@ def get_profile(user: AuthUser = Depends(get_current_user)):
 
 @app.put("/api/profile", response_model=ProfileResponse)
 def update_profile(
-    req: ProfileUpdateRequest, user: AuthUser = Depends(get_current_user)
+    req: ProfileUpdateRequest,
+    user: AuthUser = Depends(get_current_user),
+    db: SupabaseClient = Depends(require_db),
 ):
-    if _db is None:
-        raise HTTPException(503, "Database not configured")
-
     # Ensure user row exists (JIT provisioning for first-time users)
-    existing = _db.get_user(user.id)
+    existing = db.get_user(user.id)
     if existing is None:
-        _db.create_user({"id": user.id, "email": user.email})
+        db.create_user({"id": user.id, "email": user.email})
 
     # Normalize field names (frontend may use aliases)
     raw = req.model_dump(exclude_none=True)
@@ -1315,7 +1375,7 @@ def update_profile(
     if not update_data:
         raise HTTPException(400, "No fields to update")
 
-    row = _db.update_user(user.id, update_data)
+    row = db.update_user(user.id, update_data)
     if row is None:
         raise HTTPException(404, "User not found")
     return ProfileResponse(
@@ -1392,12 +1452,14 @@ _VALID_STATUSES = {"New", "Applied", "Phone Screen", "Interview", "Offer", "Reje
 @app.get("/api/dashboard/jobs")
 def get_dashboard_jobs(
     user: AuthUser = Depends(get_current_user),
+    db: SupabaseClient = Depends(require_db),
     page: int = 1,
     per_page: int = 25,
     status: Optional[str] = None,
     min_score: Optional[float] = None,
     source: Optional[str] = None,
     company: Optional[str] = None,
+    title: Optional[str] = None,
     tailored: Optional[str] = None,
     tier: Optional[str] = None,
     hide_expired: Optional[str] = None,
@@ -1409,15 +1471,12 @@ def get_dashboard_jobs(
     level_fit: Optional[str] = None,
     skill: Optional[str] = None,
 ):
-    """Paginated, filterable job list."""
-    if _db is None:
-        return {
-            "jobs": [],
-            "page": page,
-            "per_page": per_page,
-            "message": "Database not configured",
-        }
+    """Paginated, filterable job list.
 
+    With ``Depends(require_db)`` this endpoint now returns 503 (instead of an
+    empty success payload) when the DB isn't configured — so the frontend can
+    render a real error rather than silently treating "no jobs" as success.
+    """
     filters = {}
     if status:
         filters["status"] = status
@@ -1427,6 +1486,8 @@ def get_dashboard_jobs(
         filters["source"] = source
     if company:
         filters["company"] = company
+    if title:
+        filters["title"] = title
     if tailored:
         filters["tailored"] = tailored
     if tier:
@@ -1448,7 +1509,7 @@ def get_dashboard_jobs(
     if skill:
         filters["skill"] = skill
 
-    jobs, total = _db.get_jobs(user.id, filters=filters, page=page, per_page=per_page)
+    jobs, total = db.get_jobs(user.id, filters=filters, page=page, per_page=per_page)
     _refresh_s3_urls(jobs)
     return {"jobs": jobs, "page": page, "per_page": per_page, "total": total}
 
@@ -1459,7 +1520,14 @@ def update_job(
     body: dict,
     user: AuthUser = Depends(get_current_user),
 ):
-    """Update a job's fields (status, location, apply_url)."""
+    """Update a job's fields (status, location, apply_url).
+
+    When `application_status` is included, also append a row to
+    `application_timeline` so the dashboard funnel counts (Applied /
+    Interviewing / Offers) survive subsequent status changes. Without
+    this, marking Applied → New via the inline StatusDropdown silently
+    drops the job out of the Applied count (F5 in comprehensive prod-health).
+    """
     if _db is None:
         raise HTTPException(503, "Database not configured")
 
@@ -1484,6 +1552,22 @@ def update_job(
             raise ValueError("Not found")
     except ValueError:
         raise HTTPException(404, "Job not found")
+
+    # Mirror status changes to the timeline log so funnel stats stay correct.
+    if "application_status" in update_data:
+        try:
+            _db.client.table("application_timeline").insert({
+                "user_id": user.id,
+                "job_id": job_id,
+                "status": update_data["application_status"],
+                "notes": None,
+            }).execute()
+        except Exception as e:  # pragma: no cover - non-fatal
+            logger.warning(
+                "Timeline mirror failed for job %s status=%s: %s",
+                job_id, update_data["application_status"], e,
+            )
+
     return result.data[0]
 
 
@@ -1525,6 +1609,7 @@ def get_single_job(
 
 
 class TimelineEventRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     status: str
     notes: Optional[str] = None
 
@@ -1712,6 +1797,7 @@ def restore_resume_version(
 # ---------------------------------------------------------------------------
 
 class SectionsBuildRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     sections: dict
 
 
@@ -1847,18 +1933,17 @@ def get_dashboard_skills(user: AuthUser = Depends(get_current_user)):
 
 
 @app.get("/api/dashboard/stats")
-def get_dashboard_stats(user: AuthUser = Depends(get_current_user)):
-    """Aggregate metrics for the dashboard KPI cards."""
-    if _db is None:
-        return {
-            "total_jobs": 0,
-            "matched_jobs": 0,
-            "avg_match_score": 0,
-            "jobs_by_status": {},
-            "message": "Database not configured",
-        }
+def get_dashboard_stats(
+    user: AuthUser = Depends(get_current_user),
+    db: SupabaseClient = Depends(require_db),
+):
+    """Aggregate metrics for the dashboard KPI cards.
 
-    return _db.get_job_stats(user.id)
+    With ``Depends(require_db)`` this returns 503 when DB is unavailable
+    instead of an empty success payload that the frontend can't distinguish
+    from a real "zero jobs" state.
+    """
+    return db.get_job_stats(user.id)
 
 
 @app.get("/api/dashboard/runs")
@@ -1890,14 +1975,17 @@ def _get_sfn():
 
 
 class PipelineRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     queries: list[str] = Field(default=["software engineer"], description="Search queries")
 
 
 class SingleJobRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     job_description: str = Field(..., min_length=20)
     job_title: str = "Software Engineer"
     company: str = "Unknown"
     location: str = Field("", description="Job location (city/country/Remote)")
+    apply_url: str = Field("", description="Direct apply URL (used by auto-apply)")
     resume_type: str = "sre_devops"
 
 
@@ -1966,8 +2054,8 @@ def run_single_job(req: SingleJobRunRequest, user: AuthUser = Depends(get_curren
                 "title": req.job_title[:500],
                 "company": req.company[:200],
                 "description": req.job_description,
-                "location": "",
-                "apply_url": "",
+                "location": req.location or "",
+                "apply_url": req.apply_url or "",
                 "source": "manual",
             }, on_conflict="job_hash").execute()
         except Exception as e:
@@ -1986,6 +2074,7 @@ def run_single_job(req: SingleJobRunRequest, user: AuthUser = Depends(get_curren
             "job_title": req.job_title,
             "company": req.company,
             "location": req.location,
+            "apply_url": req.apply_url,
             "resume_type": req.resume_type,
             "skip_scoring": False,
         }),
@@ -1999,6 +2088,7 @@ def run_single_job(req: SingleJobRunRequest, user: AuthUser = Depends(get_curren
 
 
 class RetailorRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     tier: str = "S"  # S, A, or SA for both
     max_jobs: int = 50
 
@@ -2272,6 +2362,7 @@ def re_tailor_job(job_id: str, user: AuthUser = Depends(get_current_user)):
 
 
 class CompileLatexRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     tex_source: str = Field(..., min_length=10)
 
 
@@ -2367,11 +2458,12 @@ async def upload_resume(
 
 
 @app.get("/api/resumes")
-def list_resumes(user: AuthUser = Depends(get_current_user)):
+def list_resumes(
+    user: AuthUser = Depends(get_current_user),
+    db: SupabaseClient = Depends(require_db),
+):
     """List all resumes for the authenticated user."""
-    if not _db:
-        raise HTTPException(503, "Database not configured")
-    resumes = _db.get_resumes(user.id)
+    resumes = db.get_resumes(user.id)
     return {"resumes": resumes}
 
 
@@ -2723,6 +2815,7 @@ def apply_preview(job_id: str, user: AuthUser = Depends(get_current_user)):
 
 
 class StartSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     job_id: str
 
 
@@ -2831,6 +2924,7 @@ def apply_start_session(
 
 
 class StopSessionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     session_id: str
 
 
@@ -2865,6 +2959,7 @@ def apply_stop_session(
 
 
 class RecordApplicationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     session_id: str
     job_id: str
     confirmation_screenshot_key: Optional[str] = None

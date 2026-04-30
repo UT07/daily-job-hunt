@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { apiGet, apiPatch, apiCall } from '../api';
 import EmailComposer from '../components/EmailComposer';
+import useApiMutation from '../hooks/useApiMutation';
 
 function decodeHtml(text) {
   if (!text) return '';
@@ -133,7 +134,12 @@ function ContactItem({ contact }) {
 }
 
 function ContactsTab({ job }) {
-  const [findingContacts, setFindingContacts] = useState(false);
+  // Surface find-contacts errors instead of just console.error'ing them —
+  // before this the spinner stopped and nothing happened, with no clue why.
+  const findContacts = useApiMutation(
+    () => apiCall(`/api/dashboard/jobs/${job.job_id}/find-contacts`, {}),
+  );
+  const findingContacts = findContacts.loading;
 
   let contacts = [];
   if (job.linkedin_contacts) {
@@ -148,14 +154,7 @@ function ContactsTab({ job }) {
   }
 
   async function handleFindContacts() {
-    setFindingContacts(true);
-    try {
-      await apiCall(`/api/dashboard/jobs/${job.job_id}/find-contacts`, {});
-    } catch (err) {
-      console.error('Find contacts failed:', err);
-    } finally {
-      setFindingContacts(false);
-    }
+    await findContacts.run();
   }
 
   return (
@@ -174,6 +173,11 @@ function ContactsTab({ job }) {
           {findingContacts ? 'Finding...' : contacts.length ? 'Find More' : 'Find Contacts'}
         </Button>
       </div>
+      {findContacts.error && (
+        <div className="mb-3 p-3 border-2 border-error bg-error-light text-xs font-bold text-error font-mono">
+          Find contacts failed: {findContacts.error}
+        </div>
+      )}
       {contacts.length > 0 ? (
         contacts.map((c, i) => (
           <ContactItem key={i} contact={c} />
@@ -364,8 +368,18 @@ function ResearchTab({ job }) {
   }, [job.company_research]);
 
   const companyUrl = job.apply_url || '';
-  const glassdoorUrl = `https://www.glassdoor.com/Reviews/${encodeURIComponent(job.company)}-reviews-SRCH_KE0,${job.company?.length}.htm`;
-  const linkedinUrl = `https://www.linkedin.com/company/${encodeURIComponent(job.company?.toLowerCase().replace(/\s+/g, '-'))}`;
+  // Use search-style URLs — guessing canonical company slugs (e.g.
+  // /company/some-co or /Reviews/Some-Co-reviews-SRCH_KE0,N.htm) was wrong
+  // for most companies. Search URLs always resolve to a real page and let
+  // the user click into the right entity.
+  const companyName = (job.company || '').trim();
+  const encodedCompany = encodeURIComponent(companyName);
+  const glassdoorUrl = companyName
+    ? `https://www.glassdoor.com/Search/results.htm?keyword=${encodedCompany}`
+    : null;
+  const linkedinUrl = companyName
+    ? `https://www.linkedin.com/search/results/companies/?keywords=${encodedCompany}`
+    : null;
 
   return (
     <div className="space-y-4">
@@ -379,14 +393,18 @@ function ResearchTab({ job }) {
               Job Posting
             </a>
           )}
-          <a href={glassdoorUrl} target="_blank" rel="noopener noreferrer"
-            className="text-xs font-bold border-2 border-black px-3 py-1.5 hover:bg-yellow transition-colors">
-            Glassdoor Reviews
-          </a>
-          <a href={linkedinUrl} target="_blank" rel="noopener noreferrer"
-            className="text-xs font-bold border-2 border-black px-3 py-1.5 hover:bg-yellow transition-colors">
-            LinkedIn Company
-          </a>
+          {glassdoorUrl && (
+            <a href={glassdoorUrl} target="_blank" rel="noopener noreferrer"
+              className="text-xs font-bold border-2 border-black px-3 py-1.5 hover:bg-yellow transition-colors">
+              Glassdoor Reviews
+            </a>
+          )}
+          {linkedinUrl && (
+            <a href={linkedinUrl} target="_blank" rel="noopener noreferrer"
+              className="text-xs font-bold border-2 border-black px-3 py-1.5 hover:bg-yellow transition-colors">
+              LinkedIn Company
+            </a>
+          )}
           <a href={`https://www.google.com/search?q=${encodeURIComponent(job.company + ' engineering blog')}`}
             target="_blank" rel="noopener noreferrer"
             className="text-xs font-bold border-2 border-black px-3 py-1.5 hover:bg-yellow transition-colors">
@@ -578,12 +596,14 @@ export default function JobWorkspace() {
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null);
   const [regenLoading, setRegenLoading] = useState(null); // 'resume' | 'cover' | null
+  const [regenError, setRegenError] = useState(null);
 
   // Version history state
   const [versions, setVersions] = useState([]);
   const [versionsLoading, setVersionsLoading] = useState(false);
   const [selectedVersionId, setSelectedVersionId] = useState(null); // null = current live
   const [restoring, setRestoring] = useState(false);
+  const [restoreError, setRestoreError] = useState(null);
 
   // Timeline state
   const [timeline, setTimeline] = useState([]);
@@ -628,6 +648,7 @@ export default function JobWorkspace() {
 
   async function handleRegen(type) {
     setRegenLoading(type);
+    setRegenError(null);
     try {
       const data = await apiCall(`/api/pipeline/re-tailor/${job.job_id}`, {});
       const execName = data.pollUrl?.split('/').pop();
@@ -640,6 +661,10 @@ export default function JobWorkspace() {
           if (result.status !== 'RUNNING') {
             clearInterval(poll);
             setRegenLoading(null);
+            if (result.status === 'FAILED' || result.status === 'TIMED_OUT' || result.status === 'ABORTED') {
+              setRegenError(result.error || result.cause || `Pipeline ${result.status.toLowerCase()}`);
+              return;
+            }
             // Refresh job data to get new PDF URLs
             const updated = await apiGet(`/api/dashboard/jobs/${job.job_id}`);
             if (updated) setJob(updated);
@@ -649,17 +674,22 @@ export default function JobWorkspace() {
             setVersions(Array.isArray(versionData) ? versionData : []);
           }
         } catch (err) {
-          console.error('Regen poll error:', err);
+          // Surface poll errors instead of silently swallowing — user has been
+          // staring at a spinner and deserves to know it's not coming back.
+          clearInterval(poll);
+          setRegenLoading(null);
+          setRegenError(`Polling failed: ${err.message}`);
         }
       }, 5000);
     } catch (err) {
-      console.error('Regen failed:', err);
       setRegenLoading(null);
+      setRegenError(err.message || 'Regenerate failed');
     }
   }
 
   async function handleRestore(versionNumber) {
     setRestoring(true);
+    setRestoreError(null);
     try {
       const updated = await apiCall(
         `/api/dashboard/jobs/${job.job_id}/versions/${versionNumber}/restore`,
@@ -672,11 +702,13 @@ export default function JobWorkspace() {
       const versionData = await apiGet(`/api/dashboard/jobs/${job.job_id}/versions`);
       setVersions(Array.isArray(versionData) ? versionData : []);
     } catch (err) {
-      console.error('Restore failed:', err);
+      setRestoreError(err.message || 'Restore failed');
     } finally {
       setRestoring(false);
     }
   }
+
+  const [loadError, setLoadError] = useState(null);
 
   useEffect(() => {
     async function load() {
@@ -685,7 +717,7 @@ export default function JobWorkspace() {
         setJob(data || null);
         if (data) setCurrentStatus(data.application_status || 'New');
       } catch (err) {
-        console.error('Failed to load job:', err);
+        setLoadError(err.message || 'Failed to load job');
       } finally {
         setLoading(false);
       }
@@ -698,7 +730,13 @@ export default function JobWorkspace() {
     setVersionsLoading(true);
     apiGet(`/api/dashboard/jobs/${jobId}/versions`)
       .then((data) => setVersions(Array.isArray(data) ? data : []))
-      .catch((err) => console.error('Failed to load versions:', err))
+      .catch((err) => {
+        // Versions are auxiliary — log and let the page render without them
+        // rather than blocking. Earlier versions of the dashboard left this
+        // as a silent console.error which made it impossible to tell why
+        // the version selector didn't appear.
+        console.warn('Failed to load resume versions:', err.message);
+      })
       .finally(() => setVersionsLoading(false));
   }, [jobId, activeTab]);
 
@@ -707,7 +745,7 @@ export default function JobWorkspace() {
     setTimelineLoading(true);
     apiGet(`/api/dashboard/jobs/${jobId}/timeline`)
       .then((data) => setTimeline(Array.isArray(data) ? data : []))
-      .catch((err) => console.error('Failed to load timeline:', err))
+      .catch((err) => console.warn('Failed to load timeline:', err.message))
       .finally(() => setTimelineLoading(false));
   }, [jobId]);
 
@@ -727,7 +765,9 @@ export default function JobWorkspace() {
   if (!job) {
     return (
       <div className="border-2 border-black bg-white p-8 text-center">
-        <p className="text-stone-500 font-heading">Job not found.</p>
+        <p className="text-stone-500 font-heading">
+          {loadError ? `Failed to load job: ${loadError}` : 'Job not found.'}
+        </p>
         <Button variant="ghost" onClick={() => navigate('/')} className="mt-4">
           Back to Dashboard
         </Button>
@@ -989,6 +1029,12 @@ export default function JobWorkspace() {
         )}
         {activeTab === 'resume' && (
           <div>
+            {(regenError || restoreError) && (
+              <div className="mb-4 p-3 border-2 border-error bg-error-light text-xs font-bold text-error font-mono">
+                {regenError && <div>Regenerate failed: {regenError}</div>}
+                {restoreError && <div>Restore failed: {restoreError}</div>}
+              </div>
+            )}
             {job.resume_s3_url ? (
               <div>
                 {/* Version selector — only shown when there are saved older versions */}
