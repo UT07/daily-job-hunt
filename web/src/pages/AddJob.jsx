@@ -59,7 +59,7 @@ function ProgressIndicator({ steps, currentKey }) {
               <span>{step.label}</span>
             </div>
             {i < steps.length - 1 && (
-              <span className="text-stone-300 font-mono text-xs">\u2192</span>
+              <span className="text-stone-300 font-mono text-xs">{'→'}</span>
             )}
           </div>
         );
