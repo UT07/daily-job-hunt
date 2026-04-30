@@ -62,6 +62,14 @@ Parameters:
       GitHub secret in deploy.yml.
     AllowedPattern: '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
     ConstraintDescription: must be a valid UUID (8-4-4-4-12 hex)
+  AlarmEmail:
+    Type: String
+    Description: |
+      Email address subscribed to Phase B.5 pipeline alarm SNS topic.
+      Receives notifications from DailyPipelineExecutionsFailedAlarm and
+      DailyPipelineNoArtifactsAlarm. Subscription confirmation email is
+      sent on first deploy — click the link to start receiving alerts.
+    Default: 254utkarsh@gmail.com
 
 Resources:
 
@@ -410,6 +418,7 @@ Resources:
       Policies:
         - SSMParameterReadPolicy:
             ParameterName: naukribaba/*
+        - CloudWatchPutMetricPolicy: {}
 
   SendEmailFunction:
     Type: AWS::Serverless::Function
@@ -1126,7 +1135,8 @@ Resources:
                 "user_id.$": "$.user_id",
                 "scraper_results.$": "$.scraper_results",
                 "score_result.$": "$.score_result",
-                "dedup_result.$": "$.dedup_result"
+                "dedup_result.$": "$.dedup_result",
+                "processed_jobs.$": "$.processed_jobs"
               },
               "ResultPath": "$.metrics_saved",
               "Next": "SendEmailSummary",
@@ -1163,7 +1173,12 @@ Resources:
                 "error.$": "$.error",
                 "step": "pipeline"
               },
-              "Next": "PipelineComplete"
+              "Next": "PipelineFailedAfterError"
+            },
+            "PipelineFailedAfterError": {
+              "Type": "Fail",
+              "Error": "PipelineCaughtError",
+              "Cause": "A pipeline step failed and was caught by NotifyError. Inspect $.error in the failed execution. This Fail state ensures CloudWatch's ExecutionsFailed metric ticks so the DailyPipelineExecutionsFailedAlarm fires (B.5 silent-success fix)."
             },
             "PipelineComplete": {
               "Type": "Succeed"
@@ -1748,6 +1763,66 @@ Resources:
               awslogs-group: !Ref BrowserLogGroup
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: browser
+
+  # --- Phase B.5 observability: pipeline silent-success alarms ---
+  # Pair these with the FailState introduced at PipelineFailedAfterError and
+  # the ArtifactsCompiled custom metric emitted from save_metrics.py.
+
+  PipelineAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: naukribaba-pipeline-alarms
+      DisplayName: NaukriBaba Pipeline Alarms
+
+  PipelineAlarmEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref PipelineAlarmTopic
+      Protocol: email
+      Endpoint: !Ref AlarmEmail
+
+  DailyPipelineExecutionsFailedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-daily-pipeline-executions-failed
+      AlarmDescription: |
+        Daily pipeline Step Function execution failed (caught error routed to
+        PipelineFailedAfterError, B.5). Before B.5 these were silent successes.
+      Namespace: AWS/States
+      MetricName: ExecutionsFailed
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !GetAtt DailyPipelineStateMachine.Arn
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref PipelineAlarmTopic]
+
+  DailyPipelineNoArtifactsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-daily-pipeline-no-artifacts-24h
+      AlarmDescription: |
+        Daily pipeline ran but produced 0 resume PDFs in the last 24h.
+        This is the "Apr 22 empty-tectonic-layer" pattern: pipeline succeeds
+        cleanly, score writes ~50 jobs, but ArtifactsCompiled=0 because
+        compile_latex silently fell back to "tectonic_not_available". The
+        alarm fires regardless of execution-success/fail status.
+      Namespace: Naukribaba/Pipeline
+      MetricName: ArtifactsCompiled
+      Dimensions:
+        - Name: DocType
+          Value: resume
+      Statistic: Sum
+      Period: 86400  # 24h
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref PipelineAlarmTopic]
 
 Outputs:
   ApiUrl:
