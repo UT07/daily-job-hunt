@@ -94,10 +94,13 @@ _REQUIRED_SECTIONS = ["experience", "skills", "education", "projects", "certific
 def _derive_header_markers(profile: dict | None) -> list[str]:
     """Return per-user header markers from the profile, with safe fallbacks.
 
-    Priority: full_name + email from `users` table. If either is missing,
-    drop just that marker (don't reject — base resume's contact line may
-    legitimately use a different format). If both are missing, return [] —
-    skip the header check entirely rather than fail every tailor.
+    Priority for the name marker: full_name → name → first_name+last_name.
+    Then email. If neither name nor email resolves, return [] — skip the
+    header check entirely rather than fail every tailor.
+
+    Schema note: prod `users` table has `name`, `first_name`, `last_name`,
+    `email` but no `full_name` column. The full_name lookup is kept for
+    forward-compatibility with future onboarding flows that might add it.
 
     Multi-tenant fix: was previously hardcoded
     `["Utkarsh Singh", "254utkarsh@gmail.com"]`; this caused validation
@@ -108,6 +111,10 @@ def _derive_header_markers(profile: dict | None) -> list[str]:
         return []
     markers = []
     name = (profile.get("full_name") or profile.get("name") or "").strip()
+    if not name:
+        first = (profile.get("first_name") or "").strip()
+        last = (profile.get("last_name") or "").strip()
+        name = " ".join(p for p in (first, last) if p)
     if name:
         markers.append(name)
     email = (profile.get("email") or "").strip()
@@ -394,7 +401,9 @@ def handler(event, context):
     # Read user profile so the header-marker validation uses THIS user's
     # name + email, not hardcoded "Utkarsh Singh / 254utkarsh@gmail.com".
     # Multi-tenant fix: previously failed for any other user; now per-user.
-    user_profile_resp = db.table("users").select("full_name, name, email") \
+    # Schema note: prod `users` table has `name` (and `first_name`/`last_name`)
+    # but no `full_name` column; _derive_header_markers falls back to `name`.
+    user_profile_resp = db.table("users").select("name, first_name, last_name, email") \
         .eq("id", user_id).limit(1).execute()
     user_profile = user_profile_resp.data[0] if user_profile_resp.data else None
     header_markers = _derive_header_markers(user_profile)

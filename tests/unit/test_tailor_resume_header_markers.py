@@ -49,6 +49,20 @@ class TestDeriveHeaderMarkers:
         profile = {"full_name": "Alice Doe"}
         assert _derive_header_markers(profile) == ["Alice Doe"]
 
+    def test_first_last_fallback_when_no_name_field(self):
+        # Prod schema has no `full_name` and `name` may be empty for
+        # newly-onboarded users — first_name + last_name is the tertiary fallback.
+        profile = {"first_name": "Carol", "last_name": "Davies", "email": "c@example.com"}
+        assert _derive_header_markers(profile) == ["Carol Davies", "c@example.com"]
+
+    def test_first_only_fallback(self):
+        profile = {"first_name": "Carol", "email": "c@example.com"}
+        assert _derive_header_markers(profile) == ["Carol", "c@example.com"]
+
+    def test_name_takes_precedence_over_first_last(self):
+        profile = {"name": "Alice Doe", "first_name": "Wrong", "last_name": "Person"}
+        assert _derive_header_markers(profile) == ["Alice Doe"]
+
     def test_blank_strings_treated_as_missing(self):
         profile = {"full_name": "  ", "email": ""}
         assert _derive_header_markers(profile) == []
