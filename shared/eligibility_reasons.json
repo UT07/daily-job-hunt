@@ -1,0 +1,17 @@
+{
+  "comment": "Single source of truth for eligibility reasons. Backend pytest contract test reads this; frontend imports it via Vite's JSON import at hooks/useApplyEligibility.js. Order matches the precedence in app.py:2683-2734.",
+  "ineligibility_reasons": [
+    "already_applied",
+    "no_apply_url",
+    "no_resume",
+    "profile_incomplete"
+  ],
+  "eligible_value": "eligible",
+  "all_response_values": [
+    "eligible",
+    "already_applied",
+    "no_apply_url",
+    "no_resume",
+    "profile_incomplete"
+  ]
+}
