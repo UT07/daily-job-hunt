@@ -11,7 +11,7 @@ const validJob = {
   application_status: 'scored',
 }
 
-describe('computeEligibility — order matches app.py:2683-2734', () => {
+describe('computeEligibility — order matches app.py:apply_eligibility', () => {
   it('eligible when all gates pass', () => {
     expect(computeEligibility(validJob, completeProfile)).toEqual({
       eligible: true,
@@ -19,8 +19,19 @@ describe('computeEligibility — order matches app.py:2683-2734', () => {
     })
   })
 
-  it('already_applied wins over everything else', () => {
-    const r = computeEligibility({ ...validJob, application_status: 'applied' }, incompleteProfile)
+  it('no_apply_url wins over already_applied (job-side gates first)', () => {
+    const r = computeEligibility(
+      { ...validJob, application_status: 'applied', apply_url: null },
+      incompleteProfile,
+    )
+    expect(r).toEqual({ eligible: false, reason: 'no_apply_url' })
+  })
+
+  it('already_applied wins over profile_incomplete (when job is fully apply-ready)', () => {
+    const r = computeEligibility(
+      { ...validJob, application_status: 'applied' },
+      incompleteProfile,
+    )
     expect(r).toEqual({ eligible: false, reason: 'already_applied' })
   })
 
