@@ -44,4 +44,10 @@ describe('useUserProfile', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false))
     expect(result.current.profile).toBeNull()
   })
+
+  it('returns safe defaults when called outside ProfileProvider', () => {
+    // No wrapper — context returns its default value.
+    const { result } = renderHook(() => useUserProfile())
+    expect(result.current).toEqual({ profile: null, isLoading: true })
+  })
 })
