@@ -1,7 +1,14 @@
 [build]
+  # `base` is where commands run; `publish` is ALWAYS relative to repo root
+  # (not to base), even though they look paired here. Vite outputs to web/dist
+  # because base="web" puts the build inside web/, so publish has to spell out
+  # the full repo-root-relative path. Setting publish = "dist" silently broke
+  # the GitHub Actions auto-deploy on its first run (PR #48 merge commit) —
+  # Netlify CLI looked for <root>/dist and found nothing. Manual deploys via
+  # `netlify deploy --dir=web/dist` had been hiding this misconfig for weeks.
   base = "web"
   command = "npm run build"
-  publish = "dist"
+  publish = "web/dist"
 
 [build.environment]
   NODE_VERSION = "20"
