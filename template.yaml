@@ -1586,10 +1586,40 @@ Resources:
             QueueName: !GetAtt TaskQueue.QueueName
         - S3CrudPolicy:
             BucketName: utkarsh-job-hunt
-        - StepFunctionsExecutionPolicy:
-            StateMachineName: !GetAtt DailyPipelineStateMachine.Name
-        - StepFunctionsExecutionPolicy:
-            StateMachineName: !GetAtt SingleJobPipelineStateMachine.Name
+        # NOTE: SAM's `StepFunctionsExecutionPolicy` is misleadingly named —
+        # it only grants `states:StartExecution` (start, no inspect, no stop).
+        # Originally we used it here, which meant /api/pipeline/status/{name}
+        # was 100% silent-failing in prod: the FastAPI handler would call
+        # describe_execution(), get AccessDeniedException, swallow it in a
+        # broad except, and return HTTP 404 to the frontend. The frontend's
+        # pollPipeline saw `!res.ok` and threw "Poll failed: HTTP 404" —
+        # surfacing as "Tailor Resume doesn't work" while the backend was
+        # actually succeeding (the pipeline finished fine; we just couldn't
+        # read its state).
+        # The inline policy below grants the full Start + Describe + Stop
+        # set on both state machines, with separate Resource ARN patterns
+        # for state-machine-level vs execution-level actions (DescribeExecution
+        # is authorized against the execution ARN, not the state machine ARN).
+        - Statement:
+            - Sid: StartStateMachineExecutions
+              Effect: Allow
+              Action:
+                - states:StartExecution
+              Resource:
+                - !GetAtt DailyPipelineStateMachine.Arn
+                - !GetAtt SingleJobPipelineStateMachine.Arn
+            - Sid: DescribeAndStopExecutions
+              Effect: Allow
+              Action:
+                - states:DescribeExecution
+                - states:StopExecution
+                - states:GetExecutionHistory
+              Resource:
+                # Execution ARNs have shape:
+                #   arn:aws:states:REGION:ACCT:execution:STATE_MACHINE_NAME:EXECUTION_NAME
+                # The :* suffix matches any execution name under each state machine.
+                - !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${DailyPipelineStateMachine.Name}:*"
+                - !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${SingleJobPipelineStateMachine.Name}:*"
       Environment:
         Variables:
           GROQ_API_KEY: !Ref GroqApiKey

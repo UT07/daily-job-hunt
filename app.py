@@ -2369,17 +2369,43 @@ def pipeline_execution_status(execution_name: str, user: AuthUser = Depends(get_
     sfn = _get_sfn()
     result = None
     last_err = None
+    saw_non_not_found_error = False
     for sm_arn in candidates:
         execution_arn = _state_machine_arn_to_execution_arn(sm_arn, execution_name)
         try:
             result = sfn.describe_execution(executionArn=execution_arn)
             break
-        except Exception as e:
+        except sfn.exceptions.ExecutionDoesNotExist as e:
+            # Genuine "not in this state machine" — keep trying the next candidate.
+            last_err = e
+            continue
+        except Exception as e:  # noqa: BLE001 — we re-raise below if every candidate hit this
+            # Anything else (AccessDenied, Throttling, network, etc.) is NOT
+            # a "not found" — it's an infra/permission issue. Catching it as
+            # 404 here would be a silent failure: the user sees "Tailor doesn't
+            # work" and the pollPipeline frontend bails out at the first 404.
+            # This exact failure mode happened in prod 2026-04-30 → 2026-05-01:
+            # SAM's StepFunctionsExecutionPolicy doesn't include DescribeExecution,
+            # so every poll silently 404'd while the SFN succeeded fine.
+            # We track the error and re-raise as 502 below.
+            saw_non_not_found_error = True
             last_err = e
             continue
 
     if result is None:
-        logger.warning("pipeline_execution_status: %s not found in any state machine: %s", execution_name, last_err)
+        if saw_non_not_found_error:
+            # Surface real underlying error so the frontend doesn't think the
+            # execution simply doesn't exist — and so the user sees a banner
+            # they can act on instead of a silent hang.
+            logger.error(
+                "pipeline_execution_status: backend error for %s (most likely IAM): %s",
+                execution_name, last_err,
+            )
+            raise HTTPException(502, f"Pipeline status check failed: {last_err}")
+        logger.warning(
+            "pipeline_execution_status: %s not found in any state machine: %s",
+            execution_name, last_err,
+        )
         raise HTTPException(404, f"Execution not found: {execution_name}")
 
     output = None
