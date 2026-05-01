@@ -22,8 +22,26 @@ export function useApplyPreview(jobId, { enabled = true } = {}) {
 
   useEffect(() => {
     if (!enabled) return
-    fetcher()
-  }, [enabled, fetcher])
+    let cancelled = false
+    ;(async () => {
+      setIsLoading(true)
+      setError(null)
+      try {
+        const result = await apiGet(`/api/apply/preview/${jobId}`)
+        if (!cancelled) setData(result)
+      } catch (e) {
+        if (!cancelled) {
+          setError(e)
+          setData(null)
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [enabled, jobId])
 
   return { data, error, isLoading, refetch: fetcher }
 }

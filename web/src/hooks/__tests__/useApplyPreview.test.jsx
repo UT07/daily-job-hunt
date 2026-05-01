@@ -47,4 +47,18 @@ describe('useApplyPreview', () => {
     })
     expect(apiGet).toHaveBeenCalledTimes(2)
   })
+
+  it('does not fetch on initial render when enabled=false, fires when toggled to true', async () => {
+    apiGet.mockResolvedValue({ eligible: true, custom_questions: [] })
+
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useApplyPreview('job-1', { enabled }),
+      { initialProps: { enabled: false } },
+    )
+    expect(apiGet).not.toHaveBeenCalled()
+
+    rerender({ enabled: true })
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    expect(apiGet).toHaveBeenCalledWith('/api/apply/preview/job-1')
+  })
 })
