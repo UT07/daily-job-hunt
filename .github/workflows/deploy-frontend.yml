@@ -1,0 +1,88 @@
+name: Deploy Frontend
+
+# Auto-deploys the React/Vite frontend (web/) to naukribaba.netlify.app on
+# pushes to main that touch web/** or netlify.toml or this workflow itself.
+#
+# Why this exists: naukribaba.netlify.app was previously an "orphan" Netlify
+# site — created by hand with no GitHub connection, so a `git push` to main
+# never rebuilt it. The local repo's .netlify/state.json points at a
+# different (test) site, which masked the problem. Three times this week
+# we shipped frontend fixes that took effect locally + in our test site
+# but never reached production users. This workflow makes "merge to main"
+# the single deploy trigger and removes the entire orphan-site failure mode.
+#
+# Build-time env vars (VITE_API_URL, VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY)
+# live in the Netlify site's env-var UI. We use `netlify deploy --build` so
+# the Netlify CLI pulls them from the linked site before running the build —
+# Netlify stays the single source of truth and we don't have to mirror the
+# values into GitHub Secrets where they could drift.
+#
+# Security note: this workflow only uses GitHub-runner-provided env vars
+# (GITHUB_SHA, GITHUB_REF_NAME) inside run: blocks, never user-controlled
+# fields like commit messages or PR titles. That avoids the workflow
+# injection class of vulnerability.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "netlify.toml"
+      - ".github/workflows/deploy-frontend.yml"
+  workflow_dispatch:
+
+# Cancel any in-flight deploy when a new commit lands on main — last-write-wins
+# is the right behavior for a static site (no half-applied state to worry about).
+concurrency:
+  group: deploy-frontend
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    env:
+      NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+      NETLIFY_SITE_ID: ${{ secrets.NETLIFY_SITE_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: web
+        # npm ci is reproducible from the lockfile and won't mutate package.json.
+        run: npm ci
+
+      - name: Build and deploy to Netlify
+        # Note: run from repo ROOT (not web/) because netlify.toml at repo
+        # root has `base = "web"` — the Netlify CLI honours that and cd's
+        # into web/ before running `npm run build`. If we also set
+        # working-directory: web, the CLI would try to resolve web/web/.
+        env:
+          # Short SHA + branch name surface in the Netlify deploy log so you
+          # can trace any prod deploy back to a commit. Both come from the
+          # GitHub-Actions runner, not from user input — safe to pass to a shell.
+          DEPLOY_SHA: ${{ github.sha }}
+          DEPLOY_REF: ${{ github.ref_name }}
+        # netlify deploy --build does three things in one command:
+        #   1. Pulls VITE_* env vars from the linked Netlify site (single source of truth).
+        #   2. Runs the build command from netlify.toml (`npm run build`)
+        #      from the `base` directory (`web/`), with those env vars in scope.
+        #   3. Uploads `<base>/<publish>` (web/dist) as a production deploy.
+        # --site is explicit (instead of relying on .netlify/state.json) because
+        # this repo's local state file points at a different test site —
+        # we don't want CI to inherit that confusion.
+        run: |
+          SHORT_SHA="${DEPLOY_SHA:0:7}"
+          npx netlify-cli@latest deploy \
+            --build \
+            --prod \
+            --site "$NETLIFY_SITE_ID" \
+            --message "deploy from ${SHORT_SHA} (${DEPLOY_REF})"
