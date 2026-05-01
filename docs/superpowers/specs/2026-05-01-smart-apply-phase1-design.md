@@ -141,13 +141,13 @@ Backend `/api/apply/eligibility/{job_id}` is **not called per row** (60+ rows = 
 
 ```js
 // hooks/useApplyEligibility.js
-// Order matches app.py:2683-2734 server-side branches exactly so the two never
-// disagree on which reason fires when multiple apply.
+// Order matches app.py:apply_eligibility server-side branches exactly so the
+// two never disagree on which reason fires when multiple apply.
 export function computeEligibility(job, profile) {
-  if (job.application_status === 'applied') return { eligible: false, reason: 'already_applied' };
   if (!job.apply_url)                        return { eligible: false, reason: 'no_apply_url' };
   if (!job.resume_s3_key)                    return { eligible: false, reason: 'no_resume' };
-  if (!profile.profile_complete)             return { eligible: false, reason: 'profile_incomplete' };
+  if (job.application_status === 'applied')  return { eligible: false, reason: 'already_applied' };
+  if (!profile || !profile.profile_complete) return { eligible: false, reason: 'profile_incomplete' };
   return { eligible: true, platform: job.apply_platform || null };
 }
 ```
@@ -194,7 +194,7 @@ Telemetry is colocated with user actions (button click handlers) — never insid
 
 ```
 EligibilityBadge.test.jsx          — color + tooltip per reason (5 tests)
-useApplyEligibility.test.js        — computeEligibility() truth table (10 tests)
+useApplyEligibility.test.js        — computeEligibility() truth table (11 tests)
 AutoApplyButton.test.jsx           — smart-button state × action mapping (5 tests, one per state)
 QuestionsTable.test.jsx            — copy-button writes correct value to clipboard (1 test)
 ProfileSnapshot.test.jsx           — collapse/expand state (1 test)

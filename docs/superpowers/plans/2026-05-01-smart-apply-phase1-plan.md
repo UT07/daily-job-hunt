@@ -671,7 +671,7 @@ const validJob = {
   application_status: 'scored',
 }
 
-describe('computeEligibility — order matches app.py:2683-2734', () => {
+describe('computeEligibility — order matches app.py:apply_eligibility', () => {
   it('eligible when all gates pass', () => {
     expect(computeEligibility(validJob, completeProfile)).toEqual({
       eligible: true,
@@ -679,8 +679,19 @@ describe('computeEligibility — order matches app.py:2683-2734', () => {
     })
   })
 
-  it('already_applied wins over everything else', () => {
-    const r = computeEligibility({ ...validJob, application_status: 'applied' }, incompleteProfile)
+  it('no_apply_url wins over already_applied (job-side gates first)', () => {
+    const r = computeEligibility(
+      { ...validJob, application_status: 'applied', apply_url: null },
+      incompleteProfile,
+    )
+    expect(r).toEqual({ eligible: false, reason: 'no_apply_url' })
+  })
+
+  it('already_applied wins over profile_incomplete (when job is fully apply-ready)', () => {
+    const r = computeEligibility(
+      { ...validJob, application_status: 'applied' },
+      incompleteProfile,
+    )
     expect(r).toEqual({ eligible: false, reason: 'already_applied' })
   })
 
@@ -749,21 +760,13 @@ Expected: FAIL — module not found.
 `web/src/hooks/useApplyEligibility.js`:
 
 ```js
-// Order matches app.py:2683-2734 exactly so frontend and backend never disagree
-// on which reason fires when multiple apply.
+// Order matches app.py:apply_eligibility exactly so frontend and backend never
+// disagree on which reason fires when multiple apply.
 export function computeEligibility(job, profile) {
-  if (job.application_status === 'applied') {
-    return { eligible: false, reason: 'already_applied' }
-  }
-  if (!job.apply_url) {
-    return { eligible: false, reason: 'no_apply_url' }
-  }
-  if (!job.resume_s3_key) {
-    return { eligible: false, reason: 'no_resume' }
-  }
-  if (!profile || !profile.profile_complete) {
-    return { eligible: false, reason: 'profile_incomplete' }
-  }
+  if (!job.apply_url)                        return { eligible: false, reason: 'no_apply_url' }
+  if (!job.resume_s3_key)                    return { eligible: false, reason: 'no_resume' }
+  if (job.application_status === 'applied')  return { eligible: false, reason: 'already_applied' }
+  if (!profile || !profile.profile_complete) return { eligible: false, reason: 'profile_incomplete' }
   return { eligible: true, platform: job.apply_platform || null }
 }
 ```
@@ -774,7 +777,7 @@ export function computeEligibility(job, profile) {
 cd web && npm test -- useApplyEligibility
 ```
 
-Expected: 10 tests pass.
+Expected: 11 tests pass.
 
 - [ ] **Step 5: Commit**
 
