@@ -660,7 +660,7 @@ git commit -m "feat(web): useUserProfile hook + ProfileContext"
 ```js
 import { describe, it, expect } from 'vitest'
 import { computeEligibility } from '../useApplyEligibility'
-import enumFile from '../../../../shared/eligibility_reasons.json' assert { type: 'json' }
+import enumFile from '../../../../shared/eligibility_reasons.json'
 
 const completeProfile = { profile_complete: true }
 const incompleteProfile = { profile_complete: false }
@@ -1166,27 +1166,33 @@ git commit -m "feat(web): EligibilityBadge — read-only row badge"
 
 - [ ] **Step 1: Hoist `<ProfileProvider>` to `main.jsx`**
 
-Edit `web/src/main.jsx`. Find the JSX tree and wrap with `<ProfileProvider>` so every page (AppLayout, Dashboard, JobWorkspace) shares one context:
+Edit `web/src/main.jsx`. The current tree wraps `<App />` in `<StrictMode>`. Add `<ProfileProvider>` inside `<StrictMode>`:
 
 ```jsx
-import { ProfileProvider } from './hooks/useUserProfile'
+import { StrictMode } from 'react'
+import { createRoot } from 'react-dom/client'
+import { PostHogProvider } from 'posthog-js/react'
+import './index.css'
+import App from './App.jsx'
+import { initPostHog } from './lib/posthog'
+import { ProfileProvider } from './hooks/useUserProfile'  // NEW
 
-// existing tree:
+const ph = initPostHog()
+
 const tree = (
-  <BrowserRouter>
-    <AuthProvider>
+  <StrictMode>
+    <ProfileProvider>
       <App />
-    </AuthProvider>
-  </BrowserRouter>
+    </ProfileProvider>
+  </StrictMode>
 )
 
-// wrap with ProfileProvider; PostHogProvider stays as the outermost (per existing structure)
-ph
-  ? <PostHogProvider client={ph}><ProfileProvider>{tree}</ProfileProvider></PostHogProvider>
-  : <ProfileProvider>{tree}</ProfileProvider>
+createRoot(document.getElementById('root')).render(
+  ph ? <PostHogProvider client={ph}>{tree}</PostHogProvider> : tree,
+)
 ```
 
-(Adjust to match the actual `main.jsx` structure — the key is that `<ProfileProvider>` must wrap the routed app, inside `<PostHogProvider>` if present.)
+The provider wraps `<App />` and is inside `<PostHogProvider>` (which stays outermost so PostHog is initialized before any consumer renders).
 
 - [ ] **Step 2: Add `<EligibilityBadge>` per row in `JobTable.jsx`**
 
@@ -1335,6 +1341,7 @@ documented in spec §2 backend dependency."
 ```jsx
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { AutoApplyButton } from '../AutoApplyButton'
 
 vi.mock('../../../lib/applyTelemetry', () => ({
@@ -1345,8 +1352,21 @@ import * as t from '../../../lib/applyTelemetry'
 const baseJob = { id: 'j1', apply_url: 'https://x.io', resume_s3_key: 'k', apply_platform: 'greenhouse', application_status: 'scored' }
 const completeProfile = { profile_complete: true }
 
+// AutoApplyButton uses useNavigate(); tests must render inside a Router.
 function renderWithProfile(props, profile = completeProfile) {
-  return render(<AutoApplyButton job={baseJob} profile={profile} onOpenModal={vi.fn()} {...props} />)
+  return render(
+    <MemoryRouter>
+      <AutoApplyButton job={baseJob} profile={profile} onOpenModal={vi.fn()} {...props} />
+    </MemoryRouter>
+  )
+}
+
+function renderWithJob(job) {
+  return render(
+    <MemoryRouter>
+      <AutoApplyButton job={job} profile={completeProfile} onOpenModal={vi.fn()} />
+    </MemoryRouter>
+  )
 }
 
 describe('AutoApplyButton smart-button states', () => {
@@ -1373,17 +1393,17 @@ describe('AutoApplyButton smart-button states', () => {
   })
 
   it('no_resume → label changes', () => {
-    render(<AutoApplyButton job={{ ...baseJob, resume_s3_key: null }} profile={completeProfile} onOpenModal={vi.fn()} />)
+    renderWithJob({ ...baseJob, resume_s3_key: null })
     expect(screen.getByRole('button', { name: /Generate tailored resume first/i })).toBeEnabled()
   })
 
   it('no_apply_url → label changes', () => {
-    render(<AutoApplyButton job={{ ...baseJob, apply_url: null }} profile={completeProfile} onOpenModal={vi.fn()} />)
+    renderWithJob({ ...baseJob, apply_url: null })
     expect(screen.getByRole('button', { name: /Add apply URL/i })).toBeEnabled()
   })
 
   it('already_applied → "Applied ✓" disabled', () => {
-    render(<AutoApplyButton job={{ ...baseJob, application_status: 'applied' }} profile={completeProfile} onOpenModal={vi.fn()} />)
+    renderWithJob({ ...baseJob, application_status: 'applied' })
     const btn = screen.getByRole('button', { name: /Applied/i })
     expect(btn).toBeDisabled()
   })
@@ -1486,13 +1506,16 @@ import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { QuestionsTable } from '../QuestionsTable'
 
+// Match the actual /api/apply/preview shape (app.py:2884-2894):
+// { id, label, type, required, options, max_length, ai_answer, requires_user_action, category }
 const Q = [
-  { question: 'Why are you interested?', answer: 'Because I love payments.', source: 'ai' },
-  { question: 'Years of experience?', answer: '5+ years', source: 'profile' },
+  { id: 'why_interested', label: 'Why are you interested?', ai_answer: 'Because I love payments.', required: true, requires_user_action: false, category: 'custom' },
+  { id: 'experience_years', label: 'Years of experience?', ai_answer: '5+ years', required: true, requires_user_action: false, category: 'profile' },
+  { id: 'salary_neg', label: 'Salary expectation?', ai_answer: null, required: false, requires_user_action: true, category: 'custom' },
 ]
 
 describe('QuestionsTable', () => {
-  it('writes the answer to clipboard on copy click and calls onCopy', async () => {
+  it('writes the ai_answer to clipboard on copy click and calls onCopy with label', async () => {
     const onCopy = vi.fn()
     const writeText = vi.fn().mockResolvedValue(undefined)
     Object.assign(navigator, { clipboard: { writeText } })
@@ -1504,6 +1527,18 @@ describe('QuestionsTable', () => {
 
     expect(writeText).toHaveBeenCalledWith('Because I love payments.')
     expect(onCopy).toHaveBeenCalledWith({ field_name: 'Why are you interested?' })
+  })
+
+  it('disables copy when ai_answer is null (AI failed for that question)', () => {
+    render(<QuestionsTable questions={Q} onCopy={vi.fn()} />)
+    const buttons = screen.getAllByRole('button', { name: /copy/i })
+    // 3rd row has ai_answer: null
+    expect(buttons[2]).toBeDisabled()
+  })
+
+  it('shows fallback text in answer column when ai_answer is null', () => {
+    render(<QuestionsTable questions={Q} onCopy={vi.fn()} />)
+    expect(screen.getByText(/no AI answer/i)).toBeInTheDocument()
   })
 })
 ```
@@ -1523,8 +1558,9 @@ Expected: FAIL — module not found.
 ```jsx
 export function QuestionsTable({ questions, onCopy }) {
   const copy = async (q) => {
-    await navigator.clipboard.writeText(q.answer)
-    onCopy({ field_name: q.question })
+    if (!q.ai_answer) return
+    await navigator.clipboard.writeText(q.ai_answer)
+    onCopy({ field_name: q.label })
   }
 
   return (
@@ -1537,12 +1573,23 @@ export function QuestionsTable({ questions, onCopy }) {
         </tr>
       </thead>
       <tbody>
-        {questions.map((q, i) => (
-          <tr key={i} className="border-b border-black/30">
-            <td className="p-2 align-top">{q.question}</td>
-            <td className="p-2">{q.answer}</td>
+        {questions.map((q) => (
+          <tr key={q.id} className="border-b border-black/30">
+            <td className="p-2 align-top">
+              {q.label}{q.required && <span className="text-red-700"> *</span>}
+            </td>
             <td className="p-2">
-              <button type="button" onClick={() => copy(q)} className="px-2 py-1 border border-black hover:bg-yellow-200">
+              {q.ai_answer
+                ? q.ai_answer
+                : <span className="italic text-gray-500">(no AI answer — fill manually)</span>}
+            </td>
+            <td className="p-2">
+              <button
+                type="button"
+                onClick={() => copy(q)}
+                disabled={!q.ai_answer}
+                className="px-2 py-1 border border-black hover:bg-yellow-200 disabled:opacity-30 disabled:cursor-not-allowed"
+              >
                 📋 Copy
               </button>
             </td>
@@ -1760,12 +1807,15 @@ import { apiGet, apiCall } from '../../../api'
 import * as t from '../../../lib/applyTelemetry'
 
 const job = { id: 'j1', title: 'SRE', company: 'Acme', apply_url: 'https://acme.com/apply', apply_platform: 'greenhouse' }
+// Match the actual /api/apply/preview shape (app.py:2896-2927).
 const previewPayload = {
   eligible: true,
-  resume: { url: 'https://r.s3' },
-  cover_letter: { url: 'https://cl.s3' },
-  custom_questions: [{ question: 'Why?', answer: 'Because.', source: 'ai' }],
-  profile: { full_name: 'Daisy' },
+  job: { title: 'SRE', company: 'Acme', apply_url: 'https://acme.com/apply' },
+  resume: { s3_url: 'https://r.s3', filename: 'resume.pdf', resume_version: 1, s3_key: 'k', is_default: false },
+  cover_letter: { text: 'Dear hiring team,\nI am writing about your SRE role...', editable: true, max_length: 10000, source: 'ai_generated', include_by_default: true },
+  custom_questions: [{ id: 'why', label: 'Why?', type: 'textarea', required: true, ai_answer: 'Because.', requires_user_action: false, category: 'custom' }],
+  profile: { first_name: 'Daisy', last_name: 'X', email: 'd@x.io', phone: '+353', linkedin: 'in/daisy', github: 'gh/daisy', website: '', location: 'Dublin' },
+  platform: 'greenhouse',
 }
 
 describe('AutoApplyModal', () => {
@@ -1920,9 +1970,32 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied }) {
         {!isLoading && preview && (
           <>
             <div className="flex gap-2 mb-4">
-              {preview.resume?.url && <a href={preview.resume.url} target="_blank" rel="noopener" className="px-3 py-1 border border-black bg-white">📄 Tailored Resume</a>}
-              {preview.cover_letter?.url && <a href={preview.cover_letter.url} target="_blank" rel="noopener" className="px-3 py-1 border border-black bg-white">📄 Cover Letter</a>}
+              {preview.resume?.s3_url && (
+                <a href={preview.resume.s3_url} target="_blank" rel="noopener" className="px-3 py-1 border border-black bg-white">
+                  📄 Tailored Resume ({preview.resume.filename})
+                </a>
+              )}
             </div>
+
+            {/* Cover letter is INLINE TEXT (not a URL) — copy-paste flow */}
+            {preview.cover_letter?.text && (
+              <div className="mb-4 border-2 border-black p-3">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="font-bold font-mono">Cover letter</span>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await navigator.clipboard.writeText(preview.cover_letter.text)
+                      fieldCopied({ job_id: job.id, field_name: '__cover_letter__' })
+                    }}
+                    className="px-2 py-1 border border-black hover:bg-yellow-200"
+                  >
+                    📋 Copy
+                  </button>
+                </div>
+                <pre className="text-sm whitespace-pre-wrap font-mono max-h-48 overflow-auto">{preview.cover_letter.text}</pre>
+              </div>
+            )}
 
             {questions.length === 0 ? (
               <EmptyPreviewState onRetry={refetch} />
@@ -1980,6 +2053,23 @@ git commit -m "feat(web): AutoApplyModal — orchestrates preview, copy, record-
 
 **Files:**
 - Modify: `web/src/pages/JobWorkspace.jsx`
+- Modify: `web/src/components/TailorCard.jsx` (add `data-testid="tailor-card"`)
+
+- [ ] **Step 0: Add `data-testid` to `<TailorCard>`'s root element**
+
+`AutoApplyButton`'s `no_resume` smart-button action does `document.querySelector('[data-testid="tailor-card"]')` then scrolls. The querySelector returns null silently if absent — bad UX. Open `web/src/components/TailorCard.jsx` and add the attribute to the outermost element returned by the component:
+
+```jsx
+export default function TailorCard({ data, company }) {
+  return (
+    <section data-testid="tailor-card" className="...">
+      {/* existing content unchanged */}
+    </section>
+  )
+}
+```
+
+(If TailorCard's root is a `<div>`, keep the tag — only add the `data-testid`. Don't change other props.)
 
 - [ ] **Step 1: Add imports + state to JobWorkspace**
 
@@ -2062,7 +2152,7 @@ If any step fails, fix before proceeding to Group 5.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add web/src/pages/JobWorkspace.jsx
+git add web/src/pages/JobWorkspace.jsx web/src/components/TailorCard.jsx
 git commit -m "feat(web): wire AutoApplyButton + AutoApplyModal into JobWorkspace"
 ```
 
