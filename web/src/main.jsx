@@ -4,12 +4,15 @@ import { PostHogProvider } from 'posthog-js/react'
 import './index.css'
 import App from './App.jsx'
 import { initPostHog } from './lib/posthog'
+import { ProfileProvider } from './hooks/useUserProfile'
 
 const ph = initPostHog()
 
 const tree = (
   <StrictMode>
-    <App />
+    <ProfileProvider>
+      <App />
+    </ProfileProvider>
   </StrictMode>
 )
 
