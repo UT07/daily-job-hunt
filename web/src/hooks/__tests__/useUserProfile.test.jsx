@@ -7,10 +7,18 @@ vi.mock('../../api', () => ({
 }))
 import { apiGet } from '../../api'
 
+vi.mock('../../auth/useAuth', () => ({
+  useAuth: vi.fn(() => ({ user: { id: 'u1', email: 'a@b.com' }, loading: false })),
+}))
+import { useAuth } from '../../auth/useAuth'
+
 const wrapper = ({ children }) => <ProfileProvider>{children}</ProfileProvider>
 
 describe('useUserProfile', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useAuth.mockReturnValue({ user: { id: 'u1', email: 'a@b.com' }, loading: false })
+  })
 
   it('starts loading, then exposes profile from /api/profile', async () => {
     apiGet.mockResolvedValueOnce({
@@ -49,5 +57,32 @@ describe('useUserProfile', () => {
     // No wrapper — context returns its default value.
     const { result } = renderHook(() => useUserProfile())
     expect(result.current).toEqual({ profile: null, isLoading: true })
+  })
+
+  it('refetches profile when user changes (sign-out → sign-in-as-different-user)', async () => {
+    apiGet.mockResolvedValueOnce({ id: 'u1', email: 'a@b.com', profile_complete: true })
+
+    const { rerender } = renderHook(() => useUserProfile(), { wrapper })
+
+    await waitFor(() => expect(apiGet).toHaveBeenCalledTimes(1))
+
+    // Now simulate sign-in-as-different-user
+    useAuth.mockReturnValue({ user: { id: 'u2', email: 'c@d.com' }, loading: false })
+    apiGet.mockResolvedValueOnce({ id: 'u2', email: 'c@d.com', profile_complete: false })
+
+    rerender()
+
+    await waitFor(() => expect(apiGet).toHaveBeenCalledTimes(2))
+  })
+
+  it('clears profile and skips fetch when user is null (logged out)', async () => {
+    useAuth.mockReturnValue({ user: null, loading: false })
+
+    const { result } = renderHook(() => useUserProfile(), { wrapper })
+
+    // Wait a tick — useEffect should run, NOT fetch, set isLoading false
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    expect(apiGet).not.toHaveBeenCalled()
+    expect(result.current.profile).toBeNull()
   })
 })
