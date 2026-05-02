@@ -85,6 +85,13 @@ def _frontend_urls() -> dict[str, list[str]]:
     found: dict[str, list[str]] = {}
     for ext in ("*.js", "*.jsx", "*.ts", "*.tsx"):
         for path in WEB_SRC.rglob(ext):
+            # Skip test files — they contain fixture URLs (e.g., /api/apply/preview/job-1)
+            # that are mock literals, not real callsites. The contract test should
+            # only verify URLs in production code paths.
+            if "__tests__" in path.parts or path.name.endswith(
+                (".test.js", ".test.jsx", ".test.ts", ".test.tsx")
+            ):
+                continue
             text = path.read_text(errors="replace")
             for raw_line in text.splitlines():
                 if _is_comment_line(raw_line):
