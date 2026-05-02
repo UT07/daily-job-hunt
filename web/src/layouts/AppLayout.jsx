@@ -1,7 +1,6 @@
-import { useState, useEffect } from 'react';
 import { Outlet, Navigate } from 'react-router-dom';
 import { useAuth } from '../auth/useAuth';
-import { apiGet } from '../api';
+import { useUserProfile } from '../hooks/useUserProfile';
 import Sidebar from '../components/layout/Sidebar';
 import MobileNav from '../components/layout/MobileNav';
 import ConsentBanner from '../components/ConsentBanner';
@@ -9,22 +8,9 @@ import FinishSetupBanner from '../components/FinishSetupBanner';
 
 export default function AppLayout() {
   const { user, loading } = useAuth();
-  const [onboardingDone, setOnboardingDone] = useState(null); // null = loading
-  const [profileComplete, setProfileComplete] = useState(true);
+  const { profile, isLoading: profileLoading } = useUserProfile();
 
-  useEffect(() => {
-    if (!user) return;
-    apiGet('/api/profile').then(data => {
-      // Existing users with a name are treated as onboarded (backward compat)
-      setOnboardingDone(!!data.onboarding_completed_at || !!data.full_name);
-      // Profile is "complete" if key fields are filled
-      setProfileComplete(!!(data.full_name && data.phone && data.location));
-    }).catch(() => {
-      setOnboardingDone(false);
-    });
-  }, [user]);
-
-  if (loading) {
+  if (loading || (user && profileLoading)) {
     return (
       <div className="min-h-screen bg-cream flex items-center justify-center">
         <span className="spinner" />
@@ -36,17 +22,15 @@ export default function AppLayout() {
     return <Navigate to="/login" replace />;
   }
 
-  // Still checking onboarding status
-  if (onboardingDone === null) {
-    return (
-      <div className="min-h-screen bg-cream flex items-center justify-center">
-        <span className="spinner" />
-      </div>
-    );
-  }
+  // Existing users with a name are treated as onboarded (backward compat)
+  const onboardingDone = !!(profile?.onboarding_completed_at || profile?.full_name);
+  // Authoritative profile-complete signal from backend (check_profile_completeness).
+  // Replaces the old 3-field heuristic (full_name && phone && location) which
+  // drifted from the backend's 9-field check.
+  const profileComplete = !!profile?.profile_complete;
 
   // First-time user: redirect to onboarding
-  if (onboardingDone === false) {
+  if (!onboardingDone) {
     return <Navigate to="/onboarding" replace />;
   }
 
