@@ -12,6 +12,39 @@ async function authHeaders() {
   return headers
 }
 
+/**
+ * Format an API-error `detail` (or similar) field into a readable string.
+ *
+ * Necessary because FastAPI 422 validation responses use:
+ *   { "detail": [ { "loc": ["body", "field"], "msg": "...", "type": "..." } ] }
+ *
+ * Without this helper, `new Error(err.detail)` calls String(detail) and turns
+ * the array of objects into the literal string "[object Object]" — which then
+ * surfaces in every error UI as opaque garbage. Seen in onboarding's
+ * "Search Preferences" step when validation fires; affects every endpoint.
+ *
+ * Exported for unit testing AND for components that catch raw error responses.
+ */
+export function formatErrorDetail(detail) {
+  if (detail == null) return ''
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail)) {
+    return detail.map(d => {
+      if (typeof d === 'string') return d
+      if (d && typeof d === 'object') {
+        const loc = Array.isArray(d.loc) ? d.loc.filter(p => p !== 'body').join('.') : ''
+        const msg = d.msg || d.message || JSON.stringify(d)
+        return loc ? `${loc}: ${msg}` : msg
+      }
+      return String(d)
+    }).join('; ')
+  }
+  if (typeof detail === 'object') {
+    return detail.message || detail.error || detail.msg || JSON.stringify(detail)
+  }
+  return String(detail)
+}
+
 export async function apiCall(endpoint, body, options = {}) {
   const headers = await authHeaders()
   const res = await fetch(`${API_BASE}${endpoint}`, {
@@ -21,7 +54,7 @@ export async function apiCall(endpoint, body, options = {}) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `HTTP ${res.status}`);
+    throw new Error(formatErrorDetail(err.detail) || `HTTP ${res.status}`);
   }
   const data = await res.json();
 
@@ -41,7 +74,7 @@ async function pollTask(pollUrl, { intervalMs = 2000, maxWaitMs = 240000, onProg
     const task = await res.json();
     if (onProgress) onProgress(task.status);
     if (task.status === 'done') return task.result;
-    if (task.status === 'error') throw new Error(task.error || 'Task failed');
+    if (task.status === 'error') throw new Error(formatErrorDetail(task.error) || 'Task failed');
   }
   throw new Error('Task timed out — please try again');
 }
@@ -74,7 +107,7 @@ export async function pollPipeline(pollUrl, { intervalMs = 5000, maxWaitMs = 300
         return data.output;
       }
       case 'FAILED':
-        throw new Error(data.error || data.cause || 'Pipeline execution failed');
+        throw new Error(formatErrorDetail(data.error || data.cause) || 'Pipeline execution failed');
       case 'TIMED_OUT':
         throw new Error('Pipeline execution timed out on the server');
       case 'ABORTED':
@@ -95,7 +128,7 @@ export async function apiGet(endpoint) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `HTTP ${res.status}`);
+    throw new Error(formatErrorDetail(err.detail) || `HTTP ${res.status}`);
   }
   return res.json();
 }
@@ -109,7 +142,7 @@ export async function apiPut(endpoint, body) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `HTTP ${res.status}`);
+    throw new Error(formatErrorDetail(err.detail) || `HTTP ${res.status}`);
   }
   return res.json();
 }
@@ -123,7 +156,7 @@ export async function apiPatch(endpoint, body) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `HTTP ${res.status}`);
+    throw new Error(formatErrorDetail(err.detail) || `HTTP ${res.status}`);
   }
   return res.json();
 }
@@ -143,7 +176,7 @@ export async function apiUpload(endpoint, file) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `HTTP ${res.status}`);
+    throw new Error(formatErrorDetail(err.detail) || `HTTP ${res.status}`);
   }
   return res.json();
 }
@@ -156,7 +189,7 @@ export async function apiDelete(endpoint) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `HTTP ${res.status}`);
+    throw new Error(formatErrorDetail(err.detail) || `HTTP ${res.status}`);
   }
   return res.json();
 }
@@ -169,7 +202,7 @@ export async function apiGetBlob(endpoint) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(err.detail || `HTTP ${res.status}`);
+    throw new Error(formatErrorDetail(err.detail) || `HTTP ${res.status}`);
   }
   return res.blob();
 }
