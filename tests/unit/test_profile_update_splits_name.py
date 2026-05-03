@@ -10,7 +10,6 @@ This test exercises the normalization in app.update_profile (the loop that
 maps `full_name`/`name` → `update_data["name"] + first_name + last_name`).
 """
 from __future__ import annotations
-import pytest
 
 
 def _normalize(payload: dict) -> dict:
