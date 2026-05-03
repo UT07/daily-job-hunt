@@ -38,7 +38,9 @@ To verify the gates are live: trigger a manual workflow run after configuring se
 - [ ] Click "Open ATS in new tab" → real Greenhouse URL opens
 - [ ] Back on NaukriBaba, primary button now says "I submitted — mark applied"
 - [ ] Click "I submitted — mark applied" → modal closes; Network tab shows POST `/api/apply/record`
-- [ ] Reload the JobWorkspace page → application_status shows as "applied"; row badge in dashboard now grey
+- [ ] Reload the JobWorkspace page → status badge shows `"Applied"` (Title-cased; backend `app.py:3189` writes `application_status="Applied"`)
+- [ ] Reload Dashboard → status pill on the row reads `"Applied"`
+  - **Known case mismatch (follow-up):** `useApplyEligibility.js:6` compares `application_status === 'applied'` (lowercase) but backend writes `"Applied"`. Until that's reconciled, the EligibilityBadge dot may stay green/amber instead of going grey after a successful record. Treat the status pill (which renders the raw value) as the authoritative signal for this smoke step.
 
 ## JobWorkspace — ineligible (no_resume)
 - [ ] Click into a job with `application_status='scored'` but `resume_s3_key=null`
