@@ -268,6 +268,8 @@ jobs:
           AWS_DEFAULT_REGION: eu-west-1
           FLOOR_TEST_JOB_IDS: ${{ secrets.FLOOR_TEST_JOB_IDS }}
           FLOOR_TEST_TOKEN: ${{ secrets.FLOOR_TEST_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: |
           pytest tests/quality/test_answer_quality_floor.py \
                  tests/quality/test_answer_quality_golden.py \
