@@ -35,6 +35,17 @@ describe('computeEligibility — order matches app.py:apply_eligibility', () => 
     expect(r).toEqual({ eligible: false, reason: 'already_applied' })
   })
 
+  it('already_applied is case-insensitive — backend writes "Applied" (Title Case)', () => {
+    // Regression: backend app.py:apply_record() writes Title-Case "Applied".
+    // The pre-fix lower-case-only check meant the dashboard badge never went grey
+    // after the user clicked "Mark applied" in the modal.
+    const r = computeEligibility(
+      { ...validJob, application_status: 'Applied' },
+      completeProfile,
+    )
+    expect(r).toEqual({ eligible: false, reason: 'already_applied' })
+  })
+
   it('no_apply_url when apply_url missing', () => {
     const r = computeEligibility({ ...validJob, apply_url: null }, completeProfile)
     expect(r).toEqual({ eligible: false, reason: 'no_apply_url' })

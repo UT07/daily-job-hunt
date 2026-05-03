@@ -39,8 +39,7 @@ To verify the gates are live: trigger a manual workflow run after configuring se
 - [ ] Back on NaukriBaba, primary button now says "I submitted — mark applied"
 - [ ] Click "I submitted — mark applied" → modal closes; Network tab shows POST `/api/apply/record`
 - [ ] Reload the JobWorkspace page → status badge shows `"Applied"` (Title-cased; backend `app.py:3189` writes `application_status="Applied"`)
-- [ ] Reload Dashboard → status pill on the row reads `"Applied"`
-  - **Known case mismatch (follow-up):** `useApplyEligibility.js:6` compares `application_status === 'applied'` (lowercase) but backend writes `"Applied"`. Until that's reconciled, the EligibilityBadge dot may stay green/amber instead of going grey after a successful record. Treat the status pill (which renders the raw value) as the authoritative signal for this smoke step.
+- [ ] Reload Dashboard → status pill on the row reads `"Applied"` AND the `EligibilityBadge` dot is grey (already_applied state — case-insensitive comparison in `useApplyEligibility.js:6` handles backend's Title-Case write)
 
 ## JobWorkspace — ineligible (no_resume)
 - [ ] Click into a job with `application_status='scored'` but `resume_s3_key=null`
