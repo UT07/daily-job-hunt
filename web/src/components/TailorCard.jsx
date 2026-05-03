@@ -15,7 +15,7 @@ export default function TailorCard({ data, company }) {
   const link = data.pdf_url || data.drive_url || null;
 
   return (
-    <div className="animate-fade-in border-2 border-black shadow-brutal bg-white p-5">
+    <div data-testid="tailor-card" className="animate-fade-in border-2 border-black shadow-brutal bg-white p-5">
       <h3 className="text-xs font-bold text-stone-500 uppercase tracking-wider font-mono mb-4">
         Tailored Resume — {company}
       </h3>
