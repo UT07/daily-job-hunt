@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { QuestionsTable } from '../QuestionsTable'
 
 // Match the actual /api/apply/preview shape (app.py:2884-2894):
@@ -21,8 +21,20 @@ describe('QuestionsTable', () => {
     const buttons = screen.getAllByRole('button', { name: /copy/i })
     fireEvent.click(buttons[0])
 
+    await waitFor(() => expect(onCopy).toHaveBeenCalledWith({ field_name: 'Why are you interested?' }))
     expect(writeText).toHaveBeenCalledWith('Because I love payments.')
-    expect(onCopy).toHaveBeenCalledWith({ field_name: 'Why are you interested?' })
+  })
+
+  it('fires onCopy with error when clipboard.writeText rejects', async () => {
+    const onCopy = vi.fn()
+    Object.assign(navigator, { clipboard: { writeText: vi.fn().mockRejectedValue(new Error('Denied')) } })
+
+    render(<QuestionsTable questions={Q} onCopy={onCopy} />)
+    fireEvent.click(screen.getAllByRole('button', { name: /copy/i })[0])
+
+    await waitFor(() => expect(onCopy).toHaveBeenCalledWith(
+      expect.objectContaining({ field_name: 'Why are you interested?', error: expect.stringContaining('Denied') })
+    ))
   })
 
   it('disables copy when ai_answer is null (AI failed for that question)', () => {

@@ -1,8 +1,15 @@
 export function QuestionsTable({ questions, onCopy }) {
-  const copy = (q) => {
+  const copy = async (q) => {
     if (!q.ai_answer) return
-    navigator.clipboard.writeText(q.ai_answer)
-    onCopy({ field_name: q.label })
+    try {
+      await navigator.clipboard.writeText(q.ai_answer)
+      onCopy({ field_name: q.label })
+    } catch (e) {
+      // Clipboard API can reject in iframes / lost focus / denied permissions.
+      // Fire onCopy with an error flag so the consumer can surface a failure toast
+      // instead of falsely claiming a successful copy.
+      onCopy({ field_name: q.label, error: e?.message || 'Clipboard unavailable' })
+    }
   }
 
   return (

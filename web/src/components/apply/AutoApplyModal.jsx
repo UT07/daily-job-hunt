@@ -102,9 +102,16 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied }) {
                   <span className="font-bold font-mono">Cover letter</span>
                   <button
                     type="button"
-                    onClick={() => {
-                      navigator.clipboard.writeText(preview.cover_letter.text)
-                      fieldCopied({ job_id: job.id, field_name: '__cover_letter__' })
+                    onClick={async () => {
+                      try {
+                        await navigator.clipboard.writeText(preview.cover_letter.text)
+                        fieldCopied({ job_id: job.id, field_name: '__cover_letter__' })
+                      } catch (e) {
+                        // Clipboard API can reject in iframes / lost focus / denied permissions.
+                        // Fire fieldCopied with an error flag so telemetry distinguishes
+                        // a real copy from a silent failure.
+                        fieldCopied({ job_id: job.id, field_name: '__cover_letter__', error: e?.message || 'Clipboard unavailable' })
+                      }
                     }}
                     className="px-2 py-1 border border-black hover:bg-yellow-200"
                   >
