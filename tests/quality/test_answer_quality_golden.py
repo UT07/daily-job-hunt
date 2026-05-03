@@ -38,7 +38,28 @@ def _load_fixtures():
     if not FIXTURE_PATH.exists():
         return []
     data = json.loads(FIXTURE_PATH.read_text())
-    return [f for f in data["fixtures"] if f["ideal_answers"]]  # only filled ones
+    # Skip fixtures with placeholder job_ids OR placeholder ideal_answers values.
+    # Operator fills these in post-merge per spec §6.3 — until then, harness skips.
+    return [
+        f for f in data.get("fixtures", [])
+        if f.get("ideal_answers")
+        and not f.get("job_id", "").startswith("REPLACE_")
+        and not any(v.startswith("REPLACE") for v in f.get("ideal_answers", {}).values())
+    ]
+
+
+def test_load_fixtures_skips_placeholder_job_ids(tmp_path, monkeypatch):
+    """Loader must skip fixtures whose job_id or ideal_answers values are placeholders."""
+    fp = tmp_path / "golden.json"
+    fp.write_text(json.dumps({"fixtures": [
+        {"job_id": "REPLACE_WITH_GREENHOUSE_JOB_ID_1", "ideal_answers": {"q1": "REPLACE WITH ANSWER"}},
+        {"job_id": "real-job-1", "ideal_answers": {"q1": "Real answer about my work."}},
+        {"job_id": "real-job-2", "ideal_answers": {}},  # empty — must skip
+    ]}))
+    monkeypatch.setattr("tests.quality.test_answer_quality_golden.FIXTURE_PATH", fp)
+    fixtures = _load_fixtures()
+    assert len(fixtures) == 1
+    assert fixtures[0]["job_id"] == "real-job-1"
 
 
 @pytest.fixture(scope="module")
