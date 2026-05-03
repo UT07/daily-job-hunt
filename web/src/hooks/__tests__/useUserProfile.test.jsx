@@ -56,7 +56,9 @@ describe('useUserProfile', () => {
   it('returns safe defaults when called outside ProfileProvider', () => {
     // No wrapper — context returns its default value.
     const { result } = renderHook(() => useUserProfile())
-    expect(result.current).toEqual({ profile: null, isLoading: true })
+    expect(result.current.profile).toBeNull()
+    expect(result.current.isLoading).toBe(true)
+    expect(typeof result.current.refetch).toBe('function')
   })
 
   it('refetches profile when user changes (sign-out → sign-in-as-different-user)', async () => {
@@ -84,5 +86,33 @@ describe('useUserProfile', () => {
     await waitFor(() => expect(result.current.isLoading).toBe(false))
     expect(apiGet).not.toHaveBeenCalled()
     expect(result.current.profile).toBeNull()
+  })
+
+  it('exposes refetch() that re-pulls /api/profile and updates the value', async () => {
+    // Regression: Onboarding "Complete Setup" must be able to refresh the
+    // ProfileContext after saving. Without this, AppLayout's gate sees stale
+    // `onboarding_completed_at = null` and bounces the user back to /onboarding
+    // — an infinite loop. See Onboarding.handleComplete.
+    useAuth.mockReturnValue({ user: { id: 'u1' }, loading: false })
+    apiGet.mockResolvedValueOnce({ id: 'u1', full_name: 'Old', onboarding_completed_at: null })
+
+    const { result } = renderHook(() => useUserProfile(), { wrapper })
+    await waitFor(() => expect(result.current.profile?.full_name).toBe('Old'))
+    expect(typeof result.current.refetch).toBe('function')
+
+    // Simulate the Onboarding completion: backend now returns fresh profile.
+    apiGet.mockResolvedValueOnce({ id: 'u1', full_name: 'Old', onboarding_completed_at: '2026-05-03T00:00:00Z' })
+
+    await result.current.refetch()
+    await waitFor(() => expect(result.current.profile?.onboarding_completed_at).toBe('2026-05-03T00:00:00Z'))
+    expect(apiGet).toHaveBeenCalledTimes(2)
+  })
+
+  it('refetch() is a noop when called outside a ProfileProvider (no crash)', async () => {
+    // Default context value exposes a noop refetch so consumers calling it
+    // outside the provider don't throw.
+    const { result } = renderHook(() => useUserProfile())
+    expect(typeof result.current.refetch).toBe('function')
+    await expect(result.current.refetch()).resolves.toBeUndefined()
   })
 })
