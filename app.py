@@ -1436,6 +1436,15 @@ def update_profile(
     for k, v in raw.items():
         if k in ("full_name", "name"):
             update_data["name"] = v
+            # Mirror the 20260414_auto_apply_setup.sql backfill on every write so
+            # check_profile_completeness can find first_name/last_name (auto-apply
+            # answer generator reads these directly per shared/answer_generator.py).
+            # Without this, only pre-migration rows have first_name/last_name and
+            # every NEW user has profile_complete=False forever.
+            if v and isinstance(v, str):
+                parts = v.strip().split(" ", 1)
+                update_data["first_name"] = parts[0] if parts else ""
+                update_data["last_name"] = parts[1].strip() if len(parts) > 1 else ""
         elif k == "linkedin_url":
             update_data["linkedin"] = v
         elif k == "github_url":
