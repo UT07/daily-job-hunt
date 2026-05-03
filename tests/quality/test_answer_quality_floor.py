@@ -19,7 +19,6 @@ from fastapi.testclient import TestClient
 # response. The 5 IDs are stored as an env var so this file can be re-used
 # in different envs; for local dev set FLOOR_TEST_JOB_IDS to a comma-list.
 FIXTURE_JOB_IDS = [j for j in os.environ.get("FLOOR_TEST_JOB_IDS", "").split(",") if j]
-FIXTURE_USER_ID = os.environ.get("FLOOR_TEST_USER_ID", "")
 
 PLACEHOLDER_PATTERNS = ["[", "TODO", "FILL ME", "FIXME", "...", "Lorem ipsum"]
 
@@ -49,8 +48,8 @@ def _profile_facts(profile: dict) -> list[str]:
 
 
 @pytest.mark.skipif(
-    not FIXTURE_JOB_IDS or not FIXTURE_USER_ID,
-    reason="FLOOR_TEST_JOB_IDS / FLOOR_TEST_USER_ID not set",
+    not FIXTURE_JOB_IDS,
+    reason="FLOOR_TEST_JOB_IDS not set",
 )
 @pytest.mark.parametrize("job_id", FIXTURE_JOB_IDS)
 def test_answer_floor_per_job(client, job_id):

@@ -267,7 +267,6 @@ jobs:
         env:
           AWS_DEFAULT_REGION: eu-west-1
           FLOOR_TEST_JOB_IDS: ${{ secrets.FLOOR_TEST_JOB_IDS }}
-          FLOOR_TEST_USER_ID: ${{ secrets.FLOOR_TEST_USER_ID }}
           FLOOR_TEST_TOKEN: ${{ secrets.FLOOR_TEST_TOKEN }}
         run: |
           pytest tests/quality/test_answer_quality_floor.py \
