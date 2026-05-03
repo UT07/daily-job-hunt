@@ -4,15 +4,15 @@ import { PostHogProvider } from 'posthog-js/react'
 import './index.css'
 import App from './App.jsx'
 import { initPostHog } from './lib/posthog'
-import { ProfileProvider } from './hooks/useUserProfile'
+
+// ProfileProvider lives inside App.jsx so it can be wrapped in <AuthProvider>
+// — ProfileProvider calls useAuth() and must be downstream of it.
 
 const ph = initPostHog()
 
 const tree = (
   <StrictMode>
-    <ProfileProvider>
-      <App />
-    </ProfileProvider>
+    <App />
   </StrictMode>
 )
 
