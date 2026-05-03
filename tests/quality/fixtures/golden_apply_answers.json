@@ -1,0 +1,33 @@
+{
+  "comment": "OPERATOR: fill the 5 entries below with real job IDs from prod (3 Greenhouse + 2 Ashby) and write hand-crafted ideal answers. The harness compares AI answers to these via cosine similarity. Until filled, the harness skips.",
+  "fixtures": [
+    {
+      "job_id": "REPLACE_WITH_GREENHOUSE_JOB_ID_1",
+      "platform": "greenhouse",
+      "ideal_answers": {
+        "Why are you interested in this role?": "REPLACE WITH HAND-WRITTEN IDEAL ANSWER",
+        "Years of relevant experience?": "REPLACE WITH HAND-WRITTEN IDEAL ANSWER"
+      }
+    },
+    {
+      "job_id": "REPLACE_WITH_GREENHOUSE_JOB_ID_2",
+      "platform": "greenhouse",
+      "ideal_answers": {}
+    },
+    {
+      "job_id": "REPLACE_WITH_GREENHOUSE_JOB_ID_3",
+      "platform": "greenhouse",
+      "ideal_answers": {}
+    },
+    {
+      "job_id": "REPLACE_WITH_ASHBY_JOB_ID_1",
+      "platform": "ashby",
+      "ideal_answers": {}
+    },
+    {
+      "job_id": "REPLACE_WITH_ASHBY_JOB_ID_2",
+      "platform": "ashby",
+      "ideal_answers": {}
+    }
+  ]
+}
