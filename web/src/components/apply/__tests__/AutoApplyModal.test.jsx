@@ -91,6 +91,16 @@ describe('AutoApplyModal', () => {
     expect(t.modalDismissed).toHaveBeenCalled()
   })
 
+  it('closes modal when user presses Escape', async () => {
+    apiGet.mockResolvedValue(previewPayload)
+    const onClose = vi.fn()
+    render(<AutoApplyModal job={job} isOpen onClose={onClose} onMarkApplied={vi.fn()} />)
+    await waitFor(() => screen.getByRole('button', { name: /Open ATS/i }))
+
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
   it('disables mark-applied button during in-flight POST', async () => {
     apiGet.mockResolvedValue(previewPayload)
     let resolveRecord

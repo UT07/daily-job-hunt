@@ -32,6 +32,15 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied }) {
     wasOpenRef.current = isOpen
   }, [isOpen, job, atsOpenedState])
 
+  // ESC key closes the modal (basic keyboard a11y)
+  // TODO: focus trap (use react-focus-trap or @reach/dialog) — see Group 4 backlog
+  useEffect(() => {
+    if (!isOpen) return
+    const handleKey = (e) => { if (e.key === 'Escape') onClose?.() }
+    window.addEventListener('keydown', handleKey)
+    return () => window.removeEventListener('keydown', handleKey)
+  }, [isOpen, onClose])
+
   if (!isOpen) return null
 
   const handleOpenAts = () => {
@@ -63,8 +72,14 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied }) {
 
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center" onClick={onClose}>
-      <div className="bg-cream border-4 border-black p-6 max-w-3xl w-full max-h-[90vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-xl font-bold mb-2 font-mono">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="apply-modal-title"
+        className="bg-cream border-4 border-black p-6 max-w-3xl w-full max-h-[90vh] overflow-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 id="apply-modal-title" className="text-xl font-bold mb-2 font-mono">
           Smart Apply: {job.company} — {job.title}
         </h2>
 
