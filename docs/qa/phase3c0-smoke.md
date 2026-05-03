@@ -3,6 +3,19 @@
 Run against the Netlify staging preview from this PR (PR #41 wired Netlify
 deploy previews). Report results in the PR description.
 
+## Repo setup (one-time, before first smoke)
+
+Layer A floor + Layer B golden tests skip silently without these GitHub Actions secrets configured. **Configure them in the repo's Actions secrets before relying on the `Apply Answer Quality (REPORT)` job's signal.**
+
+| Secret | Purpose | How to get |
+|---|---|---|
+| `FLOOR_TEST_JOB_IDS` | Comma-separated list of staging-API job IDs to gate (~5 jobs) | Pick 5 representative jobs from staging dashboard; copy their `job_id`s |
+| `FLOOR_TEST_TOKEN` | Bearer token for staging API auth | Sign into staging as the smoke user, copy session JWT |
+
+Without these, the `Apply Answer Quality (REPORT)` CI job reports green forever and provides zero signal — the gate is dormant. **The job passing is necessary but not sufficient — the secrets must be configured for the gate to actually fire.**
+
+To verify the gates are live: trigger a manual workflow run after configuring secrets, then check the job summary for `N tests ran, M skipped` lines.
+
 ## Setup
 - [ ] Open Netlify deploy preview URL from the PR
 - [ ] Log in as the test account
