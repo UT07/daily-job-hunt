@@ -6,6 +6,7 @@ import useApiMutation from '../hooks/useApiMutation';
 import { AutoApplyButton } from '../components/apply/AutoApplyButton';
 import { AutoApplyModal } from '../components/apply/AutoApplyModal';
 import { useUserProfile } from '../hooks/useUserProfile';
+import { computeEligibility } from '../hooks/useApplyEligibility';
 
 function decodeHtml(text) {
   if (!text) return '';
@@ -829,9 +830,15 @@ export default function JobWorkspace() {
             profile={profile || { profile_complete: false }}
             onOpenModal={() => setSmartApplyModalOpen(true)}
           />
-          {job.apply_url && job.apply_url !== 'Apply' && (
-            <a href={job.apply_url} target="_blank" rel="noopener noreferrer">
-              <Button variant="ghost" size="sm">Apply</Button>
+          {job.apply_url && job.apply_url !== 'Apply' &&
+            !computeEligibility({ ...job, id: job.job_id }, profile || { profile_complete: false }).eligible && (
+            <a
+              href={job.apply_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Smart Apply not yet available — open the posting directly"
+            >
+              <Button variant="ghost" size="sm">Open posting</Button>
             </a>
           )}
         </div>
