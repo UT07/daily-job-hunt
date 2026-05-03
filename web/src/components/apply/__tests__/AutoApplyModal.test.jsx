@@ -90,4 +90,24 @@ describe('AutoApplyModal', () => {
     rerender(<AutoApplyModal job={job} isOpen={false} onClose={onClose} onMarkApplied={vi.fn()} />)
     expect(t.modalDismissed).toHaveBeenCalled()
   })
+
+  it('disables mark-applied button during in-flight POST', async () => {
+    apiGet.mockResolvedValue(previewPayload)
+    let resolveRecord
+    apiCall.mockReturnValue(new Promise((resolve) => { resolveRecord = resolve }))
+
+    render(<AutoApplyModal job={job} isOpen onClose={vi.fn()} onMarkApplied={vi.fn()} />)
+    await waitFor(() => screen.getByRole('button', { name: /Open ATS/i }))
+
+    // ATS-opened state is required to swap the button
+    vi.spyOn(window, 'open').mockImplementation(() => null)
+    fireEvent.click(screen.getByRole('button', { name: /Open ATS/i }))
+    const markBtn = await screen.findByRole('button', { name: /I submitted/i })
+
+    fireEvent.click(markBtn)
+    await waitFor(() => expect(screen.getByRole('button', { name: /Recording/i })).toBeDisabled())
+
+    resolveRecord({}) // unblock
+    await waitFor(() => expect(apiCall).toHaveBeenCalledTimes(1))
+  })
 })

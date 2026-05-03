@@ -10,6 +10,7 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied }) {
   const { data: preview, isLoading, refetch } = useApplyPreview(job.id, { enabled: isOpen })
   const [atsOpenedState, setAtsOpenedState] = useState(false)
   const [submitError, setSubmitError] = useState(null)
+  const [submitting, setSubmitting] = useState(false)
   const openedFiredRef = useRef(false)
   const wasOpenRef = useRef(isOpen)
 
@@ -41,6 +42,7 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied }) {
 
   const handleMarkApplied = async () => {
     setSubmitError(null)
+    setSubmitting(true)
     try {
       await apiCall('/api/apply/record', {
         job_id: job.id,
@@ -52,6 +54,8 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied }) {
       onClose?.()
     } catch (e) {
       setSubmitError(e.message || 'Mark-applied failed')
+    } finally {
+      setSubmitting(false)
     }
   }
 
@@ -116,8 +120,13 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied }) {
         <div className="flex justify-end gap-2 mt-4">
           <button type="button" onClick={onClose} className="px-4 py-2 border-2 border-black bg-white">Cancel</button>
           {atsOpenedState ? (
-            <button type="button" onClick={handleMarkApplied} className="px-4 py-2 border-2 border-black bg-yellow-300 hover:bg-yellow-400">
-              I submitted — mark applied
+            <button
+              type="button"
+              onClick={handleMarkApplied}
+              disabled={submitting}
+              className="px-4 py-2 border-2 border-black bg-yellow-300 hover:bg-yellow-400 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {submitting ? 'Recording…' : 'I submitted — mark applied'}
             </button>
           ) : (
             <button type="button" onClick={handleOpenAts} className="px-4 py-2 border-2 border-black bg-yellow-300 hover:bg-yellow-400">
