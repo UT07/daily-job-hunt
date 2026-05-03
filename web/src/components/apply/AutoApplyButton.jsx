@@ -12,6 +12,7 @@ const STATE_CONFIG = {
 
 export function AutoApplyButton({ job, profile, onOpenModal }) {
   const navigate = useNavigate()
+  const jobId = job.id || job.job_id
   const eligibility = computeEligibility(job, profile)
   const stateKey = eligibility.eligible ? 'eligible' : eligibility.reason
   const cfg = STATE_CONFIG[stateKey]
@@ -21,7 +22,7 @@ export function AutoApplyButton({ job, profile, onOpenModal }) {
       onOpenModal()
       return
     }
-    ineligibleActionTaken({ job_id: job.id, reason: stateKey })
+    ineligibleActionTaken({ job_id: jobId, reason: stateKey })
     if (stateKey === 'profile_incomplete') {
       navigate('/settings#profile')
     } else if (stateKey === 'no_resume') {

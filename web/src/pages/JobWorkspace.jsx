@@ -812,7 +812,7 @@ export default function JobWorkspace() {
           <ScoreBadge score={job.match_score} className="text-2xl" />
           <Badge status={currentStatus || job.application_status || 'New'} />
           <AutoApplyButton
-            job={{ ...job, id: job.job_id }}
+            job={job}
             profile={profile || { profile_complete: false }}
             onOpenModal={() => setSmartApplyModalOpen(true)}
           />
@@ -826,7 +826,7 @@ export default function JobWorkspace() {
 
       {smartApplyModalOpen && (
         <AutoApplyModal
-          job={{ ...job, id: job.job_id }}
+          job={job}
           isOpen={smartApplyModalOpen}
           onClose={() => setSmartApplyModalOpen(false)}
           onMarkApplied={() => { refetchJob(); }}

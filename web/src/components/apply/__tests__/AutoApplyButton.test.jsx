@@ -66,4 +66,21 @@ describe('AutoApplyButton smart-button states', () => {
     const btn = screen.getByRole('button', { name: /Applied/i })
     expect(btn).toBeDisabled()
   })
+
+  it('accepts job.job_id as a fallback when job.id is absent', () => {
+    // Callers (e.g. JobWorkspace) used to pre-bridge the prop with a spread.
+    // Now apply components normalize internally — telemetry must receive the
+    // correct id whether the caller passed `id` or `job_id`.
+    render(
+      <MemoryRouter>
+        <AutoApplyButton
+          job={{ ...baseJob, id: undefined, job_id: 'j-via-snake' }}
+          profile={{ profile_complete: false }}
+          onOpenModal={vi.fn()}
+        />
+      </MemoryRouter>
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Complete profile to apply/i }))
+    expect(t.ineligibleActionTaken).toHaveBeenCalledWith({ job_id: 'j-via-snake', reason: 'profile_incomplete' })
+  })
 })

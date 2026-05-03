@@ -1,39 +1,42 @@
 import { useEffect, useRef, useState } from 'react'
 import { apiCall } from '../../api'
 import { useApplyPreview } from '../../hooks/useApplyPreview'
+import { useFocusTrap } from '../../hooks/useFocusTrap'
 import { QuestionsTable } from './QuestionsTable'
 import { ProfileSnapshot } from './ProfileSnapshot'
 import { EmptyPreviewState } from './EmptyPreviewState'
 import { modalOpened, modalDismissed, fieldCopied, atsOpened, markedApplied } from '../../lib/applyTelemetry'
 
 export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied }) {
-  const { data: preview, isLoading, refetch } = useApplyPreview(job.id, { enabled: isOpen })
+  const jobId = job.id || job.job_id
+  const { data: preview, isLoading, refetch } = useApplyPreview(jobId, { enabled: isOpen })
   const [atsOpenedState, setAtsOpenedState] = useState(false)
   const [submitError, setSubmitError] = useState(null)
   const [submitting, setSubmitting] = useState(false)
   const openedFiredRef = useRef(false)
   const wasOpenRef = useRef(isOpen)
+  const dialogRef = useFocusTrap(isOpen)
 
   // Modal-opened telemetry (fire once per open)
   useEffect(() => {
     if (isOpen && !openedFiredRef.current) {
-      modalOpened({ job_id: job.id, platform: job.apply_platform, reason: 'eligible' })
+      modalOpened({ job_id: jobId, platform: job.apply_platform, reason: 'eligible' })
       openedFiredRef.current = true
     }
-  }, [isOpen, job])
+  }, [isOpen, jobId, job.apply_platform])
 
   // Modal-dismissed telemetry (fire when modal transitions from open → closed without mark-applied)
   useEffect(() => {
     if (wasOpenRef.current && !isOpen) {
-      modalDismissed({ job_id: job.id, platform: job.apply_platform, ats_was_opened: atsOpenedState })
+      modalDismissed({ job_id: jobId, platform: job.apply_platform, ats_was_opened: atsOpenedState })
       openedFiredRef.current = false
       setAtsOpenedState(false)
     }
     wasOpenRef.current = isOpen
-  }, [isOpen, job, atsOpenedState])
+  }, [isOpen, jobId, job.apply_platform, atsOpenedState])
 
-  // ESC key closes the modal (basic keyboard a11y)
-  // TODO: focus trap (use react-focus-trap or @reach/dialog) — see Group 4 backlog
+  // ESC key closes the modal. Tab-cycle focus trap + initial-focus / restore
+  // on close are handled by useFocusTrap (see hooks/useFocusTrap.js).
   useEffect(() => {
     if (!isOpen) return
     const handleKey = (e) => { if (e.key === 'Escape') onClose?.() }
@@ -45,7 +48,7 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied }) {
 
   const handleOpenAts = () => {
     window.open(job.apply_url, '_blank')
-    atsOpened({ job_id: job.id, platform: job.apply_platform })
+    atsOpened({ job_id: jobId, platform: job.apply_platform })
     setAtsOpenedState(true)
   }
 
@@ -54,11 +57,11 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied }) {
     setSubmitting(true)
     try {
       await apiCall('/api/apply/record', {
-        job_id: job.id,
+        job_id: jobId,
         platform: job.apply_platform,
         accepted_at: new Date().toISOString(),
       })
-      markedApplied({ job_id: job.id, platform: job.apply_platform, ats_was_opened: atsOpenedState })
+      markedApplied({ job_id: jobId, platform: job.apply_platform, ats_was_opened: atsOpenedState })
       onMarkApplied?.()
       onClose?.()
     } catch (e) {
@@ -73,10 +76,12 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied }) {
   return (
     <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center" onClick={onClose}>
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="apply-modal-title"
-        className="bg-cream border-4 border-black p-6 max-w-3xl w-full max-h-[90vh] overflow-auto"
+        tabIndex={-1}
+        className="bg-cream border-4 border-black p-6 max-w-3xl w-full max-h-[90vh] overflow-auto outline-none"
         onClick={(e) => e.stopPropagation()}
       >
         <h2 id="apply-modal-title" className="text-xl font-bold mb-2 font-mono">
@@ -105,12 +110,12 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied }) {
                     onClick={async () => {
                       try {
                         await navigator.clipboard.writeText(preview.cover_letter.text)
-                        fieldCopied({ job_id: job.id, field_name: '__cover_letter__' })
+                        fieldCopied({ job_id: jobId, field_name: '__cover_letter__' })
                       } catch (e) {
                         // Clipboard API can reject in iframes / lost focus / denied permissions.
                         // Fire fieldCopied with an error flag so telemetry distinguishes
                         // a real copy from a silent failure.
-                        fieldCopied({ job_id: job.id, field_name: '__cover_letter__', error: e?.message || 'Clipboard unavailable' })
+                        fieldCopied({ job_id: jobId, field_name: '__cover_letter__', error: e?.message || 'Clipboard unavailable' })
                       }
                     }}
                     className="px-2 py-1 border border-black hover:bg-yellow-200"
@@ -118,7 +123,7 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied }) {
                     📋 Copy
                   </button>
                 </div>
-                <pre className="text-sm whitespace-pre-wrap font-mono max-h-48 overflow-auto">{preview.cover_letter.text}</pre>
+                <pre className="text-sm whitespace-pre-wrap font-mono">{preview.cover_letter.text}</pre>
               </div>
             )}
 
@@ -127,7 +132,7 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied }) {
             ) : (
               <QuestionsTable
                 questions={questions}
-                onCopy={({ field_name }) => fieldCopied({ job_id: job.id, field_name })}
+                onCopy={({ field_name }) => fieldCopied({ job_id: jobId, field_name })}
               />
             )}
 

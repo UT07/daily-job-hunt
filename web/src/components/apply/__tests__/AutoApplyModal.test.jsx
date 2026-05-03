@@ -83,12 +83,43 @@ describe('AutoApplyModal', () => {
     expect(screen.getByText(/Couldn't mark applied/i)).toBeInTheDocument()
   })
 
-  it('dismiss without marking applied fires modalDismissed', async () => {
+  it('dismiss without marking applied fires modalDismissed with full payload', async () => {
     const onClose = vi.fn()
     const { rerender } = render(<AutoApplyModal job={job} isOpen onClose={onClose} onMarkApplied={vi.fn()} />)
     await waitFor(() => screen.getByRole('button', { name: /Open ATS/i }))
     rerender(<AutoApplyModal job={job} isOpen={false} onClose={onClose} onMarkApplied={vi.fn()} />)
-    expect(t.modalDismissed).toHaveBeenCalled()
+    expect(t.modalDismissed).toHaveBeenCalledWith(expect.objectContaining({
+      job_id: 'j1',
+      platform: 'greenhouse',
+      ats_was_opened: false,
+    }))
+  })
+
+  it('clicking the backdrop calls onClose once', async () => {
+    const onClose = vi.fn()
+    render(<AutoApplyModal job={job} isOpen onClose={onClose} onMarkApplied={vi.fn()} />)
+    await waitFor(() => screen.getByRole('button', { name: /Open ATS/i }))
+
+    // Backdrop is the <div className="fixed inset-0 ..."> wrapping the dialog panel
+    const dialog = screen.getByRole('dialog')
+    const backdrop = dialog.parentElement
+    fireEvent.click(backdrop)
+    expect(onClose).toHaveBeenCalledTimes(1)
+  })
+
+  it('focuses the dialog on open and traps Tab from the last action', async () => {
+    render(<AutoApplyModal job={job} isOpen onClose={vi.fn()} onMarkApplied={vi.fn()} />)
+    await waitFor(() => screen.getByRole('button', { name: /Open ATS/i }))
+
+    // useFocusTrap focuses the dialog itself when nothing inside has focus
+    expect(document.activeElement).toBe(screen.getByRole('dialog'))
+
+    // Tab from the last focusable (Open ATS) wraps to the first focusable
+    // inside the panel — which is the resume download link rendered above.
+    const openAts = screen.getByRole('button', { name: /Open ATS/i })
+    openAts.focus()
+    fireEvent.keyDown(document, { key: 'Tab' })
+    expect(document.activeElement).toBe(screen.getByRole('link', { name: /Tailored Resume/i }))
   })
 
   it('closes modal when user presses Escape', async () => {
