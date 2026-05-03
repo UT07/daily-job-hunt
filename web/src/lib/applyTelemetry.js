@@ -9,7 +9,6 @@ function capture(event, props) {
   }
 }
 
-export const eligibilityViewed = (props) => capture('apply_eligibility_viewed', props)
 export const modalOpened       = (props) => capture('apply_modal_opened', props)
 export const fieldCopied       = (props) => capture('apply_field_copied', props)
 export const atsOpened         = (props) => capture('apply_ats_opened', props)

@@ -9,13 +9,6 @@ import * as t from '../applyTelemetry'
 describe('applyTelemetry', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('eligibilityViewed captures with summary props', () => {
-    t.eligibilityViewed({ total_jobs: 60, eligible: 12, by_reason: { profile_incomplete: 0, no_resume: 5 } })
-    expect(posthog.capture).toHaveBeenCalledWith('apply_eligibility_viewed', {
-      total_jobs: 60, eligible: 12, by_reason: { profile_incomplete: 0, no_resume: 5 },
-    })
-  })
-
   it('modalOpened captures job_id, platform, reason', () => {
     t.modalOpened({ job_id: 'j1', platform: 'greenhouse', reason: 'eligible' })
     expect(posthog.capture).toHaveBeenCalledWith('apply_modal_opened', {

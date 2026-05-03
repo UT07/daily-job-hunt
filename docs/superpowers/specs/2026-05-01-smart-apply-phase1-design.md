@@ -106,7 +106,7 @@ web/src/
 │   ├── useApplyPreview.js                  ~50 LOC — wraps GET /api/apply/preview
 │   └── useUserProfile.js                   ~40 LOC — wraps GET /api/profile, exposes via ProfileContext
 ├── lib/
-│   └── applyTelemetry.js                   ~50 LOC — 7 posthog.capture wrappers
+│   └── applyTelemetry.js                   ~50 LOC — 6 posthog.capture wrappers
 └── pages/
     ├── JobWorkspace.jsx                    MODIFIED — embed <AutoApplyButton/>
     └── Dashboard.jsx                       MODIFIED — wrap children in <ProfileContext.Provider>
@@ -169,11 +169,10 @@ Five states, one per backend eligibility reason:
 
 ## 5. Telemetry — PostHog events
 
-Seven events captured via `lib/applyTelemetry.js` wrappers around `posthog.capture()`:
+Six events captured via `lib/applyTelemetry.js` wrappers around `posthog.capture()`:
 
 | Event | When | Properties |
 |---|---|---|
-| `apply_eligibility_viewed` | Once per dashboard load | `{total_jobs, eligible, by_reason: {...}}` |
 | `apply_modal_opened` | Modal opens | `{job_id, platform, reason}` |
 | `apply_field_copied` | Per-field 📋 click | `{job_id, field_name}` |
 | `apply_ats_opened` | Open ATS click | `{job_id, platform}` |

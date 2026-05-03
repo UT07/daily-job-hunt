@@ -67,7 +67,7 @@ To verify the gates are live: trigger a manual workflow run after configuring se
 ## PostHog telemetry
 - [ ] Open PostHog dashboard → Live Events stream
 - [ ] Reproduce: dashboard load, modal open, copy a field, open ATS, mark applied, dismiss
-- [ ] Confirm 7 distinct event names captured: `apply_eligibility_viewed`, `apply_modal_opened`, `apply_field_copied`, `apply_ats_opened`, `apply_marked_applied`, `apply_modal_dismissed`, `apply_ineligible_action_taken`
+- [ ] Confirm 6 distinct event names captured: `apply_modal_opened`, `apply_field_copied`, `apply_ats_opened`, `apply_marked_applied`, `apply_modal_dismissed`, `apply_ineligible_action_taken`
 - [ ] Each event has the documented properties (job_id, platform, etc.)
 
 ## Done
