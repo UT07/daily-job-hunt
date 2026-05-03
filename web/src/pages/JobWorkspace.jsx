@@ -824,12 +824,14 @@ export default function JobWorkspace() {
         </div>
       </div>
 
-      <AutoApplyModal
-        job={{ ...job, id: job.job_id }}
-        isOpen={smartApplyModalOpen}
-        onClose={() => setSmartApplyModalOpen(false)}
-        onMarkApplied={() => { refetchJob(); }}
-      />
+      {smartApplyModalOpen && (
+        <AutoApplyModal
+          job={{ ...job, id: job.job_id }}
+          isOpen={smartApplyModalOpen}
+          onClose={() => setSmartApplyModalOpen(false)}
+          onMarkApplied={() => { refetchJob(); }}
+        />
+      )}
 
       {/* Tabs */}
       <Tabs tabs={JOB_TABS} activeTab={activeTab} onTabChange={setActiveTab} />
