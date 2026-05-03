@@ -78,12 +78,17 @@ def test_answer_floor_per_job(client, job_id):
 
     fact_appearances = 0
     for q in questions:
-        answer = (q.get("answer") or "").strip()
-        question = (q.get("question") or "").strip()
+        # Floor checks only apply to free-text AI answers. Bool answers
+        # (yes_no, checkbox) and None (requires_user_action) are skipped.
+        ai_answer = q.get("ai_answer")
+        if not isinstance(ai_answer, str):
+            continue
+        answer = ai_answer.strip()
+        question = (q.get("label") or "").strip()
 
-        assert len(answer) >= 20, f"answer too short for {q['question']!r}: {answer!r}"
+        assert len(answer) >= 20, f"answer too short for {q['label']!r}: {answer!r}"
         assert answer.lower() != question.lower(), (
-            f"answer echoes question: {q['question']!r}"
+            f"answer echoes question: {q['label']!r}"
         )
         for pat in PLACEHOLDER_PATTERNS:
             assert pat.lower() not in answer.lower(), (

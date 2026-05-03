@@ -83,7 +83,14 @@ def test_golden_answer_similarity(client, fixture):
     assert resp.status_code == 200
     data = resp.json()
 
-    ai_answers = {q["question"]: q.get("answer", "") for q in data.get("custom_questions", [])}
+    # Match by label (the human-readable question text). Bool/None answers
+    # (yes_no/checkbox or requires_user_action) are skipped — golden fixtures
+    # only cover free-text AI answers.
+    ai_answers = {
+        q["label"]: q["ai_answer"]
+        for q in data.get("custom_questions", [])
+        if isinstance(q.get("ai_answer"), str)
+    }
 
     failures = []
     warnings = []
