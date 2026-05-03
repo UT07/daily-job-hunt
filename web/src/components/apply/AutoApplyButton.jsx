@@ -29,7 +29,11 @@ export function AutoApplyButton({ job, profile, onOpenModal }) {
       tailorCard?.scrollIntoView({ behavior: 'smooth' })
       tailorCard?.querySelector('button')?.focus()
     } else if (stateKey === 'no_apply_url') {
+      // Wired to the JobWorkspace overview-tab "Edit" button. If the user
+      // isn't on the overview tab (or is browsing from JobTable), the
+      // affordance won't exist — telemetry has already fired above.
       const editField = document.querySelector('[data-testid="apply-url-edit"]')
+      editField?.scrollIntoView({ behavior: 'smooth', block: 'center' })
       editField?.click()
     }
   }

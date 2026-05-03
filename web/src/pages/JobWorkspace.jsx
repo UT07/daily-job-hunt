@@ -860,6 +860,7 @@ export default function JobWorkspace() {
               {!editing ? (
                 <button
                   onClick={startEditing}
+                  data-testid="apply-url-edit"
                   className="inline-flex items-center gap-1.5 text-xs font-bold text-stone-500 border-2 border-stone-300 px-2.5 py-1
                     hover:border-black hover:text-black transition-colors cursor-pointer"
                 >
