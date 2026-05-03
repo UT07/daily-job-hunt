@@ -32,7 +32,7 @@ To verify the gates are live: trigger a manual workflow run after configuring se
 ## JobWorkspace — eligible Greenhouse job
 - [ ] Click into an eligible (green-dot) Greenhouse job
 - [ ] "Smart Apply" button is visible and enabled
-- [ ] Click — modal opens; Network tab shows GET `/api/apply/eligibility/{id}` then GET `/api/apply/preview/{id}`
+- [ ] Click — modal opens; Network tab shows GET `/api/apply/preview/{id}`
 - [ ] Modal shows: header with company + role, Resume + Cover Letter chips, question table with 1+ rows, profile snapshot collapsible
 - [ ] Click the copy icon on one row → toast (or browser alert) confirms; paste into a text editor — the AI answer is on the clipboard
 - [ ] Click "Open ATS in new tab" → real Greenhouse URL opens

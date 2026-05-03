@@ -37,7 +37,7 @@ Phase 1 doubles as the **answer-quality gate** for Phase 2. If 3b's AI-generated
 
 | Backend component | Plan | Reused by Phase 1 |
 |---|---|---|
-| `GET /api/apply/eligibility/{job_id}` | 3a | ✅ — defensive confirm before modal |
+| `GET /api/apply/eligibility/{job_id}` | 3a | Available but **not called by Phase 1** — eligibility is computed client-side from row data + profile (see §4 *Eligibility computation*). Backend's own check inside `apply_preview` is the authoritative guard. |
 | `GET /api/apply/preview/{job_id}` | 3b | ✅ — populates the answers table |
 | `POST /api/apply/record` | 3a | ✅ — Mark-applied action |
 | Apply platform classifier | 3b | ✅ — drives `apply_platform` on each job |
@@ -58,9 +58,8 @@ The current `ProfileResponse` in `app.py` exposes profile fields and `onboarding
 1. Dashboard loads, `<JobTable>` renders rows. Each row shows `<EligibilityBadge>` (green / amber / grey) computed client-side from row data + the user profile fetched once and shared via `ProfileContext`.
 2. User clicks a row → `JobWorkspace` page → `<AutoApplyButton>` shows state `eligible`, label *"Smart Apply"*.
 3. User clicks button:
-   - Defensive `GET /api/apply/eligibility/{job_id}` (catches client/server drift)
    - `<AutoApplyModal>` opens
-   - `GET /api/apply/preview/{job_id}` populates the modal
+   - `GET /api/apply/preview/{job_id}` populates the modal (backend re-checks eligibility internally and returns a degraded shell if the row state changed since the client-side compute)
 4. Modal contents:
    - Header: `Smart Apply: {company} — {role}`
    - Resume + cover letter chips (download links to S3-presigned URLs)
@@ -75,8 +74,6 @@ The current `ProfileResponse` in `app.py` exposes profile fields and `onboarding
 
 | Trigger | Behavior |
 |---|---|
-| Defensive eligibility check disagrees with client | Modal still opens with warning banner ("Eligibility changed — open ATS manually"); skips preview fetch; chips + Open ATS + Mark applied still work |
-| Defensive eligibility call fails (network error / 5xx) | Permissive: open modal anyway with banner ("Couldn't confirm eligibility — proceeding offline-style"); proceed to preview fetch as normal. **Don't block the user on a flaky call.** |
 | `eligible: true` but `custom_questions: []` (e.g., unsupported platform like HN Hiring with `apply_platform=null`, or supported platform whose form couldn't be parsed) | `<EmptyPreviewState>` replaces the table — chips and Open ATS still work; "Retry preview" link re-fetches |
 | `POST /api/apply/record` fails | Modal stays open, error toast shown, optimistic row-status update reverted; user can retry |
 | `profile_incomplete` (smart-button) | Click navigates to `/settings#profile` |
@@ -129,7 +126,7 @@ app.py: ProfileResponse                      MODIFIED — add `profile_complete:
 | Component | Props | Owns | Does not own |
 |---|---|---|---|
 | `<EligibilityBadge>` | `{eligible, reason, platform}` | Color, tooltip | No fetch, no state |
-| `<AutoApplyButton>` | `{job, profile}` | Smart-button state machine, modal-open trigger, defensive eligibility call | Preview fetch (delegates to modal) |
+| `<AutoApplyButton>` | `{job, profile}` | Smart-button state machine, modal-open trigger | Preview fetch (delegates to modal) |
 | `<AutoApplyModal>` | `{job, isOpen, onClose}` | Preview fetch lifecycle, primary-button swap, optimistic record-applied + revert-on-failure | Eligibility logic |
 | `<QuestionsTable>` | `{questions, onCopy}` | Per-row copy + toast UI | Telemetry call (delegates to parent) |
 | `<ProfileSnapshot>` | `{snapshot}` | Collapse/expand state | Data fetching |
@@ -154,7 +151,7 @@ export function computeEligibility(job, profile) {
 
 The frontend mirrors the backend's reason-set exactly: `{already_applied, no_apply_url, no_resume, profile_incomplete}` for ineligible, plus `eligible: true`. The frontend does **not** invent additional reasons.
 
-The defensive backend call happens once when the user clicks the button on `JobWorkspace` — not per row.
+If client-side eligibility says eligible but the row state has actually changed since render (e.g., `application_status` flipped to `applied` in another tab), `apply_preview` re-checks server-side and returns a degraded shell — the modal handles that path.
 
 ### Smart-button state machine
 
