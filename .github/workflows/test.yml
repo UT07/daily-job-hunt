@@ -274,6 +274,16 @@ jobs:
           pytest tests/quality/test_answer_quality_floor.py \
                  tests/quality/test_answer_quality_golden.py \
                  -v --tb=short || true
+      - name: Quality gate status summary
+        if: always()
+        run: |
+          echo "## Smart Apply quality gate status" >> $GITHUB_STEP_SUMMARY
+          if [ -z "${{ secrets.FLOOR_TEST_TOKEN }}" ] || [ -z "${{ secrets.FLOOR_TEST_JOB_IDS }}" ]; then
+            echo ":warning: **Gate is dormant** — \`FLOOR_TEST_*\` secrets not configured." >> $GITHUB_STEP_SUMMARY
+            echo "See \`docs/qa/phase3c0-smoke.md\` § 'Repo setup' for how to configure." >> $GITHUB_STEP_SUMMARY
+          else
+            echo ":white_check_mark: **Gate is live** — Layer A + B ran with configured secrets." >> $GITHUB_STEP_SUMMARY
+          fi
 
   e2e-tests:
     runs-on: ubuntu-latest
