@@ -27,6 +27,16 @@ const LEGACY_PROGRESS_STEPS = {
   ],
 };
 
+// pollTask's default maxWaitMs is 240000 (4 min), which is fine for the
+// fast `score` flow (~30s) but wrong for `contacts`: find_contacts on
+// the backend can take 5-7 min in the worst case (up to 9 Apify Google
+// searches × 60s each when Google rate-limits the scraper). A blanket
+// bump to 10 min would mean `score` also hangs for 10 min if the backend
+// dies, so we set the timeout per-key here instead. Defined at module
+// scope so the object identity stays stable across renders (otherwise it
+// would be a new dep on the runLegacy useCallback every render).
+const LEGACY_MAX_WAIT_MS = { score: 120000, contacts: 600000 };
+
 // Map raw task status strings to step keys (for legacy actions)
 function statusToStepKey(rawStatus) {
   if (!rawStatus) return null;
@@ -59,7 +69,7 @@ function ProgressIndicator({ steps, currentKey }) {
               <span>{step.label}</span>
             </div>
             {i < steps.length - 1 && (
-              <span className="text-stone-300 font-mono text-xs">\u2192</span>
+              <span className="text-stone-300 font-mono text-xs">{'→'}</span>
             )}
           </div>
         );
@@ -118,9 +128,13 @@ export default function AddJob() {
       setProgressKey('RUNNING');
 
       // Poll until terminal state
+      // Single-job pipeline takes 6-9 min in practice (tailor → compile →
+      // cover letter → find contacts). 5 min was timing out before the SFN
+      // finished — user saw "Tailor Resume doesn't work" while the backend
+      // was actually succeeding silently. 15 min gives margin.
       const output = await pollPipeline(pollUrl, {
         intervalMs: 5000,
-        maxWaitMs: 300000,
+        maxWaitMs: 900000,
         onStatus: (data) => {
           if (data.status === 'SUCCEEDED') {
             setProgressKey('SUCCEEDED');
@@ -150,7 +164,6 @@ export default function AddJob() {
     }
   }, [jd, jobTitle, company, location, applyUrl, resumeType]);
 
-  // Run legacy (non-pipeline) actions like score and contacts
   const runLegacy = useCallback(async (endpoint, key) => {
     if (!jd.trim()) return;
     setErrors([]);
@@ -162,6 +175,7 @@ export default function AddJob() {
     try {
       const payload = getPayload();
       const data = await apiCall(endpoint, payload, {
+        maxWaitMs: LEGACY_MAX_WAIT_MS[key],  // undefined → pollTask default
         onProgress: (status) => {
           const mapped = statusToStepKey(status);
           if (mapped) setProgressKey(mapped);

@@ -139,8 +139,21 @@ function ContactItem({ contact }) {
 function ContactsTab({ job }) {
   // Surface find-contacts errors instead of just console.error'ing them —
   // before this the spinner stopped and nothing happened, with no clue why.
+  //
+  // maxWaitMs: 600000 (10 min) instead of pollTask's 240000 (4 min) default.
+  // find_contacts on the backend can take 5-7 min in the worst case:
+  // up to 9 Apify Google searches (3 search-roles × 3 query variations),
+  // each with 60s timeout. When Google rate-limits the scraper (which it
+  // routinely does), Apify retries to exhaustion before falling back to
+  // Serper. The 4-min frontend default would cut that off mid-flight and
+  // surface as "Task timed out — please try again" while the Lambda kept
+  // running and (eventually) completed correctly.
   const findContacts = useApiMutation(
-    () => apiCall(`/api/dashboard/jobs/${job.job_id}/find-contacts`, {}),
+    () => apiCall(
+      `/api/dashboard/jobs/${job.job_id}/find-contacts`,
+      {},
+      { maxWaitMs: 600000 },
+    ),
   );
   const findingContacts = findContacts.loading;
 
