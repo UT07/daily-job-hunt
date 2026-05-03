@@ -415,8 +415,13 @@ export default function Onboarding() {
         if (item.country && item.status) wa[item.country] = item.status
       }
 
+      // Email is auth-managed (Supabase) — backend ProfileUpdateRequest uses
+      // extra="forbid" and rejects any unknown fields. Strip before sending.
+      // We keep `email` in local state for display in StepProfile (line ~215).
+      const { email: _email, ...profileForBackend } = profile
+
       await apiPut('/api/profile', {
-        ...profile,
+        ...profileForBackend,
         work_authorizations: wa,
         complete_onboarding: true,
       })
