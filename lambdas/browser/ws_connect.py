@@ -34,8 +34,11 @@ def _extract_token(headers: dict) -> tuple[str | None, str | None]:
     Assumes caller has already lowercased all header keys.
     """
     auth = headers.get("authorization")
-    if auth and auth.startswith("Bearer "):
-        return auth[len("Bearer "):], None  # token, chosen_subprotocol
+    if auth and auth.lower().startswith("bearer "):
+        # RFC 7235 §2.1: scheme name is case-insensitive. Strip the 7-char
+        # "Bearer " prefix using fixed length, then strip residual whitespace
+        # to match the pre-A2 behaviour.
+        return auth[len("Bearer "):].strip(), None  # token, chosen_subprotocol
 
     proto = headers.get("sec-websocket-protocol")
     if proto:
