@@ -10,6 +10,9 @@ vi.mock('../../../lib/applyTelemetry', () => ({
   fieldCopied: vi.fn(),
   atsOpened: vi.fn(),
   markedApplied: vi.fn(),
+  sessionStarted: vi.fn(),
+  sessionFailed: vi.fn(),
+  fillAllSent: vi.fn(),
 }))
 import { apiGet, apiCall, startApplySession } from '../../../api'
 import * as t from '../../../lib/applyTelemetry'

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useBrowserSession } from '../../hooks/useBrowserSession'
 import { SessionStatusBadge } from './SessionStatusBadge'
 import { ACTIONS_OUT } from '../../lib/wsProtocol'
+import { fillAllSent } from '../../lib/applyTelemetry'
 
 export function BrowserSessionView({
   wsUrl, sessionId, token,
@@ -28,6 +29,7 @@ export function BrowserSessionView({
     for (const q of preview?.custom_questions ?? []) {
       if (q.ai_answer != null) answers[q.id] = q.ai_answer
     }
+    fillAllSent({ session_id: sessionId, answer_count: Object.keys(answers).length })
     sendAction({ action: ACTIONS_OUT.FILL_ALL, answers })
   }
 

@@ -7,7 +7,7 @@ import { QuestionsTable } from './QuestionsTable'
 import { ProfileSnapshot } from './ProfileSnapshot'
 import { EmptyPreviewState } from './EmptyPreviewState'
 import { BrowserSessionView } from './BrowserSessionView'
-import { modalOpened, modalDismissed, fieldCopied, atsOpened, markedApplied } from '../../lib/applyTelemetry'
+import { modalOpened, modalDismissed, fieldCopied, atsOpened, markedApplied, sessionStarted, sessionFailed } from '../../lib/applyTelemetry'
 
 /**
  * Two-mode modal:
@@ -76,6 +76,7 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied, mode = 'ha
     startApplySession(jobId)
       .then((data) => {
         beginSession({ sessionId: data.session_id, jobId })
+        sessionStarted({ job_id: jobId, session_id: data.session_id, reused: data.reused ?? false })
         setSessionState({
           phase: 'streaming',
           wsUrl: data.ws_url,
@@ -86,6 +87,7 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied, mode = 'ha
       })
       .catch((err) => {
         // Any error (412 profile_incomplete, 409 conflict, etc.) falls back to hand_paste
+        sessionFailed({ job_id: jobId, error: err.message })
         setSessionState({
           phase: 'fallback',
           wsUrl: null,

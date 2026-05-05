@@ -51,3 +51,48 @@ describe('applyTelemetry', () => {
     })
   })
 })
+
+describe('Plan 3c session telemetry', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('sessionStarted captures session_id + reused flag', () => {
+    t.sessionStarted({ job_id: 'j1', session_id: 'sess-1', reused: false })
+    expect(posthog.capture).toHaveBeenCalledWith('apply_session_started', {
+      job_id: 'j1', session_id: 'sess-1', reused: false,
+    })
+  })
+
+  it('sessionReconnected captures attempt count', () => {
+    t.sessionReconnected({ session_id: 'sess-1', attempt: 2 })
+    expect(posthog.capture).toHaveBeenCalledWith('apply_session_reconnected', {
+      session_id: 'sess-1', attempt: 2,
+    })
+  })
+
+  it('captchaDetected fires once per session (idempotent)', () => {
+    t.captchaDetected({ session_id: 'sess-cap-1', type: 'hcaptcha' })
+    t.captchaDetected({ session_id: 'sess-cap-1', type: 'hcaptcha' })
+    expect(posthog.capture).toHaveBeenCalledTimes(1)
+  })
+
+  it('fillAllSent captures answer count', () => {
+    t.fillAllSent({ session_id: 'sess-1', answer_count: 12 })
+    expect(posthog.capture).toHaveBeenCalledWith('apply_fill_all_sent', {
+      session_id: 'sess-1', answer_count: 12,
+    })
+  })
+
+  it('submittedReceived fires when WS reports status=submitted', () => {
+    t.submittedReceived({ session_id: 'sess-1' })
+    expect(posthog.capture).toHaveBeenCalledWith('apply_submitted_received', {
+      session_id: 'sess-1',
+    })
+  })
+
+  it('sessionFailed captures the error reason', () => {
+    t.sessionFailed({ job_id: 'j1', error: 'profile_incomplete:phone' })
+    expect(posthog.capture).toHaveBeenCalledWith('apply_session_failed', {
+      job_id: 'j1', error: 'profile_incomplete:phone',
+    })
+  })
+})

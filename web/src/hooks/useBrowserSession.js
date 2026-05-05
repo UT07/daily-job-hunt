@@ -4,6 +4,11 @@ import {
   parseTextFrame,
   binaryFrameToDataUrl,
 } from '../lib/wsProtocol'
+import {
+  sessionReconnected,
+  submittedReceived,
+  captchaDetected,
+} from '../lib/applyTelemetry'
 
 const SUBPROTOCOL_PREFIX = 'naukribaba-auth.'
 
@@ -49,7 +54,13 @@ export function useBrowserSession({ wsUrl, sessionId, token, onSubmitted }) {
         if (!frame) return  // malformed; drop
         if (frame.action === ACTIONS_IN.STATUS) {
           setStatus(frame.status)
-          if (frame.status === 'submitted') onSubmitted?.()
+          if (frame.status === 'submitted') {
+            submittedReceived({ session_id: sessionId })
+            onSubmitted?.()
+          }
+          if (frame.status === 'captcha') {
+            captchaDetected({ session_id: sessionId, type: frame.type ?? 'unknown' })
+          }
         } else if (frame.action === ACTIONS_IN.FIELDS) {
           setFields(frame.fields || [])
         }
@@ -79,6 +90,7 @@ export function useBrowserSession({ wsUrl, sessionId, token, onSubmitted }) {
       const delay = RECONNECT_DELAYS_MS[attempt]
       reconnectAttemptRef.current = attempt + 1
       setStatus('reconnecting')
+      sessionReconnected({ session_id: sessionId, attempt: attempt + 1 })
       reconnectTimerRef.current = setTimeout(connect, delay)
     }
   }, [wsUrl, sessionId, token, onSubmitted])
