@@ -115,3 +115,36 @@ def test_accepts_browser_and_registers_connection():
         resp = handler(_event(authorization=f"Bearer {t}", session_qs="sess-1", role_qs="browser"), None)
     assert resp["statusCode"] == 200
     m_set.assert_called_once_with("sess-1", role="browser", connection_id="conn-abc")
+
+
+def test_connect_accepts_token_via_sec_websocket_protocol_header():
+    """Browser WebSocket can't set Authorization; the only way to pass the
+    token is via the Sec-WebSocket-Protocol subprotocol header.
+
+    Format: 'naukribaba-auth.<token>'. Lambda must extract the suffix and
+    treat it as a Bearer token.
+    """
+    from lambdas.browser.ws_connect import handler
+    from shared.ws_auth import issue_ws_token
+
+    token = issue_ws_token(
+        session_id="sess-1", user_id="user-1", role="frontend"
+    )
+
+    event = {
+        "requestContext": {"connectionId": "conn-A"},
+        "queryStringParameters": {"session": "sess-1", "role": "frontend"},
+        "headers": {
+            "Sec-WebSocket-Protocol": f"naukribaba-auth.{token}",
+            # No Authorization header — must succeed via subprotocol alone
+        },
+    }
+
+    with patch("shared.browser_sessions.get_session", return_value={
+        "session_id": "sess-1", "user_id": "user-1", "status": "starting",
+    }), patch("shared.browser_sessions.set_connection_id"):
+        result = handler(event, None)
+
+    assert result["statusCode"] == 200
+    # Server must echo the chosen subprotocol back per RFC 6455
+    assert result["headers"]["Sec-WebSocket-Protocol"] == "naukribaba-auth"
