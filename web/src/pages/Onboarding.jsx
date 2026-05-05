@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
+import { useUserProfile } from '../hooks/useUserProfile'
 import { apiPut, apiUpload, apiGet } from '../api'
 import Input, { Textarea, Select } from '../components/ui/Input'
 import Button from '../components/ui/Button'
@@ -332,6 +333,9 @@ const STEPS = ['Welcome', 'Resume', 'Profile', 'Preferences', 'Done']
 export default function Onboarding() {
   const navigate = useNavigate()
   const { user } = useAuth()
+  // After Complete Setup writes onboarding_completed_at, ProfileContext is stale;
+  // refetch so AppLayout's gate sees the new value and doesn't bounce us back.
+  const { refetch: refetchProfile } = useUserProfile()
   const [step, setStep] = useState(0)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -415,8 +419,13 @@ export default function Onboarding() {
         if (item.country && item.status) wa[item.country] = item.status
       }
 
+      // Email is auth-managed (Supabase) — backend ProfileUpdateRequest uses
+      // extra="forbid" and rejects any unknown fields. Strip before sending.
+      // We keep `email` in local state for display in StepProfile (line ~215).
+      const { email: _email, ...profileForBackend } = profile
+
       await apiPut('/api/profile', {
-        ...profile,
+        ...profileForBackend,
         work_authorizations: wa,
         complete_onboarding: true,
       })
@@ -431,6 +440,14 @@ export default function Onboarding() {
         setSaving(false)
         return
       }
+
+      // Refetch ProfileContext so AppLayout sees onboarding_completed_at + the
+      // updated profile_complete flag. Without this, `navigate('/')` from the
+      // Done screen bounces back to /onboarding (stale ProfileContext). Don't
+      // let a refetch failure block the user — proceed regardless.
+      try {
+        await refetchProfile()
+      } catch { /* swallow — Done screen still navigates */ }
 
       setSaving(false)
       next() // Advance to Done screen only after successful save

@@ -318,6 +318,7 @@ class ProfileResponse(BaseModel):
     salary_expectation_notes: str = ""
     notice_period_text: str = ""
     onboarding_completed_at: Optional[str] = None
+    profile_complete: bool = False  # NEW — set by handlers via check_profile_completeness()
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -1386,11 +1387,14 @@ def get_profile(
     user: AuthUser = Depends(get_current_user),
     db: SupabaseClient = Depends(require_db),
 ):
+    from shared.profile_completeness import check_profile_completeness
+
     row = db.get_user(user.id)
     if row is None:
         # Auto-create user on first profile fetch (just-in-time provisioning)
         row = db.create_user({"id": user.id, "email": user.email})
 
+    missing = check_profile_completeness(row)
     return ProfileResponse(
         id=row["id"],
         email=row["email"],
@@ -1409,6 +1413,7 @@ def get_profile(
         salary_expectation_notes=row.get("salary_expectation_notes") or "",
         notice_period_text=row.get("notice_period_text") or "",
         onboarding_completed_at=row.get("onboarding_completed_at"),
+        profile_complete=not missing,
     )
 
 
@@ -1418,6 +1423,8 @@ def update_profile(
     user: AuthUser = Depends(get_current_user),
     db: SupabaseClient = Depends(require_db),
 ):
+    from shared.profile_completeness import check_profile_completeness
+
     # Ensure user row exists (JIT provisioning for first-time users)
     existing = db.get_user(user.id)
     if existing is None:
@@ -1429,6 +1436,15 @@ def update_profile(
     for k, v in raw.items():
         if k in ("full_name", "name"):
             update_data["name"] = v
+            # Mirror the 20260414_auto_apply_setup.sql backfill on every write so
+            # check_profile_completeness can find first_name/last_name (auto-apply
+            # answer generator reads these directly per shared/answer_generator.py).
+            # Without this, only pre-migration rows have first_name/last_name and
+            # every NEW user has profile_complete=False forever.
+            if v and isinstance(v, str):
+                parts = v.strip().split(" ", 1)
+                update_data["first_name"] = parts[0] if parts else ""
+                update_data["last_name"] = parts[1].strip() if len(parts) > 1 else ""
         elif k == "linkedin_url":
             update_data["linkedin"] = v
         elif k == "github_url":
@@ -1453,6 +1469,7 @@ def update_profile(
             event="profile_updated",
             properties={"fields_updated": list(update_data.keys())},
         )
+    missing = check_profile_completeness(row)
     return ProfileResponse(
         id=row["id"],
         email=row["email"],
@@ -1471,6 +1488,7 @@ def update_profile(
         salary_expectation_notes=row.get("salary_expectation_notes") or "",
         notice_period_text=row.get("notice_period_text") or "",
         onboarding_completed_at=row.get("onboarding_completed_at"),
+        profile_complete=not missing,
     )
 
 

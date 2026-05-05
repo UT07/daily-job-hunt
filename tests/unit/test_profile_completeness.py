@@ -9,7 +9,6 @@ def _complete():
         "linkedin": "https://linkedin.com/in/u",
         "visa_status": "stamp-1g",
         "work_authorizations": {"IE": "stamp1g"},
-        "default_referral_source": "LinkedIn",
         "notice_period_text": "2 weeks",
     }
 
@@ -30,8 +29,16 @@ def test_multiple_missing_preserves_order():
     assert check_profile_completeness({}) == [
         "first_name", "last_name", "email", "phone", "linkedin",
         "visa_status", "work_authorizations",
-        "default_referral_source", "notice_period_text",
+        "notice_period_text",
     ]
+
+
+def test_default_referral_source_no_longer_required():
+    """Regression: default_referral_source had no UI to set it, so requiring
+    it made profile_complete structurally impossible for every user. See
+    shared/profile_completeness.py header comment for the follow-up plan."""
+    from shared.profile_completeness import REQUIRED_FIELDS
+    assert "default_referral_source" not in REQUIRED_FIELDS
 
 
 def test_empty_work_authorizations_dict_treated_as_missing():
@@ -47,5 +54,5 @@ def test_whitespace_only_string_treated_as_missing():
 
 
 def test_none_profile_returns_all_required():
-    from shared.profile_completeness import check_profile_completeness
-    assert len(check_profile_completeness(None)) == 9
+    from shared.profile_completeness import check_profile_completeness, REQUIRED_FIELDS
+    assert len(check_profile_completeness(None)) == len(REQUIRED_FIELDS)

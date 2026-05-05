@@ -1,6 +1,7 @@
 import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import AuthProvider from './auth/AuthProvider';
+import { ProfileProvider } from './hooks/useUserProfile';
 import AppLayout from './layouts/AppLayout';
 import AuthLayout from './layouts/AuthLayout';
 import PreviewBanner from './components/PreviewBanner';
@@ -40,31 +41,34 @@ export default function App() {
     <BrowserRouter>
       <PreviewBanner />
       <AuthProvider>
-        <Suspense fallback={<PageLoader />}>
-          <Routes>
-            {/* Standalone pages — outside layouts so they don't redirect */}
-            <Route path="/reset-password" element={<ResetPasswordPage />} />
-            <Route path="/onboarding" element={<Onboarding />} />
+        {/* ProfileProvider must be inside AuthProvider — it calls useAuth() */}
+        <ProfileProvider>
+          <Suspense fallback={<PageLoader />}>
+            <Routes>
+              {/* Standalone pages — outside layouts so they don't redirect */}
+              <Route path="/reset-password" element={<ResetPasswordPage />} />
+              <Route path="/onboarding" element={<Onboarding />} />
 
-            {/* Auth pages */}
-            <Route element={<AuthLayout />}>
-              <Route path="/login" element={<LoginPage />} />
-            </Route>
+              {/* Auth pages */}
+              <Route element={<AuthLayout />}>
+                <Route path="/login" element={<LoginPage />} />
+              </Route>
 
-            {/* App pages (sidebar layout) */}
-            <Route element={<AppLayout />}>
-              <Route index element={<Dashboard />} />
-              <Route path="/jobs/:jobId" element={<JobWorkspace />} />
-              <Route path="/add-job" element={<AddJob />} />
-              <Route path="/upload-resume" element={<UploadResume />} />
-              <Route path="/interview-prep" element={<InterviewPrep />} />
-              <Route path="/analytics" element={<Analytics />} />
-              <Route path="/settings" element={<Settings />} />
-              <Route path="/privacy" element={<Privacy />} />
-              <Route path="/data-export" element={<DataExport />} />
-            </Route>
-          </Routes>
-        </Suspense>
+              {/* App pages (sidebar layout) */}
+              <Route element={<AppLayout />}>
+                <Route index element={<Dashboard />} />
+                <Route path="/jobs/:jobId" element={<JobWorkspace />} />
+                <Route path="/add-job" element={<AddJob />} />
+                <Route path="/upload-resume" element={<UploadResume />} />
+                <Route path="/interview-prep" element={<InterviewPrep />} />
+                <Route path="/analytics" element={<Analytics />} />
+                <Route path="/settings" element={<Settings />} />
+                <Route path="/privacy" element={<Privacy />} />
+                <Route path="/data-export" element={<DataExport />} />
+              </Route>
+            </Routes>
+          </Suspense>
+        </ProfileProvider>
       </AuthProvider>
     </BrowserRouter>
   );

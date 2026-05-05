@@ -3,6 +3,9 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { apiGet, apiPatch, apiCall } from '../api';
 import EmailComposer from '../components/EmailComposer';
 import useApiMutation from '../hooks/useApiMutation';
+import { AutoApplyButton } from '../components/apply/AutoApplyButton';
+import { AutoApplyModal } from '../components/apply/AutoApplyModal';
+import { useUserProfile } from '../hooks/useUserProfile';
 
 function decodeHtml(text) {
   if (!text) return '';
@@ -599,9 +602,11 @@ const JOB_TABS = [
 export default function JobWorkspace() {
   const { jobId } = useParams();
   const navigate = useNavigate();
+  const { profile } = useUserProfile();
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
+  const [smartApplyModalOpen, setSmartApplyModalOpen] = useState(false);
 
   // Inline editing state
   const [editing, setEditing] = useState(false);
@@ -723,6 +728,16 @@ export default function JobWorkspace() {
 
   const [loadError, setLoadError] = useState(null);
 
+  async function refetchJob() {
+    try {
+      const data = await apiGet(`/api/dashboard/jobs/${jobId}`);
+      setJob(data || null);
+      if (data) setCurrentStatus(data.application_status || 'New');
+    } catch (err) {
+      setLoadError(err.message || 'Failed to load job');
+    }
+  }
+
   useEffect(() => {
     async function load() {
       try {
@@ -809,13 +824,27 @@ export default function JobWorkspace() {
         <div className="flex items-center gap-3">
           <ScoreBadge score={job.match_score} className="text-2xl" />
           <Badge status={currentStatus || job.application_status || 'New'} />
+          <AutoApplyButton
+            job={job}
+            profile={profile || { profile_complete: false }}
+            onOpenModal={() => setSmartApplyModalOpen(true)}
+          />
           {job.apply_url && job.apply_url !== 'Apply' && (
             <a href={job.apply_url} target="_blank" rel="noopener noreferrer">
-              <Button variant="accent" size="sm">Apply</Button>
+              <Button variant="ghost" size="sm">Apply</Button>
             </a>
           )}
         </div>
       </div>
+
+      {smartApplyModalOpen && (
+        <AutoApplyModal
+          job={job}
+          isOpen={smartApplyModalOpen}
+          onClose={() => setSmartApplyModalOpen(false)}
+          onMarkApplied={() => { refetchJob(); }}
+        />
+      )}
 
       {/* Tabs */}
       <Tabs tabs={JOB_TABS} activeTab={activeTab} onTabChange={setActiveTab} />
@@ -844,6 +873,7 @@ export default function JobWorkspace() {
               {!editing ? (
                 <button
                   onClick={startEditing}
+                  data-testid="apply-url-edit"
                   className="inline-flex items-center gap-1.5 text-xs font-bold text-stone-500 border-2 border-stone-300 px-2.5 py-1
                     hover:border-black hover:text-black transition-colors cursor-pointer"
                 >

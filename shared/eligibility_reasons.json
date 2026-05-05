@@ -1,0 +1,17 @@
+{
+  "comment": "Reasons returned by the /api/apply/eligibility endpoint specifically (NOT the broader /api/apply/* surface — preview returns additional shell-response reasons like job_no_longer_available, metadata_unavailable, platform_error which are out of scope for this enum). Backend pytest contract test reads this; frontend imports it via Vite's JSON import at hooks/useApplyEligibility.js. Order matches the precedence in app.py's apply_eligibility function.",
+  "ineligibility_reasons": [
+    "already_applied",
+    "no_apply_url",
+    "no_resume",
+    "profile_incomplete"
+  ],
+  "eligible_value": "eligible",
+  "all_response_values": [
+    "eligible",
+    "already_applied",
+    "no_apply_url",
+    "no_resume",
+    "profile_incomplete"
+  ]
+}

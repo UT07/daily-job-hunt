@@ -246,6 +246,45 @@ jobs:
       - run: pip install -r requirements.txt -r tests/requirements-test.txt
       - run: pytest tests/quality/test_self_improvement.py::TestConflictDetection -v --tb=short || true
 
+  # Smart Apply Phase 1 quality gates (per spec §6.3 Layers A + B).
+  # REPORT-only: both layers skip on PRs without staging secrets, and the
+  # job is `continue-on-error` so prompt iteration never blocks merges.
+  # Hard floors run nightly with FLOOR_TEST_* + FLOOR_TEST_TOKEN secrets.
+  apply-answer-quality:
+    name: "Apply Answer Quality (REPORT)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt -r tests/requirements-test.txt
+      - run: pip install scikit-learn
+      - name: Run apply-answer Layer A + Layer B (skips when secrets unset)
+        env:
+          AWS_DEFAULT_REGION: eu-west-1
+          FLOOR_TEST_JOB_IDS: ${{ secrets.FLOOR_TEST_JOB_IDS }}
+          FLOOR_TEST_TOKEN: ${{ secrets.FLOOR_TEST_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          pytest tests/quality/test_answer_quality_floor.py \
+                 tests/quality/test_answer_quality_golden.py \
+                 -v --tb=short || true
+      - name: Quality gate status summary
+        if: always()
+        run: |
+          echo "## Smart Apply quality gate status" >> $GITHUB_STEP_SUMMARY
+          if [ -z "${{ secrets.FLOOR_TEST_TOKEN }}" ] || [ -z "${{ secrets.FLOOR_TEST_JOB_IDS }}" ]; then
+            echo ":warning: **Gate is dormant** — \`FLOOR_TEST_*\` secrets not configured." >> $GITHUB_STEP_SUMMARY
+            echo "See \`docs/qa/phase3c0-smoke.md\` § 'Repo setup' for how to configure." >> $GITHUB_STEP_SUMMARY
+          else
+            echo ":white_check_mark: **Gate is live** — Layer A + B ran with configured secrets." >> $GITHUB_STEP_SUMMARY
+          fi
+
   e2e-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 10

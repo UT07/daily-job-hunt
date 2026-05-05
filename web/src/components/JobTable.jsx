@@ -5,6 +5,9 @@ import { ScoreBadge } from './ui/Badge';
 import Badge from './ui/Badge';
 import StatusDropdown from './StatusDropdown';
 import { apiDelete } from '../api';
+import { EligibilityBadge } from './apply/EligibilityBadge';
+import { useUserProfile } from '../hooks/useUserProfile';
+import { computeEligibility } from '../hooks/useApplyEligibility';
 
 function decodeHtml(text) {
   if (!text) return '';
@@ -293,6 +296,7 @@ function getTitleStyle(job) {
 
 export default function JobTable({ jobs, onStatusChange, onDelete, sortBy = 'first_seen', sortOrder = 'desc', onSortChange }) {
   const navigate = useNavigate();
+  const { profile } = useUserProfile();
 
   function handleSort(key) {
     if (!onSortChange) return;
@@ -381,6 +385,7 @@ export default function JobTable({ jobs, onStatusChange, onDelete, sortBy = 'fir
         <table className="w-full text-sm text-left">
           <thead>
             <tr className="bg-black">
+              <th className="px-2 py-3 text-[11px] font-bold text-cream uppercase tracking-wider w-6" aria-label="Eligibility"></th>
               {SORTABLE_COLUMNS.map((col) => (
                 col.sortable === false ? (
                   <th
@@ -412,11 +417,18 @@ export default function JobTable({ jobs, onStatusChange, onDelete, sortBy = 'fir
             </tr>
           </thead>
           <tbody>
-            {sorted.map((job) => (
+            {sorted.map((job) => {
+              const eligibility = computeEligibility(job, profile || { profile_complete: false });
+              return (
               <tr
                 key={job.job_id}
                 className={`bg-white border-b border-stone-200 hover:bg-yellow-light transition-colors ${getRowDimming(job)}`}
               >
+                {/* Eligibility badge */}
+                <td className="px-2 py-2.5 w-6 align-middle">
+                  <EligibilityBadge {...eligibility} platform={job.apply_platform} />
+                </td>
+
                 {/* Date */}
                 <td className="px-3 py-2.5 text-stone-400 whitespace-nowrap text-xs font-mono"
                     title={job.posted_date ? 'Date posted by company' : 'Date first seen by NaukriBaba'}>
@@ -555,7 +567,8 @@ export default function JobTable({ jobs, onStatusChange, onDelete, sortBy = 'fir
                   </td>
                 )}
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>

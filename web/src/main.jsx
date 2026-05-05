@@ -5,6 +5,9 @@ import './index.css'
 import App from './App.jsx'
 import { initPostHog } from './lib/posthog'
 
+// ProfileProvider lives inside App.jsx so it can be wrapped in <AuthProvider>
+// — ProfileProvider calls useAuth() and must be downstream of it.
+
 const ph = initPostHog()
 
 const tree = (
