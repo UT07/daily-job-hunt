@@ -58,8 +58,7 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied }) {
     try {
       await apiCall('/api/apply/record', {
         job_id: jobId,
-        platform: job.apply_platform,
-        accepted_at: new Date().toISOString(),
+        submission_method: 'hand_paste',
       })
       markedApplied({ job_id: jobId, platform: job.apply_platform, ats_was_opened: atsOpenedState })
       onMarkApplied?.()

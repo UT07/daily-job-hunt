@@ -1,0 +1,7 @@
+# Dev-only deps. Not installed in production Lambdas.
+# Install with: pip install -r requirements-dev.txt
+#
+# Pinned versions match .pre-commit-config.yaml so the local hook and CI
+# enforce identical lint output.
+pre-commit==4.0.1
+ruff==0.6.0

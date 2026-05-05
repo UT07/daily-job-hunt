@@ -67,7 +67,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from auth import AuthUser, get_current_user
 from audit_middleware import AuditMiddleware, set_db as set_audit_db
@@ -3123,13 +3123,25 @@ def apply_stop_session(
     return {"status": "stopped"}
 
 
+_VALID_SUBMISSION_METHODS = {"cloud_browser", "hand_paste"}
+
+
 class RecordApplicationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    session_id: str
     job_id: str
+    submission_method: str = "cloud_browser"
+    session_id: Optional[str] = None
     confirmation_screenshot_key: Optional[str] = None
     form_fields_detected: int = 0
     form_fields_filled: int = 0
+
+    @model_validator(mode="after")
+    def _validate_method_session(self):
+        if self.submission_method not in _VALID_SUBMISSION_METHODS:
+            raise ValueError(f"submission_method must be one of {sorted(_VALID_SUBMISSION_METHODS)}")
+        if self.submission_method == "cloud_browser" and not self.session_id:
+            raise ValueError("session_id is required when submission_method is cloud_browser")
+        return self
 
 
 @app.post("/api/apply/record")
@@ -3176,7 +3188,7 @@ def apply_record(
         "job_id": req.job_id,
         "job_hash": job.get("job_hash", ""),
         "canonical_hash": canonical or None,
-        "submission_method": "cloud_browser",
+        "submission_method": req.submission_method,
         "platform": job.get("apply_platform", "unknown"),
         "posting_id": job.get("apply_posting_id"),
         "board_token": job.get("apply_board_token"),
@@ -3198,11 +3210,12 @@ def apply_record(
             {"application_status": "Applied"},
         ).eq("user_id", user.id).eq("canonical_hash", canonical).execute()
 
+    method_label = "Cloud browser" if req.submission_method == "cloud_browser" else "Hand-paste"
     _db.client.table("application_timeline").insert({
         "user_id": user.id,
         "job_id": req.job_id,
         "status": "Applied",
-        "notes": f"Cloud browser via {job.get('apply_platform', 'unknown')}",
+        "notes": f"{method_label} via {job.get('apply_platform', 'unknown')}",
     }).execute()
 
     return {"status": "recorded", "application_id": application_id, "idempotent": False}

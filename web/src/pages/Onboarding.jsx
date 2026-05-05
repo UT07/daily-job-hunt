@@ -496,11 +496,21 @@ export default function Onboarding() {
               {step < 3 && (
                 <Button onClick={next}>Next →</Button>
               )}
-              {step === 3 && (
-                <Button onClick={handleComplete} loading={saving}>
-                  Complete Setup
-                </Button>
-              )}
+              {step === 3 && (() => {
+                // FU#8: at least one experience level must be selected so the
+                // daily pipeline has a seniority filter to run against.
+                const noLevels = !(prefs.experience_levels || []).length
+                return (
+                  <Button
+                    onClick={handleComplete}
+                    loading={saving}
+                    disabled={noLevels}
+                    title={noLevels ? 'Pick at least one Experience Level to continue' : undefined}
+                  >
+                    Complete Setup
+                  </Button>
+                )
+              })()}
               {step === 4 && (
                 <Button onClick={() => navigate('/', { replace: true })}>
                   Go to Dashboard →

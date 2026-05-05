@@ -63,7 +63,10 @@ describe('AutoApplyModal', () => {
     vi.spyOn(window, 'open').mockImplementation(() => null)
     fireEvent.click(screen.getByRole('button', { name: /Open ATS/i }))
     fireEvent.click(screen.getByRole('button', { name: /I submitted/i }))
-    await waitFor(() => expect(apiCall).toHaveBeenCalledWith('/api/apply/record', expect.objectContaining({ job_id: 'j1' })))
+    await waitFor(() => expect(apiCall).toHaveBeenCalledWith('/api/apply/record', {
+      job_id: 'j1',
+      submission_method: 'hand_paste',
+    }))
     await waitFor(() => expect(onMarkApplied).toHaveBeenCalledTimes(1))
     expect(onClose).toHaveBeenCalledTimes(1)
   })

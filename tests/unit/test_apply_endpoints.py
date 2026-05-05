@@ -527,6 +527,60 @@ def test_record_inserts_application_with_cloud_browser_method(client):
     assert inserted["form_fields_filled"] == 11
 
 
+def test_record_hand_paste_inserts_with_method_hand_paste(client):
+    """Phase 1 hand-paste path: frontend posts {job_id, submission_method:'hand_paste'}
+    with no session_id. Backend must insert with submission_method='hand_paste'
+    and browser_session_id=None."""
+    c, db = client
+    apps = MagicMock()
+    chain = apps.select.return_value.eq.return_value.eq.return_value.not_.in_.return_value
+    chain.execute.return_value = MagicMock(data=[])
+    apps.insert.return_value = apps
+    apps.execute.return_value = MagicMock(data=[{"id": "app-HP"}])
+    jobs = MagicMock()
+    jobs.update.return_value = jobs; jobs.eq.return_value = jobs
+    jobs.execute.return_value = MagicMock()
+    timeline = MagicMock()
+    timeline.insert.return_value = timeline
+    timeline.execute.return_value = MagicMock(data=[{"id": "t-2"}])
+
+    def router(name):
+        return {"applications": apps, "jobs": jobs, "application_timeline": timeline}.get(name, MagicMock())
+    db.client.table.side_effect = router
+
+    with patch("shared.load_job.load_job", return_value=_job_row()):
+        r = c.post("/api/apply/record", json={
+            "job_id": "j1", "submission_method": "hand_paste",
+        })
+    assert r.status_code == 200
+    inserted = apps.insert.call_args.args[0]
+    assert inserted["submission_method"] == "hand_paste"
+    assert inserted["browser_session_id"] is None
+    # Timeline note should reflect hand-paste, not cloud browser
+    timeline_row = timeline.insert.call_args.args[0]
+    assert timeline_row["notes"].startswith("Hand-paste")
+
+
+def test_record_rejects_cloud_browser_without_session_id(client):
+    """Cross-field validator: cloud_browser MUST include session_id."""
+    c, _ = client
+    # Default submission_method is cloud_browser; missing session_id → 422
+    r = c.post("/api/apply/record", json={"job_id": "j1"})
+    assert r.status_code == 422
+    body = r.json()
+    # Pydantic surfaces ValueError from model_validator under detail
+    assert "session_id" in str(body).lower()
+
+
+def test_record_rejects_unknown_submission_method(client):
+    """Whitelist guard: only cloud_browser and hand_paste are accepted."""
+    c, _ = client
+    r = c.post("/api/apply/record", json={
+        "job_id": "j1", "submission_method": "smoke_signal",
+    })
+    assert r.status_code == 422
+
+
 def test_record_is_idempotent_on_duplicate(client):
     """If canonical_hash already has an active applications row, return
     existing id instead of double-inserting."""
