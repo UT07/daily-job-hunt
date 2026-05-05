@@ -75,7 +75,26 @@ python self_improver.py
 
 ### Pre-commit hooks
 
-Install once: `pip install pre-commit && pre-commit install`. Catches the
+One-shot dev env setup (works from main repo OR any git worktree):
+
+```bash
+bash scripts/dev-setup.sh
+```
+
+That script creates the shared `.venv` and installs `requirements.txt` +
+`requirements-dev.txt` (which pins `pre-commit` and `ruff` to the versions
+in `.pre-commit-config.yaml`).
+
+Hook activation is opt-in because the repo carries format drift the hook
+would otherwise reject. To enable safely:
+
+```bash
+pre-commit run --all-files            # inspect / commit cleanup
+pre-commit install --install-hooks    # activate (covers all worktrees;
+                                      # they share core.hooksPath)
+```
+
+Once active, `git commit` runs ruff + ruff-format and catches the
 "unused pytest import" class of CI failures locally before push.
 
 ## Deployment

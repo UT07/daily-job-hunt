@@ -10,6 +10,37 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  stale-base-check:
+    # FU#14: PR #52 shipped 6 upstream PRs behind main. Force a merge-from-main
+    # before review when the gap is wide enough that a silent revert is plausible.
+    # Only runs on pull_request; push events are exempt.
+    name: Stale-base check
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fail if PR base is too far behind main
+        env:
+          # PR base.ref comes from a trusted GitHub field, but pass via env to
+          # follow the safe-interpolation pattern (no inline ${{ ... }} in run:).
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          STALE_THRESHOLD: "10"
+        run: |
+          set -euo pipefail
+          git fetch origin "$BASE_REF" --depth=200
+          MERGE_BASE=$(git merge-base HEAD "origin/$BASE_REF")
+          BEHIND=$(git rev-list --count "$MERGE_BASE..origin/$BASE_REF")
+          echo "PR is $BEHIND commits behind origin/$BASE_REF (threshold: $STALE_THRESHOLD)"
+          if [ "$BEHIND" -gt "$STALE_THRESHOLD" ]; then
+            echo "::error::PR is $BEHIND commits behind origin/$BASE_REF. Merge main into your branch before requesting review."
+            exit 1
+          fi
+
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
