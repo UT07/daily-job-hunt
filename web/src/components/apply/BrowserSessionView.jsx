@@ -13,6 +13,8 @@ export function BrowserSessionView({
     wsUrl, sessionId, token,
   })
   const [manualClickArmed, setManualClickArmed] = useState(false)
+  const [paused, setPaused] = useState(false)
+  const [typeText, setTypeText] = useState('')
   const submittedFiredRef = useRef(false)
   const imgRef = useRef(null)
 
@@ -39,6 +41,12 @@ export function BrowserSessionView({
 
   function handleEndSession() {
     dispose()
+  }
+
+  function handleTypeSend() {
+    if (!typeText) return
+    sendAction({ action: ACTIONS_OUT.TYPE, text: typeText })
+    setTypeText('')
   }
 
   function handleStreamClick(e) {
@@ -93,7 +101,7 @@ export function BrowserSessionView({
         <button
           type="button"
           onClick={handleFillAll}
-          disabled={status !== 'ready'}
+          disabled={status !== 'ready' || paused}
           className="px-3 py-2 border-2 border-black bg-yellow-300 hover:bg-yellow-400 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Fill all
@@ -117,12 +125,39 @@ export function BrowserSessionView({
         </button>
         <button
           type="button"
+          onClick={() => setPaused((p) => !p)}
+          className="px-3 py-2 border-2 border-black bg-white hover:bg-amber-100"
+        >
+          {paused ? 'Resume' : 'Pause'}
+        </button>
+        <button
+          type="button"
           onClick={handleEndSession}
           className="px-3 py-2 border-2 border-black bg-stone-200 hover:bg-stone-300 ml-auto"
         >
           End session
         </button>
       </div>
+
+      <details className="border-2 border-black p-2">
+        <summary className="cursor-pointer font-mono text-sm">Type</summary>
+        <div className="flex gap-2 mt-2">
+          <input
+            type="text"
+            placeholder="Text to type into the focused field"
+            value={typeText}
+            onChange={(e) => setTypeText(e.target.value)}
+            className="flex-1 border border-black px-2 py-1 font-mono text-sm"
+          />
+          <button
+            type="button"
+            onClick={handleTypeSend}
+            className="px-3 py-1 border-2 border-black bg-yellow-300 hover:bg-yellow-400"
+          >
+            Send type
+          </button>
+        </div>
+      </details>
     </div>
   )
 }

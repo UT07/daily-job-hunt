@@ -96,3 +96,28 @@ describe('BrowserSessionView', () => {
     await waitFor(() => expect(baseProps.onSubmitted).toHaveBeenCalled())
   })
 })
+
+describe('BrowserSessionView — manual intervention', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    hookValue = { ...hookValue, status: 'ready', screenshotUrl: 'data:x' }
+  })
+
+  it('"Type" mode with text input sends a type action', () => {
+    render(<BrowserSessionView {...baseProps} />)
+    fireEvent.click(screen.getByText('Type'))
+    const input = screen.getByPlaceholderText(/text to type/i)
+    fireEvent.change(input, { target: { value: 'hello world' } })
+    fireEvent.click(screen.getByRole('button', { name: /Send type/i }))
+    expect(mockSendAction).toHaveBeenCalledWith({
+      action: 'type', text: 'hello world',
+    })
+  })
+
+  it('"Pause" toggles fill_all to disabled and shows "Resume" label', () => {
+    render(<BrowserSessionView {...baseProps} />)
+    fireEvent.click(screen.getByRole('button', { name: /^Pause$/i }))
+    expect(screen.getByRole('button', { name: /Fill all/i })).toBeDisabled()
+    expect(screen.getByRole('button', { name: /^Resume$/i })).toBeInTheDocument()
+  })
+})
