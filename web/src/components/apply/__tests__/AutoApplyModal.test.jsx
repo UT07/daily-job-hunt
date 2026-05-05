@@ -1,16 +1,20 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { AutoApplyModal } from '../AutoApplyModal'
+import { AutoApplyProvider } from '../../../contexts/AutoApplyContext'
 
-vi.mock('../../../api', () => ({ apiGet: vi.fn(), apiCall: vi.fn() }))
+vi.mock('../../../api', () => ({ apiGet: vi.fn(), apiCall: vi.fn(), startApplySession: vi.fn(), stopApplySession: vi.fn() }))
 vi.mock('../../../lib/applyTelemetry', () => ({
   modalOpened: vi.fn(),
   modalDismissed: vi.fn(),
   fieldCopied: vi.fn(),
   atsOpened: vi.fn(),
   markedApplied: vi.fn(),
+  sessionStarted: vi.fn(),
+  sessionFailed: vi.fn(),
+  fillAllSent: vi.fn(),
 }))
-import { apiGet, apiCall } from '../../../api'
+import { apiGet, apiCall, startApplySession } from '../../../api'
 import * as t from '../../../lib/applyTelemetry'
 
 const job = { id: 'j1', title: 'SRE', company: 'Acme', apply_url: 'https://acme.com/apply', apply_platform: 'greenhouse' }
@@ -25,6 +29,10 @@ const previewPayload = {
   platform: 'greenhouse',
 }
 
+// Helper to avoid repeating AutoApplyProvider in every render call
+const renderModal = (props) =>
+  render(<AutoApplyProvider><AutoApplyModal {...props} /></AutoApplyProvider>)
+
 describe('AutoApplyModal', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -33,20 +41,20 @@ describe('AutoApplyModal', () => {
   })
 
   it('opens, fetches preview, fires modalOpened telemetry', async () => {
-    render(<AutoApplyModal job={job} isOpen onClose={vi.fn()} onMarkApplied={vi.fn()} />)
+    renderModal({ job, isOpen: true, onClose: vi.fn(), onMarkApplied: vi.fn() })
     expect(t.modalOpened).toHaveBeenCalledWith({ job_id: 'j1', platform: 'greenhouse', reason: 'eligible' })
     await waitFor(() => expect(apiGet).toHaveBeenCalledWith('/api/apply/preview/j1'))
   })
 
   it('shows EmptyPreviewState when custom_questions is empty', async () => {
     apiGet.mockResolvedValueOnce({ ...previewPayload, custom_questions: [] })
-    render(<AutoApplyModal job={job} isOpen onClose={vi.fn()} onMarkApplied={vi.fn()} />)
+    renderModal({ job, isOpen: true, onClose: vi.fn(), onMarkApplied: vi.fn() })
     await waitFor(() => expect(screen.getByText(/AI prefill not available/i)).toBeInTheDocument())
   })
 
   it('Open ATS swaps primary to "I submitted — mark applied" + fires atsOpened', async () => {
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
-    render(<AutoApplyModal job={job} isOpen onClose={vi.fn()} onMarkApplied={vi.fn()} />)
+    renderModal({ job, isOpen: true, onClose: vi.fn(), onMarkApplied: vi.fn() })
     await waitFor(() => expect(screen.getByRole('button', { name: /Open ATS/i })).toBeInTheDocument())
     fireEvent.click(screen.getByRole('button', { name: /Open ATS/i }))
     expect(openSpy).toHaveBeenCalledWith('https://acme.com/apply', '_blank')
@@ -58,7 +66,7 @@ describe('AutoApplyModal', () => {
   it('Mark applied calls /api/apply/record then onMarkApplied + onClose', async () => {
     const onMarkApplied = vi.fn()
     const onClose = vi.fn()
-    render(<AutoApplyModal job={job} isOpen onClose={onClose} onMarkApplied={onMarkApplied} />)
+    renderModal({ job, isOpen: true, onClose, onMarkApplied })
     await waitFor(() => screen.getByRole('button', { name: /Open ATS/i }))
     vi.spyOn(window, 'open').mockImplementation(() => null)
     fireEvent.click(screen.getByRole('button', { name: /Open ATS/i }))
@@ -75,7 +83,7 @@ describe('AutoApplyModal', () => {
     apiCall.mockRejectedValueOnce(new Error('500 server'))
     const onMarkApplied = vi.fn()
     const onClose = vi.fn()
-    render(<AutoApplyModal job={job} isOpen onClose={onClose} onMarkApplied={onMarkApplied} />)
+    renderModal({ job, isOpen: true, onClose, onMarkApplied })
     await waitFor(() => screen.getByRole('button', { name: /Open ATS/i }))
     vi.spyOn(window, 'open').mockImplementation(() => null)
     fireEvent.click(screen.getByRole('button', { name: /Open ATS/i }))
@@ -88,9 +96,9 @@ describe('AutoApplyModal', () => {
 
   it('dismiss without marking applied fires modalDismissed with full payload', async () => {
     const onClose = vi.fn()
-    const { rerender } = render(<AutoApplyModal job={job} isOpen onClose={onClose} onMarkApplied={vi.fn()} />)
+    const { rerender } = renderModal({ job, isOpen: true, onClose, onMarkApplied: vi.fn() })
     await waitFor(() => screen.getByRole('button', { name: /Open ATS/i }))
-    rerender(<AutoApplyModal job={job} isOpen={false} onClose={onClose} onMarkApplied={vi.fn()} />)
+    rerender(<AutoApplyProvider><AutoApplyModal job={job} isOpen={false} onClose={onClose} onMarkApplied={vi.fn()} /></AutoApplyProvider>)
     expect(t.modalDismissed).toHaveBeenCalledWith(expect.objectContaining({
       job_id: 'j1',
       platform: 'greenhouse',
@@ -100,7 +108,7 @@ describe('AutoApplyModal', () => {
 
   it('clicking the backdrop calls onClose once', async () => {
     const onClose = vi.fn()
-    render(<AutoApplyModal job={job} isOpen onClose={onClose} onMarkApplied={vi.fn()} />)
+    renderModal({ job, isOpen: true, onClose, onMarkApplied: vi.fn() })
     await waitFor(() => screen.getByRole('button', { name: /Open ATS/i }))
 
     // Backdrop is the <div className="fixed inset-0 ..."> wrapping the dialog panel
@@ -111,7 +119,7 @@ describe('AutoApplyModal', () => {
   })
 
   it('focuses the dialog on open and traps Tab from the last action', async () => {
-    render(<AutoApplyModal job={job} isOpen onClose={vi.fn()} onMarkApplied={vi.fn()} />)
+    renderModal({ job, isOpen: true, onClose: vi.fn(), onMarkApplied: vi.fn() })
     await waitFor(() => screen.getByRole('button', { name: /Open ATS/i }))
 
     // useFocusTrap focuses the dialog itself when nothing inside has focus
@@ -128,7 +136,7 @@ describe('AutoApplyModal', () => {
   it('closes modal when user presses Escape', async () => {
     apiGet.mockResolvedValue(previewPayload)
     const onClose = vi.fn()
-    render(<AutoApplyModal job={job} isOpen onClose={onClose} onMarkApplied={vi.fn()} />)
+    renderModal({ job, isOpen: true, onClose, onMarkApplied: vi.fn() })
     await waitFor(() => screen.getByRole('button', { name: /Open ATS/i }))
 
     fireEvent.keyDown(window, { key: 'Escape' })
@@ -140,7 +148,7 @@ describe('AutoApplyModal', () => {
     let resolveRecord
     apiCall.mockReturnValue(new Promise((resolve) => { resolveRecord = resolve }))
 
-    render(<AutoApplyModal job={job} isOpen onClose={vi.fn()} onMarkApplied={vi.fn()} />)
+    renderModal({ job, isOpen: true, onClose: vi.fn(), onMarkApplied: vi.fn() })
     await waitFor(() => screen.getByRole('button', { name: /Open ATS/i }))
 
     // ATS-opened state is required to swap the button
@@ -153,5 +161,46 @@ describe('AutoApplyModal', () => {
 
     resolveRecord({}) // unblock
     await waitFor(() => expect(apiCall).toHaveBeenCalledTimes(1))
+  })
+})
+
+// New describe block at the bottom of the file
+describe('AutoApplyModal — cloud_browser mode', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    apiGet.mockResolvedValue(previewPayload)
+    apiCall.mockResolvedValue({ ok: true })
+    startApplySession.mockResolvedValue({
+      session_id: 'sess-1',
+      ws_url: 'wss://api.test/prod',
+      ws_token: 'tok-XYZ',
+      status: 'starting',
+      reused: false,
+    })
+  })
+
+  it('starts a session and renders BrowserSessionView when mode=cloud_browser', async () => {
+    renderModal({
+      job,
+      isOpen: true,
+      mode: 'cloud_browser',
+      onClose: vi.fn(),
+      onMarkApplied: vi.fn(),
+    })
+    await waitFor(() => expect(startApplySession).toHaveBeenCalledWith('j1'))
+    // BrowserSessionView renders the connecting state
+    await waitFor(() => expect(screen.getByText(/Connecting to browser session/i)).toBeInTheDocument())
+  })
+
+  it('falls back to hand_paste UI when start-session returns 412 profile_incomplete', async () => {
+    startApplySession.mockRejectedValue(new Error('profile_incomplete:phone'))
+    renderModal({
+      job,
+      isOpen: true,
+      mode: 'cloud_browser',
+      onClose: vi.fn(),
+      onMarkApplied: vi.fn(),
+    })
+    await waitFor(() => expect(screen.getByText(/Open ATS/i)).toBeInTheDocument())
   })
 })

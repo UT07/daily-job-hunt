@@ -211,3 +211,17 @@ export async function healthCheck() {
   const res = await fetch(`${API_BASE}/api/health`);
   return res.json();
 }
+
+/**
+ * Launch a Smart Apply cloud-browser session for the given job.
+ * Returns {session_id, ws_url, ws_token, status, reused}.
+ * Throws on profile_incomplete (412), session_active_for_different_job (409),
+ * or backend errors. Caller is responsible for the 409 → end-then-restart UX.
+ */
+export async function startApplySession(jobId) {
+  return apiCall('/api/apply/start-session', { job_id: jobId })
+}
+
+export async function stopApplySession(sessionId) {
+  return apiCall('/api/apply/stop-session', { session_id: sessionId })
+}
