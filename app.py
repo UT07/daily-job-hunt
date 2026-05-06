@@ -1513,6 +1513,9 @@ def update_search_config(body: dict, user: AuthUser = Depends(get_current_user))
         "days_back": "days_back",
         "max_jobs_per_run": "max_jobs_per_run",
         "min_match_score": "min_match_score", "min_score": "min_match_score",
+        # enabled_sources backs the Settings → Job Sources toggles. Persistence
+        # only — pipeline filtering by this list is a separate follow-up.
+        "enabled_sources": "enabled_sources",
     }
     clean = {}
     for k, v in body.items():
