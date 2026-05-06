@@ -53,7 +53,12 @@ describe('applyTelemetry', () => {
 })
 
 describe('Plan 3c session telemetry', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // Drain captchaDetected idempotency Set so dedup behaviour is deterministic
+    // across cases and across vitest workers that share a module instance.
+    t.__resetCaptchaSeen()
+  })
 
   it('sessionStarted captures session_id + reused flag', () => {
     t.sessionStarted({ job_id: 'j1', session_id: 'sess-1', reused: false })

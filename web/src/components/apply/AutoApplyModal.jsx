@@ -65,16 +65,28 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied, mode = 'ha
     return () => window.removeEventListener('keydown', handleKey)
   }, [isOpen, onClose])
 
-  // Start a cloud-browser session when modal opens in cloud_browser mode
+  // Start a cloud-browser session when modal opens in cloud_browser mode.
+  // cancelledRef guards against the user closing the modal during Lambda
+  // cold start: without it the .then() would call beginSession() on a
+  // context whose component is already gone, leaving a ghost active session
+  // that breaks the next Apply click on a different job.
+  // Note: sessionState.phase is intentionally NOT in the deps array — it
+  // would cause the effect to re-run on every internal phase transition
+  // (idle → starting), firing the cleanup mid-flight and false-cancelling
+  // the in-flight start-session call. startingRef.current is the actual
+  // double-start guard.
+  const cancelledRef = useRef(false)
   useEffect(() => {
-    if (!isOpen || mode !== 'cloud_browser' || sessionState.phase !== 'idle') return
+    if (!isOpen || mode !== 'cloud_browser') return
     if (startingRef.current) return
     startingRef.current = true
+    cancelledRef.current = false
 
     setSessionState((s) => ({ ...s, phase: 'starting' }))
 
     startApplySession(jobId)
       .then((data) => {
+        if (cancelledRef.current) return
         beginSession({ sessionId: data.session_id, jobId })
         sessionStarted({ job_id: jobId, session_id: data.session_id, reused: data.reused ?? false })
         setSessionState({
@@ -86,6 +98,7 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied, mode = 'ha
         })
       })
       .catch((err) => {
+        if (cancelledRef.current) return
         // Any error (412 profile_incomplete, 409 conflict, etc.) falls back to hand_paste
         sessionFailed({ job_id: jobId, error: err.message })
         setSessionState({
@@ -96,20 +109,17 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied, mode = 'ha
           error: err.message,
         })
       })
-  }, [isOpen, mode, sessionState.phase, jobId, beginSession])
+  }, [isOpen, mode, jobId, beginSession])
 
-  // Reset session state when modal closes while streaming
+  // Reset session state when modal closes. Single block: cancel any in-flight
+  // start-session, end the live session if streaming, then reset everything to
+  // idle so the next open starts fresh.
   useEffect(() => {
-    if (!isOpen && sessionState.phase === 'streaming') {
-      endSession()
-      setSessionState({ phase: 'idle', wsUrl: null, sessionId: null, token: null, error: null })
-      startingRef.current = false
-    }
-    if (!isOpen && sessionState.phase !== 'idle') {
-      // Reset fully so next open starts fresh
-      setSessionState({ phase: 'idle', wsUrl: null, sessionId: null, token: null, error: null })
-      startingRef.current = false
-    }
+    if (isOpen || sessionState.phase === 'idle') return
+    cancelledRef.current = true
+    if (sessionState.phase === 'streaming') endSession()
+    setSessionState({ phase: 'idle', wsUrl: null, sessionId: null, token: null, error: null })
+    startingRef.current = false
   }, [isOpen, sessionState.phase, endSession])
 
   if (!isOpen) return null
@@ -158,6 +168,13 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied, mode = 'ha
         <h2 id="apply-modal-title" className="text-xl font-bold mb-2 font-mono">
           Smart Apply: {job.company} — {job.title}
         </h2>
+
+        {/* submitError is rendered ABOVE the mode-conditional so it shows
+            in cloud_browser mode too (otherwise a failed /api/apply/record
+            after a cloud-browser submit would never reach the user). */}
+        {submitError && (
+          <p className="text-red-700 text-sm mb-2">Couldn't mark applied: {submitError}</p>
+        )}
 
         {isCloudBrowser ? (
           /* Cloud-browser mode: BrowserSessionView owns its own controls */
@@ -237,8 +254,6 @@ export function AutoApplyModal({ job, isOpen, onClose, onMarkApplied, mode = 'ha
                 </div>
               </>
             )}
-
-            {submitError && <p className="text-red-700 text-sm mb-2">Couldn't mark applied: {submitError}</p>}
 
             <div className="flex justify-end gap-2 mt-4">
               <button type="button" onClick={onClose} className="px-4 py-2 border-2 border-black bg-white">Cancel</button>

@@ -9,7 +9,7 @@ export function BrowserSessionView({
   preview,
   onSubmitted,
 }) {
-  const { status, screenshotUrl, sendAction, dispose } = useBrowserSession({
+  const { status, screenshotUrl, fields, sendAction, dispose } = useBrowserSession({
     wsUrl, sessionId, token,
   })
   const [manualClickArmed, setManualClickArmed] = useState(false)
@@ -70,6 +70,11 @@ export function BrowserSessionView({
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-3">
         <SessionStatusBadge status={status} />
+        {fields.length > 0 && (
+          <span className="text-xs font-mono text-stone-600" data-testid="fields-detected-count">
+            {fields.length} field{fields.length === 1 ? '' : 's'} detected
+          </span>
+        )}
         {status === 'captcha' && (
           <div className="text-sm font-mono">
             <span className="font-bold">Captcha detected.</span> Solving…

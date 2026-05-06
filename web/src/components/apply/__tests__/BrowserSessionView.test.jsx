@@ -95,6 +95,29 @@ describe('BrowserSessionView', () => {
     rerender(<BrowserSessionView {...baseProps} />)
     await waitFor(() => expect(baseProps.onSubmitted).toHaveBeenCalled())
   })
+
+  it('renders detected-fields count when fields arrive from the hook', () => {
+    hookValue = {
+      ...hookValue,
+      status: 'ready',
+      screenshotUrl: 'data:x',
+      fields: [{ id: 'a' }, { id: 'b' }, { id: 'c' }],
+    }
+    render(<BrowserSessionView {...baseProps} />)
+    expect(screen.getByTestId('fields-detected-count').textContent).toMatch(/3 fields detected/i)
+  })
+
+  it('uses singular "field" in fields-count when there is exactly one', () => {
+    hookValue = { ...hookValue, status: 'ready', fields: [{ id: 'a' }] }
+    render(<BrowserSessionView {...baseProps} />)
+    expect(screen.getByTestId('fields-detected-count').textContent).toMatch(/1 field detected/i)
+  })
+
+  it('omits the fields-count badge when fields is empty', () => {
+    hookValue = { ...hookValue, status: 'ready', fields: [] }
+    render(<BrowserSessionView {...baseProps} />)
+    expect(screen.queryByTestId('fields-detected-count')).toBeNull()
+  })
 })
 
 describe('BrowserSessionView — manual intervention', () => {

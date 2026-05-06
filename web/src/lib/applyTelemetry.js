@@ -39,3 +39,10 @@ export const submittedReceived = ({ session_id }) =>
 
 export const sessionFailed = ({ job_id, error }) =>
   capture('apply_session_failed', { job_id, error })
+
+// Test-only: drain the captchaDetected idempotency Set. Lets tests assert
+// dedup behaviour deterministically without leaking state across cases or
+// between vitest worker runs that share a module instance.
+export function __resetCaptchaSeen() {
+  _captchaSeen.clear()
+}

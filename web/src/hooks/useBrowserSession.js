@@ -34,6 +34,12 @@ export function useBrowserSession({ wsUrl, sessionId, token, onSubmitted }) {
   const reconnectAttemptRef = useRef(0)
   const reconnectTimerRef = useRef(null)
   const disposedRef = useRef(false)
+  // Throttle screenshot updates: store the latest pending frame and schedule
+  // a single rAF flush. At Fargate's 5-10 fps, multiple frames may queue
+  // within one animation frame; coalescing them avoids unnecessary React
+  // re-renders. The hook still ends up rendering ~once per animation frame.
+  const pendingFrameRef = useRef(null)
+  const rafIdRef = useRef(null)
 
   const connect = useCallback(() => {
     if (disposedRef.current) return
@@ -67,9 +73,23 @@ export function useBrowserSession({ wsUrl, sessionId, token, onSubmitted }) {
         // FIELD_FILLED is informational; consumer can subscribe later if needed
         return
       }
-      // Binary frame — JPEG screenshot
+      // Binary frame — JPEG screenshot. Coalesce via rAF so multiple frames
+      // arriving within one animation frame produce a single React render.
       if (ev.data instanceof ArrayBuffer) {
-        setScreenshotUrl(binaryFrameToDataUrl(ev.data))
+        pendingFrameRef.current = binaryFrameToDataUrl(ev.data)
+        if (rafIdRef.current === null && typeof requestAnimationFrame === 'function') {
+          rafIdRef.current = requestAnimationFrame(() => {
+            rafIdRef.current = null
+            if (pendingFrameRef.current !== null) {
+              setScreenshotUrl(pendingFrameRef.current)
+              pendingFrameRef.current = null
+            }
+          })
+        } else if (rafIdRef.current === null) {
+          // No rAF available (server-side render path or unusual env): write through.
+          setScreenshotUrl(pendingFrameRef.current)
+          pendingFrameRef.current = null
+        }
       }
     }
 
@@ -101,6 +121,10 @@ export function useBrowserSession({ wsUrl, sessionId, token, onSubmitted }) {
     return () => {
       disposedRef.current = true
       clearTimeout(reconnectTimerRef.current)
+      if (rafIdRef.current !== null && typeof cancelAnimationFrame === 'function') {
+        cancelAnimationFrame(rafIdRef.current)
+        rafIdRef.current = null
+      }
       socketRef.current?.close(1000, 'unmount')
     }
   }, [connect])
