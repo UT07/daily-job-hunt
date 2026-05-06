@@ -500,15 +500,48 @@ export default function Onboarding() {
                 // FU#8: at least one experience level must be selected so the
                 // daily pipeline has a seniority filter to run against.
                 const noLevels = !(prefs.experience_levels || []).length
+
+                // Profile validation: backend `check_profile_completeness`
+                // requires these fields. Blocking Complete Setup when they're
+                // empty prevents the FinishSetupBanner-redirect-loop bug
+                // (user redoes wizard, leaves fields blank, banner persists,
+                // user redoes wizard again).
+                const profileMissing = []
+                if (!profile.full_name?.trim()) profileMissing.push('Full Name')
+                if (!profile.phone?.trim()) profileMissing.push('Phone')
+                if (!profile.linkedin_url?.trim()) profileMissing.push('LinkedIn URL')
+                if (!profile.visa_status?.trim()) profileMissing.push('Visa Status')
+                if (!profile.notice_period_text?.trim()) profileMissing.push('Notice Period')
+                const hasValidWorkAuth =
+                  Array.isArray(profile.work_authorizations) &&
+                  profile.work_authorizations.some(
+                    (wa) => wa?.country?.trim() && wa?.status?.trim()
+                  )
+                if (!hasValidWorkAuth) profileMissing.push('Work Authorizations')
+
+                const blocking = profileMissing.length > 0 || noLevels
+                const reason = noLevels
+                  ? 'Pick at least one Experience Level on this step.'
+                  : profileMissing.length > 0
+                    ? `Profile fields empty — go back and fill: ${profileMissing.join(', ')}`
+                    : undefined
+
                 return (
-                  <Button
-                    onClick={handleComplete}
-                    loading={saving}
-                    disabled={noLevels}
-                    title={noLevels ? 'Pick at least one Experience Level to continue' : undefined}
-                  >
-                    Complete Setup
-                  </Button>
+                  <div className="flex flex-col items-end gap-2">
+                    {blocking && reason && (
+                      <p className="text-sm text-red-700 max-w-md text-right" data-testid="onboarding-blocked-reason">
+                        {reason}
+                      </p>
+                    )}
+                    <Button
+                      onClick={handleComplete}
+                      loading={saving}
+                      disabled={blocking}
+                      title={reason}
+                    >
+                      Complete Setup
+                    </Button>
+                  </div>
                 )
               })()}
               {step === 4 && (
