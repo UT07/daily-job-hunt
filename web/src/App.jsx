@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import AuthProvider from './auth/AuthProvider';
 import { ProfileProvider } from './hooks/useUserProfile';
+import { AutoApplyProvider } from './contexts/AutoApplyContext';
 import AppLayout from './layouts/AppLayout';
 import AuthLayout from './layouts/AuthLayout';
 import PreviewBanner from './components/PreviewBanner';
@@ -43,8 +44,9 @@ export default function App() {
       <AuthProvider>
         {/* ProfileProvider must be inside AuthProvider — it calls useAuth() */}
         <ProfileProvider>
-          <Suspense fallback={<PageLoader />}>
-            <Routes>
+          <AutoApplyProvider>
+            <Suspense fallback={<PageLoader />}>
+              <Routes>
               {/* Standalone pages — outside layouts so they don't redirect */}
               <Route path="/reset-password" element={<ResetPasswordPage />} />
               <Route path="/onboarding" element={<Onboarding />} />
@@ -66,8 +68,9 @@ export default function App() {
                 <Route path="/privacy" element={<Privacy />} />
                 <Route path="/data-export" element={<DataExport />} />
               </Route>
-            </Routes>
-          </Suspense>
+              </Routes>
+            </Suspense>
+          </AutoApplyProvider>
         </ProfileProvider>
       </AuthProvider>
     </BrowserRouter>

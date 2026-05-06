@@ -44,6 +44,50 @@ describe('AutoApplyButton smart-button states', () => {
     expect(onOpenModal).toHaveBeenCalledTimes(1)
   })
 
+  it('eligible greenhouse job → onOpenModal receives mode=cloud_browser', () => {
+    const onOpenModal = vi.fn()
+    render(
+      <MemoryRouter>
+        <AutoApplyButton job={{ ...baseJob, apply_platform: 'greenhouse' }} profile={completeProfile} onOpenModal={onOpenModal} />
+      </MemoryRouter>
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Smart Apply/i }))
+    expect(onOpenModal).toHaveBeenCalledWith({ mode: 'cloud_browser' })
+  })
+
+  it('eligible ashby job → onOpenModal receives mode=cloud_browser', () => {
+    const onOpenModal = vi.fn()
+    render(
+      <MemoryRouter>
+        <AutoApplyButton job={{ ...baseJob, apply_platform: 'ashby' }} profile={completeProfile} onOpenModal={onOpenModal} />
+      </MemoryRouter>
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Smart Apply/i }))
+    expect(onOpenModal).toHaveBeenCalledWith({ mode: 'cloud_browser' })
+  })
+
+  it('eligible non-GH/Ashby job (lever) → onOpenModal receives mode=hand_paste', () => {
+    const onOpenModal = vi.fn()
+    render(
+      <MemoryRouter>
+        <AutoApplyButton job={{ ...baseJob, apply_platform: 'lever' }} profile={completeProfile} onOpenModal={onOpenModal} />
+      </MemoryRouter>
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Smart Apply/i }))
+    expect(onOpenModal).toHaveBeenCalledWith({ mode: 'hand_paste' })
+  })
+
+  it('eligible job with null apply_platform → onOpenModal receives mode=hand_paste', () => {
+    const onOpenModal = vi.fn()
+    render(
+      <MemoryRouter>
+        <AutoApplyButton job={{ ...baseJob, apply_platform: null }} profile={completeProfile} onOpenModal={onOpenModal} />
+      </MemoryRouter>
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Smart Apply/i }))
+    expect(onOpenModal).toHaveBeenCalledWith({ mode: 'hand_paste' })
+  })
+
   it('profile_incomplete → label changes, captures telemetry', () => {
     renderWithProfile({}, { profile_complete: false })
     expect(screen.getByRole('button', { name: /Complete profile to apply/i })).toBeEnabled()

@@ -17,9 +17,12 @@ export function AutoApplyButton({ job, profile, onOpenModal }) {
   const stateKey = eligibility.eligible ? 'eligible' : eligibility.reason
   const cfg = STATE_CONFIG[stateKey]
 
+  const platformSupportsCloudBrowser = ['greenhouse', 'ashby'].includes(job.apply_platform)
+  const mode = (eligibility.eligible && platformSupportsCloudBrowser) ? 'cloud_browser' : 'hand_paste'
+
   const onClick = () => {
     if (stateKey === 'eligible') {
-      onOpenModal()
+      onOpenModal({ mode })
       return
     }
     ineligibleActionTaken({ job_id: jobId, reason: stateKey })

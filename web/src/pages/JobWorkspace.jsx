@@ -608,6 +608,7 @@ export default function JobWorkspace() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
   const [smartApplyModalOpen, setSmartApplyModalOpen] = useState(false);
+  const [smartApplyMode, setSmartApplyMode] = useState('hand_paste');
 
   // Inline editing state
   const [editing, setEditing] = useState(false);
@@ -828,7 +829,7 @@ export default function JobWorkspace() {
           <AutoApplyButton
             job={job}
             profile={profile || { profile_complete: false }}
-            onOpenModal={() => setSmartApplyModalOpen(true)}
+            onOpenModal={({ mode }) => { setSmartApplyMode(mode); setSmartApplyModalOpen(true); }}
           />
           {job.apply_url && job.apply_url !== 'Apply' &&
             !computeEligibility({ ...job, id: job.job_id }, profile || { profile_complete: false }).eligible && (
@@ -848,6 +849,7 @@ export default function JobWorkspace() {
         <AutoApplyModal
           job={job}
           isOpen={smartApplyModalOpen}
+          mode={smartApplyMode}
           onClose={() => setSmartApplyModalOpen(false)}
           onMarkApplied={() => { refetchJob(); }}
         />
