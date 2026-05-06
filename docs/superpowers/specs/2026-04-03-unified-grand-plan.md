@@ -7,7 +7,7 @@
 > All other planning artifacts (per-phase specs, tactical task lists, the Apr 30 memory file `grand_plan_2026_04_30.md`, the per-area `backlog_*.md` memory files, `phase1_followups.md`) are now **superseded by this doc** for status. Those files remain valuable for their detail and history, but **the consolidated Master Backlog and Sequence-to-Beta sections below are the binding view of what's done, what's next, and in what order.**
 
 **Date**: 2026-04-03 · **Last updated**: 2026-05-06 (re-plan after Plan 3c.full ship)
-**Status**: Layers 1, 2, 3 ✅ COMPLETE · Layer 2.5 Phase B ✅ COMPLETE (B.7 deferred) · Layer 2.5 Phase A 70% (operator items pending) · **Layer 4 / 3.4 Apply ✅ SHIPPED (pending live smoke)** · **Sequence reset to: Backlog clear → 3.3 Tailor+ → Beta Launch**
+**Status**: Layers 1, 2, 3 ✅ COMPLETE · Layer 2.5 Phase B ✅ COMPLETE (B.7 deferred) · Layer 2.5 Phase A 70% (operator items pending) · **Layer 4 / 3.4 Apply ✅ SHIPPED (pending live smoke)** · **Sequence: Backlog clear → Polish (A.2) → 3.3 Tailor+ → Beta Launch Readiness → Beta → 3.2/3.5/3.6 post-traction**
 **Integration**: career-ops (github.com/santifer/career-ops)
 **Supersedes**: v2 design spec (2A-2G), `grand_plan_2026_04_30.md` memory file, individual `backlog_*.md` memory files (preserved for detail; this doc owns priority).
 
@@ -117,6 +117,21 @@ Goal: zero known bugs, all backlog items either shipped or explicitly archived. 
 
 See "Master Backlog" section below for the canonical list of what must be cleared.
 
+### Phase A.2: Polish — all UX rough edges (parallelizable with end of A, ~1 week)
+
+**Decision (2026-05-06)**: ALL polish lands BEFORE beta. Post-beta is reserved for new big features only (3.2 / 3.5 / 3.6). The reasoning: a beta with rough UX means user reports get clogged with the same surface-level papercuts and we lose signal on real product feedback.
+
+In scope (promoted from "nice-to-have" backlog items):
+
+- **3.1 Discover+ polish** — Add Job page redesign with progress states + cleaner error display, post-add-job review flow, live pipeline status (currently hardcoded to "runs daily at 7:00 UTC")
+- **Dashboard date-range filter** — currently shows only recent S/A; users can't see history (was A4.6)
+- **Job card layout** — table → card grid, asset-status indicators, contacts panel split off from cell (was A4.7 part 1)
+- **Status dropdown** — replace native `<select>` with brutalist styled dropdown matching the rest of the UI (was A4.7 part 2)
+- **Job workspace tab polish** — Research/Contacts/Prep tabs are still "coming soon" placeholders; either ship the contacts tab or hide the tab entirely
+- **AutoApplyButton querySelector refactor** — lift DOM access to callback props (was A2.9)
+
+**Phase A.2 exit criteria:** every UX surface a beta user touches feels finished. No "coming soon" tabs, no native form controls in the brutalist layout, no hardcoded placeholder text.
+
 ### Phase B: Tailor+ — User-Controlled Resume Editor (3.3, ~1-2 weeks)
 
 The headline feature for beta. **Why this is the gate to beta launch:** AI-generated resumes aren't 100% reliable. Today users either accept the AI output or click "Regenerate" — neither lets them fix specific things. The only way to ship a beta where users actually trust the output is to give them a real editor where the AI is an assistant, not the author.
@@ -164,16 +179,15 @@ Before pointing real users at the app, three pillars need to land:
 - Active monitoring of bug reports + PostHog funnel
 - Daily review of new bugs → triaged + fixed within 24h SLA during beta
 
-### Phase E (Post-beta): Layer 4 remainder — gated on user traction
+### Phase E (Post-beta): Three big features only — gated on user traction
+
+**Strict scope (2026-05-06 decision):** post-beta work is **ONLY** the three new big features below. All UX polish + 3.1 Discover+ polish + dashboard polish moved to Phase A.2 (pre-beta). Post-beta is reserved for new surfaces that need traction signal to be worth building.
 
 After beta is live AND we have measurable user activity (target: ≥10 active beta users for ≥2 weeks, ≥50 jobs scored per active user, ≥1 application submitted per active user). The user-traction gate matters because each of these features is high-cost-to-build and only worth shipping if real users will engage with them. Order:
 
-1. **3.1 Discover+ polish** — manual JD UI improvements (Add Job page redesign, post-add-job review flow). Low effort, ships to existing users without needing traction.
-2. **3.2 Research (CompanyLens)** — Glassdoor company data, GDELT news, salary ranges, A-F evaluation framework. Highest-impact post-beta feature.
-3. **3.6 Analytics dashboard** — funnel viz, score trends, scraper health. Needs the data Phase D collects to be meaningful; ships after beta has accumulated 4+ weeks of data.
-4. **3.5 Interview Prep** — coding bank, system design rubrics, STAR stories, mock AI. Independent surface; can ship in parallel with 3.6.
-
-These are all "make the experience richer" — none of them block beta.
+1. **3.2 Research (CompanyLens)** — Glassdoor company data, GDELT news, salary ranges, A-F evaluation framework. Highest-impact post-beta feature; visible on every job card.
+2. **3.5 Interview Prep** — coding bank, system design rubrics, STAR stories, mock AI. Independent surface; ships in parallel with 3.6 once traction is established.
+3. **3.6 Analytics dashboard** — funnel viz, score trends, scraper health, per-job cost breakdown (extends 5.7 Cost Observability). Needs the data Phase D collects to be meaningful; ships after beta has accumulated 4+ weeks of data.
 
 ---
 
@@ -227,8 +241,8 @@ Every item below is currently open or deferred. Items are sourced from: today's 
 | A4.3 | 🟡 Cover letters read like LLM prompts ("Hays is a company that specializes in...") — quality gate needed | P1 | `backlog_apr9_issues.md` |
 | A4.4 | 🟡 Profile autofill from onboarding resume + cover letter (lower the FinishSetupBanner friction) | P1 | `backlog_profile_autofill.md` |
 | A4.5 | 🟡 Score-and-improve loop missing from Lambda (exists locally) | P1 | `backlog_apr9_issues.md` |
-| A4.6 | 🟢 Dashboard date-range filter, S+A backfill stalled at 22% coverage | P2 | `backlog_apr9_issues.md` |
-| A4.7 | 🟢 Old phase 2A UX polish (status dropdown, job card layout, contacts column width, Add Job page redesign, live pipeline status) | P2 | `backlog_phase2a_remaining.md` |
+| A4.6 | 🟡 Dashboard date-range filter, S+A backfill stalled at 22% coverage | P1 (promoted from P2 — polish blocks beta) | `backlog_apr9_issues.md` |
+| A4.7 | 🟡 Old phase 2A UX polish (status dropdown, job card layout, contacts column width, Add Job page redesign, live pipeline status, Research/Contacts/Prep tabs are "coming soon" placeholders) | P1 (promoted from P2 — polish blocks beta) | `backlog_phase2a_remaining.md` |
 
 ### Decision: archive these
 
@@ -240,12 +254,12 @@ Every item below is currently open or deferred. Items are sourced from: today's 
 
 ### Phase A1+A2+A3+A4 totals
 
-- **Total open**: 27 items (1 P0, 17 P1, 9 P2)
+- **Total open**: 27 items (1 P0, 19 P1, 7 P2) — 2 items promoted P2→P1 on 2026-05-06 because polish now blocks beta
 - **Operator-only**: 7 items (A1.1-A1.7) — your action; I cannot do these
 - **Code work**: 13 items (A2.1-A2.10, A3.1-A3.3) — I can do all of these
-- **Feature gaps**: 7 items (A4.1-A4.7) — mostly P1, some compound with Tailor+
+- **Feature gaps + polish**: 7 items (A4.1-A4.7) — A4.6 + A4.7 land in Phase A.2 (pre-beta polish). Other A4 items (resume quality, cover letter quality, profile autofill, score-and-improve loop) compound with 3.3 Tailor+ in Phase B
 
-**Phase A exit criteria:** all 🔴 P0 + 🟡 P1 items either shipped or explicitly re-archived. P2 items can ship during beta as bug-pipeline absorbs them.
+**Phase A exit criteria:** all 🔴 P0 + 🟡 P1 items either shipped or explicitly re-archived. **Polish-class P1 items (A4.6 + A4.7 + 3.1 Discover+) land in Phase A.2.** P2 items can ship during beta as bug-pipeline absorbs them.
 
 ---
 
@@ -315,6 +329,7 @@ Today's lean staging is Netlify deploy previews. For beta we need:
 Each item must be ✅ before going live:
 
 - [ ] All P0 + P1 items in Master Backlog cleared or explicitly archived
+- [ ] **Phase A.2 polish complete** — no "coming soon" tabs, no native form controls in brutalist layout, Add Job page redesigned, dashboard date-range filter live, live pipeline status (not hardcoded), all UX papercuts addressed
 - [ ] 3.3 Tailor+ user-controlled editor live + tested
 - [ ] Auto-rollback wired (5.2)
 - [ ] Staging environment with E2E smoke gating PRs (5.3)
