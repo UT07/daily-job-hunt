@@ -2,6 +2,7 @@
 import hashlib
 import json
 import logging
+import os
 import random
 import re
 from datetime import datetime, timedelta
@@ -66,11 +67,17 @@ def _build_provider_list() -> list[dict]:
             "url": openrouter_url, "key_param": openrouter_key, "model": m,
             "timeout": 90, "extra_headers": openrouter_headers,
         })
-    providers.append(
-        {"name": "qwen", "url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
-         "key_param": "/naukribaba/QWEN_API_KEY", "model": "qwen-plus",
-         "timeout": 90},
-    )
+    # Paid Qwen-plus via Alibaba dashscope. Opt-in only — costs ~$0.005/call
+    # at ~3-4k tokens. Audit on 2026-05-06 showed ~15-20 calls/day across the
+    # pipeline (mostly via fallback path) → ~$3/month. Default disabled
+    # because the 7 free providers above are sufficient. Set
+    # ENABLE_PAID_QWEN=true on the Lambda to re-enable.
+    if os.environ.get("ENABLE_PAID_QWEN", "false").lower() == "true":
+        providers.append(
+            {"name": "qwen", "url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions",
+             "key_param": "/naukribaba/QWEN_API_KEY", "model": "qwen-plus",
+             "timeout": 90},
+        )
     return providers
 
 
