@@ -1,14 +1,19 @@
 import { Link } from 'react-router-dom'
 import { useUserProfile } from '../hooks/useUserProfile'
 
-// Backend `check_profile_completeness` requires these fields. Keep in sync
-// with shared/profile_completeness.py REQUIRED_FIELDS.
+// Backend `check_profile_completeness` requires DB fields:
+//   first_name, last_name, phone, linkedin, visa_status,
+//   work_authorizations, notice_period_text
+// The API normalizes these into the FRONTEND shape used here:
+//   - first_name + last_name → full_name (auto-derived server-side)
+//   - linkedin → linkedin_url
+//   - phone, visa_status, work_authorizations, notice_period_text passthrough
+// This list reflects the FRONTEND keys for what the user can fill in Settings.
 const REQUIRED_FIELDS = [
-  { key: 'first_name', label: 'First name' },
-  { key: 'last_name',  label: 'Last name'  },
-  { key: 'phone',      label: 'Phone' },
-  { key: 'linkedin',   label: 'LinkedIn URL' },
-  { key: 'visa_status', label: 'Visa status' },
+  { key: 'full_name',           label: 'Full name' },
+  { key: 'phone',               label: 'Phone' },
+  { key: 'linkedin_url',        label: 'LinkedIn URL' },
+  { key: 'visa_status',         label: 'Visa status' },
   { key: 'work_authorizations', label: 'Work authorizations' },
   { key: 'notice_period_text',  label: 'Notice period' },
 ]
@@ -22,7 +27,8 @@ function isMissing(value) {
 }
 
 export default function FinishSetupBanner() {
-  const { data: profile } = useUserProfile()
+  // useUserProfile returns { profile, isLoading, refetch }; NOT { data, ... }
+  const { profile } = useUserProfile()
   const missing = REQUIRED_FIELDS.filter(({ key }) => isMissing(profile?.[key]))
 
   return (
