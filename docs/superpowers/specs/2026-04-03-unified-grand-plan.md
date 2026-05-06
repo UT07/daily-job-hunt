@@ -7,7 +7,7 @@
 > All other planning artifacts (per-phase specs, tactical task lists, the Apr 30 memory file `grand_plan_2026_04_30.md`, the per-area `backlog_*.md` memory files, `phase1_followups.md`) are now **superseded by this doc** for status. Those files remain valuable for their detail and history, but **the consolidated Master Backlog and Sequence-to-Beta sections below are the binding view of what's done, what's next, and in what order.**
 
 **Date**: 2026-04-03 · **Last updated**: 2026-05-06 (re-plan after Plan 3c.full ship)
-**Status**: Layers 1, 2, 3 ✅ COMPLETE · Layer 2.5 Phase B ✅ COMPLETE (B.7 deferred) · Layer 2.5 Phase A 70% (operator items pending) · **Layer 4 / 3.4 Apply ✅ SHIPPED (pending live smoke)** · **Sequence: Backlog clear → Polish (A.2) → 3.3 Tailor+ → Beta Launch Readiness → Beta → 3.2/3.5/3.6 post-traction**
+**Status**: Layers 1, 2, 3 ✅ COMPLETE · Layer 2.5 Phase B ✅ COMPLETE (B.7 deferred) · Layer 2.5 Phase A 70% (operator items pending) · **Layer 4 / 3.4 Apply 🟡 NOT CLOSED — code/infra shipped (frontend + backend + Fargate image), runtime UNVERIFIED. Smart Apply is "done" only when one real Greenhouse + one real Ashby submission complete end-to-end** · **Sequence: Backlog clear → Polish (A.2) → 3.3 Tailor+ → Beta Launch Readiness → Beta → 3.2/3.5/3.6 post-traction**
 **Integration**: career-ops (github.com/santifer/career-ops)
 **Supersedes**: v2 design spec (2A-2G), `grand_plan_2026_04_30.md` memory file, individual `backlog_*.md` memory files (preserved for detail; this doc owns priority).
 
@@ -206,7 +206,7 @@ Every item below is currently open or deferred. Items are sourced from: today's 
 | A1.3 | 🟡 Run `supabase/migrations/20260430_resume_versions_unique.sql` against prod DB | P1 | grand_plan_2026_04_30 A.1.5 |
 | A1.4 | 🟡 Verify WS auth token TTL is 5min in deployed `shared/ws_auth.py` | P1 | grand_plan_2026_04_30 A.1.6 |
 | A1.5 | 🟢 Run `scripts/backfill_missing_artifacts.py` (re-tailor old jobs missing resume PDFs) | P2 | grand_plan_2026_04_30 A.1.7 |
-| A1.6 | 🟡 **Live runtime smoke of Smart Apply cloud_browser** on a real Greenhouse + Ashby job. Confirm Fargate launches, WS streams, Fill all → Submit → record completes | P1 | This session |
+| A1.6 | 🔴 **Live runtime smoke of Smart Apply cloud_browser on a real Greenhouse + a real Ashby job. Smart Apply is NOT closed until this passes.** Confirm Fargate launches, WS streams, screenshots arrive, Fill all → Submit fills the actual form → /api/apply/record persists. Either one I'm available for (Claude_in_Chrome) or you do it manually and report any runtime errors | **P0** (was P1 — promoted because the entire feature is gated on this) | This session |
 | A1.7 | 🟢 Verify `JobHuntApi` IAM has `ecs:RunTask`, `ecs:StopTask`, `iam:PassRole` (likely shipped via #50; verify in template.yaml) | P2 | grand_plan_2026_04_30 A.1.4 |
 
 ### A2. Bug fixes (code work)
@@ -254,7 +254,7 @@ Every item below is currently open or deferred. Items are sourced from: today's 
 
 ### Phase A1+A2+A3+A4 totals
 
-- **Total open**: 27 items (1 P0, 19 P1, 7 P2) — 2 items promoted P2→P1 on 2026-05-06 because polish now blocks beta
+- **Total open**: 27 items (**2 P0**, 18 P1, 7 P2) — 2 items promoted P2→P1 on 2026-05-06 (polish blocks beta) + 1 promoted P1→P0 (live smoke gates Smart Apply closure)
 - **Operator-only**: 7 items (A1.1-A1.7) — your action; I cannot do these
 - **Code work**: 13 items (A2.1-A2.10, A3.1-A3.3) — I can do all of these
 - **Feature gaps + polish**: 7 items (A4.1-A4.7) — A4.6 + A4.7 land in Phase A.2 (pre-beta polish). Other A4 items (resume quality, cover letter quality, profile autofill, score-and-improve loop) compound with 3.3 Tailor+ in Phase B
@@ -796,7 +796,7 @@ For reference, how the original v2 phases map to the new structure:
 - 🟡 User can paste a JD and get same pipeline treatment (3.1 Discover+) — `run_single_job` SFN exists; UI partial
 - 🟡 Company intel card on each job (3.2)
 - 🟡 Split-pane LaTeX editor (3.3 Tailor+) — basic editor in dashboard, no split-pane yet
-- ✅ Application tracking with outcome feedback (3.4 Apply) — backend, frontend (3c.0 + 3c.full), cloud-browser image all shipped 2026-05-05/06; ⚠️ pending live runtime smoke against real Greenhouse/Ashby form
+- 🟡 Application tracking with outcome feedback (3.4 Apply) — **NOT CLOSED.** Code (backend + frontend 3c.0 + 3c.full) and infra (Fargate image, CapSolver SSM, WS Lambdas) all shipped 2026-05-05/06. **Runtime UNVERIFIED** — feature is closed only after one real Greenhouse + one real Ashby submission complete end-to-end through the live UI
 - 🟡 Interview prep for any job (3.5)
 - 🟡 Analytics dashboard with funnel + trends (3.6)
 
