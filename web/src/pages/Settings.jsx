@@ -3,6 +3,7 @@ import { useAuth } from '../auth/useAuth'
 import { apiGet, apiPut, apiUpload, apiDelete } from '../api'
 import Card, { CardHeader, CardBody } from '../components/ui/Card'
 import Input from '../components/ui/Input'
+import { NoticePeriodPicker } from '../components/ui/NoticePeriodPicker'
 import Button from '../components/ui/Button'
 import LoginPage from './LoginPage'
 
@@ -117,8 +118,13 @@ function ProfileSection({ profile, setProfile }) {
           workAuthObj[auth.country.trim()] = auth.status.trim()
         }
       }
+      // Strip read-only fields that ProfileUpdateRequest rejects via
+      // model_config = ConfigDict(extra="forbid"). Same fix the onboarding
+      // wizard applied in 70a91a5; Settings had the same bug.
+      // eslint-disable-next-line no-unused-vars
+      const { email, id, profile_complete, missing_required_fields, onboarding_completed_at, ...payload } = profile
       await apiPut('/api/profile', {
-        ...profile,
+        ...payload,
         work_authorizations: workAuthObj,
       })
       setStatus({ type: 'success', message: 'Profile saved.' })
@@ -265,9 +271,10 @@ function ProfileSection({ profile, setProfile }) {
             onChange={e => updateField('salary_expectation_notes', e.target.value)}
             placeholder="e.g. €70-90k base + equity" />
 
-          <Input label="Notice Period" value={profile.notice_period_text || ''}
-            onChange={e => updateField('notice_period_text', e.target.value)}
-            placeholder="e.g. 2 weeks, 1 month" />
+          <NoticePeriodPicker
+            value={profile.notice_period_text || ''}
+            onChange={(v) => updateField('notice_period_text', v)}
+          />
         </div>
 
         <div className="mt-5 flex items-center gap-3">
