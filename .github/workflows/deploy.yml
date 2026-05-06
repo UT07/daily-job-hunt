@@ -1,7 +1,19 @@
 name: Deploy Backend
 
+# Auto-deploy on every push to main, with a paths-ignore filter so pure docs
+# or frontend-only changes don't burn a 10-min Lambda deploy. Manual dispatch
+# remains available to force a deploy regardless of changed paths.
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**.md"
+      - "web/**"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/test.yml"
+      - ".github/workflows/deploy-frontend.yml"
 
 jobs:
   deploy:
