@@ -5,6 +5,7 @@ import { useUserProfile } from '../hooks/useUserProfile'
 import { apiPut, apiUpload, apiGet } from '../api'
 import Input, { Textarea, Select } from '../components/ui/Input'
 import Button from '../components/ui/Button'
+import { NoticePeriodPicker } from '../components/ui/NoticePeriodPicker'
 import useApiMutation from '../hooks/useApiMutation'
 
 // ─── Step Indicator ─────────────────────────────────────────────
@@ -243,9 +244,10 @@ function StepProfile({ profile, setProfile }) {
         onChange={e => updateField('salary_expectation_notes', e.target.value)}
         placeholder="e.g. €70-90k base + equity" />
 
-      <Input label="Notice Period" value={profile.notice_period_text || ''}
-        onChange={e => updateField('notice_period_text', e.target.value)}
-        placeholder="e.g. 2 weeks, 1 month" />
+      <NoticePeriodPicker
+        value={profile.notice_period_text || ''}
+        onChange={(v) => updateField('notice_period_text', v)}
+      />
 
       <Textarea label="About You (for applications)" value={profile.candidate_context || ''}
         onChange={e => updateField('candidate_context', e.target.value)}
