@@ -7,13 +7,22 @@ import { useAuth } from '../auth/useAuth'
 const ProfileContext = createContext({ profile: null, isLoading: true, refetch: async () => {} })
 
 export function ProfileProvider({ children }) {
-  const { user } = useAuth()
+  const { user, loading: authLoading } = useAuth()
   const [profile, setProfile] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
 
   // Stable identity so consumers depending on `refetch` in effect deps
   // don't re-trigger on every parent render.
   const fetchProfile = useCallback(async () => {
+    // CRITICAL: while auth is still loading, leave isLoading=true so
+    // consumers (esp. AppLayout) keep showing the spinner instead of
+    // redirecting to /onboarding on a transient (user=null, isLoading=false)
+    // tick. Race that bit Utkarsh on 2026-05-06 — completed users were being
+    // bounced through the wizard.
+    if (authLoading) {
+      setIsLoading(true)
+      return
+    }
     if (!user) {
       setProfile(null)
       setIsLoading(false)
@@ -28,7 +37,7 @@ export function ProfileProvider({ children }) {
     } finally {
       setIsLoading(false)
     }
-  }, [user])
+  }, [user, authLoading])
 
   useEffect(() => {
     fetchProfile()
