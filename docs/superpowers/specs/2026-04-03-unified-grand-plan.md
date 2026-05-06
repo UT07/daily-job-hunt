@@ -1,10 +1,15 @@
 # NaukriBaba — Unified Grand Plan
 
-**Date**: 2026-04-03 (last updated 2026-05-06)
-**Status**: Approved · Layer 1 + Layer 2 (Reliability) + Layer 3 (Deploy) ✅ complete · Layer 2.5 Phase B ✅ complete (B.7 deferred) · **Layer 2.5 Phase A operator items still pending** · **Layer 4 / 3.4 Apply ✅ shipped (frontend + backend + cloud-browser image)** — pending live runtime smoke · Layer 4 / 3.1, 3.2, 3.3, 3.5, 3.6 not yet started
-**Supersedes**: Individual phase numbering from v2 design spec (2A-2G)
-**Integration**: career-ops (github.com/santifer/career-ops) — adopted as reference architecture
-**Active operational sequence**: see `~/.claude/projects/-Users-ut-code-naukribaba/memory/grand_plan_2026_04_30.md` (this doc owns the architectural narrative; the memory doc owns the current sprint's Phase A→B→C tasks).
+> # 🟢 ABSOLUTE SOURCE OF TRUTH
+>
+> **Read this doc first** in every new session, before any other plan/memory file.
+>
+> All other planning artifacts (per-phase specs, tactical task lists, the Apr 30 memory file `grand_plan_2026_04_30.md`, the per-area `backlog_*.md` memory files, `phase1_followups.md`) are now **superseded by this doc** for status. Those files remain valuable for their detail and history, but **the consolidated Master Backlog and Sequence-to-Beta sections below are the binding view of what's done, what's next, and in what order.**
+
+**Date**: 2026-04-03 · **Last updated**: 2026-05-06 (re-plan after Plan 3c.full ship)
+**Status**: Layers 1, 2, 3 ✅ COMPLETE · Layer 2.5 Phase B ✅ COMPLETE (B.7 deferred) · Layer 2.5 Phase A 70% (operator items pending) · **Layer 4 / 3.4 Apply ✅ SHIPPED (pending live smoke)** · **Sequence reset to: Backlog clear → 3.3 Tailor+ → Beta Launch**
+**Integration**: career-ops (github.com/santifer/career-ops)
+**Supersedes**: v2 design spec (2A-2G), `grand_plan_2026_04_30.md` memory file, individual `backlog_*.md` memory files (preserved for detail; this doc owns priority).
 
 ---
 
@@ -100,7 +105,272 @@ These are real bugs found while smoke-testing the post-deploy state. They're not
 - **Phase 2.6 Resume Quality continued** (ATS keyword injection, proof-point extraction — career-ops integration row says "Partial")
 - **Phase 2.7 Data Quality continued** (apply_platform classifier expansion is a high-leverage 1-day task that unlocks a lot of Smart Apply value)
 
-**Recommended next focus:** Phase 2.7 classifier expansion (1 day, ~700 jobs unlocked for cloud_browser) → then Layer 4 / 3.2 Research (CompanyLens). 3.3 Tailor+ split-pane editor is large and can come after.
+---
+
+## 🎯 Sequence to Beta Launch
+
+This is the binding execution order. Items inside each phase can be parallelized, but the phase order is fixed.
+
+### Phase A: Backlog & Bug Clear (immediate, ~1-2 weeks)
+
+Goal: zero known bugs, all backlog items either shipped or explicitly archived. **No new feature work begins until Phase A is clean.** Beta-quality means we can't ship to outside users while known broken things still exist.
+
+See "Master Backlog" section below for the canonical list of what must be cleared.
+
+### Phase B: Tailor+ — User-Controlled Resume Editor (3.3, ~1-2 weeks)
+
+The headline feature for beta. **Why this is the gate to beta launch:** AI-generated resumes aren't 100% reliable. Today users either accept the AI output or click "Regenerate" — neither lets them fix specific things. The only way to ship a beta where users actually trust the output is to give them a real editor where the AI is an assistant, not the author.
+
+Design constraints (binding):
+- **AI is an assistant, not the author.** Final say belongs to the user.
+- **Inline editing** of every AI-generated bullet/section, not just whole-resume regen.
+- **Per-section regenerate** with optional steering ("more impact / shorter / more keyword X").
+- **Side-by-side preview** (LaTeX source ↔ rendered PDF) so users see what they're shipping.
+- **Version history** — every edit is a saved revision; can roll back.
+- **Keyword score** updates live as the user edits (carry over the existing 0-100 ATS score).
+
+Sub-spec to be written: `docs/superpowers/specs/2026-05-XX-tailor-plus-editor-design.md` (incorporates 3.3 Tailor+ row from Layer 4 table + career-ops integration row + the existing "PDF-to-LaTeX, version history" notes).
+
+### Phase C: Beta Launch Readiness (~1 week, parallelizable with end of Phase B)
+
+Before pointing real users at the app, three pillars need to land:
+
+1. **Deploy safety re-assessment** — revisit Layer 2.5 Phase B with beta usage in mind:
+   - **B.7 Auto-rollback**: ship now (was deferred). Failing alarm during canary → CodeDeploy reverts.
+   - **Preview environment robustness**: today's lean staging is Netlify deploy previews + a preview banner. For beta, we need: Supabase staging project (separate DB), SAM stack stage variable, E2E smoke against staging gating every PR (not just CI green).
+   - **Stricter merge policy** ("no bugs shall pass"):
+     - All PRs must pass: stale-base-check, lint-and-build, unit-tests, integration-tests, e2e-tests, Deploy Readiness, plus a NEW required CR review or human review checkbox.
+     - Auto-rollback wiring for every Lambda (not just the canary tier).
+     - PRs that touch hot paths (`app.py`, `lambdas/pipeline/*`, `lambdas/browser/*`, `web/src/components/apply/*`) must run a manual smoke-test step listed in the PR template.
+
+2. **In-app error reporting** — give users a one-click "Report a bug" button that captures:
+   - Current URL + auth state + active job context
+   - Last 50 console messages (client errors, warnings)
+   - Last 20 network requests (path, status, latency)
+   - User-supplied free-text description + screenshot
+   - Submission method: client → `/api/bug-report` → Supabase `bug_reports` table
+
+3. **Automated bug pipeline** — every report fires a notification + auto-triage:
+   - **Sentry** for unhandled exceptions (frontend SDK + backend SDK). Already partially integrated via PostHog error tracking; promote to Sentry where helpful.
+   - **PostHog** for user-flow signals (where in the funnel did the user get stuck before reporting).
+   - **GitHub issue auto-creation** from `bug_reports` rows: per-report new issue with `bug` + severity labels, assigned to the maintainer.
+   - **AI triage Lambda** (optional, post-beta): inspects new bug report, attempts to classify (frontend/backend/data/infra), assigns severity, drafts a fix-PR for trivial cases.
+   - **Daily digest** to maintainer email summarizing open bugs.
+
+### Phase D: Beta Launch (1 day)
+
+- Public-facing beta tag at `naukribaba.netlify.app/beta` or new domain
+- Onboarding email for first cohort of users
+- Active monitoring of bug reports + PostHog funnel
+- Daily review of new bugs → triaged + fixed within 24h SLA during beta
+
+### Phase E (Post-beta): Layer 4 remainder — gated on user traction
+
+After beta is live AND we have measurable user activity (target: ≥10 active beta users for ≥2 weeks, ≥50 jobs scored per active user, ≥1 application submitted per active user). The user-traction gate matters because each of these features is high-cost-to-build and only worth shipping if real users will engage with them. Order:
+
+1. **3.1 Discover+ polish** — manual JD UI improvements (Add Job page redesign, post-add-job review flow). Low effort, ships to existing users without needing traction.
+2. **3.2 Research (CompanyLens)** — Glassdoor company data, GDELT news, salary ranges, A-F evaluation framework. Highest-impact post-beta feature.
+3. **3.6 Analytics dashboard** — funnel viz, score trends, scraper health. Needs the data Phase D collects to be meaningful; ships after beta has accumulated 4+ weeks of data.
+4. **3.5 Interview Prep** — coding bank, system design rubrics, STAR stories, mock AI. Independent surface; can ship in parallel with 3.6.
+
+These are all "make the experience richer" — none of them block beta.
+
+---
+
+## 📋 Master Backlog
+
+**Status legend:** 🔴 P0 (blocks beta) · 🟡 P1 (should fix before beta) · 🟢 P2 (nice-to-have, can ship in beta) · ✅ done · 📁 archived (decision: won't fix)
+
+Every item below is currently open or deferred. Items are sourced from: today's session bugs, `phase1_followups.md`, the 8 `backlog_*.md` memory files, and `grand_plan_2026_04_30.md` Phase A.1.
+
+### A1. Operator-only items (you, not me)
+
+| # | Item | Severity | Source |
+|---|------|----------|--------|
+| A1.1 | 🔴 Rotate Lambda exec-role creds + audit CloudTrail since 2026-04-22 | P0 SECURITY | grand_plan_2026_04_30 A.1.1 |
+| A1.2 | 🟡 Verify EventBridge cron uses `${DailyPipelineUserId}` not literal "default" in deployed CFN | P1 | grand_plan_2026_04_30 A.1.2 |
+| A1.3 | 🟡 Run `supabase/migrations/20260430_resume_versions_unique.sql` against prod DB | P1 | grand_plan_2026_04_30 A.1.5 |
+| A1.4 | 🟡 Verify WS auth token TTL is 5min in deployed `shared/ws_auth.py` | P1 | grand_plan_2026_04_30 A.1.6 |
+| A1.5 | 🟢 Run `scripts/backfill_missing_artifacts.py` (re-tailor old jobs missing resume PDFs) | P2 | grand_plan_2026_04_30 A.1.7 |
+| A1.6 | 🟡 **Live runtime smoke of Smart Apply cloud_browser** on a real Greenhouse + Ashby job. Confirm Fargate launches, WS streams, Fill all → Submit → record completes | P1 | This session |
+| A1.7 | 🟢 Verify `JobHuntApi` IAM has `ecs:RunTask`, `ecs:StopTask`, `iam:PassRole` (likely shipped via #50; verify in template.yaml) | P2 | grand_plan_2026_04_30 A.1.4 |
+
+### A2. Bug fixes (code work)
+
+| # | Item | Severity | Source | Notes |
+|---|------|----------|--------|-------|
+| A2.1 | 🟡 Save Sources 400 — `enabled_sources` not in backend `_FIELD_MAP` | P1 | Today's session | DB migration + 1-line backend change |
+| A2.2 | 🟡 Pipeline doesn't actually filter by `enabled_sources` — toggle UI is a frontend mirage | P1 | Today's session | Each scrape Lambda needs to read user config + early-return if disabled |
+| A2.3 | 🟡 `apply_platform` classifier covers only 10 ATSes; 794 of 921 prod jobs unclassified (Teamtailor, Recruitee, BambooHR, Workable, Lever-self-hosted, Smartrecruiters-self-hosted, custom career sites) | P1 | Today's session | Add ~10 regex patterns to `shared/apply_platform.py` + run backfill |
+| A2.4 | 🟡 Lazy-init boto3 SSM client in `lambdas/pipeline/ai_helper.py:13` | P1 | `backlog_lazy_boto3.md` | Module-level `boto3.client("ssm")` forces AWS_DEFAULT_REGION on every importer |
+| A2.5 | 🟡 LinkedIn/Indeed scrapers returning only known roles (dedup too aggressive or pagination cursor stuck) | P1 | `backlog_linkedin_indeed_dedup.md` | 2-3 hr investigation; possible architectural change to "active tracking" with `last_scraped_at` |
+| A2.6 | 🟡 Step Function `Catch → SucceedState` masks all-zero-artifact runs; B.5 alarm partially shipped, verify it actually fires | P1 | `backlog_pipeline_silent_success.md` | Run a synthetic 0-artifact day, confirm alarm fires |
+| A2.7 | 🟡 Work-auth scoring: prompt-side fix not yet shipped (post-score cap shipped via PR #24, but score_batch prompt doesn't read user.work_authorizations) | P1 | `backlog_work_auth_scoring.md`, `phase1_followups #6` | AI-cache invalidation cost is the reason it was deferred |
+| A2.8 | 🟢 Onboarding wizard doesn't collect `default_referral_source` | P2 | `phase1_followups #7` | Currently dropped from REQUIRED_FIELDS; needs a "How did you hear about us?" field in wizard or Settings |
+| A2.9 | 🟢 `AutoApplyButton` uses imperative `document.querySelector` instead of callback props | P2 | `phase1_followups #10` | Code-smell, not a bug |
+| A2.10 | 🟢 Onboarding wizard keeps `email` in local state for display; verify the strip-before-PUT stays defensive | P2 | `phase1_followups #9` | Defensive verification, not active bug |
+
+### A3. Test infra gaps
+
+| # | Item | Severity | Source |
+|---|------|----------|--------|
+| A3.1 | 🟡 Frontend integration test that mounts `<App>` with mocked auth (would have caught 2 prod bugs) | P1 | `phase1_followups #11` |
+| A3.2 | 🟡 Backend contract test pinning `application_status="Applied"` Title-Case write | P1 | `phase1_followups #12` |
+| A3.3 | 🟢 Pre-commit hook activation + 342-file format-drift cleanup | P2 | Phase 0 follow-up; `dev-setup.sh` already ships, hook is opt-in pending drift cleanup |
+
+### A4. Feature gaps surfaced from prior usage
+
+| # | Item | Severity | Source |
+|---|------|----------|--------|
+| A4.1 | 🟡 `apply_platform` column has zero population logic for older jobs (related to A2.3 but originally captured 2026-04-26) | P1 | `backlog_apr26_walkthrough.md` |
+| A4.2 | 🟡 Resume writing quality — AI strips `\textbf`, adds filler, fabricates skills (continues into 3.3 Tailor+) | P1 | `backlog_apr9_issues.md` |
+| A4.3 | 🟡 Cover letters read like LLM prompts ("Hays is a company that specializes in...") — quality gate needed | P1 | `backlog_apr9_issues.md` |
+| A4.4 | 🟡 Profile autofill from onboarding resume + cover letter (lower the FinishSetupBanner friction) | P1 | `backlog_profile_autofill.md` |
+| A4.5 | 🟡 Score-and-improve loop missing from Lambda (exists locally) | P1 | `backlog_apr9_issues.md` |
+| A4.6 | 🟢 Dashboard date-range filter, S+A backfill stalled at 22% coverage | P2 | `backlog_apr9_issues.md` |
+| A4.7 | 🟢 Old phase 2A UX polish (status dropdown, job card layout, contacts column width, Add Job page redesign, live pipeline status) | P2 | `backlog_phase2a_remaining.md` |
+
+### Decision: archive these
+
+| # | Item | Why archived |
+|---|------|--------------|
+| ARCH.1 | 📁 GradIreland scraper | Returns 0 jobs since template change; deprioritized — Greenhouse/Ashby/LinkedIn cover the gap |
+| ARCH.2 | 📁 Glassdoor *job* scraping (Fargate + Playwright) | Deprioritized — Greenhouse/Ashby/LinkedIn cover the gap. **Glassdoor *company* data still in scope for 3.2 Research.** |
+| ARCH.3 | 📁 DeepSeek free tier | Returns 402 (empty balance); use NVIDIA NIM as the alternative free provider |
+
+### Phase A1+A2+A3+A4 totals
+
+- **Total open**: 27 items (1 P0, 17 P1, 9 P2)
+- **Operator-only**: 7 items (A1.1-A1.7) — your action; I cannot do these
+- **Code work**: 13 items (A2.1-A2.10, A3.1-A3.3) — I can do all of these
+- **Feature gaps**: 7 items (A4.1-A4.7) — mostly P1, some compound with Tailor+
+
+**Phase A exit criteria:** all 🔴 P0 + 🟡 P1 items either shipped or explicitly re-archived. P2 items can ship during beta as bug-pipeline absorbs them.
+
+---
+
+## 🛡️ Layer 5 — Beta Launch Readiness (NEW)
+
+Inserted between Layer 4 (Product Features) and "Live to public" milestone. Beta-launch readiness is a layer of its own because shipping to outside users requires hardening that none of the prior layers individually delivered.
+
+### 5.1 Stricter merge gates ("no bugs shall pass")
+
+| Gate | Status | Plan |
+|------|--------|------|
+| Stale-base check (PRs >10 commits behind main fail) | ✅ Live (Phase 0 / PR #55) | unchanged |
+| Deploy Readiness (sam validate + sam build + layer build + lifespan smoke) | ✅ Live (B.1 / PR #21, #43) | unchanged |
+| Unit / lint / integration tests | ✅ Live (test.yml) | unchanged |
+| **Required CR review** (CodeRabbit or human) on every PR | 🟡 Pending | Currently CR runs only when manually invoked. Make it auto-run on every PR via `.coderabbit.yaml` or GitHub App. Human reviewer required-checkmark on hot-path PRs. |
+| **Hot-path manual smoke step** for PRs touching `app.py`, `lambdas/pipeline/*`, `lambdas/browser/*`, `web/src/components/apply/*` | 🟡 Pending | Add `[ ] Manual smoke checklist completed` to `.github/PULL_REQUEST_TEMPLATE.md`; describe paths-touched logic in CONTRIBUTING.md |
+| **No bypass merging** (no admin override, no skip-CI) without postmortem entry | 🟡 Pending | Branch protection rule: required status checks + required reviewer; remove admin merge bypass for `main` |
+
+### 5.2 Auto-rollback (Layer 2.5 B.7 reactivated)
+
+The B.7 work was deferred at end of April; resume it for beta. The hooks: failing CloudWatch alarm during canary → CodeDeploy reverts the Lambda alias to the previous version. Plan was already in `docs/superpowers/plans/2026-04-27-deployment-safety-phase2-canary.md`; reactivate.
+
+### 5.3 Staging environment hardening
+
+Today's lean staging is Netlify deploy previews. For beta we need:
+- **Supabase staging project** — separate DB, separate URL. Migrations land there first.
+- **SAM stack stage variable** — `--stack-name job-hunt-api-staging` deploys against staging Supabase
+- **E2E smoke gating** every PR — Playwright runs against staging URL on every PR, blocks merge on failure (not just CI green)
+
+### 5.4 In-app error reporting
+
+**Frontend:**
+- "Report a bug" button — always visible (footer or floating bottom-right)
+- Modal captures:
+  - User-supplied free-text description (required)
+  - Screenshot (optional, via `html2canvas` or browser screenshot API)
+  - Auto-captured: current URL, auth state, active job context (if on JobWorkspace), last 50 console messages, last 20 network requests
+  - Severity self-rating: "blocking" / "annoying" / "minor"
+
+**Backend:**
+- New `bug_reports` Supabase table: `id, user_id, url, description, severity, screenshot_s3_key, console_log_jsonb, network_log_jsonb, auth_state_jsonb, browser_user_agent, created_at, status (new/triaged/fixed/wontfix), github_issue_url`
+- New `POST /api/bug-report` endpoint
+- New `GET /api/bug-report` (admin) listing reports
+
+**Storage:**
+- Screenshots → S3 with 90-day retention, signed URLs only
+
+### 5.5 Automated bug pipeline
+
+**Sentry** as the canonical error tracker:
+- Frontend SDK in `web/src/main.jsx` with auto-capture of unhandled exceptions, unhandled promise rejections, React error boundaries
+- Backend SDK in `app.py` `_initialize_state` with auto-capture of FastAPI exceptions, structured tags for `user_id`, `path`, `lambda_name`
+- Pipeline Lambdas: Sentry + structlog from B.6 already shipped; integrate Sentry alongside
+
+**GitHub issue auto-creation:**
+- A new Lambda (`bug-report-router`) consumes `bug_reports` inserts (Supabase Realtime or scheduled cron)
+- For each new report: creates a GitHub issue with `bug` + severity labels, links the bug_report row, assigns to the maintainer
+- AI triage step (post-beta enhancement): the Lambda calls Claude/Groq to classify the bug (frontend/backend/data/infra), assign severity if user didn't, suggest a likely fix, optionally draft a PR for trivial cases
+
+**Notifications:**
+- Sentry → email maintainer on P0 alerts
+- GitHub issue → email + Slack webhook (if Slack ever wired)
+- Daily digest: cron Lambda summarizes open bugs to maintainer email
+
+### 5.6 Beta launch checklist
+
+Each item must be ✅ before going live:
+
+- [ ] All P0 + P1 items in Master Backlog cleared or explicitly archived
+- [ ] 3.3 Tailor+ user-controlled editor live + tested
+- [ ] Auto-rollback wired (5.2)
+- [ ] Staging environment with E2E smoke gating PRs (5.3)
+- [ ] In-app bug-report button visible + working (5.4)
+- [ ] Sentry + GitHub issue auto-creation tested with synthetic bug (5.5)
+- [ ] **Cost observability live (5.7) — every $ tracked, no surprise bills**
+- [ ] Privacy policy / Terms of service pages updated for beta
+- [ ] Beta cohort identified (initial 10-50 users)
+- [ ] Onboarding email template ready
+- [ ] Maintainer SLA agreed: P0 fixed within 24h, P1 within 1 week
+
+### 5.7 Cost Observability
+
+**Why**: as we scale to beta users, per-user variable costs explode. Today there's NO single dashboard that says "this run cost $X" or "user Y has consumed $Z this month". User has reported significant Alibaba Cloud spend on Qwen specifically. Without tracking we can't budget-cap, can't price the eventual paid tier, and can't notice runaway spend until the bill arrives.
+
+**What needs to be tracked:**
+
+| Service | What | Source of truth |
+|---------|------|-----------------|
+| **Alibaba Cloud / Qwen API** | Per-call cost (input + output tokens) | Alibaba console → CSV export (no API yet); add per-call cost estimate from Qwen pricing in our own ledger |
+| **OpenRouter** | Per-call cost | OpenRouter API has a `cost` field in each completion response — already there, just not aggregated |
+| **Groq** | Free tier — track usage to catch when we exceed | Groq dashboard (manual), our own request counter |
+| **NVIDIA NIM** | Free tier — same as Groq | Manual + counter |
+| **Anthropic Claude** | Per-token cost | Anthropic API response includes `usage` block; pipe to ledger |
+| **AWS** | Lambda invocations + duration, Fargate task hours, S3 storage + egress, CloudWatch logs, Step Functions transitions, EventBridge, SSM, ECR storage | Cost Explorer API (programmatic) + CloudWatch metrics |
+| **Supabase** | DB storage, edge function calls, auth seats, bandwidth | Supabase project usage page (no API yet — manual) |
+| **Netlify** | Build minutes, bandwidth, function invocations | Netlify API |
+| **Bright Data Web Unlocker** | Per-request cost | Bright Data dashboard CSV |
+| **Apify** | Per-actor-run cost (LinkedIn contacts) | Apify API |
+| **CapSolver** | Per-captcha-solve cost | CapSolver dashboard |
+| **PostHog** | Event volume tier | PostHog plan dashboard |
+| **Sentry** | Event volume tier (once integrated, 5.5) | Sentry plan dashboard |
+
+**Architecture:**
+
+1. **Per-call cost ledger** — new Supabase table `cost_events`:
+   ```
+   id, service (qwen|openrouter|groq|nvidia|claude|apify|bright_data|capsolver|aws_lambda|...),
+   user_id (nullable, for shared infra), pipeline_run_id (nullable), feature_area (apply|tailor|score|...),
+   input_units (tokens|requests|seconds|bytes), output_units, estimated_cost_usd, currency, created_at
+   ```
+2. **Lambda emit-cost helper** — every AI call site (`ai_helper.py`, scrapers, tailor, etc.) calls `emit_cost(service, units, estimated_usd)` after each provider call. The helper writes to `cost_events`.
+3. **Daily roll-up** — scheduled Lambda computes per-day per-service totals, writes to `cost_summaries`.
+4. **Cost dashboard** — `/admin/costs` route in the React app: 3 charts (today / 7-day / 30-day), broken down by service AND by feature area, filterable by user.
+5. **Spike alarms** — CloudWatch alarms on aggregate spend (e.g., > $20/day across all services) → email maintainer.
+6. **Alibaba Cloud / Qwen audit (immediate)** — before the rest of the cost system ships, do a one-shot audit:
+   - How many Qwen calls per day?
+   - What's the average tokens per call?
+   - Estimated $ per day?
+   - Are any callers using Qwen when Groq (free) would have worked? If yes, reroute.
+   - Set a budget cap in `ai_helper`: if Qwen-day-spend > $X, fall back to Groq/free providers.
+
+**Sequence:**
+- **Immediate (Phase A)**: Qwen audit + budget cap (small, ~half day)
+- **Phase C (beta launch prep)**: full cost ledger + dashboard + spike alarms
+- **Post-beta**: integrate into 3.6 Analytics dashboard so users can see their own per-job cost (would-be-paid-tier framing)
 
 ---
 
