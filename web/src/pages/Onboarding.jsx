@@ -337,8 +337,23 @@ export default function Onboarding() {
   const { user } = useAuth()
   // After Complete Setup writes onboarding_completed_at, ProfileContext is stale;
   // refetch so AppLayout's gate sees the new value and doesn't bounce us back.
-  const { refetch: refetchProfile } = useUserProfile()
+  const { profile: ctxProfile, isLoading: ctxLoading, refetch: refetchProfile } = useUserProfile()
   const [step, setStep] = useState(0)
+
+  // Defensive redirect: users who already completed onboarding shouldn't get
+  // looped back here when they land on /onboarding via stale bookmark, old
+  // banner, or the AppLayout race-condition where (user=set, profile=null
+  // briefly, isLoading=false) triggers a redirect to /onboarding before the
+  // profile fetch completes. Without this, completed users see the wizard
+  // step 0 and have no way out.
+  useEffect(() => {
+    if (ctxLoading) return
+    const onboarded =
+      !!(ctxProfile?.onboarding_completed_at || ctxProfile?.full_name)
+    if (onboarded) {
+      navigate('/', { replace: true })
+    }
+  }, [ctxProfile, ctxLoading, navigate])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
