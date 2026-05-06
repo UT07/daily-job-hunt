@@ -83,7 +83,7 @@ class TestHandler:
         sb = _make_supabase()
         cw = MagicMock()
         with patch("save_metrics.get_supabase", return_value=sb), \
-             patch("save_metrics.cloudwatch", cw):
+             patch("save_metrics._get_cloudwatch", return_value=cw):
             import save_metrics
             save_metrics.handler(self._event(processed_jobs=[
                 {"compile_result": {"pdf_s3_key": "a.pdf"},
@@ -110,7 +110,7 @@ class TestHandler:
     def test_handler_writes_resumes_generated_count_to_runs(self):
         sb = _make_supabase()
         with patch("save_metrics.get_supabase", return_value=sb), \
-             patch("save_metrics.cloudwatch", MagicMock()):
+             patch("save_metrics._get_cloudwatch", return_value=MagicMock()):
             import save_metrics
             save_metrics.handler(self._event(processed_jobs=[
                 {"compile_result": {"pdf_s3_key": "a.pdf"}},
@@ -131,7 +131,7 @@ class TestHandler:
         sb = _make_supabase()
         cw = MagicMock()
         with patch("save_metrics.get_supabase", return_value=sb), \
-             patch("save_metrics.cloudwatch", cw):
+             patch("save_metrics._get_cloudwatch", return_value=cw):
             import save_metrics
             save_metrics.handler(self._event(processed_jobs=[
                 {"compile_result": {"error": "tectonic_not_available", "pdf_s3_key": None}},
@@ -151,7 +151,7 @@ class TestHandler:
         cw = MagicMock()
         cw.put_metric_data.side_effect = Exception("CW outage")
         with patch("save_metrics.get_supabase", return_value=sb), \
-             patch("save_metrics.cloudwatch", cw):
+             patch("save_metrics._get_cloudwatch", return_value=cw):
             import save_metrics
             result = save_metrics.handler(self._event(processed_jobs=[]), None)
         assert result["saved"] == 1

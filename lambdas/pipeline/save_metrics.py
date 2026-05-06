@@ -8,8 +8,25 @@ import boto3
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-ssm = boto3.client("ssm")
-cloudwatch = boto3.client("cloudwatch", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
+# Lazy boto3 clients — module-level construction forces AWS_DEFAULT_REGION
+# on every importer (unit tests, runtime-import smoke). Same pattern as
+# ai_helper.py shipped in PR #23.
+_ssm = None
+_cloudwatch = None
+
+
+def _get_ssm():
+    global _ssm
+    if _ssm is None:
+        _ssm = boto3.client("ssm")
+    return _ssm
+
+
+def _get_cloudwatch():
+    global _cloudwatch
+    if _cloudwatch is None:
+        _cloudwatch = boto3.client("cloudwatch", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
+    return _cloudwatch
 
 # CloudWatch namespace + metric names — paired with the alarms in template.yaml
 # (DailyPipelineNoArtifactsAlarm in particular). If you rename either side,
@@ -21,7 +38,7 @@ _METRIC_PIPELINE_RUN = "PipelineRun"
 
 
 def get_param(name):
-    return ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
+    return _get_ssm().get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
 
 
 def get_supabase():
@@ -58,7 +75,7 @@ def _emit_cloudwatch_metrics(counts, matched_count):
     but don't fail the pipeline; the DB write is the load-bearing path.
     """
     try:
-        cloudwatch.put_metric_data(
+        _get_cloudwatch().put_metric_data(
             Namespace=_METRICS_NAMESPACE,
             MetricData=[
                 {

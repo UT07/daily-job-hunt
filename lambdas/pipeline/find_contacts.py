@@ -14,7 +14,17 @@ import boto3
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-ssm = boto3.client("ssm")
+# Lazy SSM client — boto3.client at module load forces AWS_DEFAULT_REGION
+# on every importer (including unit tests + runtime-import smoke). Same
+# pattern as ai_helper.py shipped in PR #23.
+_ssm = None
+
+
+def _get_ssm():
+    global _ssm
+    if _ssm is None:
+        _ssm = boto3.client("ssm")
+    return _ssm
 
 SEARCH_ROLES = [
     ("Engineering Manager", "hiring_manager"),
@@ -24,7 +34,7 @@ SEARCH_ROLES = [
 
 
 def get_param(name):
-    return ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
+    return _get_ssm().get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
 
 
 def get_supabase():
