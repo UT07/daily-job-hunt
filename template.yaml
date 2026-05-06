@@ -1620,6 +1620,31 @@ Resources:
                 # The :* suffix matches any execution name under each state machine.
                 - !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${DailyPipelineStateMachine.Name}:*"
                 - !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${SingleJobPipelineStateMachine.Name}:*"
+            # Smart Apply / cloud-browser (Plan 3a/3c.full): /api/apply/start-session
+            # calls ecs:RunTask to launch the browser Fargate task; /stop-session
+            # calls ecs:StopTask. RunTask requires iam:PassRole for both the
+            # ExecutionRole (image pull, log writes) and TaskRole (in-container
+            # AWS calls). Smoke 2026-05-06 surfaced these gaps as part of the
+            # start-session 500.
+            - Sid: BrowserSessionRunTask
+              Effect: Allow
+              Action:
+                - ecs:RunTask
+                - ecs:StopTask
+                - ecs:DescribeTasks
+              Resource:
+                - !Ref BrowserSessionTaskDef
+                - !Sub "arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/${ScraperCluster}/*"
+            - Sid: BrowserSessionPassRole
+              Effect: Allow
+              Action:
+                - iam:PassRole
+              Resource:
+                - !GetAtt FargateExecutionRole.Arn
+                - !GetAtt BrowserTaskRole.Arn
+              Condition:
+                StringEquals:
+                  iam:PassedToService: ecs-tasks.amazonaws.com
       Environment:
         Variables:
           GROQ_API_KEY: !Ref GroqApiKey
@@ -1637,6 +1662,17 @@ Resources:
           TASK_QUEUE_URL: !Ref TaskQueue
           DAILY_PIPELINE_ARN: !GetAtt DailyPipelineStateMachine.Arn
           SINGLE_JOB_PIPELINE_ARN: !GetAtt SingleJobPipelineStateMachine.Arn
+          # Smart Apply / cloud-browser session launch (Plan 3a/3c.full).
+          # /api/apply/start-session reads these to call ecs.run_task and
+          # to issue ws_url to the frontend. Without them the endpoint 500s
+          # at app.py:3042-3049 (BROWSER_SUBNET_IDS check + KeyError on
+          # CLUSTER_ARN/TASK_DEF). Smoke 2026-05-06 confirmed this gap.
+          CLUSTER_ARN: !GetAtt ScraperCluster.Arn
+          TASK_DEF: !Ref BrowserSessionTaskDef
+          BROWSER_SUBNET_IDS: !Join [",", !Ref BrowserSubnetIds]
+          SECURITY_GROUP: !GetAtt ScraperSecurityGroup.GroupId
+          BROWSER_WS_URL: !Sub "wss://${BrowserWebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+          WEBSOCKET_API_ID: !Ref BrowserWebSocketApi
       Events:
         ApiGateway:
           Type: HttpApi
