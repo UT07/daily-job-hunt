@@ -1,14 +1,110 @@
 # NaukriBaba — Unified Grand Plan
 
-**Date**: 2026-04-03 (last updated 2026-04-30)
-**Status**: Approved · Layer 1 + Layer 2 (Reliability) + Layer 3 (Deploy) ✅ complete · Layer 2.5 (Stabilization & Deploy Safety) IN PROGRESS · Layer 4 (Product Features) partial — auto-apply backend live, frontend pending
+**Date**: 2026-04-03 (last updated 2026-05-06)
+**Status**: Approved · Layer 1 + Layer 2 (Reliability) + Layer 3 (Deploy) ✅ complete · Layer 2.5 Phase B ✅ complete (B.7 deferred) · **Layer 2.5 Phase A operator items still pending** · **Layer 4 / 3.4 Apply ✅ shipped (frontend + backend + cloud-browser image)** — pending live runtime smoke · Layer 4 / 3.1, 3.2, 3.3, 3.5, 3.6 not yet started
 **Supersedes**: Individual phase numbering from v2 design spec (2A-2G)
 **Integration**: career-ops (github.com/santifer/career-ops) — adopted as reference architecture
 **Active operational sequence**: see `~/.claude/projects/-Users-ut-code-naukribaba/memory/grand_plan_2026_04_30.md` (this doc owns the architectural narrative; the memory doc owns the current sprint's Phase A→B→C tasks).
 
 ---
 
-## Status Snapshot — 2026-04-30
+## Status Snapshot — 2026-05-06
+
+### What shipped today (in this single session)
+
+| PR | Theme | Outcome |
+|----|-------|---------|
+| #56 | Plan 3c.full — live cloud-browser streaming UI | Merged + auto-deployed via the new push:main trigger |
+| #57 | `deploy.yml` push:main auto-trigger + paths-ignore | Merged. Root cause of "PRs sit on main but never reach Lambda" is now fixed |
+| #58 | FinishSetupBanner → Settings + wizard validates required profile fields | Merged. Breaks the "complete profile loop" for users with `onboarding_completed_at` set but missing required fields |
+| #59 (open) | Settings handleSave strips read-only fields + `NoticePeriodPicker` dropdown | Open — fixes 422 "email: Extra inputs are not permitted" + adds dropdown UX for notice period |
+
+Also shipped non-PR:
+- **`naukribaba-browser:latest` ECR image** built (linux/amd64, 1 GB) and pushed. Smart Apply cloud_browser path now has the Fargate image it needs.
+- **Lambda code deployed** for the first time since 2026-05-01 (covers PRs #52, #54, #55, #25, #56). Auto-deploy chain now live.
+- **CapSolver API key** confirmed present in SSM at `/naukribaba/capsolver-api-key`.
+- **Bug X1 silent compile_latex** was actually shipped earlier (PR #27 on Apr 30, "Phase A: Bug X1 + 5 stabilization fixes") — Phase A.3 is ✅ complete. The grand plan tracking for that was stale.
+
+### Where Layer 2.5 Phase B actually stands (correcting Apr 30 snapshot)
+
+| Sub-phase | Status | Reality vs Apr 30 snapshot |
+|-----------|--------|----------------------------|
+| B.1 Deploy Readiness CI gate | ✅ Shipped (PRs #11/12/21) | unchanged |
+| B.2 Lambda canary deploys | ✅ Shipped (PR #39 on Apr 30, rebased from #15) | Apr 30 snapshot says "Held" — STALE |
+| B.3 Staging environment | ✅ Lean version shipped (PR #41 — Netlify deploy previews) | Apr 30 snapshot says "Pending" — STALE |
+| B.4 Pattern-catching CI gates | ✅ Most shipped (#26 cluster fixes + #43 lifespan smoke) | Apr 30 snapshot says "Branch ready" — STALE |
+| B.5 Pipeline observability (FailState + alarm) | ✅ Shipped (PR #33) | Apr 30 snapshot says "Pending" — STALE |
+| B.6 Trimmed observability (X-Ray + dashboard + structlog) | ✅ Shipped (PR #35) | Apr 30 snapshot says "Pending" — STALE |
+| B.7 Auto-rollback wiring | 🟡 Deferred | unchanged |
+
+**Phase B is ~95% done.** B.7 is the only meaningful gap and is lower priority since canary + staging together cover most of the failure modes. **Phase B exit criteria: MET.**
+
+### Where Layer 2.5 Phase A actually stands
+
+| Sub-task | Status | Notes |
+|----------|--------|-------|
+| A.1.1 Rotate Lambda exec-role creds + CloudTrail audit | 🔴 OPERATOR PENDING | Code fix shipped (F1 sanitizer); rotation is your-only |
+| A.1.2 EventBridge cron `Input` UUID fix | 🟡 STATUS UNCERTAIN | Need to verify deployed `template.yaml` references `${DailyPipelineUserId}` correctly. Code looks right; verify in CFN |
+| A.1.3 Three Plan-3b backfills (eligibility / apply slug / geo+work-auth) | 🟡 PARTIAL | Geo+work-auth shipped via PR #24. Apply-slug backfill: 794 jobs still unclassified — but they fall in the long-tail (Teamtailor/Recruitee/etc), not GH/Ashby. Classifier expansion needed (see Bugs 2026-05-06 below) |
+| A.1.4 IAM additions (`ecs:RunTask/StopTask/PassRole`, `WsDisconnect:StopTask`) | 🟡 STATUS UNCERTAIN | Likely shipped via PR #50 ("grant DescribeExecution + raise 502") and/or with Plan 3a infra. Verify against template.yaml |
+| A.1.5 `resume_versions UNIQUE` constraint | 🟡 OPERATOR PENDING | Migration file present at `supabase/migrations/20260430_resume_versions_unique.sql`. Run via Supabase dashboard or CLI |
+| A.1.6 WS auth token TTL 60s → 5min | 🟡 STATUS UNCERTAIN | Verify in `shared/ws_auth.py` |
+| A.1.7 `backfill_missing_artifacts.py` | 🟡 OPERATOR PENDING | Deferred |
+| A.2 Session B branch consolidation | ✅ Mostly done via PRs #26, #27 | Cluster-bc-cleanup work shipped |
+| A.3 Bug X1 fix | ✅ Shipped (PR #27, Apr 30) | Apr 30 snapshot called this "Highest remaining priority" — DONE |
+| A.4 PR #25 postmortem | ✅ Merged today | done |
+| A.5 PR #23 verify | ✅ done | unchanged |
+
+**Phase A is ~70% done.** The remaining 30% is operator actions (creds, DB migration) + verification of items that may already be shipped. The architectural narrative is settled; this is execution residue.
+
+### Where Layer 4 / 3.4 Apply actually stands
+
+**Plan 3c.full shipped today (PR #56) means the cloud-browser auto-apply UI is feature-complete.** Backend (3a/3b) + classifier + frontend (3c.full) + Fargate image are all in place. Smart Apply works in:
+
+- **Hand-paste mode** for any platform — modal opens, lists AI-prefilled answers if the platform is Greenhouse/Ashby (preview API), shows EmptyPreviewState otherwise; user clicks Open ATS, marks applied. Submission method `hand_paste` in DB. ✅
+- **Cloud-browser mode** for Greenhouse + Ashby jobs — modal calls `/api/apply/start-session`, opens WS to Fargate Chrome, streams screenshots, user clicks "Fill all" or manual click/type, modal records submission. ⚠️ Untested live.
+
+**Three blocking gaps for "Smart Apply works for everything":**
+1. **Live runtime smoke**: nobody has watched a real Fargate Chrome session apply to a real Greenhouse/Ashby job through this UI. There may be a runtime bug (IAM, env var, JS handler) that unit tests didn't catch.
+2. **`apply_platform` long-tail coverage**: 794 of 921 prod jobs are unclassified because the classifier only handles 10 known ATSes. Adding Teamtailor/Recruitee/BambooHR/Ashby-Hire/Workable/etc would unlock cloud-browser for hundreds more jobs.
+3. **Mode 3 assisted-manual fallback** (cloud_browser for unknown platforms via AI-vision form-detection) — explicitly out of scope per Plan 3c.full plan; future work.
+
+### Bugs surfaced 2026-05-06 (new since the Apr 30 snapshot)
+
+These are real bugs found while smoke-testing the post-deploy state. They're not in the Apr 30 snapshot's "still open" list:
+
+| # | Bug | Severity | Fix status |
+|---|-----|----------|-----------|
+| 1 | `FinishSetupBanner` linked to `/onboarding`, looping users with `onboarding_completed_at` already set | High UX | ✅ PR #58 |
+| 2 | Onboarding wizard's "Complete Setup" didn't validate required profile fields → users could finish wizard with blank profile, then loop on the banner | High UX | ✅ PR #58 |
+| 3 | `Settings.handleSave` POSTed full profile incl. `email` → 422 "Extra inputs are not permitted" (same bug as wizard's 70a91a5 fix, missed for Settings) | High UX (blocks save) | ✅ PR #59 (open) |
+| 4 | Notice Period was free-text only; users had no guidance on format | UX polish | ✅ PR #59 (open) — `NoticePeriodPicker` |
+| 5 | `Settings → Save Sources` → 400 "No valid fields. Accepted: [...]" because `enabled_sources` isn't in the backend `_FIELD_MAP` | Functional bug | ❌ Pending |
+| 6 | `enabled_sources` toggle UI is a frontend mirage — pipeline scrapers don't actually filter by it. Even if save succeeded, the toggle has no runtime effect | Functional bug | ❌ Pending (separate, larger fix) |
+| 7 | `apply_platform` classifier only matches 10 known ATSes; 794 of 921 prod jobs are unclassified (not GH/Ashby/Lever/etc) → Smart Apply cloud_browser doesn't activate for them | Feature gap | ❌ Pending (`shared/apply_platform.py` needs ~10 more regex patterns) |
+| 8 | Lazy boto3 in `ai_helper.py` not yet shipped — module-level SSM client at line 13 forces AWS_DEFAULT_REGION on importers | Tech debt | ❌ Pending (`backlog_lazy_boto3.md` from Apr 29) |
+
+### Active sequence (next focus)
+
+**Immediate (this week):**
+1. Merge PR #59 (Settings save fix + Notice Period dropdown) — already open
+2. Phase A.1 operator actions (creds rotation, DB migration, EventBridge verification)
+3. **Live smoke** of Smart Apply on a real Greenhouse/Ashby job → confirm cloud_browser path works end-to-end
+4. Bug 5 fix (Save Sources backend) — small migration + `_FIELD_MAP` entry
+5. Bug 7 fix — extend `shared/apply_platform.py` with ~10 long-tail ATS patterns + run backfill
+
+**Next major (pick one):**
+- **Layer 4 / 3.1 Discover+ — manual JD UI polish** (Add Job page redesign, post-add-job review flow)
+- **Layer 4 / 3.2 Research** (CompanyLens, Glassdoor company data, news, salary). This is the largest Layer 4 build remaining.
+- **Layer 4 / 3.3 Tailor+** (split-pane LaTeX editor, PDF-to-LaTeX, version history)
+- **Phase 2.6 Resume Quality continued** (ATS keyword injection, proof-point extraction — career-ops integration row says "Partial")
+- **Phase 2.7 Data Quality continued** (apply_platform classifier expansion is a high-leverage 1-day task that unlocks a lot of Smart Apply value)
+
+**Recommended next focus:** Phase 2.7 classifier expansion (1 day, ~700 jobs unlocked for cloud_browser) → then Layer 4 / 3.2 Research (CompanyLens). 3.3 Tailor+ split-pane editor is large and can come after.
+
+---
+
+## Status Snapshot — 2026-04-30 (historical)
 
 ### Production state
 
@@ -272,7 +368,8 @@ Stage 3.4 evolved beyond the original "semi-auto Playwright" framing into a clou
 | Plan 3a: [WebSocket + backend](../plans/2026-04-24-auto-apply-plan3a-websocket-backend.md) | ✅ Shipped (PR #8, 2026-04-24) | 3 WS Lambdas + 5 `/api/apply/*` endpoints + idempotent record |
 | Spec: [apply platform classifier](2026-04-26-apply-platform-classifier-design.md) | ✅ Shipped (PRs #10/11/12, 2026-04-27) | URL → platform classifier; eligibility flag flipped from `apply_platform` to `apply_url`; 831 jobs backfilled; live eligibility >0 for the first time |
 | Plan 3b: [AI preview](../plans/2026-04-24-auto-apply-plan3b-preview-ai.md) | ✅ Shipped (PR #17 + #21/#22 hotfixes, 2026-04-29) | AI answer prefill, platform metadata fetchers (greenhouse/ashby), question classifier |
-| Plan 3c: [frontend UI](../plans/2026-04-26-auto-apply-plan3c-frontend-ui.md) | Stub (pending — **next after Layer 2.5**) | React UI: Apply button, modal, WS client, screenshot stream. Backend + WS contract live; no UI consumer yet. **Open product fork**: 3c.0 minimal (backend generates, user copy-pastes) vs 3c.full (cloud-browser supervision + WS streaming + screenshot updates) — re-ask at start of Layer 4 / Plan 3c. |
+| Plan 3c.0: [Smart Apply Phase 1 hand-paste](../plans/2026-05-01-smart-apply-phase1-plan.md) | ✅ Shipped (PR #52, 2026-05-05) | React UI: Apply button, hand-paste modal, eligibility, AI preview rendering. Submission method `hand_paste` in DB. |
+| Plan 3c.full: [frontend UI — live cloud-browser](../plans/2026-05-05-auto-apply-plan3c-full-frontend.md) | ✅ Shipped (PR #56, 2026-05-06) | React UI: `BrowserSessionView`, `useBrowserSession` hook, `AutoApplyContext`, `SessionStatusBadge`, telemetry, manual intervention (Pause/Type/Manual click), modal mode-switch. Backend WS subprotocol auth, ECR image (`naukribaba-browser:latest`, 1 GB), CapSolver SSM key — all in place. **⚠️ Pending live runtime smoke against a real Greenhouse/Ashby form.** |
 
 **Note on Layer placement:** Stage 3.4 originally lived in Layer 4 (AFTER DEPLOY). In practice it was built in Layer 2/3 timeframe alongside reliability work — the four-layer ordering in this doc is a logical narrative, not a strict execution schedule.
 
@@ -414,7 +511,7 @@ For reference, how the original v2 phases map to the new structure:
 - 🟡 User can paste a JD and get same pipeline treatment (3.1 Discover+) — `run_single_job` SFN exists; UI partial
 - 🟡 Company intel card on each job (3.2)
 - 🟡 Split-pane LaTeX editor (3.3 Tailor+) — basic editor in dashboard, no split-pane yet
-- 🟡 Application tracking with outcome feedback (3.4 Apply) — backend ✅, frontend (3c) pending
+- ✅ Application tracking with outcome feedback (3.4 Apply) — backend, frontend (3c.0 + 3c.full), cloud-browser image all shipped 2026-05-05/06; ⚠️ pending live runtime smoke against real Greenhouse/Ashby form
 - 🟡 Interview prep for any job (3.5)
 - 🟡 Analytics dashboard with funnel + trends (3.6)
 
