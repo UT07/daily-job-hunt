@@ -62,3 +62,31 @@ class TestExtractPlatformIds:
     def test_malformed_greenhouse_url_returns_none(self):
         assert extract_platform_ids("https://boards.greenhouse.io/airbnb") is None
         assert extract_platform_ids("https://boards.greenhouse.io/") is None
+
+    def test_greenhouse_company_domain_gh_jid(self):
+        # MongoDB-style: company hosts careers page, gh_jid points at GH posting.
+        # board_token is unknown without a network call → return None for it but
+        # still classify so the frontend cloud_browser button activates.
+        url = "https://www.mongodb.com/careers/job/?gh_jid=7743306"
+        assert extract_platform_ids(url) == {
+            "platform": "greenhouse",
+            "board_token": None,
+            "posting_id": "7743306",
+        }
+
+    def test_greenhouse_gh_jid_with_other_query_params(self):
+        url = "https://stripe.com/jobs/listing/eng?gh_jid=4567890&utm_source=lp"
+        assert extract_platform_ids(url) == {
+            "platform": "greenhouse",
+            "board_token": None,
+            "posting_id": "4567890",
+        }
+
+    def test_greenhouse_canonical_url_still_extracts_board_token(self):
+        # Regression: gh_jid pattern must not shadow the canonical pattern.
+        url = "https://boards.greenhouse.io/airbnb/jobs/7649441?gh_jid=7649441"
+        assert extract_platform_ids(url) == {
+            "platform": "greenhouse",
+            "board_token": "airbnb",
+            "posting_id": "7649441",
+        }
