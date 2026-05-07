@@ -1857,6 +1857,11 @@ Resources:
       AutoPublishAlias: live
       DeploymentPreference:
         Type: AllAtOnce
+      # Layer carries shared/* (ws_auth, browser_sessions, etc.). Without
+      # this, ws_connect/disconnect/route 500 at import: 'No module named
+      # shared'. Smoke 2026-05-07 surfaced this on the first frontend WS
+      # connect attempt.
+      Layers: [!Ref SharedDepsLayer]
       Environment:
         Variables:
           SESSIONS_TABLE: !Ref BrowserSessionsTable
@@ -1967,6 +1972,20 @@ Resources:
                 Resource:
                   - "arn:aws:s3:::utkarsh-job-hunt/sessions/*"
                   - "arn:aws:s3:::utkarsh-job-hunt/confirmations/*"
+              # profile_manager.load_profile() does HeadObject / ListObjects
+              # to detect cached profile. Smoke 2026-05-07 surfaced
+              # AccessDenied on s3:ListBucket — required even though
+              # GetObject/PutObject already cover read/write.
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource:
+                  - "arn:aws:s3:::utkarsh-job-hunt"
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - "sessions/*"
+                      - "confirmations/*"
               - Effect: Allow
                 Action: execute-api:ManageConnections
                 Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BrowserWebSocketApi}/*"

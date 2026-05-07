@@ -410,7 +410,11 @@ async def main():
     ws_headers = {"Authorization": f"Bearer {WS_TOKEN}"}
 
     try:
-        async with websockets.connect(ws_full_url, additional_headers=ws_headers) as ws:
+        # `extra_headers` is the websockets 13.x kwarg; the rename to
+        # `additional_headers` is 14+ only. browser/requirements.txt pins 13.x.
+        # Smoke 2026-05-07 surfaced "create_connection() got an unexpected
+        # keyword argument 'additional_headers'" on the very first WS attempt.
+        async with websockets.connect(ws_full_url, extra_headers=ws_headers) as ws:
             # 4. Navigate to apply URL
             _update_session_status("navigating")
             await ws.send(json.dumps({"action": "status", "status": "navigating"}))
