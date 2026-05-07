@@ -21,6 +21,10 @@ from shared.apply_platform import classify_apply_platform
     ("https://acme.jobs.personio.de/job/123456", "personio"),
     ("https://acme.jobs.personio.eu/job/123456", "personio"),
     ("https://www.linkedin.com/jobs/view/12345?easy_apply=true", "linkedin_easy_apply"),
+    # Company-domain pages embedding Greenhouse via ?gh_jid=
+    ("https://www.mongodb.com/careers/job/?gh_jid=7743306", "greenhouse"),
+    ("https://stripe.com/jobs/listing/foo?gh_jid=4567890", "greenhouse"),
+    ("https://careers.toasttab.com/role?gh_jid=12345&utm_source=x", "greenhouse"),
 ])
 def test_known_platforms(url, expected):
     assert classify_apply_platform(url) == expected

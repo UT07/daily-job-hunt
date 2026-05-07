@@ -21,6 +21,12 @@ from typing import Optional
 
 _PATTERNS = [
     ("greenhouse",          re.compile(r"boards\.greenhouse\.io/", re.IGNORECASE)),
+    # Company-domain pages embedding a Greenhouse iframe expose the posting via
+    # ?gh_jid=<id> (e.g. mongodb.com/careers/job/?gh_jid=7743306, stripe.com,
+    # datadoghq.com, toasttab.com careers pages). board_token is unknown without
+    # a network call — frontend cloud browser still works, /api/apply/preview
+    # gracefully degrades to questions=[].
+    ("greenhouse",          re.compile(r"[?&]gh_jid=\d+", re.IGNORECASE)),
     ("lever",               re.compile(r"jobs\.lever\.co/", re.IGNORECASE)),
     ("workday",             re.compile(r"\.myworkdayjobs\.com/", re.IGNORECASE)),
     ("ashby",               re.compile(r"jobs\.ashbyhq\.com/", re.IGNORECASE)),
@@ -53,6 +59,7 @@ _GREENHOUSE_STANDARD = re.compile(
 _GREENHOUSE_EMBED_PATH = re.compile(r"boards\.greenhouse\.io/embed/job_app", re.IGNORECASE)
 _GREENHOUSE_EMBED_FOR = re.compile(r"[?&]for=(?P<board>[^&#]+)", re.IGNORECASE)
 _GREENHOUSE_EMBED_TOKEN = re.compile(r"[?&]token=(?P<posting>\d+)", re.IGNORECASE)
+_GREENHOUSE_GH_JID = re.compile(r"[?&]gh_jid=(?P<posting>\d+)", re.IGNORECASE)
 _ASHBY_STANDARD = re.compile(
     r"jobs\.ashbyhq\.com/(?P<board>[^/?]+)/(?P<posting>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
     re.IGNORECASE,
@@ -87,6 +94,17 @@ def extract_platform_ids(url: Optional[str]) -> Optional[dict]:
                 "board_token": m_board.group("board"),
                 "posting_id": m_posting.group("posting"),
             }
+
+    # Company-domain page with ?gh_jid=N — board_token unknown without a
+    # network call. Frontend cloud_browser only needs platform=greenhouse to
+    # activate; preview endpoint degrades to questions=[] without board_token.
+    m = _GREENHOUSE_GH_JID.search(url)
+    if m:
+        return {
+            "platform": "greenhouse",
+            "board_token": None,
+            "posting_id": m.group("posting"),
+        }
 
     m = _ASHBY_STANDARD.search(url)
     if m:
