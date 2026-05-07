@@ -1645,6 +1645,21 @@ Resources:
               Condition:
                 StringEquals:
                   iam:PassedToService: ecs-tasks.amazonaws.com
+            # /api/apply/start-session calls browser_sessions.find_active_session_for_user
+            # (Query on user-sessions-index GSI), then create_session (PutItem). Stop/record
+            # endpoints + apply_record use Get/Update too. Smoke 2026-05-07 surfaced
+            # AccessDeniedException on the Query as the second start-session 500.
+            - Sid: BrowserSessionsTableCRUD
+              Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:GetItem
+                - dynamodb:PutItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+              Resource:
+                - !GetAtt BrowserSessionsTable.Arn
+                - !Sub "${BrowserSessionsTable.Arn}/index/*"
       Environment:
         Variables:
           GROQ_API_KEY: !Ref GroqApiKey
@@ -1673,6 +1688,7 @@ Resources:
           SECURITY_GROUP: !GetAtt ScraperSecurityGroup.GroupId
           BROWSER_WS_URL: !Sub "wss://${BrowserWebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
           WEBSOCKET_API_ID: !Ref BrowserWebSocketApi
+          SESSIONS_TABLE: !Ref BrowserSessionsTable
       Events:
         ApiGateway:
           Type: HttpApi
