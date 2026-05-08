@@ -1883,6 +1883,11 @@ Resources:
       AutoPublishAlias: live
       DeploymentPreference:
         Type: AllAtOnce
+      # Layer carries shared/* (browser_sessions). Without it the Lambda
+      # 500s at INIT with "No module named 'shared'". Same root cause as
+      # ws_connect (PR #68); only ws_connect got the layer there, this
+      # one was missed and surfaced on smoke 2026-05-08.
+      Layers: [!Ref SharedDepsLayer]
       Environment:
         Variables:
           SESSIONS_TABLE: !Ref BrowserSessionsTable
@@ -1906,6 +1911,10 @@ Resources:
           - !Ref WsRouteFunctionErrorsAlarm
           - !Ref WsRouteFunctionThrottlesAlarm
           - !Ref WsRouteFunctionDurationP99Alarm
+      # Layer carries shared/* (browser_sessions). ws_route handles every
+      # action message (fill_all, submit, click); without the layer every
+      # user action 500s. Surfaced on smoke 2026-05-08.
+      Layers: [!Ref SharedDepsLayer]
       Environment:
         Variables:
           SESSIONS_TABLE: !Ref BrowserSessionsTable
