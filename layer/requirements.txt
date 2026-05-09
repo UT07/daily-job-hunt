@@ -6,3 +6,8 @@ pyyaml>=6.0
 # Required in the shared-deps layer because the API container imports
 # `posthog` at module load time (runtime-import smoke test in CI).
 posthog>=3.0.0
+# Required by shared/ws_auth.py for Supabase JWT verification on WS
+# $connect handshake. Without this the WS Lambdas ImportModuleError at
+# INIT, API Gateway returns HTTP 502 to clients, Fargate browser exits
+# 0 immediately. Surfaced 2026-05-08 smoke (MongoDB SRE 3 retry).
+python-jose[cryptography]>=3.3.0
