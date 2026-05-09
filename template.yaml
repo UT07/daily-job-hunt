@@ -1864,7 +1864,9 @@ Resources:
       #   aws lambda update-alias --function-name <fn> --name live \
       #     --function-version <new>
       # Tracked as a P1 backlog item: parameterize a build-time hash from
-      # deploy.yml as AutoPublishCodeSha256 to fix structurally.
+      # deploy.yml as AutoPublishCodeSha256 to fix structurally. Note:
+      # `!Ref SharedDepsLayer` does NOT work — SAM rejects intrinsic
+      # functions for AutoPublishCodeSha256 (must be a literal string).
       DeploymentPreference:
         Type: AllAtOnce
       # Layer carries shared/* (ws_auth, browser_sessions, etc.). Without
