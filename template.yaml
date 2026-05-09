@@ -1855,6 +1855,15 @@ Resources:
       Timeout: 10
       MemorySize: 128
       AutoPublishAlias: live
+      # Force a new immutable version + alias advance when the layer ARN
+      # changes (e.g., new layer published with extra deps). Without this,
+      # SAM's AutoPublishAlias only bumps on CodeSha256 changes — layer
+      # references are config, not code, so layer-only updates leave the
+      # `live` alias stuck on the old version with the old layer. This bit
+      # us 3 times: PR #65, #68, #72. !Ref on a LayerVersion returns the
+      # full ARN including the version number, so any layer publish flips
+      # this string and triggers a new function version.
+      AutoPublishCodeSha256: !Ref SharedDepsLayer
       DeploymentPreference:
         Type: AllAtOnce
       # Layer carries shared/* (ws_auth, browser_sessions, etc.). Without
@@ -1881,6 +1890,8 @@ Resources:
       Timeout: 10
       MemorySize: 128
       AutoPublishAlias: live
+      # See WsConnectFunction comment — forces alias advance on layer changes.
+      AutoPublishCodeSha256: !Ref SharedDepsLayer
       DeploymentPreference:
         Type: AllAtOnce
       # Layer carries shared/* (browser_sessions). Without it the Lambda
@@ -1905,6 +1916,8 @@ Resources:
       Timeout: 5
       MemorySize: 128
       AutoPublishAlias: live
+      # See WsConnectFunction comment — forces alias advance on layer changes.
+      AutoPublishCodeSha256: !Ref SharedDepsLayer
       DeploymentPreference:
         Type: Canary10Percent5Minutes
         Alarms:
