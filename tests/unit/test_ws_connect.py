@@ -158,5 +158,9 @@ def test_connect_accepts_token_via_sec_websocket_protocol_header():
         result = handler(event, None)
 
     assert result["statusCode"] == 200
-    # Server must echo the chosen subprotocol back per RFC 6455
-    assert result["headers"]["Sec-WebSocket-Protocol"] == "naukribaba-auth"
+    # Server must echo the chosen subprotocol back per RFC 6455 §1.3 — and
+    # the echoed value must EXACTLY match one of the client's offered values
+    # or the browser aborts the handshake with protocol error 1002. The
+    # client offered 'naukribaba-auth.<token>', so we echo the same full string
+    # (NOT just the 'naukribaba-auth' prefix).
+    assert result["headers"]["Sec-WebSocket-Protocol"] == f"naukribaba-auth.{token}"

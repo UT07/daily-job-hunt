@@ -43,10 +43,14 @@ def _extract_token(headers: dict) -> tuple[str | None, str | None]:
     proto = headers.get("sec-websocket-protocol")
     if proto:
         # Format: 'naukribaba-auth.<token>'. Optional comma-separated list.
+        # Per RFC 6455 §1.3 the server's selected subprotocol MUST exactly match
+        # one of the client's offered values, else the browser aborts the
+        # handshake with protocol error 1002. So we echo back the FULL entry
+        # (incl. the token), not just the 'naukribaba-auth' prefix.
         for entry in proto.split(","):
             entry = entry.strip()
             if entry.startswith("naukribaba-auth."):
-                return entry[len("naukribaba-auth."):], "naukribaba-auth"
+                return entry[len("naukribaba-auth."):], entry
     return None, None
 
 
