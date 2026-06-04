@@ -3,10 +3,6 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { apiGet, apiPatch, apiCall } from '../api';
 import EmailComposer from '../components/EmailComposer';
 import useApiMutation from '../hooks/useApiMutation';
-import { AutoApplyButton } from '../components/apply/AutoApplyButton';
-import { AutoApplyModal } from '../components/apply/AutoApplyModal';
-import { useUserProfile } from '../hooks/useUserProfile';
-import { computeEligibility } from '../hooks/useApplyEligibility';
 
 function decodeHtml(text) {
   if (!text) return '';
@@ -603,12 +599,9 @@ const JOB_TABS = [
 export default function JobWorkspace() {
   const { jobId } = useParams();
   const navigate = useNavigate();
-  const { profile } = useUserProfile();
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
-  const [smartApplyModalOpen, setSmartApplyModalOpen] = useState(false);
-  const [smartApplyMode, setSmartApplyMode] = useState('hand_paste');
 
   // Inline editing state
   const [editing, setEditing] = useState(false);
@@ -730,7 +723,10 @@ export default function JobWorkspace() {
 
   const [loadError, setLoadError] = useState(null);
 
-  async function refetchJob() {
+  // Kept (underscore-prefixed to satisfy eslint) as scaffolding for the
+  // forthcoming manual "Mark applied" flow that will replace the cloud-browser
+  // auto-mark callback. See grand plan "Smart Apply SHELVED 2026-06-04".
+  async function _refetchJob() {
     try {
       const data = await apiGet(`/api/dashboard/jobs/${jobId}`);
       setJob(data || null);
@@ -826,34 +822,21 @@ export default function JobWorkspace() {
         <div className="flex items-center gap-3">
           <ScoreBadge score={job.match_score} className="text-2xl" />
           <Badge status={currentStatus || job.application_status || 'New'} />
-          <AutoApplyButton
-            job={job}
-            profile={profile || { profile_complete: false }}
-            onOpenModal={({ mode }) => { setSmartApplyMode(mode); setSmartApplyModalOpen(true); }}
-          />
-          {job.apply_url && job.apply_url !== 'Apply' &&
-            !computeEligibility({ ...job, id: job.job_id }, profile || { profile_complete: false }).eligible && (
+          {/* Apply: opens the posting's ATS in a new tab. The Smart Apply
+              cloud-browser path was retired 2026-06-04 — see grand plan
+              "Smart Apply SHELVED" section. */}
+          {job.apply_url && job.apply_url !== 'Apply' && (
             <a
               href={job.apply_url}
               target="_blank"
               rel="noopener noreferrer"
-              title="Smart Apply not yet available — open the posting directly"
+              title="Open this job's application page in a new tab"
             >
-              <Button variant="ghost" size="sm">Open posting</Button>
+              <Button variant="primary" size="sm">Apply</Button>
             </a>
           )}
         </div>
       </div>
-
-      {smartApplyModalOpen && (
-        <AutoApplyModal
-          job={job}
-          isOpen={smartApplyModalOpen}
-          mode={smartApplyMode}
-          onClose={() => setSmartApplyModalOpen(false)}
-          onMarkApplied={() => { refetchJob(); }}
-        />
-      )}
 
       {/* Tabs */}
       <Tabs tabs={JOB_TABS} activeTab={activeTab} onTabChange={setActiveTab} />
