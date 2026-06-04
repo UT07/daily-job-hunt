@@ -21,7 +21,18 @@ describe('wsProtocol', () => {
     expect(ACTIONS_IN.STATUS).toBe('status')
     expect(ACTIONS_IN.FIELDS).toBe('fields')
     expect(ACTIONS_IN.FIELD_FILLED).toBe('field_filled')
+    // FRAME envelopes carry base64-encoded JPEG screenshots. Added 2026-05-11
+    // when the probe surfaced that API Gateway always delivers Text frames,
+    // making the binary screenshot path dead. See wsProtocol.js doc-comment.
+    expect(ACTIONS_IN.FRAME).toBe('frame')
     expect(Object.isFrozen(ACTIONS_IN)).toBe(true)
+  })
+
+  it('parseTextFrame returns a frame envelope with base64 jpeg payload', () => {
+    // Frame messages are what the Fargate bot now sends in place of binary
+    // frames. The base64 string IS the data-URL payload (no decode needed).
+    const text = JSON.stringify({ action: 'frame', jpeg: '/9j/AAA=' })
+    expect(parseTextFrame(text)).toEqual({ action: 'frame', jpeg: '/9j/AAA=' })
   })
 
   it('parseTextFrame returns parsed JSON for valid frames', () => {

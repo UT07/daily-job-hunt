@@ -54,6 +54,25 @@ export function useBrowserSession({ wsUrl, sessionId, token, onSubmitted }) {
       setStatus('connected')
     }
 
+    // Schedule a coalesced screenshot update. Multiple frames arriving inside
+    // one animation frame collapse to a single React render — keeps the
+    // browser responsive at the 5-10 fps Fargate streams.
+    const scheduleFrameFlush = () => {
+      if (rafIdRef.current === null && typeof requestAnimationFrame === 'function') {
+        rafIdRef.current = requestAnimationFrame(() => {
+          rafIdRef.current = null
+          if (pendingFrameRef.current !== null) {
+            setScreenshotUrl(pendingFrameRef.current)
+            pendingFrameRef.current = null
+          }
+        })
+      } else if (rafIdRef.current === null) {
+        // No rAF available (jsdom in tests, SSR): write through synchronously.
+        setScreenshotUrl(pendingFrameRef.current)
+        pendingFrameRef.current = null
+      }
+    }
+
     sock.onmessage = (ev) => {
       if (typeof ev.data === 'string') {
         const frame = parseTextFrame(ev.data)
@@ -69,27 +88,22 @@ export function useBrowserSession({ wsUrl, sessionId, token, onSubmitted }) {
           }
         } else if (frame.action === ACTIONS_IN.FIELDS) {
           setFields(frame.fields || [])
+        } else if (frame.action === ACTIONS_IN.FRAME && typeof frame.jpeg === 'string') {
+          // JPEG screenshot wrapped in JSON envelope (API Gateway can't deliver
+          // binary opcodes — see wsProtocol.js doc-comment + probe Layer #9).
+          // The base64 IS the data-URL payload; no decode/re-encode needed.
+          pendingFrameRef.current = `data:image/jpeg;base64,${frame.jpeg}`
+          scheduleFrameFlush()
         }
         // FIELD_FILLED is informational; consumer can subscribe later if needed
         return
       }
-      // Binary frame — JPEG screenshot. Coalesce via rAF so multiple frames
-      // arriving within one animation frame produce a single React render.
+      // Binary frame — defensive fallback. Currently dead path on AWS API
+      // Gateway WebSocket (which always coerces to Text). Kept for portability
+      // if the transport ever changes.
       if (ev.data instanceof ArrayBuffer) {
         pendingFrameRef.current = binaryFrameToDataUrl(ev.data)
-        if (rafIdRef.current === null && typeof requestAnimationFrame === 'function') {
-          rafIdRef.current = requestAnimationFrame(() => {
-            rafIdRef.current = null
-            if (pendingFrameRef.current !== null) {
-              setScreenshotUrl(pendingFrameRef.current)
-              pendingFrameRef.current = null
-            }
-          })
-        } else if (rafIdRef.current === null) {
-          // No rAF available (server-side render path or unusual env): write through.
-          setScreenshotUrl(pendingFrameRef.current)
-          pendingFrameRef.current = null
-        }
+        scheduleFrameFlush()
       }
     }
 
