@@ -52,6 +52,9 @@ describe('useBrowserSession', () => {
   })
 
   it('decodes binary frames into a screenshot data URL', async () => {
+    // Defensive coverage: if the transport ever delivers true binary frames
+    // (currently API Gateway always coerces to Text), the legacy path still
+    // works. Real prod traffic uses the FRAME envelope below.
     const { result } = renderHook(() => useBrowserSession({
       wsUrl: 'wss://api.test/prod', sessionId: 's', token: 't',
     }))
@@ -61,6 +64,43 @@ describe('useBrowserSession', () => {
     const blob = new Uint8Array([0xff, 0xd8, 0xff]).buffer
     act(() => MockSocket.last._msg(blob))
     await waitFor(() => expect(result.current.screenshotUrl).toMatch(/^data:image\/jpeg;base64,/))
+  })
+
+  it('decodes FRAME JSON envelopes into a screenshot data URL', async () => {
+    // The actual prod path: bot sends {action:'frame', jpeg:'<base64>'} as a
+    // JSON text frame. Probe Layer #9 (scripts/probe_smart_apply.py) proves
+    // API Gateway always delivers Text opcodes, so this is the canonical
+    // delivery shape. base64('\xff\xd8\xff') === '/9j/'.
+    const { result } = renderHook(() => useBrowserSession({
+      wsUrl: 'wss://api.test/prod', sessionId: 's', token: 't',
+    }))
+    act(() => MockSocket.last._open())
+
+    act(() => MockSocket.last._msg(JSON.stringify({ action: 'frame', jpeg: '/9j/' })))
+    await waitFor(() =>
+      expect(result.current.screenshotUrl).toBe('data:image/jpeg;base64,/9j/'),
+    )
+  })
+
+  it('ignores FRAME envelopes whose jpeg field is missing or wrong type', async () => {
+    // Defensive: a malformed bot must not crash the FE or replace a previous
+    // valid screenshot with `data:image/jpeg;base64,undefined`.
+    const { result } = renderHook(() => useBrowserSession({
+      wsUrl: 'wss://api.test/prod', sessionId: 's', token: 't',
+    }))
+    act(() => MockSocket.last._open())
+
+    // First, a valid frame establishes a known good state
+    act(() => MockSocket.last._msg(JSON.stringify({ action: 'frame', jpeg: '/9j/' })))
+    await waitFor(() => expect(result.current.screenshotUrl).toBe('data:image/jpeg;base64,/9j/'))
+
+    // Malformed payloads — must be ignored
+    act(() => MockSocket.last._msg(JSON.stringify({ action: 'frame' })))               // no jpeg field
+    act(() => MockSocket.last._msg(JSON.stringify({ action: 'frame', jpeg: null })))   // null
+    act(() => MockSocket.last._msg(JSON.stringify({ action: 'frame', jpeg: 42 })))     // wrong type
+
+    // State is unchanged
+    expect(result.current.screenshotUrl).toBe('data:image/jpeg;base64,/9j/')
   })
 
   it('sendAction stringifies + sends an outbound JSON frame', async () => {

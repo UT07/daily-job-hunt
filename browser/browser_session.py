@@ -12,6 +12,7 @@ Env vars: SESSION_ID, USER_ID, JOB_ID, APPLY_URL, PLATFORM, WEBSOCKET_URL,
 """
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -230,6 +231,28 @@ async def _handle_submit(page, ws) -> None:
 
 
 # ─── Concurrent loops ────────────────────────────────────────────
+def _encode_frame_envelope(jpeg_bytes: bytes) -> str:
+    """Wrap raw JPEG bytes in a JSON text-frame envelope for API Gateway delivery.
+
+    AWS API Gateway WebSocket coerces all `post_to_connection` payloads to
+    Text-opcode frames on the wire — even when boto3's `Data` parameter is
+    `bytes`. Without an envelope, the FE receives a corrupted UTF-8 string
+    (random JPEG bytes interpreted as text) and `ev.data instanceof ArrayBuffer`
+    fails silently — every frame was being dropped pre-2026-05-11.
+
+    The fix: base64-encode the JPEG and wrap it in the same JSON action-shaped
+    envelope already used by status / fields / field_filled messages. The FE
+    parses the JSON, recognises `action: 'frame'`, and builds a data: URL
+    directly from the base64 payload (no decoding needed since base64 IS the
+    data-URL format).
+
+    Cost: ~33% bandwidth overhead from base64. Negligible CPU.
+    Surfaced by: scripts/probe_smart_apply.py — see Layer #9 diagnostic.
+    """
+    b64 = base64.b64encode(jpeg_bytes).decode("ascii")
+    return json.dumps({"action": "frame", "jpeg": b64})
+
+
 async def _screenshot_loop(page, stop_event: asyncio.Event, frontend_conn_id: str) -> None:
     """Stream JPEG screenshots to frontend via API Gateway Management API.
 
@@ -250,7 +273,9 @@ async def _screenshot_loop(page, stop_event: asyncio.Event, frontend_conn_id: st
 
             screenshot = await page.screenshot(type="jpeg", quality=quality)
 
-            # Adaptive quality reduction
+            # Adaptive quality reduction. The 128 KB ceiling is the API Gateway
+            # Management API per-message limit; base64 inflates by ~33% so the
+            # underlying JPEG must stay under ~96 KB pre-encode.
             if len(screenshot) > SCREENSHOT_MAX_BYTES and quality > 60:
                 quality = 60
                 screenshot = await page.screenshot(type="jpeg", quality=quality)
@@ -258,11 +283,12 @@ async def _screenshot_loop(page, stop_event: asyncio.Event, frontend_conn_id: st
                 quality = 45
                 screenshot = await page.screenshot(type="jpeg", quality=quality)
 
-            if len(screenshot) <= 128_000:
+            envelope = _encode_frame_envelope(screenshot)
+            if len(envelope) <= 128_000:
                 await asyncio.to_thread(
                     apigw.post_to_connection,
                     ConnectionId=frontend_conn_id,
-                    Data=screenshot,
+                    Data=envelope,
                 )
 
             # Reset quality for next frame

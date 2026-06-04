@@ -2,8 +2,13 @@
  * WebSocket message protocol for Smart Apply Plan 3c.full.
  *
  * Inbound (from Fargate browser via API Gateway Management API):
- *   - JSON text frames: {action: 'status'|'fields'|'field_filled', ...}
- *   - Binary frames: raw JPEG bytes, ~5-10 KB, 5-10 fps
+ *   - JSON text frames: {action: 'status'|'fields'|'field_filled'|'frame', ...}
+ *     - 'frame' carries a base64-encoded JPEG screenshot in `.jpeg`.
+ *     - The other actions carry status/field metadata.
+ *   - Binary frames: defensive fallback — kept in case the transport ever
+ *     stops coercing to Text frames (currently API Gateway WebSocket always
+ *     does, so the binary path is dead in prod). See scripts/probe_smart_apply.py
+ *     Layer #9 diagnostic for the proof.
  *
  * Outbound (to Fargate via $default API Gateway route):
  *   - JSON text frames only. {action: 'fill_all'|'click'|'type'|'submit'|...}
@@ -25,6 +30,7 @@ export const ACTIONS_IN = Object.freeze({
   STATUS: 'status',
   FIELDS: 'fields',
   FIELD_FILLED: 'field_filled',
+  FRAME: 'frame',
 })
 
 /**
