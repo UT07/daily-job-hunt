@@ -259,8 +259,24 @@ async def _screenshot_loop(page, stop_event: asyncio.Event, frontend_conn_id: st
     `apigw.post_to_connection` is sync boto3, so it's run via `asyncio.to_thread`
     to keep the event loop responsive at 5fps under network jitter.
     """
-    mgmt_url = f"https://{os.environ.get('WEBSOCKET_API_ID', '')}.execute-api.{AWS_REGION}.amazonaws.com/prod"
+    # Fail loud if the env var is missing. The previous fallback of "" produced
+    # a malformed URL ("https://.execute-api...") that DNS-failed on every send.
+    # Each failure was caught by `except Exception` in this loop and surfaced as
+    # a single warning per failure — but because the URL never even resolved,
+    # boto3 retried internally before raising, so log volume was low and the
+    # bug looked like "no screenshots arriving" rather than "config missing."
+    # Found 2026-06-04 after the probe + envelope fixes cleared other 13 layers.
+    ws_api_id = os.environ.get("WEBSOCKET_API_ID")
+    if not ws_api_id:
+        raise RuntimeError(
+            "WEBSOCKET_API_ID env var is missing — the Fargate task definition "
+            "must inject it (see template.yaml::BrowserTaskDefinition). Without "
+            "it the apigatewaymanagementapi endpoint URL is malformed and every "
+            "post_to_connection silently fails, dropping all screenshots."
+        )
+    mgmt_url = f"https://{ws_api_id}.execute-api.{AWS_REGION}.amazonaws.com/prod"
     apigw = boto3.client("apigatewaymanagementapi", endpoint_url=mgmt_url, region_name=AWS_REGION)
+    logger.info("Screenshot loop ready; sending to apigw_mgmt=%s frontend=%s", mgmt_url, frontend_conn_id[:16])
     quality = SCREENSHOT_QUALITY_START
 
     while not stop_event.is_set():

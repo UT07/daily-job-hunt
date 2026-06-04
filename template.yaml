@@ -2037,6 +2037,23 @@ Resources:
               Value: utkarsh-job-hunt
             - Name: WEBSOCKET_URL
               Value: !Sub "wss://${BrowserWebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
+            # WEBSOCKET_API_ID is REQUIRED by browser_session.py:_screenshot_loop
+            # to build the API Gateway Management API endpoint:
+            #   https://${WEBSOCKET_API_ID}.execute-api.${AWS_REGION}.amazonaws.com/prod
+            # Without it the URL becomes "https://.execute-api..." → DNS-fails →
+            # every post_to_connection silently raises → 0 screenshots reach
+            # the FE → modal sits on "Connecting..." forever. This was the
+            # final invisible bug behind the 14-PR Smart Apply saga; surfaced
+            # 2026-06-04 after probe + JSON-envelope + alias-bump cleared the
+            # other 13 layers. JobHuntApi Lambda already had this env var
+            # (added in PR #65); the gap was the Fargate task def specifically.
+            - Name: WEBSOCKET_API_ID
+              Value: !Ref BrowserWebSocketApi
+            # SESSIONS_TABLE has an in-code default but pin it explicitly so a
+            # rename / different-account redeploy doesn't silently break the
+            # bot's DDB lookups for ws_connection_frontend.
+            - Name: SESSIONS_TABLE
+              Value: !Ref BrowserSessionsTable
             - Name: SUPABASE_URL
               Value: !Ref SupabaseUrl
             - Name: SUPABASE_SERVICE_KEY

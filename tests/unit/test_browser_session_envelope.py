@@ -103,3 +103,62 @@ def test_encode_frame_envelope_size_is_4_over_3_input():
 
     # base64 of 1500 bytes = 2000 chars (1500 / 3 * 4)
     assert len(parsed["jpeg"]) == 2000
+
+
+# ─── Required-env-var contract ────────────────────────────────────────────────
+# These tests guard against the silent-config-failure mode that caused the
+# 2026-06-04 incident: the Fargate task def shipped without WEBSOCKET_API_ID,
+# the bot's _screenshot_loop fell back to "" → built a malformed mgmt URL
+# (https://.execute-api...) → every post_to_connection raised an exception that
+# was caught and counted as a frame error but kept the loop running silently.
+# Net effect: every Smart Apply session looked like "Connecting forever" with
+# no log line ever indicating the cause.
+
+import asyncio  # noqa: E402
+from unittest.mock import MagicMock, patch  # noqa: E402
+
+import pytest  # noqa: E402
+
+
+def test_screenshot_loop_raises_loudly_when_websocket_api_id_missing(monkeypatch):
+    """Bot must fail loud — NOT silent-degrade — when WEBSOCKET_API_ID is unset.
+
+    Pre-fix behaviour: bot kept running, screenshot loop kept retrying against
+    a malformed URL, no error surfaced to operators, sessions looked alive but
+    delivered zero frames. This test pins the new loud-failure contract.
+    """
+    monkeypatch.delenv("WEBSOCKET_API_ID", raising=False)
+
+    page = MagicMock()
+    stop_event = asyncio.Event()
+    frontend_conn_id = "fake-conn-id"
+
+    with pytest.raises(RuntimeError, match="WEBSOCKET_API_ID env var is missing"):
+        asyncio.run(browser_session._screenshot_loop(page, stop_event, frontend_conn_id))
+
+
+def test_screenshot_loop_builds_well_formed_mgmt_url_when_env_var_set(monkeypatch):
+    """When WEBSOCKET_API_ID IS set, the loop must construct a valid HTTPS
+    URL (no empty subdomain). The previous bug appeared exactly because an
+    empty string produced 'https://.execute-api...' — DNS-unresolvable but
+    superficially URL-shaped enough that boto3 didn't reject it at client init.
+    """
+    monkeypatch.setenv("WEBSOCKET_API_ID", "fakewsapi123")
+    page = MagicMock()
+    stop_event = asyncio.Event()
+    stop_event.set()  # force loop to exit immediately on first iteration check
+    frontend_conn_id = "fake-conn-id"
+
+    # Capture the endpoint_url boto3 receives so we can assert URL shape
+    captured_endpoint = {}
+
+    def fake_boto_client(service, **kwargs):
+        captured_endpoint["url"] = kwargs.get("endpoint_url")
+        return MagicMock()
+
+    with patch.object(browser_session.boto3, "client", side_effect=fake_boto_client):
+        asyncio.run(browser_session._screenshot_loop(page, stop_event, frontend_conn_id))
+
+    assert captured_endpoint["url"] == (
+        "https://fakewsapi123.execute-api.eu-west-1.amazonaws.com/prod"
+    ), "API Gateway management URL must include the WS API id as subdomain"
