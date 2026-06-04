@@ -1,10 +1,13 @@
 """Contract test: ProfileResponse must expose `profile_complete: bool` derived
 from shared.profile_completeness.check_profile_completeness().
 
-Why: Phase 1 of Smart Apply (spec §4) needs an authoritative completeness
-signal on /api/profile. Without this, frontend AppLayout has its own local
-heuristic (full_name && phone && location) that drifts from the backend's
-9-required-fields check.
+Why: the FinishSetupBanner + onboarding wizard need an authoritative
+completeness signal on /api/profile. Without this, the frontend falls back
+to a local heuristic (full_name && phone && location) that drifts from the
+backend's 9-required-fields check.
+
+(Original use case was Smart Apply Phase 1's eligibility gate — that path
+was retired 2026-06-04 — but the field remains in use elsewhere.)
 """
 from __future__ import annotations
 import importlib
@@ -26,7 +29,7 @@ def test_profile_response_model_has_profile_complete_field():
     fields = ProfileResponse.model_fields
     assert "profile_complete" in fields, (
         "ProfileResponse must declare profile_complete: bool. "
-        "Phase 1 frontend reads this — see docs/superpowers/specs/2026-05-01-smart-apply-phase1-design.md §2 backend dependency."
+        "Frontend FinishSetupBanner + onboarding gating depend on it."
     )
     annotation = fields["profile_complete"].annotation
     assert annotation is bool, f"profile_complete must be bool, got {annotation}"
