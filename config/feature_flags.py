@@ -70,9 +70,9 @@ def flag_gated(flag: str, default: bool = False):
     """Decorator: return 503 if flag is off for the caller.
 
     Usage:
-        @app.post("/api/apply/start")
-        @flag_gated("auto_apply")
-        def start_apply(..., user: AuthUser = Depends(...)):
+        @app.post("/api/jobs/foo")
+        @flag_gated("my_feature")
+        def some_handler(..., user: AuthUser = Depends(...)):
             ...
 
     The decorator looks for `user` in kwargs (FastAPI DI pattern); if

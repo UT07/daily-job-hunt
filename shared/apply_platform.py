@@ -7,11 +7,11 @@ Used by:
 Returns one of {greenhouse, lever, workday, ashby, smartrecruiters, workable,
 taleo, icims, personio, linkedin_easy_apply} or None for unmatched URLs.
 
-The /api/apply/* endpoints DO NOT gate on this column — auto-apply works for
-jobs with apply_platform=None (cloud browser handles unknown forms via AI vision).
-The actual gate is `apply_url`-non-null + `resume_s3_key`-non-null (latter
-implicitly enforces ≤B-tier since the tailoring pipeline only writes
-resume_s3_key for S/A/B-tier jobs per pipeline policy).
+The classifier is purely informational — the FE Apply button just opens
+`apply_url` in a new tab regardless of platform. (The original consumer was
+Smart Apply's cloud_browser path, retired 2026-06-04; the classifier was
+kept because the platform label is still useful for future analytics and
+the Tailor+ editor's keyword targeting.)
 """
 from __future__ import annotations
 
@@ -24,8 +24,8 @@ _PATTERNS = [
     # Company-domain pages embedding a Greenhouse iframe expose the posting via
     # ?gh_jid=<id> (e.g. mongodb.com/careers/job/?gh_jid=7743306, stripe.com,
     # datadoghq.com, toasttab.com careers pages). board_token is unknown without
-    # a network call — frontend cloud browser still works, /api/apply/preview
-    # gracefully degrades to questions=[].
+    # a network call — kept for analytics granularity even though the FE Apply
+    # button doesn't need it.
     ("greenhouse",          re.compile(r"[?&]gh_jid=\d+", re.IGNORECASE)),
     ("lever",               re.compile(r"jobs\.lever\.co/", re.IGNORECASE)),
     ("workday",             re.compile(r"\.myworkdayjobs\.com/", re.IGNORECASE)),
@@ -96,8 +96,8 @@ def extract_platform_ids(url: Optional[str]) -> Optional[dict]:
             }
 
     # Company-domain page with ?gh_jid=N — board_token unknown without a
-    # network call. Frontend cloud_browser only needs platform=greenhouse to
-    # activate; preview endpoint degrades to questions=[] without board_token.
+    # network call. Platform label still emitted for analytics; the FE Apply
+    # button just opens the URL directly so board_token isn't required.
     m = _GREENHOUSE_GH_JID.search(url)
     if m:
         return {
