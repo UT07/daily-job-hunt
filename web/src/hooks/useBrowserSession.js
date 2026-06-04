@@ -40,6 +40,20 @@ export function useBrowserSession({ wsUrl, sessionId, token, onSubmitted }) {
   // re-renders. The hook still ends up rendering ~once per animation frame.
   const pendingFrameRef = useRef(null)
   const rafIdRef = useRef(null)
+  // Callback-ref pattern: parents almost always pass inline arrow functions
+  // for `onSubmitted` (e.g. AutoApplyModal at line 186), which means a new
+  // reference is created on every parent render. If `connect` depends on
+  // `onSubmitted`, the useCallback identity churns, the effect re-runs, the
+  // cleanup closes the socket, and a fresh socket immediately opens. Net
+  // effect: WS connection cycles every parent re-render (~30s in practice,
+  // driven by sessionState transitions + preview fetch), the bot reads the
+  // FIRST conn id from DDB then sends to it forever even after it's gone.
+  // Holding the latest onSubmitted in a ref keeps the effect's identity
+  // stable across parent re-renders.
+  const onSubmittedRef = useRef(onSubmitted)
+  useEffect(() => {
+    onSubmittedRef.current = onSubmitted
+  }, [onSubmitted])
 
   const connect = useCallback(() => {
     if (disposedRef.current) return
@@ -81,7 +95,9 @@ export function useBrowserSession({ wsUrl, sessionId, token, onSubmitted }) {
           setStatus(frame.status)
           if (frame.status === 'submitted') {
             submittedReceived({ session_id: sessionId })
-            onSubmitted?.()
+            // Read the LATEST onSubmitted via the ref — never close over the
+            // initial prop (which gets stale across parent re-renders).
+            onSubmittedRef.current?.()
           }
           if (frame.status === 'captcha') {
             captchaDetected({ session_id: sessionId, type: frame.type ?? 'unknown' })
@@ -127,7 +143,11 @@ export function useBrowserSession({ wsUrl, sessionId, token, onSubmitted }) {
       sessionReconnected({ session_id: sessionId, attempt: attempt + 1 })
       reconnectTimerRef.current = setTimeout(connect, delay)
     }
-  }, [wsUrl, sessionId, token, onSubmitted])
+    // `onSubmitted` is intentionally NOT in deps — see onSubmittedRef comment
+    // above. Including it caused 30-second WS reconnect cycles in prod due to
+    // parent components passing inline arrow functions. The ref keeps the
+    // latest callback accessible without churning the effect.
+  }, [wsUrl, sessionId, token])
 
   useEffect(() => {
     disposedRef.current = false

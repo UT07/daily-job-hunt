@@ -158,4 +158,69 @@ describe('useBrowserSession', () => {
     unmount()
     expect(closeSpy).toHaveBeenCalled()
   })
+
+  it('does NOT close + reopen the socket when onSubmitted prop reference changes', () => {
+    // Regression test for 2026-06-04 incident: AutoApplyModal passes
+    // `onSubmitted={() => handleMarkApplied(...)}` — a NEW arrow on every
+    // parent render. If useBrowserSession includes onSubmitted in its
+    // connect-effect deps, the cleanup fires + the socket closes on EVERY
+    // parent re-render. Net effect in prod: WS cycles every ~30s, the bot's
+    // DDB read of ws_connection_frontend goes stale immediately, all
+    // post_to_connection calls silently GoneException. The fix is a
+    // callback-ref pattern (onSubmittedRef) decoupling the prop from the
+    // effect identity.
+    let onSubmittedCounter = 0
+    const { rerender } = renderHook(({ onSubmitted }) =>
+      useBrowserSession({
+        wsUrl: 'wss://api.test/prod',
+        sessionId: 'stable-session',
+        token: 'stable-token',
+        onSubmitted,
+      }),
+      { initialProps: { onSubmitted: () => { onSubmittedCounter++ } } },
+    )
+
+    const firstSock = MockSocket.last
+    const closeSpy = vi.spyOn(firstSock, 'close')
+    expect(firstSock).toBeTruthy()
+
+    // Re-render with a NEW inline arrow function each time — mimics parent
+    // state churn (sessionState transitions, query refetches, etc.).
+    for (let i = 0; i < 5; i++) {
+      rerender({ onSubmitted: () => { onSubmittedCounter++ } })
+    }
+
+    // The socket must NOT have been closed and the same instance must still
+    // be active. If a regression reintroduces onSubmitted in deps, the
+    // close spy fires and MockSocket.last !== firstSock.
+    expect(closeSpy).not.toHaveBeenCalled()
+    expect(MockSocket.last).toBe(firstSock)
+  })
+
+  it('invokes the LATEST onSubmitted ref when status=submitted arrives', async () => {
+    // Companion test: the callback-ref fix must still actually fire the
+    // newest onSubmitted (not a stale closure over the initial prop).
+    const calls = []
+    const { result, rerender } = renderHook(({ onSubmitted }) =>
+      useBrowserSession({
+        wsUrl: 'wss://api.test/prod',
+        sessionId: 's', token: 't',
+        onSubmitted,
+      }),
+      { initialProps: { onSubmitted: () => { calls.push('first') } } },
+    )
+
+    act(() => MockSocket.last._open())
+    await waitFor(() => expect(result.current.status).toBe('connected'))
+
+    // Swap to a different callback (this is what would happen across parent
+    // re-renders in prod)
+    rerender({ onSubmitted: () => { calls.push('second') } })
+
+    // Bot emits status=submitted
+    act(() => MockSocket.last._msg(JSON.stringify({ action: 'status', status: 'submitted' })))
+
+    // The NEWEST onSubmitted (calls.push('second')) must fire, not the stale one
+    expect(calls).toEqual(['second'])
+  })
 })
