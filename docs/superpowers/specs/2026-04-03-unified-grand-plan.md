@@ -91,19 +91,39 @@ These are real bugs found while smoke-testing the post-deploy state. They're not
 
 ### Active sequence (next focus)
 
-**Immediate (this week):**
-1. Merge PR #59 (Settings save fix + Notice Period dropdown) — already open
-2. Phase A.1 operator actions (creds rotation, DB migration, EventBridge verification)
-3. **Live smoke** of Smart Apply on a real Greenhouse/Ashby job → confirm cloud_browser path works end-to-end
-4. Bug 5 fix (Save Sources backend) — small migration + `_FIELD_MAP` entry
-5. Bug 7 fix — extend `shared/apply_platform.py` with ~10 long-tail ATS patterns + run backfill
+**🛑 Smart Apply (cloud_browser) — SHELVED 2026-06-04**
 
-**Next major (pick one):**
-- **Layer 4 / 3.1 Discover+ — manual JD UI polish** (Add Job page redesign, post-add-job review flow)
-- **Layer 4 / 3.2 Research** (CompanyLens, Glassdoor company data, news, salary). This is the largest Layer 4 build remaining.
-- **Layer 4 / 3.3 Tailor+** (split-pane LaTeX editor, PDF-to-LaTeX, version history)
-- **Phase 2.6 Resume Quality continued** (ATS keyword injection, proof-point extraction — career-ops integration row says "Partial")
-- **Phase 2.7 Data Quality continued** (apply_platform classifier expansion is a high-leverage 1-day task that unlocks a lot of Smart Apply value)
+After 18+ PRs (#52, #56–#78) the WS chain is technically working end-to-end (probe Layer #9 green; React reconnect-storm fixed in #78). However the engineering ROI proved too low vs the user value of pasting + clicking Apply manually. The hand_paste fallback already shipped in PR #52 covers the realistic flow. Cloud-browser infrastructure stays deployed but idle (Fargate task def `:3`, WS API Gateway, DDB table). Revisit when:
+- User traction warrants the polish cost (~$10-20/mo steady-state idle cost is acceptable)
+- The Tailor+ editor lands and we have a clearer story for "AI fills + user reviews"
+
+Artifacts kept from this work:
+- `scripts/probe_smart_apply.py` — 6-layer protocol probe (ready as future CI gate)
+- Callback-ref pattern in `useBrowserSession.js` — general lesson for WS-heavy features
+- Fail-loud env-var contract in `browser_session.py` — defensive pattern adopted
+- All infrastructure in CFN (DynamoDB, WS API, Fargate, IAM) — production-ready when reactivated
+
+**Immediate (this week) — pivoted 2026-06-04:**
+1. **Phase 2.6/2.7 Scoring Quality** — high-leverage, user-visible signal improvements:
+   - Score determinism (temperature=0 or multi-call averaging) — Phase 2.7 known issue: same job gets different scores across runs
+   - Original-vs-tailored score delta visible in UI — Phase 2.7 known issue: no before/after comparison
+   - Multi-perspective scoring quality (ATS + Hiring Manager + Tech Recruiter) — Phase 2.7
+   - ATS keyword injection + proof-point extraction — Phase 2.6
+2. **Phase B Tailor+ design spec** — write `docs/superpowers/specs/2026-06-XX-tailor-plus-editor-design.md` for the split-pane LaTeX editor with PDF preview + live ATS score
+3. **Phase A.2 polish in parallel** — dashboard date-range filter, job card layout, status dropdown, Add Job page redesign (UX rough edges that block beta)
+
+**Next major (in priority order):**
+- **🎯 Phase B / 3.3 Tailor+** — split-pane LaTeX editor, PDF-to-LaTeX, version history, live ATS score (the headline feature for beta launch)
+- **Phase 2.6/2.7 continued** — finish all scoring + resume quality items before beta
+- **Phase A.2 Polish** — all remaining UX rough edges before beta
+- **Phase C Beta Launch Readiness** — auto-rollback, staging hardening, in-app error reporting, Sentry, cost observability (Layer 5.7)
+- **Phase D Beta Launch**
+
+**Deferred to post-beta only:**
+- Smart Apply cloud_browser revival (loop back when user traction justifies)
+- Layer 4 / 3.2 CompanyLens (Glassdoor company data, news, salary)
+- Layer 4 / 3.5 Interview Prep
+- Layer 4 / 3.6 Analytics
 
 ---
 
