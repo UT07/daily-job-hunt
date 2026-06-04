@@ -59,10 +59,6 @@ Parameters:
     Type: String
     Default: "https://eu.i.posthog.com"
     Description: PostHog ingest endpoint (EU region by default).
-  BrowserSubnetIds:
-    Type: CommaDelimitedList
-    Description: Public subnet IDs for Fargate browser tasks (discover via aws ec2 describe-subnets)
-    Default: ""
   DailyPipelineUserId:
     Type: String
     Description: |
@@ -696,30 +692,6 @@ Resources:
         - IpProtocol: -1
           CidrIp: 0.0.0.0/0
 
-  FargateExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: naukribaba-fargate-execution
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ecs-tasks.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
-      Policies:
-        - PolicyName: SSMSecretsAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - ssm:GetParameters
-                Resource:
-                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/naukribaba/*"
-
   FargateTaskRole:
     Type: AWS::IAM::Role
     Properties:
@@ -750,6 +722,33 @@ Resources:
                   - s3:PutObject
                   - s3:GetObject
                 Resource: "arn:aws:s3:::utkarsh-job-hunt/*"
+
+  # Used by all Fargate tasks (currently just PlaywrightTaskDef). Stays in
+  # the template even after Smart Apply teardown 2026-06-04 because the
+  # playwright scraper still depends on it for image pulls + log writes.
+  FargateExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: naukribaba-fargate-execution
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      Policies:
+        - PolicyName: SSMSecretsAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameters
+                Resource:
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/naukribaba/*"
 
   PlaywrightTaskDef:
     Type: AWS::ECS::TaskDefinition
@@ -1620,46 +1619,6 @@ Resources:
                 # The :* suffix matches any execution name under each state machine.
                 - !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${DailyPipelineStateMachine.Name}:*"
                 - !Sub "arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:execution:${SingleJobPipelineStateMachine.Name}:*"
-            # Smart Apply / cloud-browser (Plan 3a/3c.full): /api/apply/start-session
-            # calls ecs:RunTask to launch the browser Fargate task; /stop-session
-            # calls ecs:StopTask. RunTask requires iam:PassRole for both the
-            # ExecutionRole (image pull, log writes) and TaskRole (in-container
-            # AWS calls). Smoke 2026-05-06 surfaced these gaps as part of the
-            # start-session 500.
-            - Sid: BrowserSessionRunTask
-              Effect: Allow
-              Action:
-                - ecs:RunTask
-                - ecs:StopTask
-                - ecs:DescribeTasks
-              Resource:
-                - !Ref BrowserSessionTaskDef
-                - !Sub "arn:${AWS::Partition}:ecs:${AWS::Region}:${AWS::AccountId}:task/${ScraperCluster}/*"
-            - Sid: BrowserSessionPassRole
-              Effect: Allow
-              Action:
-                - iam:PassRole
-              Resource:
-                - !GetAtt FargateExecutionRole.Arn
-                - !GetAtt BrowserTaskRole.Arn
-              Condition:
-                StringEquals:
-                  iam:PassedToService: ecs-tasks.amazonaws.com
-            # /api/apply/start-session calls browser_sessions.find_active_session_for_user
-            # (Query on user-sessions-index GSI), then create_session (PutItem). Stop/record
-            # endpoints + apply_record use Get/Update too. Smoke 2026-05-07 surfaced
-            # AccessDeniedException on the Query as the second start-session 500.
-            - Sid: BrowserSessionsTableCRUD
-              Effect: Allow
-              Action:
-                - dynamodb:Query
-                - dynamodb:GetItem
-                - dynamodb:PutItem
-                - dynamodb:UpdateItem
-                - dynamodb:DeleteItem
-              Resource:
-                - !GetAtt BrowserSessionsTable.Arn
-                - !Sub "${BrowserSessionsTable.Arn}/index/*"
       Environment:
         Variables:
           GROQ_API_KEY: !Ref GroqApiKey
@@ -1677,18 +1636,6 @@ Resources:
           TASK_QUEUE_URL: !Ref TaskQueue
           DAILY_PIPELINE_ARN: !GetAtt DailyPipelineStateMachine.Arn
           SINGLE_JOB_PIPELINE_ARN: !GetAtt SingleJobPipelineStateMachine.Arn
-          # Smart Apply / cloud-browser session launch (Plan 3a/3c.full).
-          # /api/apply/start-session reads these to call ecs.run_task and
-          # to issue ws_url to the frontend. Without them the endpoint 500s
-          # at app.py:3042-3049 (BROWSER_SUBNET_IDS check + KeyError on
-          # CLUSTER_ARN/TASK_DEF). Smoke 2026-05-06 confirmed this gap.
-          CLUSTER_ARN: !GetAtt ScraperCluster.Arn
-          TASK_DEF: !Ref BrowserSessionTaskDef
-          BROWSER_SUBNET_IDS: !Join [",", !Ref BrowserSubnetIds]
-          SECURITY_GROUP: !GetAtt ScraperSecurityGroup.GroupId
-          BROWSER_WS_URL: !Sub "wss://${BrowserWebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
-          WEBSOCKET_API_ID: !Ref BrowserWebSocketApi
-          SESSIONS_TABLE: !Ref BrowserSessionsTable
       Events:
         ApiGateway:
           Type: HttpApi
@@ -1753,326 +1700,6 @@ Resources:
             Principal: "*"
             Action: s3:GetObject
             Resource: !Sub "${FrontendBucket.Arn}/*"
-
-  # =========================================================================
-  #  Auto-Apply: Cloud Browser Infrastructure
-  # =========================================================================
-
-  # --- DynamoDB Session Table ---
-  BrowserSessionsTable:
-    Type: AWS::DynamoDB::Table
-    Properties:
-      TableName: naukribaba-browser-sessions
-      BillingMode: PAY_PER_REQUEST
-      AttributeDefinitions:
-        - AttributeName: session_id
-          AttributeType: S
-        - AttributeName: user_id
-          AttributeType: S
-      KeySchema:
-        - AttributeName: session_id
-          KeyType: HASH
-      GlobalSecondaryIndexes:
-        - IndexName: user-sessions-index
-          KeySchema:
-            - AttributeName: user_id
-              KeyType: HASH
-          Projection:
-            ProjectionType: ALL
-      TimeToLiveSpecification:
-        AttributeName: ttl
-        Enabled: true
-
-  # --- WebSocket API Gateway ---
-  BrowserWebSocketApi:
-    Type: AWS::ApiGatewayV2::Api
-    Properties:
-      Name: naukribaba-browser-ws
-      ProtocolType: WEBSOCKET
-      RouteSelectionExpression: "$request.body.action"
-
-  ConnectRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref BrowserWebSocketApi
-      RouteKey: $connect
-      AuthorizationType: NONE
-      Target: !Sub "integrations/${ConnectIntegration}"
-
-  DisconnectRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref BrowserWebSocketApi
-      RouteKey: $disconnect
-      Target: !Sub "integrations/${DisconnectIntegration}"
-
-  DefaultRoute:
-    Type: AWS::ApiGatewayV2::Route
-    Properties:
-      ApiId: !Ref BrowserWebSocketApi
-      RouteKey: $default
-      Target: !Sub "integrations/${DefaultIntegration}"
-
-  ConnectIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref BrowserWebSocketApi
-      IntegrationType: AWS_PROXY
-      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsConnectFunction.Alias}/invocations"
-
-  DisconnectIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref BrowserWebSocketApi
-      IntegrationType: AWS_PROXY
-      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsDisconnectFunction.Alias}/invocations"
-
-  DefaultIntegration:
-    Type: AWS::ApiGatewayV2::Integration
-    Properties:
-      ApiId: !Ref BrowserWebSocketApi
-      IntegrationType: AWS_PROXY
-      IntegrationUri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${WsRouteFunction.Alias}/invocations"
-
-  BrowserWsStage:
-    Type: AWS::ApiGatewayV2::Stage
-    Properties:
-      ApiId: !Ref BrowserWebSocketApi
-      StageName: prod
-      AutoDeploy: true
-      DefaultRouteSettings:
-        LoggingLevel: ERROR
-        DataTraceEnabled: false
-
-  # --- WebSocket Lambda Functions (defined BEFORE permissions) ---
-  WsConnectFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: naukribaba-ws-connect
-      CodeUri: lambdas/browser/
-      Handler: ws_connect.handler
-      Runtime: python3.11
-      Timeout: 10
-      MemorySize: 128
-      AutoPublishAlias: live
-      # KNOWN GOTCHA: AutoPublishAlias only advances on CodeSha256 changes.
-      # Layer-only updates leave the `live` alias stuck on the old version
-      # with the old layer ARN. Manual remediation after deploy:
-      #   aws lambda update-function-configuration --function-name <fn> \
-      #     --layers <new-layer-arn>
-      #   aws lambda publish-version --function-name <fn>
-      #   aws lambda update-alias --function-name <fn> --name live \
-      #     --function-version <new>
-      # Tracked as a P1 backlog item: parameterize a build-time hash from
-      # deploy.yml as AutoPublishCodeSha256 to fix structurally. Note:
-      # `!Ref SharedDepsLayer` does NOT work — SAM rejects intrinsic
-      # functions for AutoPublishCodeSha256 (must be a literal string).
-      DeploymentPreference:
-        Type: AllAtOnce
-      # Layer carries shared/* (ws_auth, browser_sessions, etc.). Without
-      # this, ws_connect/disconnect/route 500 at import: 'No module named
-      # shared'. Smoke 2026-05-07 surfaced this on the first frontend WS
-      # connect attempt.
-      Layers: [!Ref SharedDepsLayer]
-      Environment:
-        Variables:
-          SESSIONS_TABLE: !Ref BrowserSessionsTable
-          SUPABASE_URL: !Ref SupabaseUrl
-          SUPABASE_JWT_SECRET: !Ref SupabaseJwtSecret
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref BrowserSessionsTable
-
-  WsDisconnectFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: naukribaba-ws-disconnect
-      CodeUri: lambdas/browser/
-      Handler: ws_disconnect.handler
-      Runtime: python3.11
-      Timeout: 10
-      MemorySize: 128
-      AutoPublishAlias: live
-      DeploymentPreference:
-        Type: AllAtOnce
-      # Layer carries shared/* (browser_sessions). Without it the Lambda
-      # 500s at INIT with "No module named 'shared'". Same root cause as
-      # ws_connect (PR #68); only ws_connect got the layer there, this
-      # one was missed and surfaced on smoke 2026-05-08.
-      Layers: [!Ref SharedDepsLayer]
-      Environment:
-        Variables:
-          SESSIONS_TABLE: !Ref BrowserSessionsTable
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref BrowserSessionsTable
-
-  WsRouteFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: naukribaba-ws-route
-      CodeUri: lambdas/browser/
-      Handler: ws_route.handler
-      Runtime: python3.11
-      Timeout: 5
-      MemorySize: 128
-      AutoPublishAlias: live
-      DeploymentPreference:
-        Type: Canary10Percent5Minutes
-        Alarms:
-          - !Ref WsRouteFunctionErrorsAlarm
-          - !Ref WsRouteFunctionThrottlesAlarm
-          - !Ref WsRouteFunctionDurationP99Alarm
-      # Layer carries shared/* (browser_sessions). ws_route handles every
-      # action message (fill_all, submit, click); without the layer every
-      # user action 500s. Surfaced on smoke 2026-05-08.
-      Layers: [!Ref SharedDepsLayer]
-      Environment:
-        Variables:
-          SESSIONS_TABLE: !Ref BrowserSessionsTable
-          WEBSOCKET_API_ID: !Ref BrowserWebSocketApi
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref BrowserSessionsTable
-        - Statement:
-            - Effect: Allow
-              Action: execute-api:ManageConnections
-              Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BrowserWebSocketApi}/*"
-
-  # --- WebSocket Lambda Permissions (AFTER function definitions) ---
-  WsConnectPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref WsConnectFunctionAliaslive
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BrowserWebSocketApi}/*/$connect"
-
-  WsDisconnectPermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref WsDisconnectFunctionAliaslive
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BrowserWebSocketApi}/*/$disconnect"
-
-  WsRoutePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      FunctionName: !Ref WsRouteFunctionAliaslive
-      Action: lambda:InvokeFunction
-      Principal: apigateway.amazonaws.com
-      SourceArn: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BrowserWebSocketApi}/*/$default"
-
-  # --- Browser Session Fargate ---
-  BrowserLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: /ecs/naukribaba-browser
-      RetentionInDays: 14
-
-  BrowserTaskRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ecs-tasks.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: BrowserSessionPolicy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                Resource:
-                  - "arn:aws:s3:::utkarsh-job-hunt/sessions/*"
-                  - "arn:aws:s3:::utkarsh-job-hunt/confirmations/*"
-              # profile_manager.load_profile() does HeadObject / ListObjects
-              # to detect cached profile. Smoke 2026-05-07 surfaced
-              # AccessDenied on s3:ListBucket — required even though
-              # GetObject/PutObject already cover read/write.
-              - Effect: Allow
-                Action:
-                  - s3:ListBucket
-                Resource:
-                  - "arn:aws:s3:::utkarsh-job-hunt"
-                Condition:
-                  StringLike:
-                    s3:prefix:
-                      - "sessions/*"
-                      - "confirmations/*"
-              - Effect: Allow
-                Action: execute-api:ManageConnections
-                Resource: !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${BrowserWebSocketApi}/*"
-              - Effect: Allow
-                Action:
-                  - dynamodb:GetItem
-                  - dynamodb:UpdateItem
-                Resource: !GetAtt BrowserSessionsTable.Arn
-
-  BrowserSessionTaskDef:
-    Type: AWS::ECS::TaskDefinition
-    Properties:
-      Family: naukribaba-browser-session
-      RequiresCompatibilities: [FARGATE]
-      Cpu: '1024'
-      Memory: '3072'
-      NetworkMode: awsvpc
-      ExecutionRoleArn: !GetAtt FargateExecutionRole.Arn
-      TaskRoleArn: !GetAtt BrowserTaskRole.Arn
-      ContainerDefinitions:
-        - Name: browser
-          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/naukribaba-browser:latest"
-          Essential: true
-          Environment:
-            - Name: AWS_REGION
-              Value: !Ref AWS::Region
-            - Name: S3_BUCKET
-              Value: utkarsh-job-hunt
-            - Name: WEBSOCKET_URL
-              Value: !Sub "wss://${BrowserWebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
-            # WEBSOCKET_API_ID is REQUIRED by browser_session.py:_screenshot_loop
-            # to build the API Gateway Management API endpoint:
-            #   https://${WEBSOCKET_API_ID}.execute-api.${AWS_REGION}.amazonaws.com/prod
-            # Without it the URL becomes "https://.execute-api..." → DNS-fails →
-            # every post_to_connection silently raises → 0 screenshots reach
-            # the FE → modal sits on "Connecting..." forever. This was the
-            # final invisible bug behind the 14-PR Smart Apply saga; surfaced
-            # 2026-06-04 after probe + JSON-envelope + alias-bump cleared the
-            # other 13 layers. JobHuntApi Lambda already had this env var
-            # (added in PR #65); the gap was the Fargate task def specifically.
-            - Name: WEBSOCKET_API_ID
-              Value: !Ref BrowserWebSocketApi
-            # SESSIONS_TABLE has an in-code default but pin it explicitly so a
-            # rename / different-account redeploy doesn't silently break the
-            # bot's DDB lookups for ws_connection_frontend.
-            - Name: SESSIONS_TABLE
-              Value: !Ref BrowserSessionsTable
-            - Name: SUPABASE_URL
-              Value: !Ref SupabaseUrl
-            - Name: SUPABASE_SERVICE_KEY
-              Value: !Ref SupabaseServiceKey
-            - Name: CAPSOLVER_API_KEY
-              Value: !Ref CapSolverApiKey
-          LogConfiguration:
-            LogDriver: awslogs
-            Options:
-              awslogs-group: !Ref BrowserLogGroup
-              awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: browser
-
-  # --- Phase B.5 observability: pipeline silent-success alarms ---
-  # Pair these with the FailState introduced at PipelineFailedAfterError and
-  # the ArtifactsCompiled custom metric emitted from save_metrics.py.
-  #
-  # SNS topic is pre-created out-of-band (see PipelineAlarmTopicArn parameter
-  # comment) because the deploy IAM role lacks sns:CreateTopic.
 
   DailyPipelineExecutionsFailedAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -2214,21 +1841,6 @@ Resources:
                 ],
                 "period": 300
               }
-            },
-            {
-              "type": "metric", "x": 16, "y": 12, "width": 8, "height": 6,
-              "properties": {
-                "title": "Auto-apply WebSocket + Lambda errors",
-                "view": "timeSeries", "stacked": false, "region": "${AWS::Region}",
-                "metrics": [
-                  ["AWS/Lambda", "Invocations", "FunctionName", "naukribaba-ws-connect", {"stat": "Sum"}],
-                  [".", ".", ".", "naukribaba-ws-route", {"stat": "Sum"}],
-                  [".", ".", ".", "naukribaba-ws-disconnect", {"stat": "Sum"}],
-                  [".", "Errors", ".", "naukribaba-ws-connect", {"stat": "Sum", "label": "WsConnect errors"}],
-                  [".", ".", ".", "naukribaba-ws-route", {"stat": "Sum", "label": "WsRoute errors"}]
-                ],
-                "period": 3600
-              }
             }
           ]
         }
@@ -2237,63 +1849,6 @@ Resources:
   # Critical-tier functions x 3 alarms each (Errors, Throttles, p99 Duration).
   # These trip the CodeDeploy traffic shift if a canary deploy goes bad.
   # Edits must be mirrored to monitoring/alarms.yaml (canonical source).
-
-  WsRouteFunctionErrorsAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: naukribaba-ws-route-Errors
-      AlarmDescription: Trips canary if any errors during traffic shift
-      Namespace: AWS/Lambda
-      MetricName: Errors
-      Dimensions:
-        - Name: FunctionName
-          Value: naukribaba-ws-route
-        - Name: Resource
-          Value: naukribaba-ws-route:live
-      Statistic: Sum
-      Period: 60
-      EvaluationPeriods: 1
-      Threshold: 0
-      ComparisonOperator: GreaterThanThreshold
-      TreatMissingData: notBreaching
-
-  WsRouteFunctionThrottlesAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: naukribaba-ws-route-Throttles
-      AlarmDescription: Trips canary on any concurrency throttling during shift
-      Namespace: AWS/Lambda
-      MetricName: Throttles
-      Dimensions:
-        - Name: FunctionName
-          Value: naukribaba-ws-route
-        - Name: Resource
-          Value: naukribaba-ws-route:live
-      Statistic: Sum
-      Period: 60
-      EvaluationPeriods: 1
-      Threshold: 0
-      ComparisonOperator: GreaterThanThreshold
-      TreatMissingData: notBreaching
-
-  WsRouteFunctionDurationP99Alarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: naukribaba-ws-route-DurationP99
-      AlarmDescription: Trips canary if p99 duration exceeds 30s over 5min - catches death spiral
-      Namespace: AWS/Lambda
-      MetricName: Duration
-      Dimensions:
-        - Name: FunctionName
-          Value: naukribaba-ws-route
-        - Name: Resource
-          Value: naukribaba-ws-route:live
-      ExtendedStatistic: p99
-      Period: 300
-      EvaluationPeriods: 1
-      Threshold: 30000
-      ComparisonOperator: GreaterThanThreshold
-      TreatMissingData: notBreaching
 
   TailorResumeFunctionErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -2542,12 +2097,3 @@ Outputs:
   SingleJobPipelineArn:
     Description: Single job pipeline state machine ARN
     Value: !GetAtt SingleJobPipelineStateMachine.Arn
-  BrowserWebSocketUrl:
-    Description: WebSocket API URL for browser streaming
-    Value: !Sub "wss://${BrowserWebSocketApi}.execute-api.${AWS::Region}.amazonaws.com/prod"
-  BrowserSessionsTableName:
-    Description: DynamoDB table for browser sessions
-    Value: !Ref BrowserSessionsTable
-  BrowserTaskDefArn:
-    Description: Fargate task definition for browser sessions
-    Value: !Ref BrowserSessionTaskDef
