@@ -45,6 +45,33 @@ export function formatErrorDetail(detail) {
   return String(detail)
 }
 
+/**
+ * Throw a readable Error for a non-OK response, and on 401 clear the stale
+ * local Supabase session so AuthProvider → AppLayout redirects to /login.
+ *
+ * A 401 means the session is missing/expired (e.g. the refresh token died
+ * while the user was away). Before this helper existed, each fetch wrapper
+ * just threw the formatted detail, so any caller that swallowed the error
+ * rendered a silent broken state instead of surfacing the expiry. Clearing
+ * the local session turns "silently broken" into "bounced to login".
+ *
+ * The thrown error carries `code: 'SESSION_EXPIRED'` and `status` so callers
+ * can branch on session-expiry without string-matching the message.
+ */
+async function throwForStatus(res) {
+  const err = await res.json().catch(() => ({ detail: res.statusText }));
+  if (res.status === 401) {
+    if (supabase) await supabase.auth.signOut({ scope: 'local' });
+    const e = new Error(formatErrorDetail(err.detail) || 'Session expired — please sign in again');
+    e.code = 'SESSION_EXPIRED';
+    e.status = 401;
+    throw e;
+  }
+  const e = new Error(formatErrorDetail(err.detail) || `HTTP ${res.status}`);
+  e.status = res.status;
+  throw e;
+}
+
 export async function apiCall(endpoint, body, options = {}) {
   const headers = await authHeaders()
   const res = await fetch(`${API_BASE}${endpoint}`, {
@@ -52,10 +79,7 @@ export async function apiCall(endpoint, body, options = {}) {
     headers,
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(formatErrorDetail(err.detail) || `HTTP ${res.status}`);
-  }
+  if (!res.ok) await throwForStatus(res);
   const data = await res.json();
 
   if (data.task_id && data.poll_url) {
@@ -70,7 +94,7 @@ async function pollTask(pollUrl, { intervalMs = 2000, maxWaitMs = 240000, onProg
     await new Promise(r => setTimeout(r, intervalMs));
     const headers = await authHeaders();
     const res = await fetch(`${API_BASE}${pollUrl}`, { method: 'GET', headers });
-    if (!res.ok) throw new Error(`Poll failed: HTTP ${res.status}`);
+    if (!res.ok) await throwForStatus(res);
     const task = await res.json();
     if (onProgress) onProgress(task.status);
     if (task.status === 'done') return task.result;
@@ -94,7 +118,7 @@ export async function pollPipeline(pollUrl, { intervalMs = 5000, maxWaitMs = 900
     await new Promise(r => setTimeout(r, intervalMs));
     const headers = await authHeaders();
     const res = await fetch(`${API_BASE}${pollUrl}`, { method: 'GET', headers });
-    if (!res.ok) throw new Error(`Poll failed: HTTP ${res.status}`);
+    if (!res.ok) await throwForStatus(res);
     const data = await res.json();
     if (onStatus) onStatus(data);
 
@@ -126,10 +150,7 @@ export async function apiGet(endpoint) {
     method: 'GET',
     headers,
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(formatErrorDetail(err.detail) || `HTTP ${res.status}`);
-  }
+  if (!res.ok) await throwForStatus(res);
   return res.json();
 }
 
@@ -140,10 +161,7 @@ export async function apiPut(endpoint, body) {
     headers,
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(formatErrorDetail(err.detail) || `HTTP ${res.status}`);
-  }
+  if (!res.ok) await throwForStatus(res);
   return res.json();
 }
 
@@ -154,10 +172,7 @@ export async function apiPatch(endpoint, body) {
     headers,
     body: JSON.stringify(body),
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(formatErrorDetail(err.detail) || `HTTP ${res.status}`);
-  }
+  if (!res.ok) await throwForStatus(res);
   return res.json();
 }
 
@@ -174,10 +189,7 @@ export async function apiUpload(endpoint, file) {
     headers,
     body: formData,
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(formatErrorDetail(err.detail) || `HTTP ${res.status}`);
-  }
+  if (!res.ok) await throwForStatus(res);
   return res.json();
 }
 
@@ -187,10 +199,7 @@ export async function apiDelete(endpoint) {
     method: 'DELETE',
     headers,
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(formatErrorDetail(err.detail) || `HTTP ${res.status}`);
-  }
+  if (!res.ok) await throwForStatus(res);
   return res.json();
 }
 
@@ -200,10 +209,7 @@ export async function apiGetBlob(endpoint) {
     method: 'GET',
     headers,
   });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(formatErrorDetail(err.detail) || `HTTP ${res.status}`);
-  }
+  if (!res.ok) await throwForStatus(res);
   return res.blob();
 }
 
