@@ -1212,13 +1212,68 @@ class AIClient:
             return val
 
         # ── LLM Council: all free models, ordered by preference ──
-        # Strategy: Qwen (preferred) → Groq (fastest) → NVIDIA NIM (deep catalog)
-        # → OpenRouter (many free models).
+        # Strategy: Groq (free + fastest) → NVIDIA NIM → OpenRouter (free pool)
+        # → Qwen LAST (paid, ~$0.005/call — fallback only).
         # DeepSeek direct API removed (credits exhausted, 402 errors).
         # DeepSeek models still accessible via NVIDIA NIM + OpenRouter (free there).
         # No paid providers (Anthropic removed).
 
-        # 1. Qwen (Alibaba DashScope — user preferred, free tier)
+        # 1. Groq — free, fastest inference, multiple working models
+        groq_key = get_key("groq", "GROQ_API_KEY")
+        if groq_key:
+            # Re-verified live 2026-08-31. The previous five were ALL returning
+            # 404 — Groq retired them — which left this council dependent on
+            # paid Qwen for every single call. Probe before editing this list.
+            groq_models = [
+                "openai/gpt-oss-120b",   # strongest available, ~800ms
+                "qwen/qwen3.8-27b",      # fastest, ~335ms, clean JSON
+                "openai/gpt-oss-20b",    # smaller sibling
+                "groq/compound",         # slower (~4.4s), distinct family
+            ]
+            for model in groq_models:
+                providers.append(GroqProvider(api_key=groq_key, model=model))
+            logger.info(f"[AI] Groq council: {len(groq_models)} models")
+
+        # 2. NVIDIA NIM — free credits
+        nvidia_key = get_key("nvidia", "NVIDIA_API_KEY")
+        if nvidia_key:
+            # Re-verified live 2026-08-31: six of the previous seven returned
+            # 404/410 (Gone). Only the flagship still answers on this key.
+            nvidia_models = [
+                "nvidia/nemotron-3-super-120b-a12b",   # ~2.6s, the only NIM model still live
+            ]
+            for model in nvidia_models:
+                providers.append(NvidiaNIMProvider(api_key=nvidia_key, model=model))
+            logger.info(f"[AI] NVIDIA NIM council: {len(nvidia_models)} models (incl. DeepSeek, Kimi)")
+
+        # 3. OpenRouter — free model aggregator (shared daily quota)
+        or_key = get_key("openrouter", "OPENROUTER_API_KEY")
+        if or_key:
+            # Verified-working free models on OpenRouter (2026-04-05).
+            # Includes Meta Llama (rate-limited sometimes), NVIDIA Nemotron,
+            # OpenAI GPT-OSS, Qwen, Minimax, Arcee, z-ai GLM.
+            # Re-verified live 2026-08-31: every previous entry returned 404
+            # (models moved off the free tier). These four are the current
+            # free pool. NOTE: OpenRouter free shares ONE per-account daily
+            # quota, so these return 429 once it's spent regardless of model —
+            # treat them as depth behind Groq, never as the primary path.
+            or_models = [
+                "minimax/minimax-m3:free",
+                "nvidia/nemotron-3-ultra-550b-a55b:free",
+                "z-ai/glm-5.2:free",
+                "google/gemma-4-31b-it:free",
+            ]
+            for model in or_models:
+                providers.append(OpenRouterProvider(api_key=or_key, model=model))
+            logger.info(f"[AI] OpenRouter council: {len(or_models)} free models")
+
+        # 4. Qwen (Alibaba DashScope) — LAST because it is PAID.
+        # ai_helper.py (the pipeline path) already treats qwen-plus as paid and
+        # gates it behind ENABLE_PAID_QWEN; this file used to call it "free tier"
+        # and put it FIRST, so every interactive API call was billed even though
+        # free providers were available. As of the 2026-08-31 probe Groq is both
+        # free and ~3x faster (456ms vs 1440ms), so Qwen is now a last-resort
+        # fallback that only runs when every free provider is exhausted.
         qwen_key = get_key("qwen", "QWEN_API_KEY")
         if qwen_key:
             qwen_models = [
@@ -1228,71 +1283,8 @@ class AIClient:
             ]
             for model in qwen_models:
                 providers.append(QwenProvider(api_key=qwen_key, model=model))
-            logger.info(f"[AI] Qwen council: {len(qwen_models)} models (preferred)")
+            logger.info(f"[AI] Qwen council: {len(qwen_models)} models (PAID fallback)")
 
-        # 2. Groq — fastest inference, multiple free models
-        groq_key = get_key("groq", "GROQ_API_KEY")
-        if groq_key:
-            groq_models = [
-                "llama-3.3-70b-versatile",                     # Best overall, 128K
-                "qwen/qwen3-32b",                              # Strong JSON
-                "moonshotai/kimi-k2-instruct",                 # Kimi K2 on Groq
-                "meta-llama/llama-4-scout-17b-16e-instruct",   # Fast
-                "llama-3.1-8b-instant",                        # Lightweight fallback
-            ]
-            for model in groq_models:
-                providers.append(GroqProvider(api_key=groq_key, model=model))
-            logger.info(f"[AI] Groq council: {len(groq_models)} models")
-
-        # 3. NVIDIA NIM — free credits, DeepSeek + Kimi + Qwen available here
-        nvidia_key = get_key("nvidia", "NVIDIA_API_KEY")
-        if nvidia_key:
-            nvidia_models = [
-                "deepseek-ai/deepseek-v3.2",                      # Top open model (free via NIM)
-                "moonshotai/kimi-k2.5",                            # Kimi K2.5 (free via NIM)
-                "qwen/qwen3.5-122b-a10b",                         # Large Qwen MoE
-                "meta/llama-3.3-70b-instruct",                     # Solid general
-                "nvidia/llama-3.3-nemotron-super-49b-v1.5",        # Strong structured output
-                "mistralai/mistral-small-3.1-24b-instruct-2503",   # Fast
-                "nvidia/nemotron-3-super-120b-a12b",               # NVIDIA flagship
-            ]
-            for model in nvidia_models:
-                providers.append(NvidiaNIMProvider(api_key=nvidia_key, model=model))
-            logger.info(f"[AI] NVIDIA NIM council: {len(nvidia_models)} models (incl. DeepSeek, Kimi)")
-
-        # 4. OpenRouter — free model aggregator (includes Llama, GPT-OSS, NVIDIA, etc.)
-        or_key = get_key("openrouter", "OPENROUTER_API_KEY")
-        if or_key:
-            # Verified-working free models on OpenRouter (2026-04-05).
-            # Includes Meta Llama (rate-limited sometimes), NVIDIA Nemotron,
-            # OpenAI GPT-OSS, Qwen, Minimax, Arcee, z-ai GLM.
-            or_models = [
-                # Llama family (Meta open-source)
-                "meta-llama/llama-3.3-70b-instruct:free",
-                "meta-llama/llama-3.2-3b-instruct:free",
-                "nousresearch/hermes-3-llama-3.1-405b:free",
-                # NVIDIA Nemotron
-                "nvidia/nemotron-3-super-120b-a12b:free",
-                "nvidia/nemotron-3-nano-30b-a3b:free",
-                "nvidia/nemotron-nano-12b-v2-vl:free",
-                "nvidia/nemotron-nano-9b-v2:free",
-                # OpenAI open-source
-                "openai/gpt-oss-120b:free",
-                "openai/gpt-oss-20b:free",
-                # Qwen (very large context)
-                "qwen/qwen3.6-plus:free",
-                "qwen/qwen3-next-80b-a3b-instruct:free",
-                "qwen/qwen3-coder:free",
-                # Others
-                "z-ai/glm-4.5-air:free",
-                "google/gemma-3-27b-it:free",
-                "minimax/minimax-m2.5:free",
-                "arcee-ai/trinity-mini:free",
-                "arcee-ai/trinity-large-preview:free",
-            ]
-            for model in or_models:
-                providers.append(OpenRouterProvider(api_key=or_key, model=model))
-            logger.info(f"[AI] OpenRouter council: {len(or_models)} free models")
 
         if not providers:
             raise ProviderError(

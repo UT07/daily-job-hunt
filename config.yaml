@@ -200,7 +200,7 @@ google_drive:
 
 # --- AI Provider Settings ---
 ai:
-  groq_model: "llama-3.3-70b-versatile"
+  groq_model: "openai/gpt-oss-120b"   # was llama-3.3-70b-versatile (retired by Groq, 404 as of 2026-08-31)
   openrouter_model: "meta-llama/llama-3.3-70b-instruct:free"
   cache:
     path: "output/.ai_cache.db"

@@ -40,26 +40,53 @@ def get_supabase():
 # Provider pool
 # ---------------------------------------------------------------------------
 
+# Token budget for the council's critic call. Reasoning models (gpt-oss et al)
+# emit their chain-of-thought into a separate `reasoning` field and only then
+# write `content`. At the old budget of 100 the whole allowance was consumed by
+# reasoning, content came back empty, _call_provider treated that as a failure,
+# and the council silently degraded to "return the first candidate". The critic
+# only needs to emit a short JSON array, so the headroom is almost entirely for
+# reasoning tokens.
+CRITIC_MAX_TOKENS = 1024
+
+
 def _build_provider_list() -> list[dict]:
     """Build the full provider config list with all available models."""
     openrouter_headers = {"HTTP-Referer": "https://github.com/UT07/daily-job-hunt"}
     openrouter_key = "/naukribaba/OPENROUTER_API_KEY"
     openrouter_url = "https://openrouter.ai/api/v1/chat/completions"
+    # OpenRouter free tier, re-verified 2026-08-31. NOTE: the free pool shares a
+    # per-account daily quota — without credits on the account these return
+    # "429 free-models-per-day" regardless of which model is requested. They are
+    # kept as council *depth*, not as the primary path; Groq carries the load.
     openrouter_models = [
-        "qwen/qwen3.6-plus:free",
-        "nvidia/nemotron-3-super-120b-a12b:free",
-        "meta-llama/llama-3.3-70b-instruct:free",
-        "z-ai/glm-4.5-air:free",
-        "google/gemma-3-27b-it:free",
+        "minimax/minimax-m3:free",
+        "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "z-ai/glm-5.2:free",
+        "google/gemma-4-31b-it:free",
     ]
 
+    # Groq is the primary provider — its own free tier is not shared with the
+    # OpenRouter pool and every model below was probed successfully on
+    # 2026-08-31 (latency in comments, measured on a scoring-shaped prompt).
+    #
+    # NVIDIA NIM was removed: every candidate model returned 404 "Function not
+    # found" or timed out against this account's key. Re-add only after a live
+    # probe passes — see tests/unit/test_ai_council_models.py.
+    groq_url = "https://api.groq.com/openai/v1/chat/completions"
     providers = [
-        {"name": "groq", "url": "https://api.groq.com/openai/v1/chat/completions",
-         "key_param": "/naukribaba/GROQ_API_KEY", "model": "llama-3.3-70b-versatile",
-         "timeout": 60},
-        {"name": "nvidia", "url": "https://integrate.api.nvidia.com/v1/chat/completions",
-         "key_param": "/naukribaba/NVIDIA_API_KEY", "model": "meta/llama-3.3-70b-instruct",
-         "timeout": 120},
+        {"name": "groq/gpt-oss-120b", "url": groq_url,
+         "key_param": "/naukribaba/GROQ_API_KEY", "model": "openai/gpt-oss-120b",
+         "timeout": 90},   # ~800ms, strongest available
+        {"name": "groq/qwen3.8-27b", "url": groq_url,
+         "key_param": "/naukribaba/GROQ_API_KEY", "model": "qwen/qwen3.8-27b",
+         "timeout": 60},   # ~335ms, fastest
+        {"name": "groq/gpt-oss-20b", "url": groq_url,
+         "key_param": "/naukribaba/GROQ_API_KEY", "model": "openai/gpt-oss-20b",
+         "timeout": 60},   # ~800ms, same family as 120b (dedup handles it)
+        {"name": "groq/compound", "url": groq_url,
+         "key_param": "/naukribaba/GROQ_API_KEY", "model": "groq/compound",
+         "timeout": 120},  # ~4.4s, slower but a genuinely distinct family
     ]
     for m in openrouter_models:
         providers.append({
@@ -90,8 +117,9 @@ def _model_family(model: str) -> str:
     m = model.lower().split("/")[-1]
     m = m.replace(":free", "")
     for prefix in ("deepseek", "llama-3.3", "llama-3.1", "llama-4", "qwen3",
-                    "qwen-plus", "qwen-turbo", "qwen-max",
-                    "mistral-small", "nemotron", "hermes", "gemma", "glm", "step"):
+                    "qwen-plus", "qwen-turbo", "qwen-max", "gpt-oss",
+                    "mistral-small", "nemotron", "hermes", "gemma", "glm",
+                    "minimax", "step"):
         if m.startswith(prefix):
             return prefix
     return m
@@ -160,9 +188,22 @@ def _call_provider(
             timeout=provider.get("timeout", 60),
         )
         if resp.status_code == 200:
-            content = resp.json()["choices"][0]["message"].get("content")
+            choice = resp.json()["choices"][0]
+            message = choice.get("message", {})
+            content = message.get("content")
             if not content:
-                logger.warning(f"[ai] {provider['name']} returned empty content")
+                # A reasoning model that ran out of budget looks identical to a
+                # broken provider unless we say so explicitly. finish_reason
+                # 'length' plus a populated `reasoning` field means the model
+                # worked fine and max_tokens was simply too low.
+                if choice.get("finish_reason") == "length" and message.get("reasoning"):
+                    logger.warning(
+                        "[ai] %s returned only reasoning tokens — max_tokens=%s too low "
+                        "for a reasoning model, raise the budget",
+                        provider["name"], max_tokens,
+                    )
+                else:
+                    logger.warning(f"[ai] {provider['name']} returned empty content")
                 return None
             return {"content": content, "provider": provider["name"], "model": provider["model"]}
         elif resp.status_code == 429:
@@ -322,7 +363,7 @@ def council_complete(
         critique = _call_provider(
             critic_provider, critique_prompt,
             system="You are an impartial AI output evaluator. Return only valid JSON.",
-            temperature=0, max_tokens=100,
+            temperature=0, max_tokens=CRITIC_MAX_TOKENS,
         )
         if not critique:
             logger.warning("[council] Critic call failed, returning first candidate")
