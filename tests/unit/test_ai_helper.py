@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from ai_helper import ai_complete, ai_complete_cached
+from ai_helper import ai_complete, ai_complete_cached, _build_provider_list
 
 # Also import ai_client from project root for provider-class tests
 _project_root = str(Path(__file__).parent.parent.parent)
@@ -86,7 +86,18 @@ class TestAiComplete:
              patch("httpx.post", return_value=_make_ok_response("Hello!")):
             result = ai_complete("Say hello")
 
-        assert result == {"content": "Hello!", "provider": "groq", "model": "llama-3.3-70b-versatile"}
+        # Derive the expectation from the configured council rather than
+        # hardcoding a model id. Pinning the id here is what let the whole
+        # council rot: the models were retired by their vendors but this
+        # assertion kept passing, so CI reported green while production
+        # scored nothing. Model *identity* is guarded by
+        # tests/unit/test_ai_council_models.py; this test guards *behaviour*.
+        first = _build_provider_list()[0]
+        assert result == {
+            "content": "Hello!",
+            "provider": first["name"],
+            "model": first["model"],
+        }
 
     def test_tries_next_provider_when_first_fails_with_exception(self):
         """When the first provider raises an exception, the second provider is tried."""
@@ -106,7 +117,8 @@ class TestAiComplete:
             result = ai_complete("prompt")
 
         assert result["content"] == "From provider 2"
-        assert result["provider"] == "nvidia"
+        # Second provider in the configured council — again derived, not pinned.
+        assert result["provider"] == _build_provider_list()[1]["name"]
         assert call_count == 2
 
     def test_tries_next_provider_when_first_rate_limited(self):
