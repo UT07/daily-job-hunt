@@ -6,6 +6,20 @@ import boto3
 
 from ai_helper import ai_complete, council_complete, get_supabase
 
+
+class TailorError(Exception):
+    """Raised when tailoring cannot produce a resume for this job.
+
+    MUST be raised, never returned. Step Functions treats a returned dict as a
+    SUCCESSFUL invocation, so returning {"error": ...} bypasses the Catch on the
+    TailorResume state; the failure then surfaces in CompileResume as an
+    unhandled JSONPath error on $.tailor_result.tex_s3_key, which fails the
+    whole execution instead of just this one job in the Map.
+
+    Raising lets the existing Catch route to SaveJobAfterError as designed.
+    """
+
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -399,14 +413,14 @@ def handler(event, context):
     # Read job from jobs_raw
     job = db.table("jobs_raw").select("*").eq("job_hash", job_hash).execute()
     if not job.data:
-        return {"error": f"Job {job_hash} not found"}
+        raise TailorError(f"Job {job_hash} not found in jobs_raw")
     job = job.data[0]
 
     # Get latest resume
     resume = db.table("user_resumes").select("*").eq("user_id", user_id) \
         .order("created_at", desc=True).limit(1).execute()
     if not resume.data:
-        return {"error": "No resume found"}
+        raise TailorError(f"No base resume found for user {user_id}")
     base_tex = resume.data[0].get("tex_content", "")
 
     # Read user profile so the header-marker validation uses THIS user's
@@ -422,7 +436,7 @@ def handler(event, context):
     base_preamble, base_body = _split_tex(base_tex)
     if not base_preamble:
         logger.error(f"[tailor] base resume missing \\begin{{document}} for user {user_id}")
-        return {"error": "base resume has no \\begin{document}"}
+        raise TailorError("base resume has no \\begin{document}")
 
     # Extract keywords and detect archetype
     from utils.keyword_extractor import extract_keywords
@@ -476,7 +490,7 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         )
     except RuntimeError as e:
         logger.error(f"[tailor] Council failed: {e}")
-        return {"error": str(e), "job_hash": job_hash}
+        raise TailorError(f"council failed for {job_hash}: {e}") from e
     ai_response = response_dict["content"]
 
     # Strip markdown code fences (```latex, ```tex, etc.)
@@ -500,7 +514,7 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
 
     if not ai_body:
         logger.error(f"[tailor] AI returned empty body for job {job_hash}")
-        return {"error": "AI returned empty body"}
+        raise TailorError(f"AI returned empty body for {job_hash}")
 
     # Splice: base preamble (known-good) + AI body + \end{document}
     tailored_tex = _splice_tex(base_preamble, ai_body)
