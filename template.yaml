@@ -1101,7 +1101,6 @@ Resources:
                 "new_job_hashes.$": "$.dedup_result.new_job_hashes",
                 "user_id.$": "$.user_id",
                 "min_match_score.$": "$.min_match_score",
-                "_comment_chunk": "10, not 15. At ~1.4 scoring calls/min (8000 TPM / ~5800 tokens per call) 15 jobs needs ~11min against a 900s Lambda timeout, leaving no room for retries. 10 lands near 7min.",
                 "chunk_size": 10
               },
               "ResultPath": "$.chunks_result",
@@ -1111,7 +1110,7 @@ Resources:
             "ScoreBatchMap": {
               "Type": "Map",
               "ItemsPath": "$.chunks_result.chunks",
-              "_comment_concurrency": "MaxConcurrency 1, not 8. Every worker shares ONE account-wide Groq tokens-per-minute budget (free tier: 8000 TPM, measured 2026-09-01). Running 8 in parallel does not multiply throughput - it just converts the same budget into 429s and 413s. Serial execution is strictly faster here. Raise this only after the account has paid capacity.",
+              "Comment": "MaxConcurrency 1, not 8: every worker shares ONE account-wide Groq tokens-per-minute budget (free tier 8000 TPM, measured 2026-09-01), so parallelism converts the same budget into 429s rather than throughput. chunk_size is 10 for the same reason - at ~1.4 calls/min, 15 jobs needs ~11min against a 900s Lambda timeout. Raise both only after the account has paid capacity.",
               "MaxConcurrency": 1,
               "ResultPath": "$.score_chunks",
               "Next": "AggregateScores",
