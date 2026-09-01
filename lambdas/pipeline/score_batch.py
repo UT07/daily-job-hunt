@@ -9,6 +9,7 @@ from datetime import datetime
 from ai_helper import ai_complete_cached, get_supabase
 from shared.apply_platform import classify_apply_platform, extract_platform_ids
 from shared.work_auth import apply_geo_score_cap
+from shared.tex_utils import tex_to_plaintext
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -308,6 +309,24 @@ Return ONLY valid JSON (no markdown, no code fences):
 }"""
 
 
+# --- Groq free-tier token budget -------------------------------------------
+# Measured 2026-09-01 against the production key: x-ratelimit-limit-tokens=8000
+# tokens per MINUTE, and Groq bills prompt_tokens + max_tokens against it — so
+# an unused max_tokens still burns quota.
+#
+# The old call sent the resume as raw LaTeX and inherited ai_complete_cached's
+# max_tokens=4096 default:  3792 + 4096 = 7888, right on the limit, which
+# returned 413 "Request too large" for most jobs and scored nothing.
+#
+# Cap the job description (the tail is benefits/EEO boilerplate, not signal)
+# and pass an explicit max_tokens. 1024 was measured to truncate the response
+# mid-JSON (finish_reason='length') — that produced the "[score_batch] JSON
+# parse error" log lines. 1536 completed cleanly using 1206 completion tokens,
+# 702 of them reasoning; 2048 leaves headroom for more verbose jobs.
+MAX_DESCRIPTION_CHARS = 4000
+SCORE_MAX_TOKENS = 2048
+
+
 def score_single_job(job: dict, resume_tex: str, temperature: float = 0) -> dict | None:
     """Score a single job against the user's resume using 3-perspective AI scoring.
     Uses the same prompt template as matcher.py for consistency.
@@ -321,18 +340,24 @@ def score_single_job(job: dict, resume_tex: str, temperature: float = 0) -> dict
     remote_value = job.get("remote")
     remote_str = "Not specified" if remote_value in (None, "") else str(remote_value)
 
+    # Plaintext, not LaTeX: markup carries no scoring signal and costs ~22% of
+    # the resume's tokens (12,500 -> 9,705 chars on the current base resume).
+    resume_text = tex_to_plaintext(resume_tex)
+    description = (job.get("description") or "")[:MAX_DESCRIPTION_CHARS]
+
     prompt = f"""Score this job against the candidate's resume.
 
 Job: {job['title']} at {job['company']}
 Location: {location}
 Remote: {remote_str}
-Description: {job.get('description', '')}
+Description: {description}
 
-Resume (LaTeX): {resume_tex}"""
+Resume: {resume_text}"""
 
     try:
         response_dict = ai_complete_cached(
-            prompt, system=SCORE_SYSTEM_PROMPT, temperature=temperature
+            prompt, system=SCORE_SYSTEM_PROMPT, temperature=temperature,
+            max_tokens=SCORE_MAX_TOKENS,
         )
         text = response_dict["content"].strip()
         if text.startswith("```"):
