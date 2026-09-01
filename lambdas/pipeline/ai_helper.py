@@ -84,9 +84,14 @@ def _build_provider_list() -> list[dict]:
         {"name": "groq/gpt-oss-20b", "url": groq_url,
          "key_param": "/naukribaba/GROQ_API_KEY", "model": "openai/gpt-oss-20b",
          "timeout": 60},   # ~800ms, same family as 120b (dedup handles it)
-        {"name": "groq/compound", "url": groq_url,
-         "key_param": "/naukribaba/GROQ_API_KEY", "model": "groq/compound",
-         "timeout": 120},  # ~4.4s, slower but a genuinely distinct family
+        # groq/compound REMOVED 2026-09-01. It answers a toy prompt but returns
+        # 413 "Payload Too Large" on every real scoring call — it is an agentic
+        # model whose internal tool calls carry a much lower payload allowance
+        # than the plain chat models. In the 09-01 verification run it was the
+        # ONLY remaining source of 413s while gpt-oss-120b and qwen3.8-27b
+        # succeeded on the same prompts, so it was a guaranteed-failing hop on
+        # every request. Re-add only if a probe passes at a realistic prompt
+        # size (~3,800 tokens), not a one-word smoke test.
     ]
     for m in openrouter_models:
         providers.append({
