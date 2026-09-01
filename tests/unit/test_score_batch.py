@@ -531,9 +531,14 @@ def test_model_ab_empty_providers():
 
 def _capture_prompt(captured):
     """Build a mock ai_complete_cached that records the prompt and returns a valid response."""
-    def _mock(prompt, system=None, temperature=0):
+    def _mock(prompt, system=None, temperature=0, **kwargs):
+        # **kwargs so the stub tolerates new call-site keywords (max_tokens was
+        # added for the Groq TPM budget). Without it a TypeError is raised here,
+        # swallowed by score_single_job's except, and the test fails with an
+        # empty `captured` dict that says nothing about the real cause.
         captured["prompt"] = prompt
         captured["system"] = system
+        captured["kwargs"] = kwargs
         return {"content": json.dumps(VALID_AI_SCORE), "provider": "groq", "model": "llama"}
     return _mock
 
