@@ -1228,7 +1228,8 @@ class AIClient:
                 "openai/gpt-oss-120b",   # strongest available, ~800ms
                 "qwen/qwen3.8-27b",      # fastest, ~335ms, clean JSON
                 "openai/gpt-oss-20b",    # smaller sibling
-                "groq/compound",         # slower (~4.4s), distinct family
+                # groq/compound removed 2026-09-01: 413 "Payload Too Large" on
+                # every real (resume-sized) prompt. See ai_helper.py for detail.
             ]
             for model in groq_models:
                 providers.append(GroqProvider(api_key=groq_key, model=model))
