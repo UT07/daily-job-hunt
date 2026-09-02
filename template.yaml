@@ -1479,7 +1479,14 @@ Resources:
       Name: naukribaba-daily-pipeline-schedule
       Description: Run daily pipeline on weekdays at 7:00 UTC
       ScheduleExpression: "cron(0 7 ? * MON-FRI *)"
-      State: ENABLED
+      # RETIRED 2026-09-02. The automated pipeline is parked: the product is now
+      # the website plus on-demand "paste a JD, get a tailored resume". The
+      # scrapers drive per-request spend on Bright Data (PROXY_URL) and Apify,
+      # which is the actual cost - NaukriBaba's whole AWS footprint is ~$3/mo
+      # (Lambda $0.0001, Step Functions $0). Re-enable by flipping to ENABLED;
+      # every Lambda, layer and state machine is left deployed and idle, and
+      # idle Lambda costs nothing.
+      State: DISABLED
       Targets:
         - Arn: !GetAtt DailyPipelineStateMachine.Arn
           Id: DailyPipelineTarget
@@ -1492,7 +1499,14 @@ Resources:
       Name: naukribaba-expiry-check
       Description: Check job expiry weekly on Sundays at 6:00 UTC
       ScheduleExpression: "cron(0 6 ? * SUN *)"
-      State: ENABLED
+      # RETIRED 2026-09-02. The automated pipeline is parked: the product is now
+      # the website plus on-demand "paste a JD, get a tailored resume". The
+      # scrapers drive per-request spend on Bright Data (PROXY_URL) and Apify,
+      # which is the actual cost - NaukriBaba's whole AWS footprint is ~$3/mo
+      # (Lambda $0.0001, Step Functions $0). Re-enable by flipping to ENABLED;
+      # every Lambda, layer and state machine is left deployed and idle, and
+      # idle Lambda costs nothing.
+      State: DISABLED
       Targets:
         - Arn: !Ref CheckExpiryFunctionAliaslive
           Id: ExpiryCheckTarget
@@ -1533,7 +1547,14 @@ Resources:
       Name: naukribaba-stale-nudge
       Description: Weekly stale job nudges (Monday 9:00 UTC)
       ScheduleExpression: "cron(0 9 ? * MON *)"
-      State: ENABLED
+      # RETIRED 2026-09-02. The automated pipeline is parked: the product is now
+      # the website plus on-demand "paste a JD, get a tailored resume". The
+      # scrapers drive per-request spend on Bright Data (PROXY_URL) and Apify,
+      # which is the actual cost - NaukriBaba's whole AWS footprint is ~$3/mo
+      # (Lambda $0.0001, Step Functions $0). Re-enable by flipping to ENABLED;
+      # every Lambda, layer and state machine is left deployed and idle, and
+      # idle Lambda costs nothing.
+      State: DISABLED
       Targets:
         - Arn: !Ref StaleNudgeFunctionAliaslive
           Id: StaleNudgeTarget
@@ -1556,7 +1577,14 @@ Resources:
       Name: naukribaba-followup-reminder
       Description: Daily follow-up reminders (10:00 UTC weekdays)
       ScheduleExpression: "cron(0 10 ? * MON-FRI *)"
-      State: ENABLED
+      # RETIRED 2026-09-02. The automated pipeline is parked: the product is now
+      # the website plus on-demand "paste a JD, get a tailored resume". The
+      # scrapers drive per-request spend on Bright Data (PROXY_URL) and Apify,
+      # which is the actual cost - NaukriBaba's whole AWS footprint is ~$3/mo
+      # (Lambda $0.0001, Step Functions $0). Re-enable by flipping to ENABLED;
+      # every Lambda, layer and state machine is left deployed and idle, and
+      # idle Lambda costs nothing.
+      State: DISABLED
       Targets:
         - Arn: !Ref FollowUpReminderFunctionAliaslive
           Id: FollowUpTarget
