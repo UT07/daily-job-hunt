@@ -1,5 +1,7 @@
 from unittest.mock import patch
 
+from langgraph.types import Overwrite
+
 from agents import nodes
 
 PROV = {"name": "groq/a", "model": "openai/gpt-oss-120b"}
@@ -102,4 +104,7 @@ def test_repair_node_feeds_violations_back_into_prompt():
     assert "banned phrase: leverage" in out["prompt"]
     assert "original" in out["prompt"]
     assert out["repair_attempts"] == 1
-    assert out["candidates"] == []
+    # candidates is a reducer-backed channel (add_candidates concatenates),
+    # so a plain [] would merge as a no-op rather than clearing anything.
+    # repair_node must bypass the reducer with Overwrite to actually reset it.
+    assert out["candidates"] == Overwrite(value=[])

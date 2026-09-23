@@ -5,6 +5,8 @@ import ai_helper directly — agents.providers is the only seam.
 """
 import logging
 
+from langgraph.types import Overwrite
+
 from agents.providers import all_providers, call_one, family_of, select_critic, select_generators
 from lambdas.pipeline.ai_helper import (
     CRITIC_MAX_TOKENS,
@@ -129,8 +131,16 @@ def repair_node(state: dict) -> dict:
     return {
         "prompt": repaired,
         "repair_attempts": state.get("repair_attempts", 0) + 1,
-        # Discard the rejected batch so the reducer starts clean.
-        "candidates": [],
+        # candidates is a reducer-backed channel: add_candidates concatenates
+        # EVERY node's contribution to it regardless of which node wrote it,
+        # so a plain `[]` here would merge to a no-op, not a reset, and the
+        # rejected batch would still be sitting there for the next round to
+        # pile onto. Overwrite bypasses the reducer and replaces the
+        # channel's value directly, so this is an actual discard. It is also
+        # the JSON-serialisable form (see langgraph.types.Overwrite), so it
+        # survives a swap from the in-memory checkpointer to one that
+        # persists state (e.g. Postgres).
+        "candidates": Overwrite(value=[]),
     }
 
 

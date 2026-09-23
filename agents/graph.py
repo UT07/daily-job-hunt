@@ -52,9 +52,14 @@ def build_council_graph(checkpointer=None):
     builder.add_conditional_edges(
         "critique", quality_gate, {"finalize": "finalize", "repair": "repair"}
     )
-    # Repair routes back through plan so candidates is re-initialised; the
-    # add_candidates reducer concatenates and would otherwise accumulate
-    # rejected attempts across rounds.
+    # Repair loops back through plan so providers get redrawn on retry (a
+    # family that just failed gets a fresh pick). That routing does NOT by
+    # itself reset candidates: add_candidates merges every node's
+    # contribution to that channel regardless of which node wrote it, so a
+    # plain `{"candidates": []}` return -- from plan_node or repair_node --
+    # is a no-op concatenation. The actual reset happens explicitly in
+    # repair_node, which returns an Overwrite to bypass the reducer and
+    # replace the channel's value directly before the next round runs.
     builder.add_edge("repair", "plan")
     builder.add_edge("finalize", END)
 

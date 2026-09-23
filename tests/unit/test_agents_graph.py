@@ -34,3 +34,33 @@ def test_raises_when_every_generator_fails():
          patch("agents.nodes.call_one", return_value=None):
         with pytest.raises(RuntimeError, match="all generators failed"):
             graph_mod.council_complete_langgraph("p", "s", "desc", n_generators=2)
+
+
+def test_repair_round_resets_candidates_not_accumulates():
+    """A failing guard_report forces two repair rounds (quality_gate's
+    repair_attempts>=2 cap means three total generate passes before the
+    graph finalizes). Each round must start from an empty candidate list --
+    otherwise rejected candidates from earlier rounds pile back up, get
+    re-scored alongside the new batch, and can win despite being rejected.
+    """
+    with patch("agents.nodes.select_generators", return_value=[P1]), \
+         patch("agents.nodes.call_one", return_value=CAND_A):
+        graph = graph_mod.build_council_graph()
+        final = graph.invoke(
+            {
+                "prompt": "p",
+                "system": "s",
+                "task_description": "desc",
+                "n_generators": 1,
+                "temperature": 0.3,
+                "candidates": [],
+                "repair_attempts": 0,
+                "trace_id": "test-repair-reset",
+                "guard_report": {"passed": False, "violations": ["forced"]},
+            },
+            config={"configurable": {"thread_id": "test-repair-reset"}},
+        )
+    # Three generate passes run (initial attempt + 2 repairs) before the
+    # repair budget is exhausted, but candidates must reflect only the final
+    # round's output -- one generator's worth, not three rounds concatenated.
+    assert len(final["candidates"]) == 1
