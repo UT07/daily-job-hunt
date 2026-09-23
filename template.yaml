@@ -429,7 +429,11 @@ Resources:
       CodeUri: lambdas/pipeline/
       Handler: compile_latex.handler
       Runtime: python3.11
-      Timeout: 60
+      # 150s so the Lambda outlives compile_latex.py's 110s tectonic
+      # subprocess timeout (a cold container's empty /tmp means tectonic
+      # must fetch its bundle before it can compile) rather than the
+      # platform hard-killing the function first.
+      Timeout: 150
       MemorySize: 512
       AutoPublishAlias: live
       DeploymentPreference:

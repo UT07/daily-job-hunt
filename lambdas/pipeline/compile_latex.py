@@ -40,9 +40,20 @@ def handler(event, context):
             env["XDG_CACHE_HOME"] = "/tmp"
             env["HOME"] = "/tmp"
 
+            # /tmp is empty on a cold execution environment, so XDG_CACHE_HOME
+            # above starts with no tectonic bundle cache: the first compile in
+            # a fresh container has to fetch the whole LaTeX package bundle
+            # over the network before it can compile anything. 45s was only
+            # ever enough for a warm container with the bundle already
+            # cached, and this stack can go idle for weeks between
+            # invocations (e.g. the pipeline being parked), so a cold
+            # container is the common case, not the edge case. 110s covers a
+            # cold fetch + compile; CompileLatexFunction's own Timeout in
+            # template.yaml is raised alongside this so the Lambda outlives
+            # the subprocess instead of being hard-killed first.
             result = subprocess.run(
                 [tectonic_path, "-X", "compile", tex_path],
-                capture_output=True, text=True, timeout=45,
+                capture_output=True, text=True, timeout=110,
                 env=env,
             )
             if result.returncode != 0:
