@@ -7,6 +7,7 @@ import pathlib
 import re
 
 import pytest
+import yaml
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
@@ -93,4 +94,82 @@ def test_lambda_runtime_dep_in_layer_requirements(dep):
         f"The shared layer installs from THAT SEPARATE file — a dep added "
         f"only to the root file works locally but ModuleNotFoundErrors in "
         f"every zip-based pipeline Lambda in production."
+    )
+
+
+def _load_template_tolerant_of_cfn_tags():
+    """Load template.yaml, treating unrecognized CloudFormation short-form
+    tags (!Sub, !Ref, !GetAtt, !If, !Join, ...) as plain scalars/sequences/
+    mappings instead of erroring.
+
+    Plain `yaml.safe_load` raises `ConstructorError: could not determine a
+    constructor for the tag '!Sub'` on this template — SAM/CFN intrinsic
+    tags aren't standard YAML and PyYAML doesn't know them, and this repo
+    has no cfn-flip/cfn-tools dependency to resolve them properly. This test
+    doesn't need the *resolved* value of a `!Sub` or `!GetAtt` (e.g. an
+    ARN) — only the surrounding structure (which top-level keys and
+    function properties exist) — so discarding the tag and keeping the
+    underlying node is sufficient and needs no new dependency.
+    """
+
+    class _CfnTagTolerantLoader(yaml.SafeLoader):
+        pass
+
+    def _construct_underlying_node(loader, _tag_suffix, node):
+        if isinstance(node, yaml.ScalarNode):
+            return loader.construct_scalar(node)
+        if isinstance(node, yaml.SequenceNode):
+            return loader.construct_sequence(node)
+        if isinstance(node, yaml.MappingNode):
+            return loader.construct_mapping(node)
+        return None
+
+    _CfnTagTolerantLoader.add_multi_constructor("!", _construct_underlying_node)
+
+    with (REPO / "template.yaml").open() as f:
+        return yaml.load(f, Loader=_CfnTagTolerantLoader)
+
+
+def test_alias_all_properties_set_whenever_any_function_auto_publishes():
+    """A layer-only change must still publish a new Lambda version and move
+    the `live` alias — otherwise Step Functions keeps invoking the OLD
+    version, which stays frozen to the OLD layer, and every call
+    ModuleNotFoundErrors despite a green deploy.
+
+    This is exactly the 2026-09-23 incident this file is named for: layer
+    v65 was built correctly with agents/ + langgraph, and the function's
+    $LATEST configuration referenced v65, but the `live` alias for
+    naukribaba-tailor-resume stayed on version 10 — frozen to the OLD layer
+    v64 — because SAM's `AutoPublishAlias` only publishes a new version
+    when the function's CodeUri hash changes, and a layer-only bump never
+    touches that hash. `AutoPublishAliasAllProperties: true` makes SAM
+    consider ALL properties (including the layer list) when deciding
+    whether to publish, so a layer-only change moves the alias too.
+    """
+    template = _load_template_tolerant_of_cfn_tags()
+
+    function_resources = [
+        resource
+        for resource in template["Resources"].values()
+        if isinstance(resource, dict)
+        and resource.get("Type") == "AWS::Serverless::Function"
+    ]
+    functions_with_alias = [
+        resource
+        for resource in function_resources
+        if "AutoPublishAlias" in resource.get("Properties", {})
+    ]
+    if not functions_with_alias:
+        pytest.skip("no function in template.yaml uses AutoPublishAlias")
+
+    globals_function = template.get("Globals", {}).get("Function", {})
+    assert globals_function.get("AutoPublishAliasAllProperties") is True, (
+        f"{len(functions_with_alias)} function(s) in template.yaml use "
+        "AutoPublishAlias, but Globals.Function has no "
+        "`AutoPublishAliasAllProperties: true`. Without it, a layer-only "
+        "change (a package added to the shared layer, a dependency bump, "
+        "...) publishes NO new Lambda version, so the `live` alias that "
+        "Step Functions invokes silently keeps running the OLD version "
+        "against the OLD layer — deploy reports UPDATE_COMPLETE while "
+        "production keeps ModuleNotFoundError'ing."
     )

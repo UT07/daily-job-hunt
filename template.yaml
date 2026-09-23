@@ -11,6 +11,13 @@ Globals:
     # see WHERE a Lambda is slow / erroring without adding logging
     # everywhere. Adds ~$0.50/month at our volume.
     Tracing: Active
+    # Without this, AutoPublishAlias only republishes a new Lambda version
+    # when the function's CodeUri hash changes, so a layer-only change (e.g.
+    # adding agents/ + langgraph to the shared layer) publishes no new
+    # version and the `live` alias silently keeps the OLD layer — exactly
+    # why prod kept raising `ModuleNotFoundError: No module named 'agents'`
+    # even after a successful, UPDATE_COMPLETE deploy (2026-09-23).
+    AutoPublishAliasAllProperties: true
 
 Parameters:
   GroqApiKey:
