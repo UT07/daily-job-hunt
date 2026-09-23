@@ -98,7 +98,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install ruff
-      - run: ruff check lambdas/ tests/ app.py
+      - run: ruff check lambdas/ tests/ app.py agents/
       - uses: actions/setup-node@v4
         with:
           node-version: "20"

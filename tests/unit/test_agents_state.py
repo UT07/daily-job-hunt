@@ -1,4 +1,3 @@
-import operator
 from typing import get_type_hints
 
 from agents.state import Candidate, CouncilState, add_candidates
