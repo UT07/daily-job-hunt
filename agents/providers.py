@@ -16,6 +16,17 @@ def family_of(provider: dict) -> str:
     return _model_family(provider["model"])
 
 
+def all_providers() -> list[dict]:
+    """Full provider pool config.
+
+    Exposed so nodes can do per-branch generator fallback (retrying a failed
+    provider against the rest of the pool) without importing
+    `_build_provider_list` directly — agents.providers stays the only seam
+    onto ai_helper's provider config.
+    """
+    return _build_provider_list()
+
+
 def select_generators(n: int) -> list[dict]:
     """Pick n providers from distinct model families."""
     return _select_diverse_providers(_build_provider_list(), n=n)

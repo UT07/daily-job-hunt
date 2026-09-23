@@ -3,6 +3,9 @@ from unittest.mock import patch
 from agents import nodes
 
 PROV = {"name": "groq/a", "model": "openai/gpt-oss-120b"}
+# Distinct model family from PROV ("gpt-oss" vs "glm") — see
+# lambdas.pipeline.ai_helper._model_family.
+FALLBACK_PROV = {"name": "or/b", "model": "z-ai/glm-5.2:free"}
 CAND_A = {"content": "alpha", "provider": "groq/a", "model": "m1"}
 CAND_B = {"content": "beta", "provider": "or/b", "model": "m2"}
 
@@ -22,6 +25,33 @@ def test_generate_node_wraps_result_in_list_for_reducer():
 def test_generate_node_contributes_empty_list_on_failure():
     # A dead provider must not poison the reducer with None.
     with patch.object(nodes, "call_one", return_value=None):
+        out = nodes.generate_node({"provider": PROV, "prompt": "p", "system": "", "temperature": 0.3})
+    assert out == {"candidates": []}
+
+
+def test_generate_node_success_path_does_not_touch_fallback():
+    # The common case: primary succeeds, fallback pool must never be consulted.
+    with patch.object(nodes, "all_providers") as mock_all_providers, \
+         patch.object(nodes, "call_one", return_value=CAND_A):
+        out = nodes.generate_node({"provider": PROV, "prompt": "p", "system": "", "temperature": 0.3})
+    assert out == {"candidates": [CAND_A]}
+    mock_all_providers.assert_not_called()
+
+
+def test_generate_node_falls_back_to_different_family_after_primary_fails():
+    # Primary fails; PROV itself (same family) must be skipped in the pool;
+    # the distinct-family fallback is tried next and succeeds.
+    with patch.object(nodes, "all_providers", return_value=[PROV, FALLBACK_PROV]), \
+         patch.object(nodes, "call_one", side_effect=[None, CAND_B]):
+        out = nodes.generate_node({"provider": PROV, "prompt": "p", "system": "", "temperature": 0.3})
+    assert out == {"candidates": [CAND_B]}
+
+
+def test_generate_node_contributes_empty_list_when_all_fallbacks_fail():
+    # Primary and every eligible fallback fail — still a clean empty list,
+    # never a raised exception or a None poisoning the reducer.
+    with patch.object(nodes, "all_providers", return_value=[PROV, FALLBACK_PROV]), \
+         patch.object(nodes, "call_one", return_value=None):
         out = nodes.generate_node({"provider": PROV, "prompt": "p", "system": "", "temperature": 0.3})
     assert out == {"candidates": []}
 

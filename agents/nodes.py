@@ -5,16 +5,22 @@ import ai_helper directly — agents.providers is the only seam.
 """
 import logging
 
-from agents.providers import call_one, family_of, select_critic, select_generators
-from lambdas.pipeline.ai_helper import _parse_critic_scores
+from agents.providers import all_providers, call_one, family_of, select_critic, select_generators
+from lambdas.pipeline.ai_helper import (
+    CRITIC_MAX_TOKENS,
+    CRITIQUE_SYSTEM,
+    _parse_critic_scores,
+    build_critique_prompt,
+)
 
 logger = logging.getLogger()
 
-# Reasoning models emit chain-of-thought before content; too small a budget
-# yields empty content that is indistinguishable from a dead provider.
-CRITIC_MAX_TOKENS = 1024
-
-CRITIQUE_SYSTEM = "You are an impartial AI output evaluator. Return only valid JSON."
+# CRITIC_MAX_TOKENS, CRITIQUE_SYSTEM and build_critique_prompt are re-exported
+# (not just used) from this import — the legacy sequential council in
+# ai_helper.py owns the one copy of the scoring rubric, so both engines can't
+# silently drift while they run side by side during migration. Keep them
+# imported by name (not `ai_helper.X`) so `nodes.CRITIC_MAX_TOKENS` etc. and
+# existing patch targets keep resolving.
 
 
 def plan_node(state: dict) -> dict:
@@ -29,35 +35,39 @@ def plan_node(state: dict) -> dict:
 
 def generate_node(payload: dict) -> dict:
     """One generator branch. Dispatched once per provider via Send."""
-    result = call_one(
-        payload["provider"],
-        payload["prompt"],
-        payload.get("system", ""),
-        payload.get("temperature", 0.3),
-        max_tokens=4096,
-    )
+    provider = payload["provider"]
+    prompt = payload["prompt"]
+    system = payload.get("system", "")
+    temperature = payload.get("temperature", 0.3)
+
+    result = call_one(provider, prompt, system, temperature, max_tokens=4096)
+    if not result:
+        # Primary provider failed — retry through the rest of the pool before
+        # giving up on this slot, same as legacy ai_helper.council_complete's
+        # "try others from different families" fallback.
+        #
+        # Deliberate difference from legacy: council_complete excludes
+        # families already used by OTHER generators, accumulated in a
+        # `used_families` set across its serial loop. This node is one
+        # branch of a parallel `Send` fan-out and cannot see its sibling
+        # branches' state, so it can only exclude its OWN assigned family.
+        # Two branches may therefore both fall back onto the same family and
+        # produce duplicate candidates — that's an accepted tradeoff of the
+        # parallel port, not a bug: the critic still scores both, and a
+        # duplicate candidate is far cheaper than silently dropping a
+        # generator slot. Do not "fix" this by trying to coordinate
+        # exclusion across branches.
+        own_family = family_of(provider)
+        for fallback in all_providers():
+            if family_of(fallback) == own_family:
+                continue
+            result = call_one(fallback, prompt, system, temperature, max_tokens=4096)
+            if result:
+                logger.info("[council] Generator fallback: %s succeeded", fallback["name"])
+                break
     # An empty list keeps the reducer total — a failed branch contributes
     # nothing rather than a None that would break concatenation.
     return {"candidates": [result] if result else []}
-
-
-def _build_critique_prompt(candidates: list[dict], task_description: str) -> str:
-    blocks = [
-        f"--- CANDIDATE {i} ({c['provider']}:{c['model']}) ---\n{c['content'][:3000]}"
-        for i, c in enumerate(candidates, 1)
-    ]
-    return (
-        f"You are evaluating {len(candidates)} candidate outputs for this task:\n"
-        f"{task_description}\n\n"
-        "Rate each candidate 0-100 on:\n"
-        "1. ACCURACY: Does it follow ALL instructions? No banned phrases, no fabrication?\n"
-        "2. COMPLETENESS: Are all required sections/structure present?\n"
-        "3. QUALITY: Active voice, specific metrics, no filler, proper formatting (\\textbf preserved)?\n"
-        "4. ADHERENCE: Does it match the specific job description, not generic?\n\n"
-        "Average the four dimensions into a single score per candidate.\n\n"
-        + "\n\n".join(blocks)
-        + "\n\nReturn ONLY a JSON array of integer scores in candidate order, e.g. [85, 72]. No other text."
-    )
 
 
 def critique_node(state: dict) -> dict:
@@ -76,7 +86,7 @@ def critique_node(state: dict) -> dict:
 
     verdict = call_one(
         critic,
-        _build_critique_prompt(candidates, state.get("task_description", "")),
+        build_critique_prompt(candidates, state.get("task_description", "")),
         CRITIQUE_SYSTEM,
         temperature=0,
         max_tokens=CRITIC_MAX_TOKENS,
