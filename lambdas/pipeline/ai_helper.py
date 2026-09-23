@@ -313,7 +313,34 @@ def build_critique_prompt(candidates: list[dict], task_description: str) -> str:
     )
 
 
+def _council_engine() -> str:
+    """Which council implementation to use: 'legacy' or 'langgraph'.
+
+    Defaults to legacy so a deploy never silently changes behaviour; the flag
+    is flipped only after the parity test and a live smoke run pass.
+    """
+    return os.environ.get("COUNCIL_ENGINE", "legacy").strip().lower()
+
+
 def council_complete(
+    prompt: str,
+    system: str = "",
+    task_description: str = "",
+    n_generators: int = 2,
+    temperature: float = 0.3,
+) -> dict:
+    """Generate candidates from diverse models, pick the best by critic score."""
+    if _council_engine() == "langgraph":
+        from agents.graph import council_complete_langgraph
+        return council_complete_langgraph(
+            prompt, system, task_description, n_generators, temperature
+        )
+    return _council_complete_legacy(
+        prompt, system, task_description, n_generators, temperature
+    )
+
+
+def _council_complete_legacy(
     prompt: str,
     system: str = "",
     task_description: str = "",
