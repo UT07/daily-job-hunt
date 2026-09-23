@@ -331,7 +331,14 @@ def council_complete(
 ) -> dict:
     """Generate candidates from diverse models, pick the best by critic score."""
     if _council_engine() == "langgraph":
-        from agents.graph import council_complete_langgraph
+        try:
+            from agents.graph import council_complete_langgraph  # flat — pytest / zip Lambda
+        except ImportError:
+            # Container image (Dockerfile.lambda ships `lambdas/` as a real
+            # package): this module is imported as `lambdas.pipeline.ai_helper`,
+            # and there is no flat `agents` on the path there — only
+            # `lambdas.pipeline.agents` resolves.
+            from lambdas.pipeline.agents.graph import council_complete_langgraph
         return council_complete_langgraph(
             prompt, system, task_description, n_generators, temperature
         )
