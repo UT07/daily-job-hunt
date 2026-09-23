@@ -83,6 +83,11 @@ Parameters:
       The deploy role only needs cloudwatch:* (which it has) to wire
       the alarms to this ARN.
     Default: "arn:aws:sns:eu-west-1:385017713886:naukribaba-pipeline-alarms"
+  CouncilEngine:
+    Type: String
+    Default: legacy
+    AllowedValues: [legacy, langgraph]
+    Description: Which council implementation the pipeline uses.
 
 Resources:
 
@@ -358,6 +363,9 @@ Resources:
       DeploymentPreference:
         Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
+      Environment:
+        Variables:
+          COUNCIL_ENGINE: !Ref CouncilEngine
       Policies:
         - SSMParameterReadPolicy:
             ParameterName: naukribaba/*
@@ -405,6 +413,9 @@ Resources:
           - !Ref TailorResumeFunctionThrottlesAlarm
           - !Ref TailorResumeFunctionDurationP99Alarm
       Layers: [!Ref SharedDepsLayer]
+      Environment:
+        Variables:
+          COUNCIL_ENGINE: !Ref CouncilEngine
       Policies:
         - SSMParameterReadPolicy:
             ParameterName: naukribaba/*
@@ -451,6 +462,9 @@ Resources:
           - !Ref GenerateCoverLetterFunctionThrottlesAlarm
           - !Ref GenerateCoverLetterFunctionDurationP99Alarm
       Layers: [!Ref SharedDepsLayer]
+      Environment:
+        Variables:
+          COUNCIL_ENGINE: !Ref CouncilEngine
       Policies:
         - SSMParameterReadPolicy:
             ParameterName: naukribaba/*
