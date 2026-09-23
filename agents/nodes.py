@@ -1,19 +1,20 @@
 """Council graph nodes.
 
 Each node takes a state dict and returns a partial-state update. Nodes never
-import ai_helper directly — agents.providers is the only seam.
+import ai_helper directly — agents.providers and agents._ai_helper (the
+flat/test import shim) are the only seams.
 """
 import logging
 
 from langgraph.types import Overwrite
 
-from agents.providers import all_providers, call_one, family_of, select_critic, select_generators
-from lambdas.pipeline.ai_helper import (
+from agents._ai_helper import (
     CRITIC_MAX_TOKENS,
     CRITIQUE_SYSTEM,
     _parse_critic_scores,
     build_critique_prompt,
 )
+from agents.providers import all_providers, call_one, family_of, select_critic, select_generators
 
 logger = logging.getLogger()
 

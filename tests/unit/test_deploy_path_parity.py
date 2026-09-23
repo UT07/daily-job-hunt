@@ -3,6 +3,7 @@
 This repo has shipped a package present in the layer but absent from the
 Docker image; lazy imports hid it until runtime. Assert it instead.
 """
+import ast
 import pathlib
 import re
 
@@ -173,3 +174,65 @@ def test_alias_all_properties_set_whenever_any_function_auto_publishes():
         "against the OLD layer — deploy reports UPDATE_COMPLETE while "
         "production keeps ModuleNotFoundError'ing."
     )
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-23 COUNCIL_ENGINE=langgraph incident, part 2: a SECOND import
+# convention introduced inside agents/ itself, on top of the layer/Dockerfile
+# parity this file already guards above.
+# ---------------------------------------------------------------------------
+# The checks above catch a *package* missing from a deploy path. This
+# incident's actual failure was one level down: `agents/` itself was
+# deployed correctly everywhere (layer v65 genuinely contained it), but two
+# of its own modules -- agents/providers.py and agents/nodes.py -- imported
+# it as `from lambdas.pipeline.ai_helper import ...`. That spelling only
+# resolves where a `lambdas` package is on the path: at the repo root
+# (pytest, via tests/conftest.py) and in the container-image Lambda
+# (Dockerfile.lambda ships the whole lambdas/ tree). It CANNOT resolve in a
+# zip-based pipeline Lambda, because template.yaml gives those functions
+# `CodeUri: lambdas/pipeline/`, which SAM/CFN flattens into /var/task --
+# there is no `lambdas` package there, only a flat `ai_helper.py`. Every
+# test passed; every zip-based pipeline Lambda ModuleNotFoundError'd.
+
+AGENTS_DIR = REPO / "agents"
+
+# agents/_ai_helper.py is the resolution shim this incident produced: it
+# tries the flat `import ai_helper` first (the deployed zip-Lambda shape)
+# and falls back to `from lambdas.pipeline import ai_helper` (the
+# repo-root/test/container shape) only inside a guarded `except
+# ImportError:` -- a fallback that never even executes in the flattened
+# Lambda where the bug actually bit. That one guarded line is the sanctioned
+# exception this test exists to enforce everywhere else: every OTHER module
+# under agents/ must go through the shim (or through agents.providers)
+# instead of reaching into lambdas.pipeline directly.
+_AGENTS_MODULES = sorted(p for p in AGENTS_DIR.glob("*.py") if p.name != "_ai_helper.py")
+
+
+@pytest.mark.parametrize("path", _AGENTS_MODULES, ids=lambda p: p.name)
+def test_agents_modules_never_import_lambdas_package_directly(path):
+    """No module under agents/ (other than the _ai_helper shim) may contain
+    an `import lambdas...` / `from lambdas... import ...` statement -- that
+    import cannot resolve once CodeUri flattens lambdas/pipeline/ into a zip
+    Lambda's /var/task, which is exactly what production hit.
+
+    Walks the AST instead of grepping text, so a docstring or comment that
+    merely *mentions* "lambdas.pipeline" -- as several docstrings in this
+    repo now deliberately do, to document this very incident -- can never
+    trip this check. Only a real import statement can.
+    """
+    tree = ast.parse(path.read_text(), filename=str(path))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert not (alias.name == "lambdas" or alias.name.startswith("lambdas.")), (
+                    f"{path.relative_to(REPO)}: `import {alias.name}` cannot resolve in "
+                    f"the deployed (flattened) Lambda -- route through agents._ai_helper "
+                    f"or agents.providers instead"
+                )
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            assert not (module == "lambdas" or module.startswith("lambdas.")), (
+                f"{path.relative_to(REPO)}: `from {module} import ...` cannot resolve in "
+                f"the deployed (flattened) Lambda -- route through agents._ai_helper or "
+                f"agents.providers instead"
+            )

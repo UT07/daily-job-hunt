@@ -3,13 +3,13 @@
 Nodes import only this module. Everything AWS-touching or network-touching
 stays behind these four functions, so node tests need no credentials.
 """
-from agents.state import Candidate
-from lambdas.pipeline.ai_helper import (
+from agents._ai_helper import (
     _build_provider_list,
     _call_provider,
     _model_family,
     _select_diverse_providers,
 )
+from agents.state import Candidate
 
 
 def family_of(provider: dict) -> str:

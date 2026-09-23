@@ -1,8 +1,8 @@
 """State carried through the council graph.
 
 Candidate deliberately mirrors the dict shape returned by
-lambdas.pipeline.ai_helper._call_provider so generate nodes can append
-provider results without translating them.
+agents._ai_helper._call_provider (the ai_helper shim's re-export) so
+generate nodes can append provider results without translating them.
 """
 from typing import Annotated, Any, TypedDict
 
