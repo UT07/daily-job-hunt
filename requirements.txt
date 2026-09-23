@@ -44,3 +44,8 @@ posthog>=3.0.0
 
 # Optional: Anthropic SDK (only needed if using Claude as paid fallback)
 # anthropic>=0.39.0
+
+# LangGraph orchestration for the AI council. langchain-community and provider
+# SDKs are deliberately excluded — they blow the 250MB Lambda ceiling.
+langgraph>=0.2.0
+langchain-core>=0.3.0
