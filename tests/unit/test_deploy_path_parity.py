@@ -203,64 +203,108 @@ def test_alias_all_properties_set_whenever_any_function_auto_publishes():
 # agents/ moved to lambdas/pipeline/agents/ on 2026-09-23 (see "part 3"
 # below) specifically so it packages inside the pipeline functions' own
 # CodeUri instead of the shared layer. It is no longer a repo-root package.
-AGENTS_DIR = REPO / "lambdas" / "pipeline" / "agents"
+#
+# 2026-09-24 generalization: this check originally only scanned agents/*.py,
+# exempting agents/_ai_helper.py by filename because that one file's whole
+# job is the sanctioned `try: import ai_helper / except ImportError: from
+# lambdas.pipeline import ai_helper` fallback. Task 12 (retrieval/embeddings.py)
+# and Task 13 (retrieval/store.py) each then inlined that SAME guarded
+# fallback directly into their own module instead of a dedicated shim file
+# -- there is no whole file to exempt by name for either of them, and a
+# per-file exemption list doesn't scale to "every module under
+# lambdas/pipeline/" anyway. Fixed at the root instead: walk every .py file
+# anywhere under lambdas/pipeline/ (this CodeUri's real root), and judge
+# each `lambdas...` import by where it sits in the AST, not by which file
+# it happens to live in. An import is sanctioned exactly when it is
+# lexically inside a `try`/`except ImportError` construct -- the only shape
+# that resolves in the flattened zip Lambda (the flat import succeeds
+# there) while also covering the container-image shape (the flat import
+# fails over to the qualified one there instead). A bare, unguarded
+# `lambdas...` import anywhere else is flagged, regardless of file or
+# directory.
+PIPELINE_DIR = REPO / "lambdas" / "pipeline"
+_PIPELINE_MODULES = sorted(PIPELINE_DIR.rglob("*.py"))
 
-# agents/_ai_helper.py is the resolution shim this incident produced: it
-# tries the flat `import ai_helper` first -- which now resolves under
-# pytest AND in the deployed zip Lambda, since agents/ moved specifically to
-# make those two shapes identical (see "part 3" below) -- and falls back to
-# `from lambdas.pipeline import ai_helper` (the container-image shape) only
-# inside a guarded `except ImportError:`, a fallback that never even
-# executes in the flattened Lambda where the original bug actually bit.
-# That one guarded line is the sanctioned exception this test exists to
-# enforce everywhere else: every OTHER module under agents/ must go through
-# the shim (or through agents.providers) instead of reaching into
-# lambdas.pipeline directly.
-_AGENTS_MODULES = sorted(p for p in AGENTS_DIR.glob("*.py") if p.name != "_ai_helper.py")
+
+def _handler_catches_import_error(handler: ast.ExceptHandler) -> bool:
+    """True if this `except` clause's type is (or includes) ImportError."""
+    exc_type = handler.type
+    if isinstance(exc_type, ast.Name):
+        return exc_type.id == "ImportError"
+    if isinstance(exc_type, (ast.Tuple, ast.List)):
+        return any(isinstance(e, ast.Name) and e.id == "ImportError" for e in exc_type.elts)
+    return False
 
 
-@pytest.mark.parametrize("path", _AGENTS_MODULES, ids=lambda p: p.name)
-def test_agents_modules_never_import_lambdas_package_directly(path):
-    """No module under agents/ (other than the _ai_helper shim) may contain
-    an `import lambdas...` / `from lambdas... import ...` statement -- that
-    import cannot resolve once CodeUri flattens lambdas/pipeline/ into a zip
-    Lambda's /var/task, which is exactly what production hit.
+def _unguarded_lambdas_imports(tree: ast.AST) -> list[str]:
+    """Return one description per `lambdas...` import that is NOT inside a
+    try/except ImportError construct.
 
-    There are now TWO sanctioned guarded fallbacks to `lambdas.pipeline...`
-    in this codebase, and both are structurally exempt from THIS particular
-    scan for the same reason: neither is a module living inside agents/, so
-    `_AGENTS_MODULES` (built from `AGENTS_DIR.glob("*.py")`) never picks
-    them up to begin with.
-      1. agents/_ai_helper.py's own `except ImportError:` branch (excluded
-         above by filename) -- falls back to `lambdas.pipeline.ai_helper`.
-      2. lambdas/pipeline/ai_helper.py's `council_complete()` -- its
-         `except ImportError:` branch falls back to
-         `lambdas.pipeline.agents.graph` for the container image (see that
-         function's docstring). That file is agents/'s SIBLING
-         (lambdas/pipeline/ai_helper.py), not a module "under agents/", so
-         it was never in scope of this scan in the first place.
+    Recurses by hand instead of using `ast.walk` (which flattens the tree
+    and loses nesting) so it can track, node by node, whether the current
+    statement sits inside the `try:` body or a matching handler's body of a
+    `try` / `except ImportError:` -- the shape every sanctioned fallback in
+    this codebase uses today (agents/_ai_helper.py, retrieval/embeddings.py,
+    retrieval/store.py, ai_helper.py's council_complete). Both branches of
+    that construct are treated as guarded, regardless of which one actually
+    holds the `lambdas...` spelling, since the construct as a whole is the
+    deliberate flat-first / qualified-fallback resolution dance. `orelse`
+    and `finalbody` are deliberately NOT guarded by this try, since they run
+    unconditionally rather than only after a failed flat import.
 
-    Walks the AST instead of grepping text, so a docstring or comment that
-    merely *mentions* "lambdas.pipeline" -- as several docstrings in this
-    repo now deliberately do, to document this very incident -- can never
-    trip this check. Only a real import statement can.
+    A docstring or comment that merely *mentions* "lambdas.pipeline" is
+    never an ast.Import/ast.ImportFrom node in the first place, so it can
+    never trip this -- only a real import statement can.
     """
-    tree = ast.parse(path.read_text(), filename=str(path))
-    for node in ast.walk(tree):
+    violations: list[str] = []
+
+    def visit(node: ast.AST, guarded: bool) -> None:
+        if isinstance(node, ast.Try) and any(_handler_catches_import_error(h) for h in node.handlers):
+            for child in node.body:
+                visit(child, True)
+            for handler in node.handlers:
+                for child in handler.body:
+                    visit(child, True)
+            for child in node.orelse:
+                visit(child, guarded)
+            for child in node.finalbody:
+                visit(child, guarded)
+            return
         if isinstance(node, ast.Import):
             for alias in node.names:
-                assert not (alias.name == "lambdas" or alias.name.startswith("lambdas.")), (
-                    f"{path.relative_to(REPO)}: `import {alias.name}` cannot resolve in "
-                    f"the deployed (flattened) Lambda -- route through agents._ai_helper "
-                    f"or agents.providers instead"
-                )
+                if not guarded and (alias.name == "lambdas" or alias.name.startswith("lambdas.")):
+                    violations.append(f"line {node.lineno}: `import {alias.name}`")
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
-            assert not (module == "lambdas" or module.startswith("lambdas.")), (
-                f"{path.relative_to(REPO)}: `from {module} import ...` cannot resolve in "
-                f"the deployed (flattened) Lambda -- route through agents._ai_helper or "
-                f"agents.providers instead"
-            )
+            if not guarded and (module == "lambdas" or module.startswith("lambdas.")):
+                violations.append(f"line {node.lineno}: `from {module} import ...`")
+        for child in ast.iter_child_nodes(node):
+            visit(child, guarded)
+
+    visit(tree, False)
+    return violations
+
+
+@pytest.mark.parametrize("path", _PIPELINE_MODULES, ids=lambda p: str(p.relative_to(PIPELINE_DIR)))
+def test_no_unguarded_lambdas_imports_under_pipeline(path):
+    """No module anywhere under lambdas/pipeline/ may contain a bare
+    `import lambdas...` / `from lambdas... import ...` -- that import cannot
+    resolve once CodeUri flattens lambdas/pipeline/ into a zip Lambda's
+    /var/task, which is exactly what production hit on 2026-09-23. The one
+    sanctioned exception is a `lambdas...` import inside a
+    `try: <flat import> / except ImportError: <lambdas... fallback>`
+    construct -- see the comment block above and `_unguarded_lambdas_imports`
+    for why that shape alone resolves in every deploy path this repo has.
+    """
+    tree = ast.parse(path.read_text(), filename=str(path))
+    violations = _unguarded_lambdas_imports(tree)
+    assert not violations, (
+        f"{path.relative_to(REPO)}: unguarded lambdas-package import(s) "
+        f"that cannot resolve in the deployed (flattened) Lambda: "
+        f"{violations}. Wrap the fallback in try/except ImportError (see "
+        f"agents/_ai_helper.py or retrieval/embeddings.py), or route "
+        f"through agents.providers instead."
+    )
 
 
 # ---------------------------------------------------------------------------

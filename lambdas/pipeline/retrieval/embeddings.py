@@ -53,7 +53,19 @@ def _api_key() -> str:
 
 
 def cache_key(text: str) -> str:
-    return "embed:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+    """Content-AND-identity-addressed cache key.
+
+    Hashes MODEL and EMBED_DIM alongside the text, not the text alone. If
+    MODEL is ever swapped for a different one -- even one that happens to
+    keep EMBED_DIM at 768 -- old rows simply become unreachable under the
+    new key instead of being served back as if they were the new model's
+    output. That's a deliberate, silent cache invalidation on model change,
+    not a bug: stale rows just age out via _CACHE_TTL and are never matched
+    again. The `embed:` prefix is kept stable across model changes so any
+    row is still recognisable as an embedding-cache entry.
+    """
+    digest = hashlib.sha256(f"{MODEL}:{EMBED_DIM}:{text}".encode("utf-8")).hexdigest()
+    return "embed:" + digest
 
 
 def _cache_get(key: str) -> list[float] | None:
@@ -100,10 +112,30 @@ def _check_dim(vector: list[float]) -> list[float]:
     return vector
 
 
+def _validated_cache_hit(vector: list[float] | None) -> list[float] | None:
+    """Apply the dimension guard to a value that already came back from
+    _cache_get, treating a mismatch as a miss instead of an error.
+
+    cache_key() now folds MODEL/EMBED_DIM into the hash, so a genuine model
+    swap simply misses cache going forward. This is defence in depth for
+    rows written before that fix (or any other way a wrong-shape vector
+    ended up under a colliding key): a poisoned cache entry should
+    self-heal on the next successful fetch+write, not raise and break every
+    caller that happens to hit it.
+    """
+    if vector is None:
+        return None
+    try:
+        return _check_dim(vector)
+    except ValueError as exc:
+        logger.warning("[embed] cached vector failed dimension check, treating as miss: %s", exc)
+        return None
+
+
 def embed(text: str) -> list[float]:
     """Embed one string. Cached by content hash."""
     key = cache_key(text)
-    hit = _cache_get(key)
+    hit = _validated_cache_hit(_cache_get(key))
     if hit is not None:
         return hit
 
@@ -121,7 +153,8 @@ def embed(text: str) -> list[float]:
 
 def embed_batch(texts: list[str]) -> list[list[float]]:
     """Embed many strings. Cache hits are served without touching the network."""
-    results: list[list[float] | None] = [_cache_get(cache_key(t)) for t in texts]
+    keys = [cache_key(t) for t in texts]
+    results: list[list[float] | None] = [_validated_cache_hit(_cache_get(k)) for k in keys]
     missing = [i for i, r in enumerate(results) if r is None]
     if not missing:
         return results  # type: ignore[return-value]
@@ -139,5 +172,5 @@ def embed_batch(texts: list[str]) -> list[list[float]]:
     for slot, item in zip(missing, resp.json()["embeddings"]):
         vector = _check_dim(item["values"])
         results[slot] = vector
-        _cache_put(cache_key(texts[slot]), vector)
+        _cache_put(keys[slot], vector)
     return results  # type: ignore[return-value]
