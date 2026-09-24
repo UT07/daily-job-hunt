@@ -179,7 +179,7 @@ in the first 30 minutes of Day 1, not discovered later.
 
 ### 6.1 Schema
 
-Migration `20260922_pgvector.sql`:
+Migration `20260922000000_pgvector.sql`:
 
 - `create extension if not exists vector`
 - `alter table jobs add column embedding vector(768)`

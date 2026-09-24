@@ -1,6 +1,6 @@
 -- RPC functions for pgvector similarity queries (Task 13).
 --
--- Split from 20260922_pgvector.sql (Task 11) into its own migration: the
+-- Split from 20260922000000_pgvector.sql (Task 11) into its own migration: the
 -- Supabase CLI records applied migrations by version and skips ones already
 -- recorded, so SQL appended to a migration file after it has been pushed
 -- would never reach the database. `create or replace function` is already

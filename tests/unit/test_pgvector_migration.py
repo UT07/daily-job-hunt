@@ -5,7 +5,7 @@ import pathlib
 
 MIGRATION = (
     pathlib.Path(__file__).resolve().parents[2]
-    / "supabase/migrations/20260922_pgvector.sql"
+    / "supabase/migrations/20260922000000_pgvector.sql"
 )
 
 
