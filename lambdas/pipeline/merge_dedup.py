@@ -342,6 +342,13 @@ def handler(event, context):
             batch_dedup_skipped += 1
             logger.debug(f"[batch dedup] Skipping duplicate in batch: '{j.get('title')}' @ '{j.get('company')}'")
             continue
+        # Tier 4: semantic. Catches the same posting reworded across queries.
+        if os.environ.get("SEMANTIC_DEDUP", "off") == "on":
+            from retrieval.dedup import find_semantic_duplicate
+            duplicate = find_semantic_duplicate(j)
+            if duplicate:
+                filtered_out += 1
+                continue
         batch_dedup_keys.add(key)
         new_hashes.append(j["job_hash"])
 
