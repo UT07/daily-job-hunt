@@ -39,6 +39,10 @@ COPY shared/ ${LAMBDA_TASK_ROOT}/shared/
 # Pipeline lambdas get `ai_helper` via their working directory; the
 # container lambda needs an explicit COPY of the package tree.
 # (~400KB; negligible vs. the AI/crypto deps.)
+#
+# This also carries lambdas/pipeline/agents/ (moved here 2026-09-23, was
+# previously a separate `COPY agents/` line from a repo-root package) — no
+# extra COPY needed, it comes along as part of this tree.
 COPY lambdas/ ${LAMBDA_TASK_ROOT}/lambdas/
 
 # `config/` (PostHog feature-flags wrapper) was missing from the API

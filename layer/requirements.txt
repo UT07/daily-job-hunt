@@ -11,3 +11,14 @@ posthog>=3.0.0
 # INIT, API Gateway returns HTTP 502 to clients, Fargate browser exits
 # 0 immediately. Surfaced 2026-05-08 smoke (MongoDB SRE 3 retry).
 python-jose[cryptography]>=3.3.0
+# NOTE: this file is SEPARATE from the root requirements.txt and is what
+# the shared Lambda layer actually installs from (see layer/build.sh).
+# Adding a package to the root file alone does NOT put it on the Lambda
+# runtime path — both files must be updated together for any dependency
+# imported by zip-based pipeline Lambdas (shared/, lambdas/pipeline/ and its
+# lambdas/pipeline/agents/ subpackage).
+# Missed here on 2026-09-22: langgraph/langchain-core landed in the root
+# file for the AI council rewrite but not here, so COUNCIL_ENGINE=langgraph
+# ModuleNotFoundError'd in prod despite working locally.
+langgraph>=0.2.0
+langchain-core>=0.3.0

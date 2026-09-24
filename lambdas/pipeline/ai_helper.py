@@ -49,6 +49,11 @@ def get_supabase():
 # reasoning tokens.
 CRITIC_MAX_TOKENS = 1024
 
+# System prompt for the critic call. Shared by the sequential council below
+# (council_complete) and the LangGraph port (agents.nodes.critique_node) so
+# the two engines can't drift while they run side by side during migration.
+CRITIQUE_SYSTEM = "You are an impartial AI output evaluator. Return only valid JSON."
+
 
 def _build_provider_list() -> list[dict]:
     """Build the full provider config list with all available models."""
@@ -280,7 +285,69 @@ def _parse_critic_scores(raw: str, expected_count: int) -> list[int] | None:
 # council_complete — diverse generators + numeric critic scoring
 # ---------------------------------------------------------------------------
 
+def build_critique_prompt(candidates: list[dict], task_description: str) -> str:
+    """Build the critic's numeric-scoring prompt.
+
+    Single source for this rubric — shared by council_complete below and by
+    the LangGraph port's critique_node (agents/nodes.py imports this
+    function rather than keeping its own copy) so the two engines can't
+    silently drift while they run side by side during migration.
+    """
+    candidate_blocks = []
+    for i, c in enumerate(candidates, 1):
+        candidate_blocks.append(
+            f"--- CANDIDATE {i} ({c['provider']}:{c['model']}) ---\n{c['content'][:3000]}"
+        )
+
+    return (
+        f"You are evaluating {len(candidates)} candidate outputs for this task:\n"
+        f"{task_description}\n\n"
+        "Rate each candidate 0-100 on:\n"
+        "1. ACCURACY: Does it follow ALL instructions? No banned phrases, no fabrication?\n"
+        "2. COMPLETENESS: Are all required sections/structure present?\n"
+        "3. QUALITY: Active voice, specific metrics, no filler, proper formatting (\\textbf preserved)?\n"
+        "4. ADHERENCE: Does it match the specific job description, not generic?\n\n"
+        "Average the four dimensions into a single score per candidate.\n\n"
+        + "\n\n".join(candidate_blocks)
+        + "\n\nReturn ONLY a JSON array of integer scores in candidate order, e.g. [85, 72]. No other text."
+    )
+
+
+def _council_engine() -> str:
+    """Which council implementation to use: 'legacy' or 'langgraph'.
+
+    Defaults to legacy so a deploy never silently changes behaviour; the flag
+    is flipped only after the parity test and a live smoke run pass.
+    """
+    return os.environ.get("COUNCIL_ENGINE", "legacy").strip().lower()
+
+
 def council_complete(
+    prompt: str,
+    system: str = "",
+    task_description: str = "",
+    n_generators: int = 2,
+    temperature: float = 0.3,
+) -> dict:
+    """Generate candidates from diverse models, pick the best by critic score."""
+    if _council_engine() == "langgraph":
+        try:
+            from agents.graph import council_complete_langgraph  # flat — pytest / zip Lambda
+        except ImportError:
+            # Container image (Dockerfile.lambda ships `lambdas/` as a real
+            # package): this module is imported as `lambdas.pipeline.ai_helper`,
+            # and there is no flat `agents` on the path there — only
+            # `lambdas.pipeline.agents` resolves.
+            from lambdas.pipeline.agents.graph import council_complete_langgraph
+        return council_complete_langgraph(
+            prompt, system, task_description, n_generators, temperature
+        )
+    return _council_complete_legacy(
+        prompt, system, task_description, n_generators, temperature
+    )
+
+
+def _council_complete_legacy(
     prompt: str,
     system: str = "",
     task_description: str = "",
@@ -345,29 +412,12 @@ def council_complete(
     logger.info(f"[council] Critic: {critic_provider['name']}:{critic_provider['model']}")
 
     # Step 4: Build critique prompt with numeric scoring
-    candidate_blocks = []
-    for i, c in enumerate(candidates, 1):
-        candidate_blocks.append(
-            f"--- CANDIDATE {i} ({c['provider']}:{c['model']}) ---\n{c['content'][:3000]}"
-        )
-
-    critique_prompt = (
-        f"You are evaluating {len(candidates)} candidate outputs for this task:\n"
-        f"{task_description}\n\n"
-        "Rate each candidate 0-100 on:\n"
-        "1. ACCURACY: Does it follow ALL instructions? No banned phrases, no fabrication?\n"
-        "2. COMPLETENESS: Are all required sections/structure present?\n"
-        "3. QUALITY: Active voice, specific metrics, no filler, proper formatting (\\textbf preserved)?\n"
-        "4. ADHERENCE: Does it match the specific job description, not generic?\n\n"
-        "Average the four dimensions into a single score per candidate.\n\n"
-        + "\n\n".join(candidate_blocks)
-        + "\n\nReturn ONLY a JSON array of integer scores in candidate order, e.g. [85, 72]. No other text."
-    )
+    critique_prompt = build_critique_prompt(candidates, task_description)
 
     try:
         critique = _call_provider(
             critic_provider, critique_prompt,
-            system="You are an impartial AI output evaluator. Return only valid JSON.",
+            system=CRITIQUE_SYSTEM,
             temperature=0, max_tokens=CRITIC_MAX_TOKENS,
         )
         if not critique:
