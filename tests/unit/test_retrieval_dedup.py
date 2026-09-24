@@ -52,4 +52,8 @@ def test_skips_jobs_with_no_description():
 
 
 def test_threshold_is_pinned():
-    assert dedup.SEMANTIC_THRESHOLD == 0.93
+    # Raised from 0.93 to 0.97 in Task 15 after sweeping real production
+    # embeddings and finding confirmed false positives (distinct roles, not
+    # duplicates) at 0.93 and even 0.95 -- see the comment on
+    # dedup.SEMANTIC_THRESHOLD for the specific pairs.
+    assert dedup.SEMANTIC_THRESHOLD == 0.97

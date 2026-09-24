@@ -1,9 +1,23 @@
-"""Gemini text-embedding-004 client with content-addressed caching.
+"""Gemini gemini-embedding-001 client with content-addressed caching.
 
 Reuses the generativelanguage REST pattern already established by
 GeminiProvider in ai_client.py — same endpoint family, same auth, no SDK.
 Embeddings cannot run in-process: sentence-transformers pulls ~800MB of torch,
 which does not fit a Lambda package.
+
+MODEL was originally `models/text-embedding-004` per the Task 12 design doc.
+Verified 2026-09-24 (Task 15, first-call fail-fast check) that Google has
+since removed it: a live embedContent call 404s with "models/text-embedding-004
+is not found ... or is not supported for embedContent", and it no longer
+appears in `GET v1beta/models` at all. This is a model-catalog change, not an
+API-key problem — the same key's ListModels call returns 200 with 61 models,
+including `gemini-embedding-001`, Google's documented replacement for both
+text-embedding-004 and embedding-001. Switched MODEL to that, and pass
+`outputDimensionality: EMBED_DIM` on every request (gemini-embedding-001
+defaults to 3072-dim, but supports Matryoshka truncation to smaller sizes)
+so the wire format stays exactly 768 floats — empirically confirmed via a
+live call before this change shipped — with no pgvector schema/migration
+change needed.
 
 Import resolution for `ai_helper` mirrors lambdas/pipeline/agents/_ai_helper.py:
 this package (lambdas/pipeline/retrieval/) lives inside the pipeline Lambdas'
@@ -33,7 +47,7 @@ except ImportError:
 logger = logging.getLogger()
 
 EMBED_DIM = 768
-MODEL = "models/text-embedding-004"
+MODEL = "models/gemini-embedding-001"
 ENDPOINT = f"https://generativelanguage.googleapis.com/v1beta/{MODEL}:embedContent"
 BATCH_ENDPOINT = f"https://generativelanguage.googleapis.com/v1beta/{MODEL}:batchEmbedContents"
 
@@ -142,7 +156,11 @@ def embed(text: str) -> list[float]:
     resp = httpx.post(
         ENDPOINT,
         params={"key": _api_key()},
-        json={"model": MODEL, "content": {"parts": [{"text": text}]}},
+        json={
+            "model": MODEL,
+            "content": {"parts": [{"text": text}]},
+            "outputDimensionality": EMBED_DIM,
+        },
         timeout=30,
     )
     resp.raise_for_status()
@@ -163,7 +181,11 @@ def embed_batch(texts: list[str]) -> list[list[float]]:
         BATCH_ENDPOINT,
         params={"key": _api_key()},
         json={"requests": [
-            {"model": MODEL, "content": {"parts": [{"text": texts[i]}]}}
+            {
+                "model": MODEL,
+                "content": {"parts": [{"text": texts[i]}]},
+                "outputDimensionality": EMBED_DIM,
+            }
             for i in missing
         ]},
         timeout=60,

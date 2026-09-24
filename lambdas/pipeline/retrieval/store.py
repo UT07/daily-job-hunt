@@ -17,6 +17,7 @@ qualified import only for the container-image shape. Never spell this as
 `from lambdas.pipeline.ai_helper import ...` -- that form cannot resolve once
 CodeUri flattens this directory in the zip-based pipeline Lambdas.
 """
+import json
 import logging
 import math
 
@@ -32,14 +33,38 @@ def _db():
     return ai_helper.get_supabase()
 
 
-def cosine(a: list[float], b: list[float]) -> float:
+def _as_vector(v: list[float] | str) -> list[float]:
+    """Coerce a value that may be PostgREST's wire form of a `vector` column.
+
+    Confirmed live (Task 15 threshold tuning): `.table("jobs").select(...)`
+    on a pgvector column does not come back as a JSON array the way every
+    other column type does -- Postgres has no native JSON cast for `vector`,
+    so PostgREST falls back to its text output, e.g. `"[0.001,-0.02,...]"` as
+    one big string. That text happens to already be valid JSON-array syntax,
+    so json.loads round-trips it exactly. RPC-returned similarities
+    (similar_jobs_in_company, similar_bullets) never hit this: pgvector's
+    `<=>` operator runs server-side there and returns a plain float, not a
+    vector column. Only a caller that pulls raw embedding columns directly
+    (this module's own docstring: "threshold tuning ... pulling rows is
+    cheaper than a round trip") ever sees the string form.
+    """
+    return json.loads(v) if isinstance(v, str) else v
+
+
+def cosine(a: list[float] | str, b: list[float] | str) -> float:
     """Cosine similarity between two vectors.
+
+    Accepts either a plain list of floats or PostgREST's stringified `vector`
+    column form (see _as_vector) -- both a hand-built query vector and a row
+    pulled straight from `jobs.embedding` are valid inputs.
 
     Returns 0.0 for a zero-magnitude vector instead of raising -- an
     all-zero embedding is a real possibility from a degenerate input (e.g.
     empty or whitespace-only text reaching the embedding client), and that's
     a "no signal" case, not one worth crashing the caller over.
     """
+    a = _as_vector(a)
+    b = _as_vector(b)
     dot = sum(x * y for x, y in zip(a, b))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))

@@ -13,7 +13,31 @@ from retrieval.store import similar_jobs_in_company
 logger = logging.getLogger()
 
 # Tuned against labelled duplicate pairs from production data, not guessed.
-SEMANTIC_THRESHOLD = 0.93
+#
+# Started at 0.93 per the design doc. Task 15 swept {0.88, 0.90, 0.92, 0.93,
+# 0.95, 0.97} against the real, freshly-backfilled embeddings for all 1,232
+# jobs and hand-inspected the actual pairs at each level (not just counts).
+# 0.93 gives 104 pairs, but includes confirmed false positives -- pulling
+# the full descriptions, not just titles, showed:
+#   - Google, 0.9627: "Senior Systems Engineer, SRE" vs "Senior Software
+#     Engineer, SRE" are two genuinely distinct, officially separate Google
+#     SRE hiring tracks (different minimum-qualifications text: systems/
+#     Unix-internals vs software-engineering focus) -- not a duplicate.
+#   - Datadog, 0.9609: "Senior Sales Engineer - Key Accounts Southcentral"
+#     vs "...Key Accounts" target different account tiers (regional vs
+#     Fortune-100 strategic) in the body text -- distinct reqs.
+# Both survive even at 0.95 (0.9609 and 0.9627 are both >= 0.95), so 0.95
+# is not safe either. Raised to 0.97 (56 -> 21 pairs): every pair sampled
+# at 0.97, including the lowest-similarity member of that band (Twilio,
+# 0.9715), checked out as a genuine same-posting duplicate on full-text
+# inspection -- several with the SAME defect shape as the original TREQS
+# report (Mastercard "Lead Site Reliability Engineer" vs "Lead BizOps
+# Engineer" at 0.9743: the first row's title was mis-scraped, its own
+# description body reads "seeking a Lead BizOps Engineer" throughout).
+# A missed real duplicate just leaves both copies visible to the user;
+# a false merge silently drops one of two genuinely different open roles.
+# That asymmetry favors the higher, still-data-backed threshold.
+SEMANTIC_THRESHOLD = 0.97
 
 MIN_DESCRIPTION_CHARS = 200
 
