@@ -394,6 +394,18 @@ def handler(event, context):
         logger.error(f"[tailor] base resume missing \\begin{{document}} for user {user_id}")
         raise TailorError("base resume has no \\begin{document}")
 
+    # Base Skills-section text: seeds BOTH the council's guard_output_node
+    # fabrication check (task="tailor" below -- see the council_complete call)
+    # and the post-hoc quality_warnings check further down. Computed once
+    # here so both call sites see the same value instead of the graph-level
+    # guard silently evaluating fabrication against an empty baseline (which
+    # would make it pass everything regardless of what the model wrote).
+    base_skills_match = re.search(
+        r"\\section\*\{(?:Technical )?Skills\}(.*?)\\section\*\{",
+        base_body, re.DOTALL,
+    )
+    base_skills_text = base_skills_match.group(1) if base_skills_match else ""
+
     # Extract keywords and detect archetype
     from utils.keyword_extractor import extract_keywords
     description = job.get("description", "") or ""
@@ -453,6 +465,25 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
             ),
             n_generators=2,
             temperature=0.3,
+            task="tailor",
+            base_skills=base_skills_text,
+            base_body=base_body,
+            # header_markers is deliberately NOT forwarded here. The graph's
+            # guard_output_node evaluates `winner.content`, which is the
+            # model's raw BODY-only output -- the prompt above explicitly
+            # forbids \documentclass/\begin{document}. The header markers
+            # (the user's name/email, from _derive_header_markers above) live
+            # only in `base_preamble`, spliced in AFTER council_complete
+            # returns (see "Splice:" below). Passing header_markers through
+            # would arm check_header_present against content structurally
+            # incapable of containing them -- a block-severity violation on
+            # every single call, burning the full 2-round repair budget for a
+            # check that can never pass at this stage, for zero benefit (a
+            # repair prompt telling the model to add its own name/email into
+            # the resume BODY would actively corrupt the output). The
+            # post-splice `_check_header_present(tailored_tex, header_markers)`
+            # hard gate below is the correct place this is already enforced,
+            # against the actually-spliced text.
         )
     except RuntimeError as e:
         logger.error(f"[tailor] Council failed: {e}")
@@ -497,7 +528,12 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
 
     # Escape unescaped special characters in the BODY only (not preamble).
     # The preamble uses #1, #2 etc as macro parameters — escaping those breaks everything.
-    import re
+    # (`re` is the module imported at the top of this file -- a redundant
+    # local `import re` used to live on this line. Harmless on its own, but
+    # it makes `re` a local name for the ENTIRE function body per Python's
+    # scoping rules, which broke as soon as this function gained an earlier
+    # module-level `re.search` call above -- see the base_skills_text block
+    # near the top of this function. Removed rather than worked around.)
     body_start = tailored_tex.find(r"\begin{document}")
     if body_start > 0:
         preamble_part = tailored_tex[:body_start]
@@ -540,12 +576,8 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         # Quality validation — writing quality, not just structure
         quality_warnings = _check_banned_phrases(ai_body)
         quality_warnings.extend(_check_textbf_preservation(base_body, ai_body))
-        base_skills_match = re.search(
-            r"\\section\*\{(?:Technical )?Skills\}(.*?)\\section\*\{",
-            base_body, re.DOTALL,
-        )
-        if base_skills_match:
-            quality_warnings.extend(_check_fabrication(base_skills_match.group(1), ai_body))
+        if base_skills_text:
+            quality_warnings.extend(_check_fabrication(base_skills_text, ai_body))
 
         if quality_warnings:
             logger.warning(f"[tailor] Quality warnings for {job_hash}: {'; '.join(quality_warnings[:5])}")

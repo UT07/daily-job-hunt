@@ -119,6 +119,14 @@ Tailored Resume (LaTeX):
             task_description=f"Score resume for {job['title']} at {job['company']}. Be strict — 85+ means ready to submit.",
             n_generators=2,
             temperature=0.2,
+            # This handler only scores a tailored resume against a JD and
+            # returns JSON (ats/hm/tr scores + improvement notes) -- it never
+            # produces resume/cover-letter prose or LaTeX, so "score" (not
+            # "default") is the correct policy: same injection_detection/
+            # pii_scrub as default, but banned_phrases off too, since running
+            # the resume-prose phrase blocklist against a JSON scores blob
+            # would be meaningless at best and a false positive at worst.
+            task="score",
         )
 
         scores = _parse_scores(result["content"])

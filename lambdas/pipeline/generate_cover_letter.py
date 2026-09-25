@@ -266,6 +266,19 @@ Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
                 ),
                 n_generators=2,
                 temperature=0.7,
+                task="cover_letter",
+                # base_skills/base_body deliberately NOT forwarded: this
+                # handler's output is plain prose paragraphs (the prompt
+                # above explicitly forbids LaTeX), never a
+                # \section*{Skills}-shaped document, so check_fabrication's
+                # section regex can never match it -- base_skills would be a
+                # documented no-op here, not a meaningful guard. base_body
+                # would be actively wrong to pass: check_textbf_preservation
+                # has no policy gate and runs unconditionally whenever
+                # base_body is supplied, comparing \textbf{ counts between
+                # the LaTeX base resume (many) and this prose body (always
+                # zero) -- that would flag "textbf_stripped" on every single
+                # cover letter regardless of quality.
             )
         except RuntimeError:
             result = ai_complete(prompt, system=COVER_LETTER_SYSTEM_PROMPT, temperature=0.7)

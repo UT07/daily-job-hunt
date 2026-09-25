@@ -125,6 +125,22 @@ def scrub_pii(text: str) -> str:
     return out
 
 
+def maybe_scrub_pii(text: str, task: str) -> str:
+    """Redact PII from `text` when the task's policy has `pii_scrub` enabled.
+
+    This is the actual wiring for the `pii_scrub` policy flag -- previously
+    declared True on every policy in guardrails/policy.py but never consulted
+    by anything (see that module's docstring). Split out as its own function,
+    rather than folded into check_input's return value, so check_input's
+    GuardResult contract -- relied on directly by test_guardrails_input.py's
+    `.passed` assertions -- does not change shape. Called from
+    guard_input_node right before the accepted prompt is fenced, so contact
+    details are stripped before ever reaching a third-party free-tier
+    provider.
+    """
+    return scrub_pii(text) if _policy(task).get("pii_scrub") else text
+
+
 def check_input(text: str, task: str) -> GuardResult:
     policy = _policy(task)
     violations: list[Violation] = []

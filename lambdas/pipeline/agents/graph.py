@@ -1,12 +1,21 @@
 """Council graph assembly.
 
-    START -> plan -> generate (fan-out) -> critique -> gate -> finalize -> END
-                ^                                        |
-                +------------------ repair <-------------+
+    START -> guard_input -> plan -> generate (fan-out) -> critique -> guard_output -> gate -> finalize -> END
+                                        ^                                                       |
+                                        +----------------------- repair <----------------------+
 
 Generators run concurrently via the Send API. The legacy implementation looped
 over them serially; this is the measurable win that makes the port more than a
 relabelling.
+
+guard_input sits before `plan` and is never re-entered by the repair loop
+(repair routes back to `plan`, not to `guard_input`) -- input validation is a
+one-shot check on the caller's prompt, not something a repair round should
+redo. guard_output sits after `critique` and feeds `quality_gate`, which is
+what actually arms the repair loop: before this node was wired in, nothing
+ever populated `guard_report`, so `quality_gate` always saw `None` and always
+returned "finalize". See guard_output_node's docstring for the check_output
+adapter it performs, and quality_gate's for the two-attempt repair bound.
 """
 import uuid
 
@@ -18,6 +27,8 @@ from agents.nodes import (
     critique_node,
     finalize_node,
     generate_node,
+    guard_input_node,
+    guard_output_node,
     plan_node,
     quality_gate,
     repair_node,
@@ -40,26 +51,35 @@ def _fan_out(state: dict) -> list[Send]:
 
 def build_council_graph(checkpointer=None):
     builder = StateGraph(CouncilState)
+    builder.add_node("guard_input", guard_input_node)
     builder.add_node("plan", plan_node)
     builder.add_node("generate", generate_node)
     builder.add_node("critique", critique_node)
+    builder.add_node("guard_output", guard_output_node)
     builder.add_node("repair", repair_node)
     builder.add_node("finalize", finalize_node)
 
-    builder.add_edge(START, "plan")
+    builder.add_edge(START, "guard_input")
+    # guard_input_node raises ValueError on a detected injection rather than
+    # returning a state update -- LangGraph propagates that straight out of
+    # .invoke(), so no edge out of a rejected guard_input is ever taken and
+    # `plan` never sees a prompt that should have been refused.
+    builder.add_edge("guard_input", "plan")
     builder.add_conditional_edges("plan", _fan_out, ["generate"])
     builder.add_edge("generate", "critique")
+    builder.add_edge("critique", "guard_output")
     builder.add_conditional_edges(
-        "critique", quality_gate, {"finalize": "finalize", "repair": "repair"}
+        "guard_output", quality_gate, {"finalize": "finalize", "repair": "repair"}
     )
-    # Repair loops back through plan so providers get redrawn on retry (a
-    # family that just failed gets a fresh pick). That routing does NOT by
-    # itself reset candidates: add_candidates merges every node's
-    # contribution to that channel regardless of which node wrote it, so a
-    # plain `{"candidates": []}` return -- from plan_node or repair_node --
-    # is a no-op concatenation. The actual reset happens explicitly in
-    # repair_node, which returns an Overwrite to bypass the reducer and
-    # replace the channel's value directly before the next round runs.
+    # Repair loops back through plan (NOT through guard_input -- see module
+    # docstring) so providers get redrawn on retry (a family that just failed
+    # gets a fresh pick). That routing does NOT by itself reset candidates:
+    # add_candidates merges every node's contribution to that channel
+    # regardless of which node wrote it, so a plain `{"candidates": []}`
+    # return -- from plan_node or repair_node -- is a no-op concatenation.
+    # The actual reset happens explicitly in repair_node, which returns an
+    # Overwrite to bypass the reducer and replace the channel's value
+    # directly before the next round runs.
     builder.add_edge("repair", "plan")
     builder.add_edge("finalize", END)
 
@@ -82,16 +102,33 @@ def council_complete_langgraph(
     task_description: str = "",
     n_generators: int = 2,
     temperature: float = 0.3,
+    task: str = "default",
+    base_skills: str = "",
+    base_body: str = "",
+    header_markers: list[str] | None = None,
 ) -> dict:
-    """Drop-in replacement for council_complete. Returns a Candidate dict."""
+    """Drop-in replacement for council_complete. Returns a Candidate dict.
+
+    `task` and the three guard-context fields flow straight into the initial
+    state -- CouncilState already declares all four (see agents/state.py),
+    and guard_input_node/guard_output_node already read them via
+    `state.get(...)`; this function was the missing link that never set them
+    from the public entry point. `header_markers or []` normalises the
+    common no-caller-supplied-it case to the list type CouncilState declares,
+    rather than storing `None` in a `list[str]` field.
+    """
     trace_id = str(uuid.uuid4())
     final = _get_graph().invoke(
         {
+            "task": task,
             "prompt": prompt,
             "system": system,
             "task_description": task_description,
             "n_generators": n_generators,
             "temperature": temperature,
+            "base_skills": base_skills,
+            "base_body": base_body,
+            "header_markers": header_markers or [],
             "candidates": [],
             "repair_attempts": 0,
             "trace_id": trace_id,
