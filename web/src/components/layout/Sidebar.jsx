@@ -3,9 +3,6 @@ import { useAuth } from '../../auth/useAuth';
 import {
   LayoutDashboard,
   PlusCircle,
-  FileUp,
-  GraduationCap,
-  BarChart3,
   Settings,
   LogOut,
   ChevronLeft,
@@ -14,15 +11,13 @@ import {
 import { useUIStore } from '../../stores/uiStore';
 import NotificationBell from '../NotificationBell';
 
+// "Upload Resume", "Interview Prep" and "Analytics" used to live here as
+// dead `-- coming soon` stubs, styled identically to working links (audit
+// P0-2). Removed — see App.jsx for where each one's real functionality
+// actually lives (or doesn't).
 const NAV_ITEMS = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/add-job', icon: PlusCircle, label: 'Add Job' },
-  { to: '/upload-resume', icon: FileUp, label: 'Upload Resume' },
-];
-
-const TOOL_ITEMS = [
-  { to: '/interview-prep', icon: GraduationCap, label: 'Interview Prep' },
-  { to: '/analytics', icon: BarChart3, label: 'Analytics' },
 ];
 
 const ACCOUNT_ITEMS = [
@@ -84,11 +79,6 @@ export default function Sidebar() {
       {/* Nav */}
       <nav className="flex-1 px-2 py-2 overflow-y-auto">
         {NAV_ITEMS.map((item) => (
-          <NavItem key={item.to} {...item} collapsed={sidebarCollapsed} />
-        ))}
-
-        <SectionLabel collapsed={sidebarCollapsed}>Tools</SectionLabel>
-        {TOOL_ITEMS.map((item) => (
           <NavItem key={item.to} {...item} collapsed={sidebarCollapsed} />
         ))}
 

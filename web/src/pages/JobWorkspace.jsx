@@ -63,7 +63,7 @@ function FormattedDescription({ text }) {
     </div>
   );
 }
-import { ArrowLeft, Pencil, Save, X } from 'lucide-react';
+import { ArrowLeft, Pencil, Save, X, Flag } from 'lucide-react';
 import Tabs from '../components/ui/Tabs';
 import Button from '../components/ui/Button';
 import Input from '../components/ui/Input';
@@ -586,6 +586,123 @@ function PrepTab({ job }) {
   );
 }
 
+// P1-8: base_*_score / tailored_*_score are populated on hundreds of jobs
+// (407 have tailored_ats_score, 106 have base_ats_score per the live-data
+// audit) but were never read anywhere in web/src — the expensive half
+// (computing a before/after) was done, only the display was missing.
+// Purely additive: renders nothing extra for the many jobs that don't have
+// both halves, so it can't regress the common case.
+function ScoreCard({ label, score, baseScore, tailoredScore }) {
+  const hasDelta = baseScore != null && tailoredScore != null && baseScore !== tailoredScore;
+  const delta = hasDelta ? Math.round(tailoredScore - baseScore) : 0;
+  return (
+    <div className="border-2 border-black p-4">
+      <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">{label}</p>
+      <p className="text-2xl font-mono font-bold"><ScoreBadge score={score} /></p>
+      {hasDelta && (
+        <p className="text-[10px] text-stone-400 font-mono mt-1">
+          Base {Math.round(baseScore)} &rarr; Tailored {Math.round(tailoredScore)}{' '}
+          <span className={delta >= 0 ? 'text-success font-bold' : 'text-error font-bold'}>
+            ({delta >= 0 ? '+' : ''}{delta})
+          </span>
+        </p>
+      )}
+    </div>
+  );
+}
+
+// P1-7: POST /api/feedback/flag-score is a complete, working backend endpoint
+// (records a "quality_flag" pipeline_adjustment for self-improvement) with
+// zero UI anywhere in the app to reach it — undercutting CLAUDE.md's own
+// backlog Priority 1 item ("Score accuracy: user reports scores feel
+// inaccurate/low"). This is the minimal affordance to actually collect that
+// signal: a quiet link that expands into a small inline form, matching the
+// app's existing no-modal, inline-disclosure pattern (StatusDropdown, delete
+// confirm).
+function ScoreFeedback({ jobId }) {
+  const [open, setOpen] = useState(false);
+  const [expectedScore, setExpectedScore] = useState('');
+  const [comment, setComment] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await apiCall('/api/feedback/flag-score', {
+        job_id: jobId,
+        feedback_type: 'score_inaccurate',
+        expected_score: expectedScore === '' ? null : Number(expectedScore),
+        comment: comment.trim() || null,
+      });
+      setSubmitted(true);
+    } catch (err) {
+      setError(err.message || 'Failed to submit feedback');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (submitted) {
+    return (
+      <p className="text-xs text-success font-bold mb-6 flex items-center gap-1.5">
+        <Flag size={12} /> Thanks — feedback recorded.
+      </p>
+    );
+  }
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="text-xs text-stone-400 hover:text-black underline mb-6 inline-flex items-center gap-1.5 cursor-pointer transition-colors"
+      >
+        <Flag size={12} /> Flag this score as inaccurate
+      </button>
+    );
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="border-2 border-black bg-white p-4 mb-6 space-y-3">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-bold uppercase tracking-wider text-stone-500">Flag this score</p>
+        <button type="button" onClick={() => setOpen(false)} className="text-stone-400 hover:text-black cursor-pointer">
+          <X size={14} />
+        </button>
+      </div>
+      <label className="block text-xs text-stone-500">
+        What should the score be? (optional)
+        <input
+          type="number"
+          min={0}
+          max={100}
+          value={expectedScore}
+          onChange={(e) => setExpectedScore(e.target.value)}
+          placeholder="0-100"
+          className="block mt-1 w-24 border-2 border-black px-2 py-1 text-sm font-mono focus:outline-none focus:shadow-brutal-yellow"
+        />
+      </label>
+      <label className="block text-xs text-stone-500">
+        What's wrong with it? (optional)
+        <textarea
+          value={comment}
+          onChange={(e) => setComment(e.target.value)}
+          maxLength={1000}
+          rows={2}
+          className="block mt-1 w-full border-2 border-black px-2 py-1.5 text-sm font-body focus:outline-none focus:shadow-brutal-yellow"
+        />
+      </label>
+      {error && <p className="text-xs text-error font-bold">{error}</p>}
+      <Button type="submit" variant="primary" size="sm" loading={submitting} disabled={submitting}>
+        Submit Feedback
+      </Button>
+    </form>
+  );
+}
+
 const JOB_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'research', label: 'Research' },
@@ -967,21 +1084,28 @@ export default function JobWorkspace() {
               </div>
             )}
 
-            {/* Score cards */}
-            <div className="grid grid-cols-3 gap-4 mb-6">
-              <div className="border-2 border-black p-4">
-                <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">ATS</p>
-                <p className="text-2xl font-mono font-bold"><ScoreBadge score={job.ats_score} /></p>
-              </div>
-              <div className="border-2 border-black p-4">
-                <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Hiring Manager</p>
-                <p className="text-2xl font-mono font-bold"><ScoreBadge score={job.hiring_manager_score} /></p>
-              </div>
-              <div className="border-2 border-black p-4">
-                <p className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">Technical</p>
-                <p className="text-2xl font-mono font-bold"><ScoreBadge score={job.tech_recruiter_score} /></p>
-              </div>
+            {/* Score cards — each shows a Base -> Tailored delta when both
+                halves of that dimension's before/after score exist (P1-8) */}
+            <div className="grid grid-cols-3 gap-4 mb-2">
+              <ScoreCard label="ATS" score={job.ats_score} baseScore={job.base_ats_score} tailoredScore={job.tailored_ats_score} />
+              <ScoreCard label="Hiring Manager" score={job.hiring_manager_score} baseScore={job.base_hm_score} tailoredScore={job.tailored_hm_score} />
+              <ScoreCard label="Technical" score={job.tech_recruiter_score} baseScore={job.base_tr_score} tailoredScore={job.tailored_tr_score} />
             </div>
+            {(job.final_score != null || job.writing_quality_score != null) && (
+              <div className="flex items-center gap-4 mb-4 flex-wrap">
+                {job.final_score != null && (
+                  <p className="text-xs text-stone-500">
+                    Final Score: <span className="font-mono font-bold text-black">{Math.round(job.final_score)}</span>
+                  </p>
+                )}
+                {job.writing_quality_score != null && (
+                  <p className="text-xs text-stone-500">
+                    Writing Quality: <span className="font-mono font-bold text-black">{Math.round(job.writing_quality_score)}</span>
+                  </p>
+                )}
+              </div>
+            )}
+            <ScoreFeedback jobId={job.job_id} />
             {/* Metadata row: AI model, source, date */}
             <div className="flex items-center gap-4 mb-6 flex-wrap">
               {job.tailoring_model && (
@@ -1209,7 +1333,11 @@ export default function JobWorkspace() {
           </div>
         )}
         {activeTab === 'editor' && (
-          <ResumeEditor job={job} />
+          <ResumeEditor
+            job={job}
+            onGenerateResume={() => handleRegen('resume')}
+            generating={regenLoading === 'resume'}
+          />
         )}
         {activeTab === 'cover-letter' && (
           <div>
@@ -1244,7 +1372,16 @@ export default function JobWorkspace() {
                   <path strokeLinecap="round" strokeLinejoin="round" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
                 </svg>
                 <p className="text-stone-400 font-heading font-bold">No cover letter generated yet</p>
-                <p className="text-xs text-stone-400 mt-1">Run the pipeline to generate a cover letter for this job.</p>
+                <p className="text-xs text-stone-400 mt-1 mb-4">Generate a tailored cover letter for this job.</p>
+                <Button
+                  variant="accent"
+                  size="sm"
+                  loading={regenLoading === 'cover'}
+                  disabled={!!regenLoading}
+                  onClick={() => handleRegen('cover')}
+                >
+                  {regenLoading === 'cover' ? 'Generating...' : 'Generate Cover Letter'}
+                </Button>
               </div>
             )}
           </div>

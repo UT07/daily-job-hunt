@@ -16,7 +16,7 @@ const SECTION_LABELS = {
 // Display order for sections in the editor
 const SECTION_ORDER = ['summary', 'skills', 'experience', 'projects', 'education', 'certifications'];
 
-export default function ResumeEditor({ job }) {
+export default function ResumeEditor({ job, onGenerateResume, generating }) {
   const jobId = job.job_id;
 
   const [sections, setSections] = useState(null);
@@ -38,6 +38,17 @@ export default function ResumeEditor({ job }) {
   useEffect(() => {
     let cancelled = false;
     async function load() {
+      // No tailored resume yet — GET .../sections predictably 404s ("No
+      // tailored .tex found for job {id}. Run tailoring first.", app.py).
+      // Skip the round-trip and show the same friendly empty state as the
+      // Resume tab, instead of a raw red error banner for what is currently
+      // an everyday state, not an edge case (audit P1-4).
+      if (!job.resume_s3_url) {
+        setSections(null);
+        setLoadError(null);
+        setLoadingData(false);
+        return;
+      }
       setLoadingData(true);
       setLoadError(null);
       try {
@@ -54,7 +65,7 @@ export default function ResumeEditor({ job }) {
     }
     load();
     return () => { cancelled = true; };
-  }, [jobId]);
+  }, [jobId, job.resume_s3_url]);
 
   function handleSectionChange(key, value) {
     setSections((prev) => ({ ...prev, [key]: value }));
@@ -111,6 +122,23 @@ export default function ResumeEditor({ job }) {
       <div className="flex items-center gap-3 py-12 justify-center">
         <span className="spinner" />
         <span className="text-sm text-stone-400 font-mono">Loading sections...</span>
+      </div>
+    );
+  }
+
+  if (!job.resume_s3_url) {
+    return (
+      <div className="text-center py-16">
+        <svg className="w-16 h-16 mx-auto mb-4 text-stone-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+        <p className="text-stone-400 font-heading font-bold">No resume generated yet</p>
+        <p className="text-xs text-stone-400 mt-1 mb-4">Generate a tailored resume before editing its sections.</p>
+        {onGenerateResume && (
+          <Button variant="accent" size="sm" loading={!!generating} disabled={!!generating} onClick={onGenerateResume}>
+            {generating ? 'Generating...' : 'Generate Resume'}
+          </Button>
+        )}
       </div>
     );
   }

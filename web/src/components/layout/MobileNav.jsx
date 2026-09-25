@@ -1,11 +1,11 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, PlusCircle, GraduationCap, BarChart3, Menu } from 'lucide-react';
+import { LayoutDashboard, PlusCircle, Menu } from 'lucide-react';
 
+// "Prep" (/interview-prep) and "Stats" (/analytics) used to point at dead
+// `-- coming soon` stubs (audit P0-2) — removed, see App.jsx.
 const ITEMS = [
   { to: '/', icon: LayoutDashboard, label: 'Home' },
   { to: '/add-job', icon: PlusCircle, label: 'Add' },
-  { to: '/interview-prep', icon: GraduationCap, label: 'Prep' },
-  { to: '/analytics', icon: BarChart3, label: 'Stats' },
   { to: '/settings', icon: Menu, label: 'More' },
 ];
 

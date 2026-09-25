@@ -107,28 +107,36 @@ export default function NotificationBell({ collapsed = false }) {
               </div>
             ) : (
               <div>
-                {runs.slice(0, 10).map((run, i) => (
-                  <div
-                    key={run.id || run.execution_arn || i}
-                    className="px-3 py-2.5 border-b border-stone-200 last:border-b-0 hover:bg-yellow-light transition-colors"
-                  >
-                    <p className="text-xs font-bold text-black">
-                      Pipeline {run.status === 'SUCCEEDED' ? 'completed' : run.status === 'FAILED' ? 'failed' : 'ran'}
-                    </p>
-                    <p className="text-[10px] text-stone-400 font-mono mt-0.5">
-                      {run.started_at || run.created_at
-                        ? new Date(run.started_at || run.created_at).toLocaleString('en-IE', {
-                            day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
-                          })
-                        : '--'}
-                    </p>
-                    {run.jobs_found != null && (
-                      <p className="text-[10px] text-stone-500 mt-0.5">
-                        {run.jobs_found} jobs found
+                {runs.slice(0, 10).map((run, i) => {
+                  // P1-9: the Step Function routes any step failure to
+                  // SucceedState via NotifyError (backlog_pipeline_silent_success),
+                  // so "SUCCEEDED" alone can't be trusted — a run that found 0
+                  // jobs looks identical to a normal one unless we call it out.
+                  const isEmptySuccess = run.status === 'SUCCEEDED' && (run.jobs_found ?? 0) === 0;
+                  return (
+                    <div
+                      key={run.id || run.execution_arn || i}
+                      className="px-3 py-2.5 border-b border-stone-200 last:border-b-0 hover:bg-yellow-light transition-colors"
+                    >
+                      <p className={`text-xs font-bold ${isEmptySuccess ? 'text-yellow-dark' : 'text-black'}`}>
+                        Pipeline {run.status === 'SUCCEEDED' ? 'completed' : run.status === 'FAILED' ? 'failed' : 'ran'}
+                        {isEmptySuccess && ' — 0 jobs found'}
                       </p>
-                    )}
-                  </div>
-                ))}
+                      <p className="text-[10px] text-stone-400 font-mono mt-0.5">
+                        {run.started_at || run.created_at
+                          ? new Date(run.started_at || run.created_at).toLocaleString('en-IE', {
+                              day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit',
+                            })
+                          : '--'}
+                      </p>
+                      {run.jobs_found != null && !isEmptySuccess && (
+                        <p className="text-[10px] text-stone-500 mt-0.5">
+                          {run.jobs_found} jobs found
+                        </p>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
