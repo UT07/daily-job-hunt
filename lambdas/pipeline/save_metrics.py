@@ -49,10 +49,28 @@ def get_supabase():
 def _count_compiled_artifacts(processed_jobs):
     """Count jobs whose tailor → compile → save chain produced a real PDF.
 
-    Each entry in processed_jobs is the merged Map iterator state, which
-    includes `compile_result.pdf_s3_key` if the resume PDF compiled. Returns
-    a dict with separate counts for resumes and cover letters so the metric
-    we emit isn't muddled.
+    Each entry in processed_jobs is NOT the accumulated Map iteration state —
+    it's whatever the LAST state in ProcessMatchedJobs's ItemProcessor
+    returns (template.yaml), which is always SaveJob or SaveJobAfterError.
+    Neither has a ResultPath override, so the Lambda's raw return value
+    REPLACES the entire item. save_job.py's handler returns exactly
+    `{"job_hash", "user_id", "saved", "has_resume", "failed"}` — there is no
+    `compile_result` key on it; that field was consumed by SaveJob one step
+    earlier and dropped. Checking for it here can never be true, which is
+    why this metric read 0.0 on all 74 sampled days from 2026-05-01 to
+    2026-09-02 regardless of what actually happened (confirmed live via
+    `aws cloudwatch get-metric-statistics`, including days with real,
+    non-zero JobsMatched). Use `has_resume`/`failed` instead — they're
+    already correctly populated by save_job.py from the real compile_result
+    it saw before returning.
+
+    NOTE: SaveJob's return has no cover-letter analog to `has_resume`, so
+    `cover_letters` below still can't be recovered from processed_jobs as
+    currently wired — it will keep reading 0 regardless of what actually
+    compiled. No CloudWatch alarm currently watches the cover_letter
+    dimension (only DocType=resume), so this is a known, lower-severity gap,
+    not a silent alarm failure. Fixing it needs save_job.py to also return
+    something like `has_cover_letter`, which is out of scope for this change.
     """
     if not processed_jobs:
         return {"resumes": 0, "cover_letters": 0}
@@ -61,8 +79,7 @@ def _count_compiled_artifacts(processed_jobs):
     for job in processed_jobs:
         if not isinstance(job, dict):
             continue
-        compile_result = job.get("compile_result") or {}
-        if compile_result.get("pdf_s3_key"):
+        if job.get("has_resume") and not job.get("failed"):
             resumes += 1
         cover_compile = job.get("cover_compile_result") or {}
         if cover_compile.get("pdf_s3_key"):

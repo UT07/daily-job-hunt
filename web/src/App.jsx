@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import AuthProvider from './auth/AuthProvider';
 import { ProfileProvider } from './hooks/useUserProfile';
 import AppLayout from './layouts/AppLayout';
@@ -17,17 +17,20 @@ const DataExport = lazy(() => import('./pages/DataExport'));
 const LoginPage = lazy(() => import('./pages/LoginPage'));
 const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage'));
 
-// Placeholder pages (to be built in later tasks)
-function UploadResume() {
-  return <div className="font-heading text-stone-400">Upload Resume — coming soon</div>;
-}
-function InterviewPrep() {
-  return <div className="font-heading text-stone-400">Interview Prep — coming soon</div>;
-}
-function Analytics() {
-  return <div className="font-heading text-stone-400">Analytics — coming soon</div>;
-}
-
+// P0-2: "Upload Resume" / "Interview Prep" / "Analytics" used to be inline
+// `-- coming soon` placeholder pages, wired into the permanent sidebar and
+// mobile nav with no visual distinction from working links (audit-dashboard.md
+// P0-2). Removed rather than badged:
+// - Upload Resume: fully redundant — resume upload/list/delete already lives
+//   at /settings (Settings.jsx, apiUpload('/api/resumes/upload', ...)).
+//   Redirect below so any old link/bookmark lands on the real feature.
+// - Interview Prep: the real feature already exists, just per-job rather
+//   than top-level — see PrepTab in JobWorkspace.jsx, wired to
+//   GET /api/dashboard/jobs/{id}/interview-prep. No generic top-level page
+//   makes sense without a job in context, so this route is dropped, not
+//   redirected.
+// - Analytics: verified zero backend or frontend footprint anywhere in the
+//   app (GET /api/quality-stats exists but is unused by any UI). Dropped.
 function PageLoader() {
   return (
     <div className="flex items-center justify-center py-20">
@@ -59,12 +62,15 @@ export default function App() {
                 <Route index element={<Dashboard />} />
                 <Route path="/jobs/:jobId" element={<JobWorkspace />} />
                 <Route path="/add-job" element={<AddJob />} />
-                <Route path="/upload-resume" element={<UploadResume />} />
-                <Route path="/interview-prep" element={<InterviewPrep />} />
-                <Route path="/analytics" element={<Analytics />} />
+                {/* Redundant stub — real resume upload/management lives at /settings */}
+                <Route path="/upload-resume" element={<Navigate to="/settings" replace />} />
                 <Route path="/settings" element={<Settings />} />
                 <Route path="/privacy" element={<Privacy />} />
                 <Route path="/data-export" element={<DataExport />} />
+                {/* Catch-all for removed stubs (/interview-prep, /analytics) and any
+                    other stray/old link — previously an unmatched path rendered a
+                    blank page with no sidebar at all. */}
+                <Route path="*" element={<Navigate to="/" replace />} />
               </Route>
             </Routes>
           </Suspense>

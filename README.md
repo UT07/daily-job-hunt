@@ -1,6 +1,6 @@
 # Daily NaukriBaba
 
-AI-powered job automation SaaS. Scrapes 8 job boards, matches using a consensus council of 24 LLMs, generates tailored LaTeX resumes and cover letters, finds real LinkedIn contacts, and tracks everything in a dashboard.
+AI-powered job automation SaaS. Scrapes 8 job boards, matches using a consensus council of diverse LLM families (2 generators + a cross-family critic), generates tailored LaTeX resumes and cover letters, finds real LinkedIn contacts, and tracks everything in a dashboard.
 
 ## Quick Start
 
@@ -14,7 +14,7 @@ python main.py
 
 - Backend: FastAPI + Supabase (Postgres, Auth, RLS) + AWS Lambda
 - Frontend: React 19 + Tailwind v4 + Vite
-- AI: 24 LLMs via Groq, Qwen, NVIDIA NIM, OpenRouter
+- AI: 11-provider failover pool (Groq, Qwen, NVIDIA NIM, OpenRouter); 7 models across 6 model families in the live scoring pool
 - PDF: LaTeX via tectonic/pdflatex
 - Storage: S3 + Google Drive
 - Contacts: Serper.dev (Google Search API)

@@ -110,6 +110,15 @@ export default function PipelineStatus({ onComplete }) {
   const latest = status?.latest_run;
   const metrics = status?.today_metrics || [];
 
+  // P1-9: the Step Function routes any step failure to SucceedState via
+  // NotifyError (backlog_pipeline_silent_success), so "completed" alone
+  // can't be trusted — a run that produced 0 artifacts reports the same
+  // terminal status as one that produced 100. This is the one signal the
+  // dashboard already has to tell them apart; surface it instead of a plain
+  // green "Complete" either way.
+  const latestJobsFound = latest ? (latest.raw_jobs ?? latest.jobs_found ?? 0) : 0;
+  const latestLooksEmpty = latest?.status === 'completed' && latestJobsFound === 0;
+
   // Aggregate scraper stats from today's metrics (exclude disabled scrapers)
   const DISABLED_SCRAPERS = ['adzuna', 'glassdoor'];
   const scraperStats = {};
@@ -130,10 +139,14 @@ export default function PipelineStatus({ onComplete }) {
           {pollStatus === 'RUNNING' ? (
             <span className="inline-block w-2.5 h-2.5 bg-yellow rounded-full animate-pulse" />
           ) : latest ? (
-            <span className={`inline-block w-2.5 h-2.5 rounded-full ${
-              latest.status === 'completed' ? 'bg-success' :
-              latest.status === 'failed' ? 'bg-error' : 'bg-stone-400'
-            }`} />
+            <span
+              className={`inline-block w-2.5 h-2.5 rounded-full ${
+                latestLooksEmpty ? 'bg-yellow-dark' :
+                latest.status === 'completed' ? 'bg-success' :
+                latest.status === 'failed' ? 'bg-error' : 'bg-stone-400'
+              }`}
+              title={latestLooksEmpty ? 'Completed but found 0 jobs — may be a silent failure, not a quiet day' : undefined}
+            />
           ) : (
             <span className="inline-block w-2.5 h-2.5 bg-stone-300 rounded-full" />
           )}
@@ -145,7 +158,11 @@ export default function PipelineStatus({ onComplete }) {
             {latest && !pollStatus && (
               <span className="text-xs text-stone-500 ml-2">
                 Last run: {new Date(latest.started_at || latest.run_date).toLocaleDateString()} —{' '}
-                {latest.raw_jobs || latest.jobs_found || 0} found, {latest.matched_jobs || latest.jobs_matched || 0} matched
+                {latestLooksEmpty ? (
+                  <span className="text-yellow-dark font-bold">0 jobs found (check scrapers)</span>
+                ) : (
+                  <>{latestJobsFound} found, {latest.matched_jobs || latest.jobs_matched || 0} matched</>
+                )}
               </span>
             )}
             {pollStatus === 'RUNNING' && (

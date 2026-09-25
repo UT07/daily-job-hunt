@@ -198,15 +198,22 @@ function ContactsCell({ contacts }) {
   );
 }
 
+// Location/Source/Resume Type/AI Model used to be clickable sort headers
+// that did nothing: db_client.py's get_jobs() whitelists only
+// {first_seen, match_score, title, company, application_status, posted_date}
+// and silently falls back to first_seen for anything else, so the arrow lit
+// up but row order never changed (audit P1-2). db_client.py is outside
+// web/'s ownership, so fixed here by not claiming a sort capability the
+// backend doesn't have, rather than by touching the whitelist.
 const SORTABLE_COLUMNS = [
   { key: 'first_seen', label: 'Date' },
   { key: 'match_score', label: 'Score' },
   { key: 'title', label: 'Title' },
   { key: 'company', label: 'Company' },
-  { key: 'location', label: 'Location' },
-  { key: 'source', label: 'Source' },
-  { key: 'matched_resume', label: 'Resume Type' },
-  { key: 'tailoring_model', label: 'AI Model' },
+  { key: null, label: 'Location', sortable: false },
+  { key: null, label: 'Source', sortable: false },
+  { key: null, label: 'Resume Type', sortable: false },
+  { key: null, label: 'AI Model', sortable: false },
   { key: null, label: 'Skills', sortable: false },
 ];
 
@@ -566,4 +573,4 @@ export default function JobTable({ jobs, onStatusChange, onDelete, sortBy = 'fir
   );
 }
 
-export { SkillsTags, ModelBadge, decodeHtml };
+export { SkillsTags, ModelBadge, decodeHtml, DeleteButton };

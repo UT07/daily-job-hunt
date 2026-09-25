@@ -1,5 +1,10 @@
 # CLAUDE.md — Project Context for Claude Code
 
+> **Current state, verified numbers and the active roadmap live in
+> [`docs/ROADMAP.md`](docs/ROADMAP.md).** This file describes conventions,
+> the module map and how to work in the repo. Where the two disagree about
+> what is true *today*, ROADMAP.md wins.
+
 ## Project Overview
 
 **NaukriBaba** is an automated job search pipeline + self-service web app.
@@ -10,7 +15,10 @@ tailored resumes on demand.
 
 ## Architecture
 
-- **Pipeline** (`main.py`): 10-step orchestrator run daily via GitHub Actions
+- **Pipeline**: AWS Step Functions state machines (`DailyPipelineStateMachine`,
+  `SingleJobPipelineStateMachine`) defined in `template.yaml`. `main.py` is the
+  legacy local-run orchestrator, retained for local dry-runs only.
+  **All four EventBridge schedules were disabled 2026-09-02** — see ROADMAP.md.
 - **API** (`app.py`): FastAPI backend with 5 endpoints, deployable to AWS Lambda via Mangum
 - **Frontend** (`web/`): React + Vite + Tailwind, deployable to Netlify
 - **Self-improvement** (`self_improver.py`): Post-run analysis that detects weak spots
@@ -19,6 +27,9 @@ tailored resumes on demand.
 
 - **LaTeX over Google Docs**: LaTeX + tectonic gives pixel-perfect ATS-friendly PDFs in ~15s. Google Docs approach was tried and reverted (commit abc0fe9).
 - **Multi-provider AI**: Groq → DeepSeek → OpenRouter → Claude failover chain. All free tiers. SQLite response cache with 72h TTL.
+- **AI council**: 2 generator models from distinct families + a cross-family
+  critic = 3 LLM calls per decision, over a 7-model live pool. Earlier docs
+  claimed "32 LLMs"/"24 LLMs"; neither was ever true.
 - **3-perspective scoring**: Every resume is evaluated as ATS (keyword match), Hiring Manager (impact), and Technical Recruiter (skills depth). All 3 must score 85+ or the resume is iteratively improved.
 - **Google Drive for sharing**: Service account uploads PDFs, shares with user's Gmail. Permanent links (unlike S3 presigned URLs which expire in 30 days).
 
@@ -40,6 +51,9 @@ tailored resumes on demand.
 | `s3_uploader.py` | S3 upload with 30-day presigned URLs |
 | `email_notifier.py` | Gmail HTML notification with top 15 jobs table |
 | `self_improver.py` | Post-run analysis: scores, keywords, scraper health |
+| `lambdas/pipeline/agents/` | LangGraph council: state, nodes, graph, provider adapter |
+| `lambdas/pipeline/guardrails/` | Safety layer: injection detection, output guards, per-task policy |
+| `lambdas/pipeline/retrieval/` | pgvector: Gemini embeddings, similarity queries, semantic dedup, bullet retrieval |
 | `scrapers/` | Lambda scrapers: LinkedIn, Indeed, Glassdoor (blocked), Irish (Jobs.ie+IrishJobs+GradIreland), Adzuna, YC, HN. Uses httpx + Bright Data Web Unlocker proxy. |
 | `scrapers/playwright/` | DORMANT — Scrapling/Fargate scrapers, superseded by Web Unlocker. Kept as fallback for JS-heavy sites like Glassdoor. |
 
@@ -101,7 +115,9 @@ Once active, `git commit` runs ruff + ruff-format and catches the
 
 - **Frontend**: Netlify (`netlify.toml` configured, set `VITE_API_URL` env var)
 - **Backend**: AWS Lambda via SAM (`template.yaml`, use `sam deploy --guided`)
-- **Pipeline**: GitHub Actions (`.github/workflows/daily_job_hunt.yml`, weekdays 7:00 UTC)
+- **Pipeline**: Step Functions, triggered by EventBridge (currently DISABLED).
+  `.github/workflows/daily_job_hunt.yml` still exists and still invokes `main.py`,
+  but is not the production path.
 
 ## Implementation Status
 

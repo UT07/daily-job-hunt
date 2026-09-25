@@ -1,15 +1,20 @@
 import { useState, useRef, useEffect } from 'react';
 import { apiPatch } from '../api';
 
-const STATUSES = ['New', 'Applied', 'Interview', 'Offer', 'Rejected', 'Withdrawn'];
+// Must match backend _VALID_STATUSES (app.py:1545) and JobWorkspace.jsx's
+// VALID_STATUSES — was missing 'Phone Screen' and 'Accepted', silently
+// blocking those two transitions from the fast inline table dropdown.
+const STATUSES = ['New', 'Applied', 'Phone Screen', 'Interview', 'Offer', 'Rejected', 'Withdrawn', 'Accepted'];
 
 const STATUS_STYLES = {
-  New:       'bg-info-light text-info border-info',
-  Applied:   'bg-yellow-light text-yellow-dark border-yellow-dark',
-  Interview: 'bg-success-light text-success border-success',
-  Offer:     'bg-success text-white border-success',
-  Rejected:  'bg-error-light text-error border-error',
-  Withdrawn: 'bg-stone-200 text-stone-600 border-stone-400',
+  New:           'bg-info-light text-info border-info',
+  Applied:       'bg-yellow-light text-yellow-dark border-yellow-dark',
+  'Phone Screen':'bg-yellow-light text-yellow-dark border-yellow-dark',
+  Interview:     'bg-success-light text-success border-success',
+  Offer:         'bg-success text-white border-success',
+  Rejected:      'bg-error-light text-error border-error',
+  Withdrawn:     'bg-stone-200 text-stone-600 border-stone-400',
+  Accepted:      'bg-success text-white border-success',
 };
 
 export default function StatusDropdown({ jobId, currentStatus, onStatusChange }) {

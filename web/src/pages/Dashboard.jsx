@@ -6,13 +6,18 @@ import { LayoutList, LayoutGrid, ArrowUpDown } from 'lucide-react';
 import PipelineStatus from '../components/PipelineStatus';
 import StatsBar from '../components/StatsBar';
 import JobTable from '../components/JobTable';
-import { SkillsTags, ModelBadge, decodeHtml } from '../components/JobTable';
+import { SkillsTags, ModelBadge, decodeHtml, DeleteButton } from '../components/JobTable';
+import StatusDropdown from '../components/StatusDropdown';
 import { ScoreBadge } from '../components/ui/Badge';
-import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import { Select } from '../components/ui/Input';
 
-const SOURCES = ['All', 'adzuna', 'linkedin', 'irishjobs', 'jobs_ie', 'gradireland', 'yc', 'hn', 'web', 'greenhouse', 'ashby', 'indeed'];
+// P2-2: was stale against live data — 'yc'/'hn'/'web' match 0 rows anywhere
+// in the table (the real value is 'hn_hiring', 239 rows, the 2nd-largest
+// source), while real sources 'glassdoor' (46+ rows) and 'manual' (jobs
+// created via the on-demand "Add Job" flow the product has pivoted to) had
+// no option at all.
+const SOURCES = ['All', 'adzuna', 'linkedin', 'irishjobs', 'jobs_ie', 'gradireland', 'hn_hiring', 'glassdoor', 'greenhouse', 'ashby', 'indeed', 'manual'];
 const STATUS_OPTIONS = ['All', 'New', 'Applied', 'Interview', 'Offer', 'Rejected', 'Withdrawn', 'Expired'];
 const ARCHETYPES = ['All', 'sre_devops', 'backend', 'fullstack', 'platform_cloud', 'data'];
 const SENIORITIES = ['All', 'Junior/Graduate', 'Mid-Level', 'Senior', 'Staff/Lead'];
@@ -60,7 +65,6 @@ function CardView({ jobs, onStatusChange, onDelete }) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
       {jobs.map((job) => {
-        const isDimmed = job.application_status === 'Rejected' || job.is_expired;
         const dimClass = job.application_status === 'Rejected' ? 'opacity-40' : job.is_expired ? 'opacity-50' : '';
         const titleStrike = job.application_status === 'Rejected' ? 'line-through' : '';
         return (
@@ -117,7 +121,17 @@ function CardView({ jobs, onStatusChange, onDelete }) {
                     EXPIRED
                   </span>
                 )}
-                <Badge status={job.application_status || 'New'} />
+                {/* Interactive status control — was a static <Badge>, silently
+                    dropping the onStatusChange prop (npm run lint flagged it
+                    as unused). Stop propagation so opening the dropdown / picking
+                    a status doesn't also trigger the card's navigate-to-job click. */}
+                <span onClick={(e) => e.stopPropagation()}>
+                  <StatusDropdown
+                    jobId={job.job_id}
+                    currentStatus={job.application_status || 'New'}
+                    onStatusChange={onStatusChange}
+                  />
+                </span>
                 <span className="border border-stone-300 text-stone-500 font-mono text-[10px] font-bold px-1.5 py-0.5">
                   {job.source || '--'}
                 </span>
@@ -138,18 +152,20 @@ function CardView({ jobs, onStatusChange, onDelete }) {
                 )}
                 <ModelBadge model={job.tailoring_model} />
               </div>
-              {job.apply_url && job.apply_url !== 'Apply' && (
-                <a
-                  href={job.apply_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={(e) => e.stopPropagation()}
-                  className="border-2 border-black bg-black text-cream text-[10px] font-heading font-bold px-2 py-1
-                    hover:bg-stone-700 transition-colors shrink-0"
-                >
-                  Apply
-                </a>
-              )}
+              <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
+                {job.apply_url && job.apply_url !== 'Apply' && (
+                  <a
+                    href={job.apply_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="border-2 border-black bg-black text-cream text-[10px] font-heading font-bold px-2 py-1
+                      hover:bg-stone-700 transition-colors"
+                  >
+                    Apply
+                  </a>
+                )}
+                {onDelete && <DeleteButton jobId={job.job_id} onDelete={onDelete} />}
+              </div>
             </div>
           </div>
         </div>
@@ -159,9 +175,86 @@ function CardView({ jobs, onStatusChange, onDelete }) {
   );
 }
 
+// Renders a small removable pill for one active filter. Shared between the
+// always-visible filter bar and the empty state so "what's hiding my jobs"
+// looks and behaves the same in both places.
+function FilterChip({ label, onClear }) {
+  return (
+    <button
+      onClick={onClear}
+      title="Click to remove this filter"
+      className="inline-flex items-center gap-1.5 border-2 border-black bg-white px-2 py-0.5
+        font-mono text-[10px] font-bold uppercase tracking-wide hover:bg-stone-100 transition-colors cursor-pointer"
+    >
+      {label}
+      <span aria-hidden="true" className="text-stone-500">&times;</span>
+    </button>
+  );
+}
+
+// P0-1: the previous defaults could narrow 1,243 jobs down to a single card
+// with zero explanation — indistinguishable from a broken app. This replaces
+// JobTable/CardView's generic "No jobs found" with one that says exactly
+// why, lists the filters responsible (each clearable on its own), and tells
+// the user what to do next — versus a true "no data at all" first-run state.
+function EmptyJobsState({ hasAnyJobsEver, activeFilterChips, hiddenCount, baselineLabel, onClearAll }) {
+  if (!hasAnyJobsEver) {
+    return (
+      <div className="border-2 border-black bg-white p-12 text-center">
+        <div className="text-stone-500 text-sm space-y-4">
+          <svg className="w-12 h-12 mx-auto text-stone-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+          </svg>
+          <p>No jobs yet. Add one manually or run the pipeline above to get started.</p>
+          <a href="/add-job" className="inline-block">
+            <Button variant="accent" size="sm">+ Add Job</Button>
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-2 border-black bg-white p-12 text-center">
+      <div className="text-stone-500 text-sm space-y-4">
+        <svg className="w-12 h-12 mx-auto text-stone-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+        <p>
+          No jobs match your current filters.
+          {hiddenCount > 0 && ` ${hiddenCount} ${baselineLabel} ${hiddenCount === 1 ? 'is' : 'are'} hidden by the filters below.`}
+        </p>
+        {activeFilterChips.length > 0 && (
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            {activeFilterChips.map((chip) => (
+              <FilterChip key={chip.key} label={chip.label} onClear={chip.onClear} />
+            ))}
+          </div>
+        )}
+        <div>
+          <Button variant="primary" size="sm" onClick={onClearAll}>
+            Clear all filters
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Filters that persist to ?key=value query params on the URL so navigating
 // away and back (or sharing a link) preserves the active filter set.
 // (F6 from comprehensive-prod-health plan; UC-1 option A — URL query params.)
+//
+// tier defaults to 'All' rather than 'S'. With the live corpus this small
+// (64 non-expired jobs today, tier breakdown S=1/A=6/B=22/C=29/D=6), a
+// default of 'S' shows exactly one card with no explanation — reads as
+// "broken," not "signal not volume." hide_expired + min_score already do
+// the heavy noise-cutting (94.9% of jobs are expired; only 1 of the 64
+// non-expired jobs is below the score floor), so 'All' here still means
+// "the ~63 live, scored-enough jobs," each still carrying its tier badge
+// for at-a-glance triage — the S/A/B tabs remain one click away for
+// narrowing further. Revisit this once the parked pipeline is producing a
+// steady flow of S/A jobs again.
 const FILTER_DEFAULTS = {
   status: 'All',
   source: 'All',
@@ -169,7 +262,7 @@ const FILTER_DEFAULTS = {
   company: '',
   title: '',
   tailored: false,
-  tier: 'S',
+  tier: 'All',
   hide_expired: true,
   archetype: 'All',
   seniority: 'All',
@@ -209,6 +302,11 @@ export default function Dashboard() {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  // Absolute count across every job (any status, any expiry), fetched once
+  // and used only to (a) tell "no jobs yet" apart from "filtered to zero"
+  // in the empty state, and (b) size the "N hidden by filters" message when
+  // Hide Expired is off. null until the first fetch resolves.
+  const [grandTotal, setGrandTotal] = useState(null);
 
   // Filters — initial values hydrated from URL query params so deep links
   // and browser-back restore the prior filter set.
@@ -323,6 +421,20 @@ export default function Dashboard() {
     }
   }, []);
 
+  // One cheap, unfiltered request (per_page=1, we only read `total`) to learn
+  // the absolute job count regardless of tier/score/expiry. /api/dashboard/stats
+  // already excludes expired jobs (db_client.get_job_stats filters is_expired=False),
+  // so it can't tell "brand new user, zero jobs ever" apart from "63 jobs hidden
+  // by filters" — this fills that gap without touching the backend.
+  const fetchGrandTotal = useCallback(async () => {
+    try {
+      const data = await apiGet('/api/dashboard/jobs?page=1&per_page=1');
+      setGrandTotal(typeof data.total === 'number' ? data.total : null);
+    } catch (err) {
+      console.warn('Failed to fetch grand total:', err.message);
+    }
+  }, []);
+
   // Fetch available skills for filter dropdown.
   // Was silently swallowed (.catch(() => {})) — if the endpoint failed the
   // skills filter just stayed empty with no clue why. Downgrade to a warn
@@ -343,8 +455,9 @@ export default function Dashboard() {
     if (user) {
       fetchJobs();
       fetchStats();
+      fetchGrandTotal();
     }
-  }, [user, fetchJobs, fetchStats]);
+  }, [user, fetchJobs, fetchStats, fetchGrandTotal]);
 
   function handleStatusChange(jobId, newStatus) {
     setJobs((prev) =>
@@ -358,6 +471,7 @@ export default function Dashboard() {
   function handleDelete(jobId) {
     setJobs((prev) => prev.filter((j) => j.job_id !== jobId));
     setTotal((t) => Math.max(0, t - 1));
+    setGrandTotal((t) => (typeof t === 'number' ? Math.max(0, t - 1) : t));
     fetchStats();
   }
 
@@ -365,6 +479,87 @@ export default function Dashboard() {
     setPage(1);
     setFilterVersion((v) => v + 1);
   }
+
+  function handleClearAllFilters() {
+    setStatusFilter(FILTER_DEFAULTS.status);
+    setSourceFilter(FILTER_DEFAULTS.source);
+    setMinScore(0);
+    setCompanySearch(FILTER_DEFAULTS.company);
+    setTitleSearch(FILTER_DEFAULTS.title);
+    setTailoredOnly(FILTER_DEFAULTS.tailored);
+    setTierFilter(FILTER_DEFAULTS.tier);
+    setHideExpired(false);
+    setArchetypeFilter(FILTER_DEFAULTS.archetype);
+    setSeniorityFilter(FILTER_DEFAULTS.seniority);
+    setRemoteFilter(FILTER_DEFAULTS.remote);
+    setLevelFitFilter(FILTER_DEFAULTS.level_fit);
+    setSkillFilter(FILTER_DEFAULTS.skill);
+    handleFilterApply();
+  }
+
+  // Active-filter chips shown "at a glance" above the results (P0-1). Tier
+  // and Hide Expired are included whenever they're doing work — even though
+  // both match today's *defaults* — because a default that hides 94.9% of
+  // the corpus (expired) or narrows 64 jobs down to 1 (tier=S) still needs
+  // to be visible and one click from being undone, not just "not surprising
+  // because it's the default." Min Score is included whenever > 0 for the
+  // same reason. Every other filter only appears once the user moves it off
+  // its neutral value.
+  const activeFilterChips = [];
+  if (tierFilter !== 'All') {
+    const tierLabels = { S: 'Must Apply (S)', A: 'Strong Match (A)', B: 'Worth Trying (B)' };
+    activeFilterChips.push({ key: 'tier', label: `Tier: ${tierLabels[tierFilter] || tierFilter}`, onClear: () => { setTierFilter('All'); handleFilterApply(); } });
+  }
+  if (hideExpired) {
+    activeFilterChips.push({ key: 'hide_expired', label: 'Hiding expired', onClear: () => { setHideExpired(false); handleFilterApply(); } });
+  }
+  if (minScore > 0) {
+    activeFilterChips.push({ key: 'min_score', label: `Score ≥ ${minScore}`, onClear: () => { setMinScore(0); handleFilterApply(); } });
+  }
+  if (statusFilter !== 'All') {
+    activeFilterChips.push({ key: 'status', label: `Status: ${statusFilter}`, onClear: () => { setStatusFilter('All'); handleFilterApply(); } });
+  }
+  if (sourceFilter !== 'All') {
+    activeFilterChips.push({ key: 'source', label: `Source: ${sourceFilter}`, onClear: () => { setSourceFilter('All'); handleFilterApply(); } });
+  }
+  if (companySearch.trim()) {
+    activeFilterChips.push({ key: 'company', label: `Company: "${companySearch.trim()}"`, onClear: () => { setCompanySearch(''); handleFilterApply(); } });
+  }
+  if (titleSearch.trim()) {
+    activeFilterChips.push({ key: 'title', label: `Title: "${titleSearch.trim()}"`, onClear: () => { setTitleSearch(''); handleFilterApply(); } });
+  }
+  if (tailoredOnly) {
+    activeFilterChips.push({ key: 'tailored', label: 'Tailored only', onClear: () => { setTailoredOnly(false); handleFilterApply(); } });
+  }
+  if (archetypeFilter !== 'All') {
+    activeFilterChips.push({ key: 'archetype', label: `Archetype: ${ARCHETYPE_LABELS[archetypeFilter] || archetypeFilter}`, onClear: () => { setArchetypeFilter('All'); handleFilterApply(); } });
+  }
+  if (seniorityFilter !== 'All') {
+    activeFilterChips.push({ key: 'seniority', label: `Seniority: ${seniorityFilter}`, onClear: () => { setSeniorityFilter('All'); handleFilterApply(); } });
+  }
+  if (remoteFilter !== 'All') {
+    activeFilterChips.push({ key: 'remote', label: `Remote: ${remoteFilter}`, onClear: () => { setRemoteFilter('All'); handleFilterApply(); } });
+  }
+  if (levelFitFilter !== 'All') {
+    activeFilterChips.push({ key: 'level_fit', label: `Level Fit: ${LEVEL_FIT_LABELS[levelFitFilter] || levelFitFilter}`, onClear: () => { setLevelFitFilter('All'); handleFilterApply(); } });
+  }
+  if (skillFilter.trim()) {
+    activeFilterChips.push({ key: 'skill', label: `Skill: "${skillFilter.trim()}"`, onClear: () => { setSkillFilter(''); handleFilterApply(); } });
+  }
+
+  // "N hidden by filters" — baseline depends on whether expired jobs are in
+  // play at all. /api/dashboard/stats (stats.total_jobs) always excludes
+  // expired jobs, so it's the right baseline while Hide Expired is on;
+  // otherwise fall back to the unfiltered grandTotal (null-safe: falls back
+  // to `total` itself, i.e. "nothing hidden," until that request resolves).
+  const nonExpiredTotal = stats.total_jobs ?? 0;
+  const baselineTotal = hideExpired ? nonExpiredTotal : (grandTotal ?? total);
+  const baselineLabel = hideExpired ? 'non-expired jobs' : 'jobs (including expired)';
+  const hiddenCount = Math.max(0, baselineTotal - total);
+  // Only treat this as a genuine "no jobs yet" state once grandTotal has
+  // actually loaded and is 0 — default to "assume jobs exist" so we don't
+  // flash the onboarding-style empty state before the request resolves.
+  const hasAnyJobsEver = grandTotal === null ? true : grandTotal > 0;
 
   // Compute page numbers for pagination
   const totalPages = Math.max(1, Math.ceil((total || jobs.length) / perPage));
@@ -408,7 +603,7 @@ export default function Dashboard() {
       </div>
 
       {/* Pipeline status + Run button */}
-      <PipelineStatus onComplete={() => { fetchJobs(); fetchStats(); }} />
+      <PipelineStatus onComplete={() => { fetchJobs(); fetchStats(); fetchGrandTotal(); }} />
 
       {/* KPI Stats */}
       <StatsBar stats={stats} />
@@ -631,7 +826,6 @@ export default function Dashboard() {
             { key: 'All', label: 'All Jobs', color: 'bg-stone-100 text-stone-600 border-stone-300' },
           ].map((tier) => {
             const isActive = tierFilter === (tier.key === 'All' ? 'All' : tier.key);
-            const count = tier.key === 'All' ? total : jobs.filter(j => j.score_tier === tier.key).length;
             return (
               <button
                 key={tier.key}
@@ -659,12 +853,35 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Active filters — "at a glance" visibility + one-click clear (P0-1) */}
+      {!loading && activeFilterChips.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          <span className="text-[10px] font-bold text-stone-400 uppercase tracking-widest">Filtered by:</span>
+          {activeFilterChips.map((chip) => (
+            <FilterChip key={chip.key} label={chip.label} onClear={chip.onClear} />
+          ))}
+          {activeFilterChips.length > 1 && (
+            <button
+              onClick={handleClearAllFilters}
+              className="text-[11px] font-bold text-stone-500 underline hover:text-black transition-colors cursor-pointer"
+            >
+              Clear all
+            </button>
+          )}
+        </div>
+      )}
+
       {/* View Toggle + Job Display */}
       {!loading && (
         <div>
           <div className="flex items-center justify-between mb-3">
             <p className="text-xs font-bold text-stone-400 uppercase tracking-wider">
               {total} job{total !== 1 ? 's' : ''}{tierFilter !== 'All' && ` in Tier ${tierFilter}`}
+              {hiddenCount > 0 && (
+                <span className="text-stone-400 font-normal normal-case tracking-normal">
+                  {' '}&middot; {hiddenCount} more {baselineLabel} hidden by filters
+                </span>
+              )}
             </p>
             <div className="flex items-center gap-3">
               {/* Sort control */}
@@ -721,7 +938,15 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {viewMode === 'list' ? (
+          {jobs.length === 0 ? (
+            <EmptyJobsState
+              hasAnyJobsEver={hasAnyJobsEver}
+              activeFilterChips={activeFilterChips}
+              hiddenCount={hiddenCount}
+              baselineLabel={baselineLabel}
+              onClearAll={handleClearAllFilters}
+            />
+          ) : viewMode === 'list' ? (
             <JobTable
               jobs={jobs}
               onStatusChange={handleStatusChange}

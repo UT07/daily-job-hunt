@@ -6,6 +6,25 @@ import boto3
 
 from ai_helper import ai_complete, council_complete, get_supabase
 
+try:
+    from retrieval.bullets import retrieve_evidence
+except Exception:  # retrieval package absent in some deploy paths
+    retrieve_evidence = None
+
+# Output guards moved to guardrails/output_guards.py (Task 21). Re-exported
+# here under their original underscore-prefixed names so existing callers in
+# this module's handler() and existing test patch targets keep working
+# unchanged. `guardrails` sits alongside this module under lambdas/pipeline/
+# and resolves as a flat top-level package in every shape this Lambda
+# actually runs in (pytest, zip Lambda) — no try/except needed, same as
+# guardrails/input_guards.py's own imports.
+from guardrails.output_guards import check_banned_phrases as _check_banned_phrases
+from guardrails.output_guards import check_brace_balance as _check_brace_balance
+from guardrails.output_guards import check_required_sections as _check_required_sections
+from guardrails.output_guards import check_fabrication as _check_fabrication
+from guardrails.output_guards import check_header_present as _check_header_present
+from guardrails.output_guards import check_textbf_preservation as _check_textbf_preservation
+
 
 class TailorError(Exception):
     """Raised when tailoring cannot produce a resume for this job.
@@ -102,9 +121,6 @@ def _validate_macro_arities(tex: str) -> list[str]:
     return issues
 
 
-_REQUIRED_SECTIONS = ["experience", "skills", "education", "projects", "certifications"]
-
-
 def _derive_header_markers(profile: dict | None) -> list[str]:
     """Return per-user header markers from the profile, with safe fallbacks.
 
@@ -135,104 +151,6 @@ def _derive_header_markers(profile: dict | None) -> list[str]:
     if email:
         markers.append(email)
     return markers
-
-
-def _check_header_present(tex: str, markers: list[str]) -> list[str]:
-    """Return list of header markers missing from the tex. Empty = all present
-    (or no markers configured, in which case the check is a no-op)."""
-    if not markers:
-        return []
-    return [m for m in markers if m not in tex]
-
-
-def _check_required_sections(tex: str) -> list[str]:
-    """Return the list of required section keywords NOT found in any \\section heading.
-
-    Uses substring matching so "Work Experience" satisfies "experience" and
-    "Technical Skills" satisfies "skills". Matches the downstream compiler gate.
-    """
-    heads = [h.lower() for h in re.findall(r"\\section\*?\{([^}]*)\}", tex)]
-    return [s for s in _REQUIRED_SECTIONS if not any(s in h for h in heads)]
-
-
-def _check_brace_balance(tex: str) -> bool:
-    """Return True if {/} are balanced (ignoring \\{ and \\})."""
-    depth = 0
-    i = 0
-    while i < len(tex):
-        if tex[i] == "\\" and i + 1 < len(tex) and tex[i + 1] in "{}":
-            i += 2
-            continue
-        if tex[i] == "{":
-            depth += 1
-        elif tex[i] == "}":
-            depth -= 1
-            if depth < 0:
-                return False
-        i += 1
-    return depth == 0
-
-
-# ---------------------------------------------------------------------------
-# Quality validation — checks writing quality, not just LaTeX structure
-# ---------------------------------------------------------------------------
-
-_BANNED_PHRASES = [
-    "highly motivated", "extensive experience", "proven track record",
-    "passionate about", "self-motivated", "team player", "detail-oriented",
-    "results-driven", "strong background in", "experienced professional",
-    "seasoned professional", "leveraging", "utilizing", "showcasing",
-    "demonstrating proficiency", "directly transferable to", "aligned with",
-    "outcomes relevant to", "i am excited", "excited to join",
-    "results-oriented", "spearheaded", "facilitated", "synergies",
-    "robust", "seamless", "cutting-edge", "innovative",
-    "in today's fast-paced world", "demonstrated ability to",
-]
-
-
-def _check_banned_phrases(tex: str) -> list[str]:
-    """Check for banned filler phrases in the tailored body."""
-    tex_lower = tex.lower()
-    return [f"banned_phrase: '{p}'" for p in _BANNED_PHRASES if p in tex_lower]
-
-
-def _check_textbf_preservation(base_body: str, tailored_body: str) -> list[str]:
-    r"""Check that \textbf formatting is preserved from base resume."""
-    base_count = len(re.findall(r"\\textbf\{", base_body))
-    tailored_count = len(re.findall(r"\\textbf\{", tailored_body))
-    if base_count == 0:
-        return []
-    ratio = tailored_count / base_count
-    if ratio < 0.5:
-        return [
-            f"textbf_stripped: base has {base_count} \\textbf, tailored has {tailored_count} "
-            f"({ratio:.0%} preserved, need >=50%)"
-        ]
-    return []
-
-
-def _check_fabrication(base_skills_text: str, tailored_tex: str) -> list[str]:
-    """Check if tailored resume mentions skills not present in base."""
-    _KNOWN_FABRICATIONS = {
-        "java", "vue.js", "angular", "ruby", "php", "scala", "rust",
-        "kotlin", "swift", "dart", "flutter", "spring", "hibernate",
-        "django", "rails", "laravel", "spring boot",
-    }
-    base_lower = base_skills_text.lower()
-    errors = []
-    skills_match = re.search(
-        r"\\section\*\{(?:Technical )?Skills\}(.*?)\\section\*\{",
-        tailored_tex, re.DOTALL,
-    )
-    if not skills_match:
-        return []
-    clean = re.sub(r"\\[a-zA-Z]+\{([^}]*)\}", r"\1", skills_match.group(1))
-    clean = re.sub(r"[{}\\]", "", clean)
-    for item in re.split(r"[,&\n]+", clean):
-        skill = item.strip().lower()
-        if skill and skill in _KNOWN_FABRICATIONS and skill not in base_lower:
-            errors.append(f"fabrication: '{skill.title()}' not in base resume")
-    return errors
 
 
 # ---------------------------------------------------------------------------
@@ -399,6 +317,44 @@ _FULL_REWRITE_NOTE = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Evidence pool (Task 17): ground tailoring in the candidate's own verified
+# resume bullets (retrieval/bullets.py, Task 16). Bounding the model to facts
+# that already appear in the user's own resume is a hallucination-mitigation
+# control -- its effect on fabrication is measured in a follow-up task via
+# the existing _check_fabrication guard. Flag-gated by BULLET_RAG (default
+# off); see safe_evidence_block for why retrieval can never break tailoring.
+# ---------------------------------------------------------------------------
+
+
+def build_evidence_block(bullets: list[dict]) -> str:
+    """Format retrieved bullets as a bounded evidence pool for the prompt."""
+    if not bullets:
+        return ""
+    lines = "\n".join(f"- [{b['section']}] {b['text']}" for b in bullets)
+    return (
+        "\n\nEVIDENCE POOL — verified facts from this candidate's own resume:\n"
+        f"{lines}\n"
+        "Draw claims only from this pool. Do not invent experience, metrics, "
+        "employers or technologies that do not appear above.\n"
+    )
+
+
+def safe_evidence_block(user_id: str, jd_text: str, k: int = 8) -> str:
+    """Retrieval is an enhancement, never a dependency.
+
+    If BULLET_RAG is off, or the vector store is unreachable, this returns ""
+    and tailoring proceeds exactly as it did before this feature existed.
+    """
+    if os.environ.get("BULLET_RAG", "off") != "on":
+        return ""
+    try:
+        return build_evidence_block(retrieve_evidence(user_id, jd_text, k=k))
+    except Exception as exc:
+        logger.warning(f"[tailor] evidence retrieval failed, continuing without: {exc}")
+        return ""
+
+
 def handler(event, context):
     job_hash = event["job_hash"]
     user_id = event["user_id"]
@@ -471,6 +427,16 @@ Return ONLY the tailored body. No \\documentclass, no \\newcommand, no \\begin{{
 
 Reminder: your output MUST contain all six section headers verbatim: \\section*{{Summary}}, \\section*{{Technical Skills}}, \\section*{{Experience}}, \\section*{{Featured Projects}}, \\section*{{Education}}, \\section*{{Certifications}}.
 PRESERVE all \\textbf{{}} formatting from the base resume."""
+
+    # Evidence pool (Task 17): appends retrieved resume bullets, if any, so
+    # the model is bounded to facts that actually appear in this candidate's
+    # own resume. No-op (empty string) when BULLET_RAG is off or retrieval
+    # fails -- see safe_evidence_block. Uses the full description, not the
+    # [:4000]-truncated copy above, since this text is only embedded for
+    # similarity search and never sent to the model itself. Must happen
+    # before the council_complete call below, since that call reads
+    # user_prompt by value.
+    user_prompt += safe_evidence_block(user_id, description)
 
     # ALWAYS use council — no single-call bypass regardless of tier
     logger.info(f"[tailor] Council mode for {job_hash} (depth={tailoring_depth}, archetype={archetype})")
