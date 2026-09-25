@@ -421,3 +421,53 @@ def test_retrieval_package_lives_under_lambdas_pipeline():
         "lambdas/pipeline/retrieval/ -- two copies of the same package is "
         "exactly the shadowing hazard this move exists to eliminate"
     )
+
+
+# ---------------------------------------------------------------------------
+# guardrails/ (Task 19, guardrail result types + per-task policy) applies the
+# agents/ and retrieval/ lesson up front instead of relearning it: it will be
+# consumed by tailor_resume.py, score_batch.py and agents/nodes.py, all of
+# which already live inside lambdas/pipeline/, so it ships at
+# lambdas/pipeline/guardrails/ -- inside the pipeline functions' own CodeUri
+# -- rather than as a repo-root package needing layer/Dockerfile parity the
+# way "shared" does. It is deliberately NOT in APP_PACKAGES above for the
+# same reason "agents" and "retrieval" are not.
+# ---------------------------------------------------------------------------
+
+
+def test_guardrails_not_in_layer_build_first_party_list():
+    """guardrails/ must never enter the shared layer's FIRST_PARTY list.
+
+    Same hazard as agents/ and retrieval/: a layer mounts at /opt/python,
+    which precedes /var/task on sys.path, so a stale copy there would
+    silently shadow the real one, and a layer-content-only change does not
+    reliably publish a new Lambda version (see
+    test_alias_all_properties_set_whenever_any_function_auto_publishes).
+    First-party application code belongs in the function's own CodeUri.
+    """
+    packages = _first_party_packages_in_layer_build_sh()
+    assert "guardrails" not in packages, (
+        "guardrails/ must not be in layer/build.sh's FIRST_PARTY list. It "
+        "ships inside lambdas/pipeline/guardrails/, as part of the pipeline "
+        "functions' CodeUri, instead."
+    )
+
+
+def test_guardrails_package_lives_under_lambdas_pipeline():
+    """guardrails/ must be a subpackage of lambdas/pipeline/, not a repo-root package.
+
+    lambdas/pipeline/ is the CodeUri SAM/CFN packages for every zip-based
+    pipeline Lambda, including tailor_resume and score_batch -- guardrails/'s
+    consumers -- so SAM hashes guardrails/'s actual file contents as part of
+    that function package, guaranteeing a version publish on every change.
+    """
+    assert (REPO / "lambdas" / "pipeline" / "guardrails" / "__init__.py").is_file(), (
+        "guardrails/ is not at lambdas/pipeline/guardrails/ -- it must live "
+        "inside the pipeline functions' CodeUri, not at the repo root, so "
+        "its changes are packaged (and hashed) with the function itself"
+    )
+    assert not (REPO / "guardrails").is_dir(), (
+        "a stale repo-root guardrails/ directory exists alongside "
+        "lambdas/pipeline/guardrails/ -- two copies of the same package is "
+        "exactly the shadowing hazard this move exists to eliminate"
+    )
