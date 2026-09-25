@@ -6,6 +6,11 @@ import boto3
 
 from ai_helper import ai_complete, council_complete, get_supabase
 
+try:
+    from retrieval.bullets import retrieve_evidence
+except Exception:  # retrieval package absent in some deploy paths
+    retrieve_evidence = None
+
 
 class TailorError(Exception):
     """Raised when tailoring cannot produce a resume for this job.
@@ -399,6 +404,44 @@ _FULL_REWRITE_NOTE = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Evidence pool (Task 17): ground tailoring in the candidate's own verified
+# resume bullets (retrieval/bullets.py, Task 16). Bounding the model to facts
+# that already appear in the user's own resume is a hallucination-mitigation
+# control -- its effect on fabrication is measured in a follow-up task via
+# the existing _check_fabrication guard. Flag-gated by BULLET_RAG (default
+# off); see safe_evidence_block for why retrieval can never break tailoring.
+# ---------------------------------------------------------------------------
+
+
+def build_evidence_block(bullets: list[dict]) -> str:
+    """Format retrieved bullets as a bounded evidence pool for the prompt."""
+    if not bullets:
+        return ""
+    lines = "\n".join(f"- [{b['section']}] {b['text']}" for b in bullets)
+    return (
+        "\n\nEVIDENCE POOL — verified facts from this candidate's own resume:\n"
+        f"{lines}\n"
+        "Draw claims only from this pool. Do not invent experience, metrics, "
+        "employers or technologies that do not appear above.\n"
+    )
+
+
+def safe_evidence_block(user_id: str, jd_text: str, k: int = 8) -> str:
+    """Retrieval is an enhancement, never a dependency.
+
+    If BULLET_RAG is off, or the vector store is unreachable, this returns ""
+    and tailoring proceeds exactly as it did before this feature existed.
+    """
+    if os.environ.get("BULLET_RAG", "off") != "on":
+        return ""
+    try:
+        return build_evidence_block(retrieve_evidence(user_id, jd_text, k=k))
+    except Exception as exc:
+        logger.warning(f"[tailor] evidence retrieval failed, continuing without: {exc}")
+        return ""
+
+
 def handler(event, context):
     job_hash = event["job_hash"]
     user_id = event["user_id"]
@@ -471,6 +514,16 @@ Return ONLY the tailored body. No \\documentclass, no \\newcommand, no \\begin{{
 
 Reminder: your output MUST contain all six section headers verbatim: \\section*{{Summary}}, \\section*{{Technical Skills}}, \\section*{{Experience}}, \\section*{{Featured Projects}}, \\section*{{Education}}, \\section*{{Certifications}}.
 PRESERVE all \\textbf{{}} formatting from the base resume."""
+
+    # Evidence pool (Task 17): appends retrieved resume bullets, if any, so
+    # the model is bounded to facts that actually appear in this candidate's
+    # own resume. No-op (empty string) when BULLET_RAG is off or retrieval
+    # fails -- see safe_evidence_block. Uses the full description, not the
+    # [:4000]-truncated copy above, since this text is only embedded for
+    # similarity search and never sent to the model itself. Must happen
+    # before the council_complete call below, since that call reads
+    # user_prompt by value.
+    user_prompt += safe_evidence_block(user_id, description)
 
     # ALWAYS use council — no single-call bypass regardless of tier
     logger.info(f"[tailor] Council mode for {job_hash} (depth={tailoring_depth}, archetype={archetype})")

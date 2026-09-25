@@ -105,6 +105,18 @@ Parameters:
       queries. Defaults off because it depends on the pgvector schema and
       RPC migrations (db/migrations, Tasks 11/13), which are not yet
       applied to production.
+  BulletRag:
+    Type: String
+    Default: "off"
+    AllowedValues: ["off", "on"]
+    Description: >
+      Enables TailorResumeFunction's evidence-pool injection
+      (retrieval/bullets.py): bullets retrieved from the candidate's own
+      resume are appended to the tailoring prompt so the model is bounded to
+      facts that already appear there, reducing fabrication. Defaults off
+      because it depends on the pgvector schema/RPC migrations (Tasks
+      11/13) and the resume_bullets table being populated (Task 16), which
+      are not yet indexed for production users.
 
 Resources:
 
@@ -436,6 +448,7 @@ Resources:
       Environment:
         Variables:
           COUNCIL_ENGINE: !Ref CouncilEngine
+          BULLET_RAG: !Ref BulletRag
       Policies:
         - SSMParameterReadPolicy:
             ParameterName: naukribaba/*
