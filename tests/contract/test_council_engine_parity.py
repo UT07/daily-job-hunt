@@ -33,9 +33,14 @@ WHAT IS DELIBERATELY NOT ESTABLISHED
       CONTENT parity only, never critic identity.
     * Repair-loop behaviour. Legacy has no repair loop at all, so there is
       nothing on that side to compare against. The graph's bounded
-      reflexion loop (quality_gate / repair_node) is exercised only by
-      test_graph_only_repair_loop_bounded_and_returns_valid_winner, which
-      is explicitly labelled graph-only and asserts no parity.
+      reflexion loop (quality_gate / repair_node / guard_output_node) is
+      exercised only by test_graph_only_repair_loop_bounded_and_returns_valid_winner,
+      which is explicitly labelled graph-only and asserts no parity. Since
+      Task 22 wired guard_output_node into the graph, that test drives the
+      loop with real content that permanently fails check_output, not a
+      hand-seeded guard_report -- guard_output_node recomputes guard_report
+      from the actual winner content every round, so a hand-seeded value
+      would just be overwritten by a real (passing) evaluation on round one.
 
 The legacy council and the graph are driven with the same deterministic fake
 providers; any divergence in the selected WINNER is a port defect.
@@ -238,18 +243,30 @@ def test_graph_only_repair_loop_bounded_and_returns_valid_winner():
     """Graph-only -- legacy has no repair loop, so there is no parity claim
     here, unlike every other test in this module.
 
-    Seeds a permanently-failing guard_report (it is never cleared, so
-    quality_gate keeps routing to "repair" until its own attempt cap fires)
-    to force the graph's headline addition -- the bounded reflexion loop --
-    to actually run, and confirms it terminates at the documented 2-attempt
-    bound (agents/nodes.py::quality_gate) instead of looping forever, still
-    producing a well-formed {content, provider, model} winner.
+    Forces a PERMANENTLY-FAILING guard by making the mocked provider always
+    return content that genuinely fails check_output: task="tailor" enables
+    the latex_structure policy, and content with no LaTeX sections at all is
+    missing all 5 required sections -- a block-severity violation, so
+    guard_report["passed"] is False every round, not just the first. This
+    must be driven through real guard_output_node evaluation rather than a
+    hand-seeded initial guard_report: guard_output_node (wired into the
+    graph by Task 22) recomputes guard_report from the ACTUAL winner content
+    after every critique, so a hand-seeded value -- as this test used before
+    that wiring landed -- is silently overwritten by a real (passing)
+    evaluation on round one, and repair_attempts would incorrectly read 0
+    instead of 2 (the wiring-incomplete failure mode this test now guards
+    against). This forces quality_gate to keep routing to "repair" until its
+    own attempt cap fires (agents/nodes.py::quality_gate), still producing a
+    well-formed {content, provider, model} winner.
     """
+    bad_cand = {"content": "No LaTeX sections here at all, ever.",
+                "provider": "groq/a", "model": "openai/gpt-oss-120b"}
     with patch("agents.providers._build_provider_list", return_value=[P1]), \
-         patch("agents.providers._call_provider", return_value=CAND_A):
+         patch("agents.providers._call_provider", return_value=bad_cand):
         graph = graph_mod.build_council_graph()
         final = graph.invoke(
             {
+                "task": "tailor",
                 "prompt": "p",
                 "system": "s",
                 "task_description": "desc",
@@ -258,16 +275,16 @@ def test_graph_only_repair_loop_bounded_and_returns_valid_winner():
                 "candidates": [],
                 "repair_attempts": 0,
                 "trace_id": "test-graph-only-repair",
-                "guard_report": {"passed": False, "violations": ["forced"]},
             },
             config={"configurable": {"thread_id": "test-graph-only-repair"}},
         )
 
     assert final["repair_attempts"] == 2, "expected exactly 2 repair rounds before the budget cap finalizes"
+    assert final["guard_report"]["passed"] is False
     winner = final.get("winner")
     assert winner is not None
     assert set(winner) == {"content", "provider", "model"}
-    assert winner["content"] == CAND_A["content"]
+    assert winner["content"] == bad_cand["content"]
 
 
 def test_engine_flag_defaults_to_legacy(monkeypatch):

@@ -15,6 +15,8 @@ from agents._ai_helper import (
     build_critique_prompt,
 )
 from agents.providers import all_providers, call_one, family_of, select_critic, select_generators
+from guardrails.input_guards import INSTRUCTION_HIERARCHY, check_input, fence
+from guardrails.output_guards import check_output
 
 logger = logging.getLogger()
 
@@ -24,6 +26,38 @@ logger = logging.getLogger()
 # silently drift while they run side by side during migration. Keep them
 # imported by name (not `ai_helper.X`) so `nodes.CRITIC_MAX_TOKENS` etc. and
 # existing patch targets keep resolving.
+
+
+def guard_input_node(state: dict) -> dict:
+    """Reject injected input, then fence and declare the hierarchy.
+
+    Raising rather than repairing is deliberate: an injection attempt is not
+    a quality problem to iterate on, it is input to refuse. Letting it reach
+    `repair_node` would hand an attacker a free reflexion loop to refine
+    their payload against our own guard feedback.
+
+    The exception message is the only artifact an on-call engineer sees in
+    CloudWatch for a rejected job, so it names the task (which policy fired)
+    and a bounded preview of the offending prompt (which text tripped it) --
+    enough to tell a real attack from a false positive without correlating
+    back to the original job record by hand. The input guards measured
+    0 false positives across 3,842 real job descriptions (Task 20), which is
+    the justification for failing the whole call rather than softening this
+    to a warning.
+    """
+    task = state.get("task", "default")
+    prompt = state["prompt"]
+    result = check_input(prompt, task)
+    if not result.passed:
+        preview = prompt[:300].replace("\n", " ")
+        raise ValueError(
+            f"Input guard rejected the prompt for task={task!r}: "
+            f"{result.to_dict()['violations']} | prompt_preview={preview!r}"
+        )
+    return {
+        "prompt": fence(prompt),
+        "system": f"{INSTRUCTION_HIERARCHY}\n\n{state.get('system', '')}".strip(),
+    }
 
 
 def plan_node(state: dict) -> dict:
@@ -106,6 +140,36 @@ def critique_node(state: dict) -> dict:
     best = max(range(len(scores)), key=lambda i: scores[i])
     logger.info("[council] Scores: %s, winner: candidate %d", scores, best + 1)
     return {"winner": candidates[best], "scores": scores}
+
+
+def guard_output_node(state: dict) -> dict:
+    """Evaluate the winning candidate against the task's output policy.
+
+    This is what arms `quality_gate`'s repair loop: before this node existed
+    on the graph path, nothing ever wrote `guard_report`, so `quality_gate`
+    always saw `None` (-> treated as passed) and always finalized on the
+    first pass. Recomputing it fresh here, every round, from the ACTUAL
+    winner content is also what makes the repair loop meaningful rather than
+    a rubber stamp -- a stale or hand-seeded report would never reflect
+    whether a repaired attempt actually fixed anything.
+
+    `check_output`'s keyword is `base_skills_text`; `CouncilState`'s field
+    (matching tailor_resume's own naming for the same value) is
+    `base_skills`. This node is the adapter between the two names -- get it
+    wrong and the fabrication check silently never runs, which is exactly
+    the "policy flag that does nothing" defect class this task exists to
+    close (see guardrails/policy.py's removal of the dead `fairness_cap`
+    key for the other instance of it found during this task).
+    """
+    winner = state.get("winner") or {}
+    result = check_output(
+        winner.get("content", ""),
+        state.get("task", "default"),
+        base_skills_text=state.get("base_skills", ""),
+        base_body=state.get("base_body", ""),
+        header_markers=state.get("header_markers"),
+    )
+    return {"guard_report": result.to_dict()}
 
 
 def quality_gate(state: dict) -> str:

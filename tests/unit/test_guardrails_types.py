@@ -1,4 +1,4 @@
-from guardrails.policy import policy_for
+from guardrails.policy import POLICIES, policy_for
 from guardrails.types import GuardResult, Violation
 
 
@@ -33,3 +33,20 @@ def test_tailor_policy_enables_latex_checks():
 
 def test_score_policy_disables_latex_checks():
     assert policy_for("score")["latex_structure"] is False
+
+
+def test_no_fairness_cap_key():
+    """Regression pin: guardrails/policy.py must not carry a "fairness_cap"
+    key again without also wiring something real to consume it.
+
+    An earlier draft had one, paired with an `apply_fairness_cap` that was
+    never implemented anywhere. The real geo/work-auth score cap is
+    `apply_geo_score_cap` in shared/work_auth.py, called unconditionally
+    from score_batch.py -- outside this package's guard pipeline entirely.
+    See guardrails/policy.py's module docstring for the full explanation.
+    """
+    for task, policy in POLICIES.items():
+        assert "fairness_cap" not in policy, (
+            f"policy {task!r} carries a fairness_cap key with nothing in "
+            "guardrails/ that reads it -- see guardrails/policy.py docstring"
+        )

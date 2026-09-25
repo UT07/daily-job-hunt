@@ -37,17 +37,32 @@ def test_raises_when_every_generator_fails():
 
 
 def test_repair_round_resets_candidates_not_accumulates():
-    """A failing guard_report forces two repair rounds (quality_gate's
-    repair_attempts>=2 cap means three total generate passes before the
-    graph finalizes). Each round must start from an empty candidate list --
-    otherwise rejected candidates from earlier rounds pile back up, get
-    re-scored alongside the new batch, and can win despite being rejected.
+    """A permanently-failing guard_output_node evaluation forces two repair
+    rounds (quality_gate's repair_attempts>=2 cap means three total generate
+    passes before the graph finalizes). Each round must start from an empty
+    candidate list -- otherwise rejected candidates from earlier rounds pile
+    back up, get re-scored alongside the new batch, and can win despite
+    being rejected.
+
+    Drives failure via real content (task="tailor", missing every required
+    LaTeX section -- a block-severity violation) rather than a hand-seeded
+    `guard_report`. Now that guard_output_node is wired into the graph (Task
+    22), it recomputes guard_report from the ACTUAL winner content after
+    every critique round; a hand-seeded value would be silently overwritten
+    by a real (passing, since CAND_A's plain "alpha" content trips no
+    checks) evaluation on round one, and this test would report only one
+    generate pass -- happening to still satisfy the assertion below with
+    len==1, but for the wrong reason (0 repairs, not 2). See
+    test_agents_guard_nodes.py::test_guard_output_wiring_arms_the_bounded_repair_loop
+    for the dedicated wiring regression this mirrors.
     """
+    bad_cand = {"content": "No LaTeX sections at all.", "provider": "groq/a", "model": "m1"}
     with patch("agents.nodes.select_generators", return_value=[P1]), \
-         patch("agents.nodes.call_one", return_value=CAND_A):
+         patch("agents.nodes.call_one", return_value=bad_cand):
         graph = graph_mod.build_council_graph()
         final = graph.invoke(
             {
+                "task": "tailor",
                 "prompt": "p",
                 "system": "s",
                 "task_description": "desc",
@@ -56,10 +71,10 @@ def test_repair_round_resets_candidates_not_accumulates():
                 "candidates": [],
                 "repair_attempts": 0,
                 "trace_id": "test-repair-reset",
-                "guard_report": {"passed": False, "violations": ["forced"]},
             },
             config={"configurable": {"thread_id": "test-repair-reset"}},
         )
+    assert final["repair_attempts"] == 2
     # Three generate passes run (initial attempt + 2 repairs) before the
     # repair budget is exhausted, but candidates must reflect only the final
     # round's output -- one generator's worth, not three rounds concatenated.
