@@ -46,6 +46,22 @@ def test_scrub_pii_preserves_surrounding_text():
     assert "Contact" in ig.scrub_pii("Contact jane@example.com")
 
 
+def test_maybe_scrub_pii_scrubs_when_policy_enables_it():
+    # Every policy in guardrails/policy.py declares pii_scrub True today, so
+    # any real task name exercises the enabled branch.
+    out = ig.maybe_scrub_pii("Contact jane@example.com", "tailor")
+    assert "jane@example.com" not in out
+    assert "[EMAIL_REDACTED]" in out
+
+
+def test_maybe_scrub_pii_leaves_text_alone_when_policy_disables_it():
+    ig.POLICY_OVERRIDE = {"injection_detection": True, "pii_scrub": False}
+    try:
+        assert ig.maybe_scrub_pii("Contact jane@example.com", "tailor") == "Contact jane@example.com"
+    finally:
+        ig.POLICY_OVERRIDE = None
+
+
 def test_injection_check_skipped_when_policy_disables_it():
     ig.POLICY_OVERRIDE = {"injection_detection": False, "pii_scrub": False}
     try:

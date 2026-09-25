@@ -24,16 +24,17 @@ score_batch.py's call actually consult it would resurrect the same dead-flag
 defect; see test_guardrails_types.py::test_no_fairness_cap_key for the
 regression test pinning this absence.
 
-KNOWN EXISTING VIOLATION of the "every key must be read" rule above:
-`pii_scrub`, declared True on every policy below, is not currently read by
-`check_input` (which only ever consults `injection_detection`) and
-`scrub_pii()` in `input_guards.py` has no caller outside its own unit tests
--- PII is not actually being scrubbed from any prompt on any path today.
-This is the same dead-flag shape as the removed `fairness_cap`, found while
-fixing that one, but wiring `scrub_pii` into `guard_input_node` is a
-behaviour change beyond this task's scope (wiring the guard *nodes* into the
-graph). Left as-is and flagged for a dedicated follow-up rather than fixed
-silently here or ignored silently.
+`pii_scrub`, declared True on every policy below, used to be exactly this
+kind of dead flag: read by nothing, with `scrub_pii()` in `input_guards.py`
+having no caller outside its own unit tests, the same shape as the removed
+`fairness_cap` above. Closed in the task that wired the guard *nodes* into
+the graph: `guard_input_node` now calls
+`guardrails.input_guards.maybe_scrub_pii(prompt, task)`, which consults this
+same `policy_for(task)["pii_scrub"]` flag and redacts emails/phone numbers
+before the (accepted) prompt is fenced and dispatched to a third-party
+free-tier provider. See `maybe_scrub_pii`'s docstring in `input_guards.py`
+and `test_agents_guard_nodes.py::test_guard_input_scrubs_pii_when_policy_enables_it`
+for the wiring regression test.
 """
 
 POLICIES: dict[str, dict] = {

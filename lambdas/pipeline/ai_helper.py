@@ -328,8 +328,25 @@ def council_complete(
     task_description: str = "",
     n_generators: int = 2,
     temperature: float = 0.3,
+    task: str = "default",
+    base_skills: str = "",
+    base_body: str = "",
+    header_markers: list[str] | None = None,
 ) -> dict:
-    """Generate candidates from diverse models, pick the best by critic score."""
+    """Generate candidates from diverse models, pick the best by critic score.
+
+    `task` selects the guardrail policy (guardrails/policy.py) that the
+    LangGraph engine's guard_input_node/guard_output_node apply -- "tailor",
+    "cover_letter", "score", or the "default" fallback used when a caller
+    passes nothing (so existing callers keep their pre-guardrail behaviour
+    unless they opt in). `base_skills`/`base_body`/`header_markers` are
+    extra context guard_output_node needs to evaluate fabrication and
+    formatting-preservation checks against the CALLER's own base resume
+    rather than an empty baseline; pass them whenever the caller actually
+    has them and the check is meaningful against what the graph evaluates
+    (see tailor_resume.py's council_complete call for a case where one of
+    these three is deliberately withheld, and why).
+    """
     if _council_engine() == "langgraph":
         try:
             from agents.graph import council_complete_langgraph  # flat — pytest / zip Lambda
@@ -340,8 +357,16 @@ def council_complete(
             # `lambdas.pipeline.agents` resolves.
             from lambdas.pipeline.agents.graph import council_complete_langgraph
         return council_complete_langgraph(
-            prompt, system, task_description, n_generators, temperature
+            prompt, system, task_description, n_generators, temperature,
+            task=task, base_skills=base_skills, base_body=base_body,
+            header_markers=header_markers,
         )
+    # Legacy has no guard nodes at all -- _council_complete_legacy below never
+    # imports guardrails, so `task`/`base_skills`/`base_body`/`header_markers`
+    # have nothing to plug into on this path. Dropped here deliberately, not
+    # forgotten: legacy is frozen pre-guardrail behaviour, kept only as the
+    # COUNCIL_ENGINE=legacy escape hatch and the parity test's baseline, and
+    # is not a candidate for picking up guard-policy awareness of its own.
     return _council_complete_legacy(
         prompt, system, task_description, n_generators, temperature
     )

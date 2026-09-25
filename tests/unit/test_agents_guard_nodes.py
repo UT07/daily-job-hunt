@@ -56,6 +56,31 @@ def test_guard_input_fences_the_prompt():
     assert "Backend engineer, Python." in out["prompt"]
 
 
+def test_guard_input_scrubs_pii_when_policy_enables_it():
+    # pii_scrub is True on every policy in guardrails/policy.py today (see
+    # that module's docstring for the wiring history): a task="tailor" job
+    # description containing a candidate's own contact details must not
+    # reach fence()/the model unredacted.
+    out = nodes.guard_input_node(
+        {"prompt": "Contact jane@example.com about this role.", "task": "tailor", "system": ""}
+    )
+    assert "jane@example.com" not in out["prompt"]
+    assert "[EMAIL_REDACTED]" in out["prompt"]
+
+
+def test_guard_input_leaves_pii_alone_when_policy_disables_scrub():
+    from guardrails import input_guards as ig
+
+    ig.POLICY_OVERRIDE = {"injection_detection": True, "pii_scrub": False}
+    try:
+        out = nodes.guard_input_node(
+            {"prompt": "Contact jane@example.com about this role.", "task": "tailor", "system": ""}
+        )
+        assert "jane@example.com" in out["prompt"]
+    finally:
+        ig.POLICY_OVERRIDE = None
+
+
 def test_guard_output_records_violations_into_state():
     state = {"winner": {"content": "results-driven synergy", "provider": "p", "model": "m"},
              "task": "tailor"}

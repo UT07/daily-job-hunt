@@ -102,16 +102,33 @@ def council_complete_langgraph(
     task_description: str = "",
     n_generators: int = 2,
     temperature: float = 0.3,
+    task: str = "default",
+    base_skills: str = "",
+    base_body: str = "",
+    header_markers: list[str] | None = None,
 ) -> dict:
-    """Drop-in replacement for council_complete. Returns a Candidate dict."""
+    """Drop-in replacement for council_complete. Returns a Candidate dict.
+
+    `task` and the three guard-context fields flow straight into the initial
+    state -- CouncilState already declares all four (see agents/state.py),
+    and guard_input_node/guard_output_node already read them via
+    `state.get(...)`; this function was the missing link that never set them
+    from the public entry point. `header_markers or []` normalises the
+    common no-caller-supplied-it case to the list type CouncilState declares,
+    rather than storing `None` in a `list[str]` field.
+    """
     trace_id = str(uuid.uuid4())
     final = _get_graph().invoke(
         {
+            "task": task,
             "prompt": prompt,
             "system": system,
             "task_description": task_description,
             "n_generators": n_generators,
             "temperature": temperature,
+            "base_skills": base_skills,
+            "base_body": base_body,
+            "header_markers": header_markers or [],
             "candidates": [],
             "repair_attempts": 0,
             "trace_id": trace_id,

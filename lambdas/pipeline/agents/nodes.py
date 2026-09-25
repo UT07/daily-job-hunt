@@ -15,7 +15,7 @@ from agents._ai_helper import (
     build_critique_prompt,
 )
 from agents.providers import all_providers, call_one, family_of, select_critic, select_generators
-from guardrails.input_guards import INSTRUCTION_HIERARCHY, check_input, fence
+from guardrails.input_guards import INSTRUCTION_HIERARCHY, check_input, fence, maybe_scrub_pii
 from guardrails.output_guards import check_output
 
 logger = logging.getLogger()
@@ -29,7 +29,7 @@ logger = logging.getLogger()
 
 
 def guard_input_node(state: dict) -> dict:
-    """Reject injected input, then fence and declare the hierarchy.
+    """Reject injected input, scrub PII, then fence and declare the hierarchy.
 
     Raising rather than repairing is deliberate: an injection attempt is not
     a quality problem to iterate on, it is input to refuse. Letting it reach
@@ -44,6 +44,11 @@ def guard_input_node(state: dict) -> dict:
     0 false positives across 3,842 real job descriptions (Task 20), which is
     the justification for failing the whole call rather than softening this
     to a warning.
+
+    PII scrubbing happens AFTER the injection check passes but BEFORE
+    fencing, gated by the same per-task policy (`maybe_scrub_pii` reads
+    `pii_scrub` off `policy_for(task)`) -- a job description that trips the
+    injection guard is rejected outright, never scrubbed and forwarded.
     """
     task = state.get("task", "default")
     prompt = state["prompt"]
@@ -54,6 +59,7 @@ def guard_input_node(state: dict) -> dict:
             f"Input guard rejected the prompt for task={task!r}: "
             f"{result.to_dict()['violations']} | prompt_preview={preview!r}"
         )
+    prompt = maybe_scrub_pii(prompt, task)
     return {
         "prompt": fence(prompt),
         "system": f"{INSTRUCTION_HIERARCHY}\n\n{state.get('system', '')}".strip(),
