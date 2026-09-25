@@ -21,8 +21,30 @@ def _get_ssm():
         _ssm = boto3.client("ssm")
     return _ssm
 
+# Process-level param cache — same rationale and shape as ai_helper.get_param:
+# it used to do a live SSM GetParameter round trip, with KMS decryption, on
+# EVERY call. This module keeps its own copy even though it already imports
+# get_supabase from ai_helper; collapsing the two is a wider refactor than this
+# change. reset_caches() below is the escape hatch for a rotated parameter or a
+# per-call test.
+_param_cache: dict[str, str] = {}
+
+
 def get_param(name):
-    return _get_ssm().get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
+    # `not in` rather than a falsy check: a parameter that is legitimately the
+    # empty string must stay cached, not be re-fetched on every call forever.
+    if name not in _param_cache:
+        _param_cache[name] = _get_ssm().get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
+    return _param_cache[name]
+
+
+def reset_caches():
+    """Drop the memoized SSM parameters.
+
+    Only the parameters: this module gets its Supabase client from ai_helper,
+    whose own reset_caches() owns that half.
+    """
+    _param_cache.clear()
 
 
 def handler(event, context):

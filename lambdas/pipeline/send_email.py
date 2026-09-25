@@ -23,13 +23,46 @@ def _get_ssm():
     return _ssm
 
 
+# Process-level caches — same rationale and shape as ai_helper.get_param /
+# ai_helper.get_supabase: both used to redo their full work on EVERY call, a
+# live SSM GetParameter round trip with KMS decryption, plus a fresh
+# create_client() on top of two of those. Memoized in place rather than by
+# importing ai_helper's copies: that would resolve here (same CodeUri) but is a
+# wider refactor than this change, and the scrapers cannot do it at all.
+# reset_caches() below is the escape hatch for a rotated parameter or a
+# per-call test.
+_param_cache: dict[str, str] = {}
+_supabase = None
+
+
 def get_param(name):
-    return _get_ssm().get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
+    # `not in` rather than a falsy check: a parameter that is legitimately the
+    # empty string must stay cached, not be re-fetched on every call forever.
+    if name not in _param_cache:
+        _param_cache[name] = _get_ssm().get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
+    return _param_cache[name]
 
 
 def get_supabase():
-    from supabase import create_client
-    return create_client(get_param("/naukribaba/SUPABASE_URL"), get_param("/naukribaba/SUPABASE_SERVICE_KEY"))
+    global _supabase
+    if _supabase is None:
+        from supabase import create_client
+        _supabase = create_client(
+            get_param("/naukribaba/SUPABASE_URL"),
+            get_param("/naukribaba/SUPABASE_SERVICE_KEY"),
+        )
+    return _supabase
+
+
+def reset_caches():
+    """Drop the memoized SSM parameters and Supabase client.
+
+    Mirrors ai_helper.reset_caches(). Leaves the boto3 client alone — that one
+    is a connection holder, not a cached value.
+    """
+    global _supabase
+    _param_cache.clear()
+    _supabase = None
 
 
 def handler(event, context):
