@@ -4,47 +4,15 @@ import smtplib
 from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 
-import boto3
-from ai_helper import get_supabase
+# Both helpers come from ai_helper, which memoizes them. This module used to
+# carry its own copy of get_param, plus a lazy boto3 handle to feed it — the
+# same code against a separate cache — beside an imported get_supabase.
+# ai_helper shares this CodeUri so the import resolves; the scrapers' CodeUri
+# ships no ai_helper.py, which is why they still keep their own copies.
+from ai_helper import get_param, get_supabase
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
-# Lazy SSM client — boto3.client at module load forces AWS_DEFAULT_REGION
-# on every importer (including unit tests + runtime-import smoke). Same
-# pattern as ai_helper.py shipped in PR #23.
-_ssm = None
-
-
-def _get_ssm():
-    global _ssm
-    if _ssm is None:
-        _ssm = boto3.client("ssm")
-    return _ssm
-
-# Process-level param cache — same rationale and shape as ai_helper.get_param:
-# it used to do a live SSM GetParameter round trip, with KMS decryption, on
-# EVERY call. This module keeps its own copy even though it already imports
-# get_supabase from ai_helper; collapsing the two is a wider refactor than this
-# change. reset_caches() below is the escape hatch for a rotated parameter or a
-# per-call test.
-_param_cache: dict[str, str] = {}
-
-
-def get_param(name):
-    # `not in` rather than a falsy check: a parameter that is legitimately the
-    # empty string must stay cached, not be re-fetched on every call forever.
-    if name not in _param_cache:
-        _param_cache[name] = _get_ssm().get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
-    return _param_cache[name]
-
-
-def reset_caches():
-    """Drop the memoized SSM parameters.
-
-    Only the parameters: this module gets its Supabase client from ai_helper,
-    whose own reset_caches() owns that half.
-    """
-    _param_cache.clear()
 
 
 def handler(event, context):
