@@ -90,6 +90,21 @@ Parameters:
       The deploy role only needs cloudwatch:* (which it has) to wire
       the alarms to this ARN.
     Default: "arn:aws:sns:eu-west-1:385017713886:naukribaba-pipeline-alarms"
+  PipelineAlarmEmail:
+    Type: String
+    Description: |
+      Email address subscribed to PipelineAlarmTopicArn so alarms actually
+      notify someone. Fix for the 2026-09-25 audit finding that
+      naukribaba-pipeline-alarms had zero SNS subscriptions — every one of
+      the 14 alarms wired to it (including DailyPipelineNoArtifactsAlarm,
+      stuck in ALARM since 2026-04-30) was notifying nobody. Defaulted to
+      the address already on record as this pipeline's notification
+      address (SSM /naukribaba/GMAIL_USER, also config.yaml's
+      drive.share_with) rather than inventing one — change it here if
+      that's no longer the right inbox. AWS will email a confirmation link
+      to this address after deploy; the subscription stays PendingConfirmation
+      (and silent) until it's clicked.
+    Default: "254utkarsh@gmail.com"
   CouncilEngine:
     Type: String
     Default: legacy
@@ -1816,6 +1831,52 @@ Resources:
       Dimensions:
         - Name: DocType
           Value: resume
+      Statistic: Sum
+      Period: 86400  # 24h
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions: [!Ref PipelineAlarmTopicArn]
+
+  # 2026-09-25 audit fix: naukribaba-pipeline-alarms had zero subscribers,
+  # so even a correctly-firing alarm (the two above, plus the other 12 in
+  # this stack) notified nobody. This is a plain AWS::SNS::Subscription,
+  # not an AWS::SNS::Topic — it only needs sns:Subscribe, not
+  # sns:CreateTopic, so it's unaffected by the reason the topic itself had
+  # to be created out-of-band (see PipelineAlarmTopicArn's description).
+  # Confirmed read-only via `aws iam simulate-principal-policy` that the
+  # deploy role (yuno-github-deploy) is allowed sns:Subscribe on this topic.
+  PipelineAlarmEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref PipelineAlarmTopicArn
+      Protocol: email
+      Endpoint: !Ref PipelineAlarmEmail
+
+  # Companion to DailyPipelineNoArtifactsAlarm: catches the failure mode one
+  # step further upstream. JobsMatched is populated by AggregateScoresFunction
+  # straight from score_result (not the processed_jobs chain the artifacts
+  # metric was broken by), so it doesn't share that bug — verified live via
+  # `aws cloudwatch get-metric-statistics`, e.g. 2026-09-01 read Sum=34.
+  # Without this, a day where scoring itself matches 0 jobs (Groq outage,
+  # rotted model IDs — this project's own 2026-08-31 history) looks
+  # identical to a quiet day, right up until the (now-fixed) artifacts
+  # alarm fires for a different reason 24h later.
+  DailyPipelineNoJobsMatchedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-daily-pipeline-no-jobs-matched-24h
+      AlarmDescription: |
+        Daily pipeline matched 0 jobs in the last 24h. Distinguishes
+        "scoring/matching produced nothing" (this alarm) from "matching
+        worked but tailoring/compiling produced nothing"
+        (DailyPipelineNoArtifactsAlarm) — the 2026-09-01 live data shows
+        these are genuinely different failure points (34 matched, 0
+        artifacts that day, due to the ArtifactsCompiled bug fixed
+        alongside this alarm).
+      Namespace: Naukribaba/Pipeline
+      MetricName: JobsMatched
       Statistic: Sum
       Period: 86400  # 24h
       EvaluationPeriods: 1

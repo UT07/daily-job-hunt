@@ -9,6 +9,17 @@ These tests pin the new behavior:
 - _count_compiled_artifacts handles missing/empty/null processed_jobs
 - The handler emits the right number of CloudWatch metric data points
 - runs.resumes_generated reflects the actual count (no longer hardcoded)
+
+2026-09-25 audit fix: these fixtures used to shape each `processed_jobs`
+entry as `{"compile_result": {"pdf_s3_key": ...}}`. That shape never
+occurs in production — per template.yaml's ASL, each entry is whatever
+save_job.py's handler returns (`job_hash`/`user_id`/`saved`/`has_resume`/
+`failed`), which has no `compile_result` key. The old fixtures let
+_count_compiled_artifacts's bug (reading `compile_result` instead of
+`has_resume`) pass every test in this file for 5 months — see
+lambdas/pipeline/save_metrics.py's docstring and
+tests/unit/test_save_metrics_pipeline_contract.py for the real contract
+check. Fixtures below now match save_job.py's actual return shape.
 """
 from __future__ import annotations
 
@@ -39,25 +50,45 @@ class TestCountCompiledArtifacts:
         assert _count_compiled_artifacts(None) == {"resumes": 0, "cover_letters": 0}
 
     def test_resume_compiled_counts(self):
+        """Realistic shape: each entry is save_job.py's actual return."""
         from save_metrics import _count_compiled_artifacts
         jobs = [
-            {"compile_result": {"pdf_s3_key": "a.pdf"}},
-            {"compile_result": {"pdf_s3_key": "b.pdf"}},
-            {"compile_result": {"error": "tectonic_not_available", "pdf_s3_key": None}},
+            {"job_hash": "a", "user_id": "u", "saved": True, "has_resume": True, "failed": False},
+            {"job_hash": "b", "user_id": "u", "saved": True, "has_resume": True, "failed": False},
+            {"job_hash": "c", "user_id": "u", "saved": True, "has_resume": False, "failed": True},
         ]
         assert _count_compiled_artifacts(jobs)["resumes"] == 2
 
-    def test_cover_letter_counted_independently(self):
+    def test_stale_compile_result_field_is_ignored(self):
+        """Regression guard for the exact 2026-09-25 bug: an item shaped
+        like the OLD (wrong) assumption — a top-level `compile_result` key
+        and no `has_resume` — must NOT be counted. If this ever starts
+        passing 1 instead of 0, someone reverted the fix."""
+        from save_metrics import _count_compiled_artifacts
+        jobs = [{"compile_result": {"pdf_s3_key": "a.pdf"}}]
+        assert _count_compiled_artifacts(jobs)["resumes"] == 0
+
+    def test_cover_letter_field_not_present_on_real_save_job_output_stays_zero(self):
+        """Known, documented gap: save_job.py has no cover-letter analog to
+        `has_resume`, so a realistic processed_jobs entry can never carry
+        cover-letter compile status by the time save_metrics runs. This
+        pins that today's behavior is "always 0", not silently "sometimes
+        wrong" — see save_metrics.py's _count_compiled_artifacts docstring."""
         from save_metrics import _count_compiled_artifacts
         jobs = [
-            {
-                "compile_result": {"pdf_s3_key": "a.pdf"},
-                "cover_compile_result": {"pdf_s3_key": "a-cl.pdf"},
-            },
-            {
-                "compile_result": {"pdf_s3_key": "b.pdf"},
-                "cover_compile_result": {"error": "compilation_failed"},
-            },
+            {"job_hash": "a", "user_id": "u", "saved": True, "has_resume": True, "failed": False},
+        ]
+        assert _count_compiled_artifacts(jobs)["cover_letters"] == 0
+
+    def test_cover_letter_counted_if_present_defensive_only(self):
+        """`cover_compile_result` is dead code on today's real inputs (see
+        test above) but still exercised here in case save_job.py ever
+        grows a cover-letter field of that shape — this only guards the
+        counting logic itself, not that the field currently arrives."""
+        from save_metrics import _count_compiled_artifacts
+        jobs = [
+            {"has_resume": True, "failed": False, "cover_compile_result": {"pdf_s3_key": "a-cl.pdf"}},
+            {"has_resume": True, "failed": False, "cover_compile_result": {"error": "compilation_failed"}},
         ]
         result = _count_compiled_artifacts(jobs)
         assert result["resumes"] == 2
@@ -65,7 +96,7 @@ class TestCountCompiledArtifacts:
 
     def test_skips_non_dict_entries(self):
         from save_metrics import _count_compiled_artifacts
-        jobs = [None, "garbage", {"compile_result": {"pdf_s3_key": "ok.pdf"}}]
+        jobs = [None, "garbage", {"has_resume": True, "failed": False}]
         assert _count_compiled_artifacts(jobs)["resumes"] == 1
 
 
@@ -86,9 +117,9 @@ class TestHandler:
              patch("save_metrics._get_cloudwatch", return_value=cw):
             import save_metrics
             save_metrics.handler(self._event(processed_jobs=[
-                {"compile_result": {"pdf_s3_key": "a.pdf"},
+                {"has_resume": True, "failed": False,
                  "cover_compile_result": {"pdf_s3_key": "a-cl.pdf"}},
-                {"compile_result": {"pdf_s3_key": "b.pdf"}},
+                {"has_resume": True, "failed": False},
             ]), None)
 
         cw.put_metric_data.assert_called_once()
@@ -113,9 +144,9 @@ class TestHandler:
              patch("save_metrics._get_cloudwatch", return_value=MagicMock()):
             import save_metrics
             save_metrics.handler(self._event(processed_jobs=[
-                {"compile_result": {"pdf_s3_key": "a.pdf"}},
-                {"compile_result": {"pdf_s3_key": "b.pdf"}},
-                {"compile_result": {"pdf_s3_key": "c.pdf"}},
+                {"has_resume": True, "failed": False},
+                {"has_resume": True, "failed": False},
+                {"has_resume": True, "failed": False},
             ]), None)
 
         # runs.insert was called with resumes_generated=3 (no longer hardcoded 0)
@@ -134,8 +165,8 @@ class TestHandler:
              patch("save_metrics._get_cloudwatch", return_value=cw):
             import save_metrics
             save_metrics.handler(self._event(processed_jobs=[
-                {"compile_result": {"error": "tectonic_not_available", "pdf_s3_key": None}},
-                {"compile_result": {"error": "tectonic_not_available", "pdf_s3_key": None}},
+                {"has_resume": False, "failed": True},
+                {"has_resume": False, "failed": True},
             ]), None)
 
         call = cw.put_metric_data.call_args.kwargs
