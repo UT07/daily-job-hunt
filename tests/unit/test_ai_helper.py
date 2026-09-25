@@ -1,4 +1,5 @@
 """Unit tests for lambdas/pipeline/ai_helper.py."""
+import contextlib
 import hashlib
 import sys
 from datetime import datetime, timedelta
@@ -362,6 +363,264 @@ class TestLazySsmInit:
             }
             ai_helper.get_param("/foo")
             assert mock_client.call_count == 1
-            # Second call reuses the same client (no second create)
-            ai_helper.get_param("/foo")
+            # Second call reuses the same client (no second create). This must be
+            # a DIFFERENT parameter name: get_param memoizes per name, so asking
+            # for "/foo" again would be served from _param_cache without ever
+            # reaching _get_ssm(), and this assertion would pass vacuously.
+            ai_helper.get_param("/bar")
             assert mock_client.call_count == 1, "ssm client should be reused, not recreated"
+
+
+# ---------------------------------------------------------------------------
+# get_param / get_supabase memoization
+#
+# Both helpers used to redo their full work on every call: get_param() a live
+# SSM GetParameter round trip with KMS decryption, get_supabase() a fresh
+# create_client() on top of two of those. Since nothing in the pipeline calls
+# them once (get_supabase() runs per cache read AND per cache write,
+# _call_provider() reads a key per provider hop), one logical step paid for the
+# same handful of immutable values several times over. These tests pin the
+# memoization down by call count, which is the only thing that actually
+# regressed when it was missing.
+# ---------------------------------------------------------------------------
+
+@contextlib.contextmanager
+def _fresh_ssm(values):
+    """Point ai_helper at a mock SSM serving `values`, from a cold cache.
+
+    Clears the param/client caches AND the lazy boto3 handle on both entry and
+    exit: leaving _ssm set would make `patch("ai_helper.boto3.client")` a no-op
+    for the next test, since _get_ssm() short-circuits on an existing client.
+    """
+    import ai_helper
+    ai_helper.reset_caches()
+    ai_helper._ssm = None
+
+    mock_ssm = MagicMock()
+    mock_ssm.get_parameter.side_effect = (
+        lambda Name, WithDecryption=False: {"Parameter": {"Value": values[Name]}}
+    )
+    try:
+        with patch("ai_helper.boto3.client", return_value=mock_ssm) as mock_client:
+            yield mock_ssm, mock_client
+    finally:
+        ai_helper.reset_caches()
+        ai_helper._ssm = None
+
+
+class TestGetParamCaching:
+    """get_param memoizes per parameter name for the life of the process."""
+
+    def test_repeated_reads_of_one_name_hit_ssm_once(self):
+        import ai_helper
+        with _fresh_ssm({"/naukribaba/GROQ_API_KEY": "gk"}) as (mock_ssm, _):
+            for _ in range(5):
+                assert ai_helper.get_param("/naukribaba/GROQ_API_KEY") == "gk"
+            assert mock_ssm.get_parameter.call_count == 1
+
+    def test_each_distinct_name_is_fetched_exactly_once(self):
+        import ai_helper
+        values = {"/a": "1", "/b": "2", "/c": "3"}
+        with _fresh_ssm(values) as (mock_ssm, _):
+            for _ in range(3):
+                assert [ai_helper.get_param(n) for n in ("/a", "/b", "/c")] == ["1", "2", "3"]
+            assert mock_ssm.get_parameter.call_count == 3
+
+    def test_decryption_still_requested_on_the_real_fetch(self):
+        """Memoizing must not quietly drop WithDecryption — these are SecureStrings."""
+        import ai_helper
+        with _fresh_ssm({"/secret": "plaintext"}) as (mock_ssm, _):
+            ai_helper.get_param("/secret")
+            mock_ssm.get_parameter.assert_called_once_with(
+                Name="/secret", WithDecryption=True
+            )
+
+    def test_empty_string_value_is_cached_not_refetched(self):
+        """A parameter that is legitimately "" must not re-hit SSM forever.
+
+        This is why get_param tests membership rather than truthiness — a
+        `if not _param_cache.get(name)` guard would miss on every call here.
+        """
+        import ai_helper
+        with _fresh_ssm({"/empty": ""}) as (mock_ssm, _):
+            assert ai_helper.get_param("/empty") == ""
+            assert ai_helper.get_param("/empty") == ""
+            assert mock_ssm.get_parameter.call_count == 1
+
+    def test_failed_fetch_is_not_cached(self):
+        """A transient SSM error must not poison the cache for the process."""
+        import ai_helper
+        ai_helper.reset_caches()
+        ai_helper._ssm = None
+        mock_ssm = MagicMock()
+        mock_ssm.get_parameter.side_effect = [
+            RuntimeError("throttled"),
+            {"Parameter": {"Value": "eventually"}},
+        ]
+        try:
+            with patch("ai_helper.boto3.client", return_value=mock_ssm):
+                with pytest.raises(RuntimeError, match="throttled"):
+                    ai_helper.get_param("/flaky")
+                # Retry must reach SSM again rather than serve a cached miss.
+                assert ai_helper.get_param("/flaky") == "eventually"
+                assert mock_ssm.get_parameter.call_count == 2
+        finally:
+            ai_helper.reset_caches()
+            ai_helper._ssm = None
+
+
+class TestGetSupabaseCaching:
+    """get_supabase constructs one client per process, not one per call."""
+
+    _PARAMS = {
+        "/naukribaba/SUPABASE_URL": "https://test.supabase.co",
+        "/naukribaba/SUPABASE_SERVICE_KEY": "test-key",
+    }
+
+    def test_client_constructed_once_and_same_instance_returned(self):
+        import ai_helper
+        sentinel = MagicMock(name="supabase_client")
+        with _fresh_ssm(self._PARAMS):
+            with patch("supabase.create_client", return_value=sentinel) as mock_create:
+                first = ai_helper.get_supabase()
+                second = ai_helper.get_supabase()
+        assert first is sentinel and second is sentinel
+        assert mock_create.call_count == 1
+
+    def test_repeated_calls_do_not_re_read_ssm(self):
+        """The motivating case: 10 get_supabase() calls used to be 20 SSM reads."""
+        import ai_helper
+        with _fresh_ssm(self._PARAMS) as (mock_ssm, _):
+            with patch("supabase.create_client", return_value=MagicMock()):
+                for _ in range(10):
+                    ai_helper.get_supabase()
+            # Exactly one read of URL + one of the service key, ever.
+            assert mock_ssm.get_parameter.call_count == 2
+
+    def test_client_built_from_the_configured_url_and_key(self):
+        import ai_helper
+        with _fresh_ssm(self._PARAMS):
+            with patch("supabase.create_client", return_value=MagicMock()) as mock_create:
+                ai_helper.get_supabase()
+        mock_create.assert_called_once_with("https://test.supabase.co", "test-key")
+
+    def test_construction_failure_is_not_cached(self):
+        """A failed create_client must leave the next call free to retry."""
+        import ai_helper
+        good = MagicMock(name="supabase_client")
+        with _fresh_ssm(self._PARAMS):
+            with patch("supabase.create_client",
+                       side_effect=[RuntimeError("dns"), good]) as mock_create:
+                with pytest.raises(RuntimeError, match="dns"):
+                    ai_helper.get_supabase()
+                assert ai_helper.get_supabase() is good
+        assert mock_create.call_count == 2
+
+
+class TestResetCaches:
+    """reset_caches() is the escape hatch for rotated params / per-call tests."""
+
+    def test_reset_forces_a_fresh_param_read(self):
+        import ai_helper
+        with _fresh_ssm({"/rotating": "old"}) as (mock_ssm, _):
+            assert ai_helper.get_param("/rotating") == "old"
+            mock_ssm.get_parameter.side_effect = (
+                lambda Name, WithDecryption=False: {"Parameter": {"Value": "new"}}
+            )
+            # Still cached — that is the point of the cache.
+            assert ai_helper.get_param("/rotating") == "old"
+            ai_helper.reset_caches()
+            assert ai_helper.get_param("/rotating") == "new"
+
+    def test_reset_forces_a_fresh_client(self):
+        import ai_helper
+        first, second = MagicMock(name="c1"), MagicMock(name="c2")
+        with _fresh_ssm(TestGetSupabaseCaching._PARAMS):
+            with patch("supabase.create_client", side_effect=[first, second]):
+                assert ai_helper.get_supabase() is first
+                ai_helper.reset_caches()
+                assert ai_helper.get_supabase() is second
+
+    def test_reset_leaves_the_boto3_client_alone(self):
+        """_ssm is a connection holder, not a cached value — recreating it buys
+        nothing, and the lazy-init contract above is about import time only."""
+        import ai_helper
+        with _fresh_ssm({"/x": "y"}):
+            ai_helper.get_param("/x")
+            assert ai_helper._ssm is not None
+            ai_helper.reset_caches()
+            assert ai_helper._ssm is not None
+
+
+class TestCachedCallRoundTrips:
+    """End-to-end: what a single ai_complete_cached() now costs in round trips."""
+
+    def _db_with_hit(self):
+        db = MagicMock()
+        table = MagicMock()
+        table.select.return_value = table
+        table.eq.return_value = table
+        table.gte.return_value = table
+        table.execute.return_value = MagicMock(
+            data=[{"response": "cached", "provider": "p", "model": "m"}]
+        )
+        db.table.return_value = table
+        return db
+
+    def test_cache_hit_costs_two_ssm_reads_and_one_client(self):
+        import ai_helper
+        with _fresh_ssm(TestGetSupabaseCaching._PARAMS) as (mock_ssm, _):
+            with patch("supabase.create_client", return_value=self._db_with_hit()) as mock_create:
+                result = ai_helper.ai_complete_cached("prompt", system="sys")
+                assert result["content"] == "cached"
+                assert mock_ssm.get_parameter.call_count == 2
+                assert mock_create.call_count == 1
+
+                # A second call — the case that used to double everything —
+                # adds no SSM traffic and no second client.
+                ai_helper.ai_complete_cached("another prompt", system="sys")
+                assert mock_ssm.get_parameter.call_count == 2
+                assert mock_create.call_count == 1
+
+    def test_cache_miss_reuses_the_client_across_read_and_write(self):
+        """The miss path touches the db twice (select, then upsert). Both must
+        come from the same client.
+
+        Not a regression guard for the caching work — ai_complete_cached already
+        bound get_supabase() to a local and reused it, so this held before the
+        fix too. It pins that down so a future refactor can't turn the write leg
+        into a second get_supabase() call and quietly reintroduce the cost.
+        """
+        import ai_helper
+        db = MagicMock()
+        table = MagicMock()
+        table.select.return_value = table
+        table.eq.return_value = table
+        table.gte.return_value = table
+        table.execute.return_value = MagicMock(data=[])
+        table.upsert.return_value = table
+        db.table.return_value = table
+
+        with _fresh_ssm(TestGetSupabaseCaching._PARAMS) as (mock_ssm, _):
+            with patch("supabase.create_client", return_value=db) as mock_create, \
+                 patch("ai_helper.ai_complete",
+                       return_value={"content": "fresh", "provider": "p", "model": "m"}):
+                ai_helper.ai_complete_cached("prompt", system="sys")
+
+        table.upsert.assert_called_once()
+        assert mock_create.call_count == 1
+        assert mock_ssm.get_parameter.call_count == 2
+
+    def test_provider_keys_are_read_once_across_the_failover_chain(self):
+        """Every Groq provider shares one key_param — the chain used to re-read
+        it (and pay KMS) on each hop."""
+        import ai_helper
+        keyed = {p["key_param"] for p in ai_helper._build_provider_list()}
+        with _fresh_ssm({k: "real-api-key" for k in keyed}) as (mock_ssm, _):
+            with patch("ai_helper.random.random", return_value=1.0), \
+                 patch("httpx.post", side_effect=httpx.ConnectError("down")):
+                with pytest.raises(RuntimeError, match="All \\d+ AI providers failed"):
+                    ai_helper.ai_complete("prompt")
+            # One read per DISTINCT key param, not one per provider hop.
+            assert mock_ssm.get_parameter.call_count == len(keyed)
+            assert len(keyed) < len(ai_helper._build_provider_list())

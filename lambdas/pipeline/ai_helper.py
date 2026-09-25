@@ -27,13 +27,59 @@ def _get_ssm():
     return _ssm
 
 
+# Process-level caches for the two helpers below. Both used to redo their full
+# work on EVERY call: get_param() a live SSM GetParameter round trip with KMS
+# decryption, get_supabase() a fresh create_client() plus two of those round
+# trips. Nothing here is called once — get_supabase() is called per cache read
+# AND per cache write, _call_provider() reads a key per provider hop — so a
+# single logical step spent hundreds of milliseconds re-fetching the same
+# handful of values. Counting it off this file: an ai_complete_cached() cache
+# HIT cost 2 SSM round trips + 1 create_client() to serve one SELECT, and a
+# miss added one more SSM read per provider hop on top.
+#
+# Neither the parameters nor the Supabase URL/key change within an invocation,
+# and a warm container can reuse both across invocations exactly as _get_ssm()
+# above already reuses the boto3 client. Callers that need a genuinely fresh
+# read — a parameter rotated inside a long-lived process, or a test asserting
+# per-call behaviour — call reset_caches().
+_param_cache: dict[str, str] = {}
+_supabase = None
+
+
 def get_param(name):
-    return _get_ssm().get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
+    # `not in` rather than a falsy check: a parameter that is legitimately the
+    # empty string must stay cached, not be re-fetched on every call forever.
+    if name not in _param_cache:
+        _param_cache[name] = _get_ssm().get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
+    return _param_cache[name]
 
 
 def get_supabase():
-    from supabase import create_client
-    return create_client(get_param("/naukribaba/SUPABASE_URL"), get_param("/naukribaba/SUPABASE_SERVICE_KEY"))
+    global _supabase
+    if _supabase is None:
+        from supabase import create_client
+        _supabase = create_client(
+            get_param("/naukribaba/SUPABASE_URL"),
+            get_param("/naukribaba/SUPABASE_SERVICE_KEY"),
+        )
+    return _supabase
+
+
+def reset_caches():
+    """Drop the memoized SSM parameters and Supabase client.
+
+    Exists for two callers: tests that assert per-call fetch behaviour (see
+    TestGetParamCaching / TestGetSupabaseCaching in
+    tests/unit/test_ai_helper.py, plus the autouse fixture in
+    tests/unit/conftest.py that isolates every unit test from the previous
+    one's cached values), and any long-lived process that needs to pick up a
+    rotated parameter without a restart. Leaves the boto3 client in _ssm alone
+    — that one is a connection holder, not a cached value, and recreating it
+    buys nothing.
+    """
+    global _supabase
+    _param_cache.clear()
+    _supabase = None
 
 
 # ---------------------------------------------------------------------------
