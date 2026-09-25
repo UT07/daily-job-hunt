@@ -496,6 +496,112 @@ class TestShouldRevertOrExtend:
         assert should_revert_or_extend({}, metrics) == "revert"
 
 
+class TestShouldRevertOrExtendNoneHandling:
+    """Regression tests for the production crash confirmed via CloudWatch:
+
+    TypeError: unsupported operand type(s) for +: 'int' and 'NoneType'
+      File "self_improver.py", line 198, in should_revert_or_extend
+        after_3 = sum(r.get("avg_base_score", 0) for r in run_metrics[1:4]) / 3
+
+    `avg_base_score` is None (not 0) whenever a run scored zero jobs (see
+    self_improve.py:_build_current_run_stats: `avg_base = ... if scores
+    else None`), which is a real and recurring condition, not a rare edge
+    case. `.get("avg_base_score", 0)` only substitutes the default for a
+    *missing* key, not an explicit `None` value, so `sum()` received a
+    `None` and crashed trying to add it to the running int total.
+    """
+
+    def test_none_in_3_run_window_does_not_crash(self):
+        # Confirmed shape: pipeline_runs.avg_base_score can be NULL.
+        metrics = [
+            {"avg_base_score": 60},
+            {"avg_base_score": None},
+            {"avg_base_score": 61},
+            {"avg_base_score": 62},
+        ]
+        # Should not raise; None is excluded, avg of [61, 62] = 61.5, a
+        # ~2.5% improvement — within the default 5% threshold, so neither
+        # revert nor confirm at the 3-run stage, and no 6th run available.
+        assert should_revert_or_extend({}, metrics) == "extend"
+
+    def test_none_baseline_returns_wait_not_crash(self):
+        metrics = [
+            {"avg_base_score": None},
+            {"avg_base_score": 50},
+            {"avg_base_score": 48},
+            {"avg_base_score": 47},
+        ]
+        assert should_revert_or_extend({}, metrics) == "wait"
+
+    def test_all_none_in_3_run_window_extends_without_6th_run(self):
+        metrics = [
+            {"avg_base_score": 60},
+            {"avg_base_score": None},
+            {"avg_base_score": None},
+            {"avg_base_score": None},
+        ]
+        assert should_revert_or_extend({}, metrics) == "extend"
+
+    def test_none_3_run_window_falls_through_to_usable_5_run_window(self):
+        # 3-run window (indices 1-3) is entirely None -> inconclusive.
+        # 5-run window (indices 1-5) has 2 usable values: 30, 28 -> avg 29,
+        # a decline from baseline 60 of over 50% -> revert.
+        metrics = [
+            {"avg_base_score": 60},
+            {"avg_base_score": None},
+            {"avg_base_score": None},
+            {"avg_base_score": None},
+            {"avg_base_score": 30},
+            {"avg_base_score": 28},
+        ]
+        assert should_revert_or_extend({}, metrics) == "revert"
+
+    def test_none_still_detects_real_decline(self):
+        # A None mixed into an otherwise-declining window must not mask
+        # the decline by pulling the average toward zero, nor crash.
+        metrics = [
+            {"avg_base_score": 60},
+            {"avg_base_score": None},
+            {"avg_base_score": 40},
+            {"avg_base_score": 38},
+        ]
+        # avg of [40, 38] = 39, change = (39-60)/60 = -35% -> revert
+        assert should_revert_or_extend({}, metrics) == "revert"
+
+
+class TestShouldRevertAdjustmentNoneHandling:
+    """Same None-safety regression, for the older should_revert_adjustment
+    (identical `.get(key, 0)`-on-a-possibly-None-value bug pattern)."""
+
+    def test_none_in_window_does_not_crash(self):
+        metrics = [
+            {"avg_base_score": 60},
+            {"avg_base_score": None},
+            {"avg_base_score": 50},
+            {"avg_base_score": 48},
+        ]
+        # avg of [50, 48] = 49, change = (49-60)/60 = -18.3% -> True
+        assert should_revert_adjustment({}, metrics) is True
+
+    def test_none_baseline_returns_false_not_crash(self):
+        metrics = [
+            {"avg_base_score": None},
+            {"avg_base_score": 50},
+            {"avg_base_score": 48},
+            {"avg_base_score": 47},
+        ]
+        assert should_revert_adjustment({}, metrics) is False
+
+    def test_all_none_window_returns_false_not_crash(self):
+        metrics = [
+            {"avg_base_score": 60},
+            {"avg_base_score": None},
+            {"avg_base_score": None},
+            {"avg_base_score": None},
+        ]
+        assert should_revert_adjustment({}, metrics) is False
+
+
 class TestIsOnCooldown:
     """Tests for the cooldown check logic."""
 

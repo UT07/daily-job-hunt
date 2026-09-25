@@ -839,12 +839,29 @@ def should_revert_adjustment(adjustment: dict, run_metrics: list[dict], threshol
     """
     if len(run_metrics) < 4:
         return False
-    before = run_metrics[0].get("avg_base_score", 0)
-    after_avg = sum(r.get("avg_base_score", 0) for r in run_metrics[1:4]) / 3
-    if before == 0:
+    before = run_metrics[0].get("avg_base_score")
+    if not before:
+        return False
+    after_avg = _avg_base_score(run_metrics[1:4])
+    if after_avg is None:
         return False
     change = (after_avg - before) / before
     return change < -threshold
+
+
+def _avg_base_score(window: list[dict]) -> float | None:
+    """Average ``avg_base_score`` over a window, ignoring runs with no value.
+
+    A run's ``avg_base_score`` is ``None`` (not 0) when the pipeline scored
+    zero jobs that run — see ``lambdas/pipeline/self_improve.py``'s
+    ``_build_current_run_stats``, which stores ``None`` rather than 0 when
+    there were no scored jobs to average. Treating that as 0 would read as
+    a catastrophic score collapse and could drive a false "revert"; runs
+    with no data are excluded from the average instead. Returns None if no
+    run in the window has a usable value.
+    """
+    values = [v for v in (r.get("avg_base_score") for r in window) if v is not None]
+    return sum(values) / len(values) if values else None
 
 
 def should_revert_or_extend(adjustment: dict, run_metrics: list[dict], threshold: float = 0.05) -> str:
@@ -857,6 +874,9 @@ def should_revert_or_extend(adjustment: dict, run_metrics: list[dict], threshold
     - Inconclusive (change within +/- threshold):
         - If 6+ data points available, evaluate 5-run average. Drop -> "revert", else "confirm".
         - Otherwise: "extend" (need more runs).
+    - A run's ``avg_base_score`` may be None (no jobs scored that run); see
+      ``_avg_base_score``. If a whole window has no usable data, that
+      comparison is treated the same as an inconclusive change.
 
     Args:
         adjustment: The adjustment dict (unused but kept for interface consistency).
@@ -868,25 +888,27 @@ def should_revert_or_extend(adjustment: dict, run_metrics: list[dict], threshold
     """
     if len(run_metrics) < 4:
         return "wait"
-    before = run_metrics[0].get("avg_base_score", 0)
-    if before == 0:
+    before = run_metrics[0].get("avg_base_score")
+    if not before:
         return "wait"
 
-    after_3 = sum(r.get("avg_base_score", 0) for r in run_metrics[1:4]) / 3
-    change_3 = (after_3 - before) / before
+    after_3 = _avg_base_score(run_metrics[1:4])
+    change_3 = (after_3 - before) / before if after_3 is not None else None
 
-    if change_3 < -threshold:
-        return "revert"
-    if change_3 > threshold:
-        return "confirm"
-
-    # Inconclusive at 3 runs — try 5 if available
-    if len(run_metrics) >= 6:
-        after_5 = sum(r.get("avg_base_score", 0) for r in run_metrics[1:6]) / 5
-        change_5 = (after_5 - before) / before
-        if change_5 < -threshold:
+    if change_3 is not None:
+        if change_3 < -threshold:
             return "revert"
-        return "confirm"
+        if change_3 > threshold:
+            return "confirm"
+
+    # Inconclusive (or no data) at 3 runs — try 5 if available
+    if len(run_metrics) >= 6:
+        after_5 = _avg_base_score(run_metrics[1:6])
+        if after_5 is not None:
+            change_5 = (after_5 - before) / before
+            if change_5 < -threshold:
+                return "revert"
+            return "confirm"
 
     return "extend"
 

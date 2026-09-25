@@ -562,3 +562,130 @@ class TestBuildQueryStats:
 
         stats = _build_query_stats(db, "u1", "2026-03-07")
         assert stats["adzuna"]["match_rates"] == [0.0]
+
+
+class TestShouldRevertOrExtendNoneHandling:
+    """Regression tests against the module this Lambda actually deploys
+    (`lambdas/pipeline/self_improver.py` — a separate, deliberately-lean
+    copy of the root `self_improver.py`; see its module docstring). This
+    is the exact file CloudWatch's traceback names:
+
+        TypeError: unsupported operand type(s) for +: 'int' and 'NoneType'
+          File "/var/task/self_improve.py", line 329, in handler
+            decision = should_revert_or_extend(adj, runs_since)
+          File "/var/task/self_improver.py", line 198, in should_revert_or_extend
+            after_3 = sum(r.get("avg_base_score", 0) for r in run_metrics[1:4]) / 3
+
+    Confirmed 5/5 on every sampled invocation Aug 27 - Sep 2 2026.
+    `runs_since` (the handler's `run_metrics`) comes straight from
+    `pipeline_runs.avg_base_score`, which is written as `None` — not 0 —
+    whenever a run scored zero jobs (`_build_current_run_stats`: `avg_base
+    = ... if scores else None`). That's a routine condition (see the
+    project's own scoring-throughput backlog item), not a rare edge case,
+    which is why this crashed 100% of the time rather than intermittently.
+
+    tests/unit/test_self_improver.py covers the same fix in the root
+    module's copy of this function; both copies had the identical bug and
+    both needed the identical fix, but only this module is what actually
+    runs in production.
+    """
+
+    def test_none_in_3_run_window_does_not_crash(self):
+        from lambdas.pipeline.self_improver import should_revert_or_extend
+
+        metrics = [
+            {"avg_base_score": 60},
+            {"avg_base_score": None},
+            {"avg_base_score": 61},
+            {"avg_base_score": 62},
+        ]
+        # None excluded; avg([61, 62]) = 61.5, ~2.5% change -> inconclusive,
+        # no 6th run available -> extend. Must not raise.
+        assert should_revert_or_extend({}, metrics) == "extend"
+
+    def test_none_baseline_returns_wait_not_crash(self):
+        from lambdas.pipeline.self_improver import should_revert_or_extend
+
+        metrics = [
+            {"avg_base_score": None},
+            {"avg_base_score": 50},
+            {"avg_base_score": 48},
+            {"avg_base_score": 47},
+        ]
+        assert should_revert_or_extend({}, metrics) == "wait"
+
+    def test_all_none_in_3_run_window_extends_without_6th_run(self):
+        from lambdas.pipeline.self_improver import should_revert_or_extend
+
+        metrics = [
+            {"avg_base_score": 60},
+            {"avg_base_score": None},
+            {"avg_base_score": None},
+            {"avg_base_score": None},
+        ]
+        assert should_revert_or_extend({}, metrics) == "extend"
+
+    def test_none_3_run_window_falls_through_to_usable_5_run_window(self):
+        from lambdas.pipeline.self_improver import should_revert_or_extend
+
+        metrics = [
+            {"avg_base_score": 60},
+            {"avg_base_score": None},
+            {"avg_base_score": None},
+            {"avg_base_score": None},
+            {"avg_base_score": 30},
+            {"avg_base_score": 28},
+        ]
+        # 3-run window all-None -> inconclusive; 5-run window has [30, 28],
+        # avg 29, a >50% decline from baseline 60 -> revert.
+        assert should_revert_or_extend({}, metrics) == "revert"
+
+    def test_none_still_detects_real_decline(self):
+        from lambdas.pipeline.self_improver import should_revert_or_extend
+
+        metrics = [
+            {"avg_base_score": 60},
+            {"avg_base_score": None},
+            {"avg_base_score": 40},
+            {"avg_base_score": 38},
+        ]
+        # avg([40, 38]) = 39, change = -35% -> revert (None must not dilute
+        # the average toward a smaller, masked decline).
+        assert should_revert_or_extend({}, metrics) == "revert"
+
+    def test_real_world_shape_from_should_revert_or_extend_call_site(self):
+        """End-to-end through the handler's actual call site: a
+        pipeline_runs row with a NULL avg_base_score (0 jobs scored that
+        day) sitting among otherwise-valid rows must not crash the
+        handler's revert/confirm/extend evaluation."""
+        from lambdas.pipeline.self_improve import handler
+
+        active_adj = {
+            "id": "adj-none-1",
+            "user_id": "u1",
+            "status": "auto_applied",
+            "applied_at": "2026-08-25T00:00:00",
+            "adjustment_type": "score_threshold",
+        }
+        db = _make_mock_db(
+            metrics_data=SAMPLE_METRICS,
+            jobs_data=SAMPLE_JOBS,
+            active_adjustments=[active_adj],
+            runs_since_data=[
+                {"avg_base_score": 60},
+                {"avg_base_score": None},  # a day with 0 jobs scored
+                {"avg_base_score": 58},
+                {"avg_base_score": 57},
+            ],
+        )
+        with patch("lambdas.pipeline.self_improve.get_supabase", return_value=db), \
+                patch("lambdas.pipeline.self_improve.save_pipeline_run"), \
+                patch("lambdas.pipeline.self_improve.ai_complete", return_value={"content": "{}"}):
+            result = handler({"user_id": "u1"}, None)  # must not raise
+
+        # before=60; window [None, 58, 57] -> avg([58,57])=57.5, change ~
+        # -4.2%, within the +/-5% threshold and no 6th run -> "extend",
+        # i.e. no action this run. The real assertion is that the handler
+        # completed at all instead of raising.
+        assert result["reverted"] == []
+        assert result["confirmed"] == []
