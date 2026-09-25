@@ -1282,7 +1282,7 @@ git checkout main && git pull && git checkout -b feat/pgvector-retrieval
 ### Task 11: Vector schema migration
 
 **Files:**
-- Create: `supabase/migrations/20260922_pgvector.sql`
+- Create: `supabase/migrations/20260922000000_pgvector.sql`
 - Test: `tests/unit/test_pgvector_migration.py`
 
 **Interfaces:**
@@ -1299,7 +1299,7 @@ import pathlib
 
 MIGRATION = (
     pathlib.Path(__file__).resolve().parents[2]
-    / "supabase/migrations/20260922_pgvector.sql"
+    / "supabase/migrations/20260922000000_pgvector.sql"
 )
 
 
@@ -1392,7 +1392,7 @@ Expected: migration applied. Confirm with `select extname from pg_extension wher
 - [ ] **Step 6: Commit**
 
 ```bash
-git add supabase/migrations/20260922_pgvector.sql tests/unit/test_pgvector_migration.py
+git add supabase/migrations/20260922000000_pgvector.sql tests/unit/test_pgvector_migration.py
 git commit -m "feat(db): add pgvector schema for jobs and resume bullets"
 ```
 
@@ -1704,7 +1704,7 @@ def similar_bullets(user_id: str, vector: list[float], k: int = 8) -> list[dict]
 
 - [ ] **Step 4: Add the two RPC functions**
 
-Append to `supabase/migrations/20260922_pgvector.sql`:
+Append to `supabase/migrations/20260922000000_pgvector.sql`:
 
 ```sql
 create or replace function public.match_jobs_in_company(
@@ -1742,7 +1742,7 @@ Expected: PASS, 5 passed.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add retrieval/store.py supabase/migrations/20260922_pgvector.sql tests/unit/test_retrieval_store.py
+git add retrieval/store.py supabase/migrations/20260922000000_pgvector.sql tests/unit/test_retrieval_store.py
 git commit -m "feat(retrieval): pgvector similarity queries for jobs and bullets"
 ```
 

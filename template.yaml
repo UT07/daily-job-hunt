@@ -95,6 +95,16 @@ Parameters:
     Default: legacy
     AllowedValues: [legacy, langgraph]
     Description: Which council implementation the pipeline uses.
+  SemanticDedup:
+    Type: String
+    Default: "off"
+    AllowedValues: ["off", "on"]
+    Description: >
+      Enables MergeDedupFunction's tier-4 pgvector semantic dedup
+      (retrieval/dedup.py), which catches the same posting reworded across
+      queries. Defaults off because it depends on the pgvector schema and
+      RPC migrations (db/migrations, Tasks 11/13), which are not yet
+      applied to production.
 
 Resources:
 
@@ -353,6 +363,9 @@ Resources:
       DeploymentPreference:
         Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
+      Environment:
+        Variables:
+          SEMANTIC_DEDUP: !Ref SemanticDedup
       Policies:
         - SSMParameterReadPolicy:
             ParameterName: naukribaba/*
