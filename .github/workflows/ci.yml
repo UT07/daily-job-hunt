@@ -61,3 +61,129 @@ jobs:
         run: pytest tests/unit/ -v --tb=short
         env:
           AWS_DEFAULT_REGION: eu-west-1
+
+  detect-ai-changes:
+    # Cheap gate for the expensive job below. Runs on every trigger (push
+    # AND pull_request) and always succeeds so `ai-eval`'s `needs:` is never
+    # blocked by a skipped upstream job — the pull_request/push distinction
+    # is handled INSIDE this step instead of via a job-level `if:`, so
+    # there's no ambiguity about whether a downstream job's own `if:`
+    # overrides GitHub's default "needs must succeed" check on a SKIPPED
+    # (as opposed to failed) dependency.
+    name: Detect AI-relevant changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      ai_relevant: ${{ steps.filter.outputs.ai_relevant }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Diff changed paths against the PR base
+        id: filter
+        env:
+          # Trusted GitHub context fields, passed via env rather than
+          # inline ${{ ... }} in `run:`, matching the safe-interpolation
+          # pattern the stale-base-check job above already uses for
+          # github.event.pull_request.base.ref.
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            echo "Event is '$EVENT_NAME', not pull_request — ai-eval only runs on PRs (provider quota)."
+            echo "ai_relevant=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --name-only "$BASE_SHA" "$HEAD_SHA" > changed_files.txt
+          echo "Changed files in this PR:"
+          cat changed_files.txt
+          if grep -qE '^(lambdas/pipeline/agents/|lambdas/pipeline/guardrails/|lambdas/pipeline/retrieval/|evals/)' changed_files.txt; then
+            echo "AI-relevant path changed — ai-eval will run."
+            echo "ai_relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No AI-relevant path changed — ai-eval will be skipped."
+            echo "ai_relevant=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  ai-eval:
+    name: AI Eval Gate
+    needs: detect-ai-changes
+    runs-on: ubuntu-latest
+    # Only for changes that can move model behaviour; the golden set costs
+    # real Groq/OpenRouter free-tier quota, so it does not run on every PR.
+    #
+    # NOTE for future editors: `github.event.pull_request.changed_files` is
+    # a COUNT (an integer), not a list of paths — `contains(that, 'evals/')`
+    # can never match anything meaningful and is not how GitHub exposes
+    # per-file changes. The actual changed-files list only exists by
+    # diffing the checkout (see detect-ai-changes above), which is also why
+    # this can't just be an `on.pull_request.paths:` trigger filter on the
+    # workflow: that filter applies to every job in the file (it would also
+    # gate stale-base-check/unit-tests), not just this one.
+    if: needs.detect-ai-changes.outputs.ai_relevant == 'true'
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt -r tests/requirements-test.txt
+
+      # lambdas/pipeline/ai_helper.py's get_param() checks an env var first —
+      # derived from the SSM parameter's last path segment, e.g.
+      # /naukribaba/GROQ_API_KEY -> GROQ_API_KEY — before ever calling SSM
+      # (see that function's docstring for the full precedence contract).
+      # This job supplies every provider key and Supabase credential it
+      # needs as a plain `env:` secret below, so get_param never falls
+      # through to SSM and this job needs no AWS credentials at all.
+      #
+      # It previously configured aws-actions/configure-aws-credentials (the
+      # same auth .github/workflows/deploy.yml uses) to let get_param reach
+      # SSM directly, but that IAM user has no ssm:GetParameter grant —
+      # every provider call failed with AccessDeniedException and the gate
+      # reported a meaningless result. Fixing that IAM grant is out of
+      # scope; needing no AWS access here at all is the simpler fix.
+      - name: Run golden set
+        env:
+          # Loading the base resume (evals/harness.py:_load_base_resume) and
+          # building the golden set both use the direct-env Supabase client
+          # (db_client.py), not ai_helper.get_supabase() — same split every
+          # one-off script under scripts/ already has. This also now covers
+          # any ai_helper.get_supabase() call reached via the council path,
+          # through get_param's env-var-first precedence above.
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # Council provider keys (lambdas/pipeline/ai_helper.py
+          # _build_provider_list), resolved via get_param's env-var-first
+          # lookup instead of SSM. Groq is the primary provider; the other
+          # three are failover depth. DeepSeek is deliberately omitted —
+          # CLAUDE.md backlog notes its balance is empty (always 402s) — a
+          # provider whose key is absent or whose call fails is simply
+          # skipped by the council's own failover, same as in production.
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+        # repeats=1: the CI default. See evals/harness.py's module docstring
+        # for why repeats>1 (meaningful score_variance) costs real provider
+        # quota and is a local/manual-run knob, not a CI one.
+        run: python -m evals.harness 1
+
+      - name: Check the gate
+        run: python scripts/check_eval_gate.py
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: evals/report.json

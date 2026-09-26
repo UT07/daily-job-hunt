@@ -1,0 +1,10 @@
+{
+  "id": "3cebbba9261b",
+  "task": "score",
+  "title": "Distributed Data Infrastructure Engineer",
+  "company": "ClickHouse",
+  "description": "ClickHouse | Distributed Data Infrastructure Engineer | Remote Hiring in the US right now. Seniors/Staff/Principal levels\nClickHouse is a popular, Open-Source OLAP Database. We are ClickHouse Inc, the company behind the database aiming to build the best in class real time data warehouse.\nWhat we are looking for:\nDistributed Systems / Cloud Engineers to build\n- AutoScaling Systems for a Cloud Database\n- A Distributed Caching Layer on top of S3 [0]\nIf you have experience in productionizing and maintaining distributed systems cloud-based multi-tenant caches - you would fit right in.\nWe also maintain our own ClickHouse based Data Infrastructure. Bonus points if you've worked on auto-scaling or other data-driven forecasting challenges in the past.\nCan work in a fast moving scale-up environment. Proactive and hands on.\nYou must be independent and self-organized.\nDatabase SRE / Cache Operations experience\nGo, Kubernetes, Distributed Systems in general\nYou will need to be able to do On-Call - debugging production infra, db or cache issues\nLow-level database programming (C++, ClickHouse) - This is crucial for the cache.\nIf you want to work on operating production critical databases/caches in the cloud on or write data-driven algorithms for autoscaling, consider applying! Send me an email: manish.gill [at] clickhouse [dot] com\n[0]\nhttps://clickhouse.com/blog/building-a-distributed-cache-for...",
+  "expected": {
+    "tier": "C"
+  }
+}
