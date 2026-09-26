@@ -2,6 +2,8 @@
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock
 
+import pytest
+
 
 def _make_supabase(jobs_raw_data=None, existing_jobs_data=None, scrape_runs_data=None, search_config_data=None):
     """Build a mock Supabase client for merge_dedup tests."""
@@ -388,3 +390,365 @@ def test_job_age_days_returns_none_for_missing():
     assert merge_dedup._job_age_days({}) is None
     assert merge_dedup._job_age_days({"posted_date": None}) is None
     assert merge_dedup._job_age_days({"posted_date": "garbage"}) is None
+
+
+# ---------------------------------------------------------------------------
+# Tuned title pre-filter (2026-09-25 throughput fix) — Rule 1 now rejects
+# off-track functions (sales, management track, data science, etc.) in
+# addition to seniority, so that the ~150/day capacity target is hit by
+# raising precision rather than just imposing a volume cap. Every reject
+# case below was checked against real corpus titles (scripts/tune_prefilter.py)
+# before being added to REJECT_TITLE_KEYWORDS / _WORD_BOUNDARY_REJECT_PATTERN.
+# ---------------------------------------------------------------------------
+
+def _good_job(title, **extra):
+    """A job that would pass every rule except the one under test."""
+    base = {
+        "title": title,
+        "description": _GOOD_DESC,
+        "location": "Dublin, Ireland",
+        "posted_date": datetime.now(timezone.utc).isoformat(),
+    }
+    base.update(extra)
+    return base
+
+
+@pytest.mark.parametrize("title", [
+    "Senior Sales Engineer - UK",
+    "Enterprise Account Executive, Juno",
+    "Business Development Representative (Sydney)",
+    "Senior Solutions Consultant",
+    "Presales Engineer",
+    "Solutions Architect, Enterprise (Pre-sales)",
+    "Senior Professional Services Engineer",
+])
+def test_prefilter_rejects_sales_and_presales_titles(title):
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(_good_job(title), {"python", "aws"})
+    assert passes is False
+    assert reason.startswith("role_mismatch:")
+
+
+@pytest.mark.parametrize("title", [
+    "Manager, Customer Success",
+    "Senior Engineering Manager - Developer Experience",  # management track, no EM archetype exists
+    "Manager, Site Reliability Engineering (SRE)",
+])
+def test_prefilter_rejects_manager_titles_including_engineering_manager(title):
+    """Manager-track titles are rejected even when SRE/engineering-flavored:
+    this pipeline's only two resume archetypes (sre_devops, fullstack) are
+    both IC resumes, so an EM-track JD can't be tailored well regardless of
+    how relevant its buzzwords look."""
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(_good_job(title), {"python", "aws"})
+    assert passes is False
+    assert reason == "role_mismatch:manager"
+
+
+@pytest.mark.parametrize("title", [
+    "Solutions Architect, Enterprise",
+    "Manager, Solutions Architects",  # plural form
+    "Principal Solutions Architect",
+])
+def test_prefilter_rejects_architect_titles(title):
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(_good_job(title), {"python", "aws"})
+    assert passes is False
+
+
+@pytest.mark.parametrize("title,expected_kw", [
+    ("Senior Data Scientist", "data scientist"),
+    ("Senior Developer Advocate", "developer advocate"),
+    ("Recruiter", "recruiter"),
+    ("Compensation Analyst", "compensation analyst"),
+    ("Controller", "controller"),
+    ("Senior Revenue Analytics Analyst", "revenue analytics"),
+    ("2026 - Women in Tech Summit, EMEA", "summit"),
+])
+def test_prefilter_rejects_off_archetype_titles(title, expected_kw):
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(_good_job(title), {"python", "aws"})
+    assert passes is False
+    assert reason == f"role_mismatch:{expected_kw}"
+
+
+@pytest.mark.parametrize("title", [
+    "Software Engineering Intern - Summer 2026",
+    "Software Engineer, Intern (Summer or Winter)",
+    "Software Engineer Internship, Frontend",
+    "Data Science Intern (Winter 2027)",
+])
+def test_prefilter_rejects_internships(title):
+    """Matches existing user feedback (feedback_graduated.md) — the user has
+    already graduated, so internship postings are never worth a scoring slot."""
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(_good_job(title), {"python", "aws"})
+    assert passes is False
+    assert reason.startswith("role_mismatch:") and "intern" in reason
+
+
+# --- Collision guards: real titles the tuned filter must NOT reject -------
+
+@pytest.mark.parametrize("title", [
+    "Staff Software Engineer, International",
+    "Senior Android Engineer, International",
+    "Infrastructure Lead / Senior Software Engineer - Data Platforms & Internal Tooling",
+])
+def test_prefilter_does_not_reject_international_or_internal_titles(title):
+    """Regression guard: naive substring matching on 'intern' would also
+    catch 'International' and 'Internal' — both real, senior, on-target
+    titles observed in the live jobs_raw corpus. Word-boundary matching
+    (_WORD_BOUNDARY_REJECT_PATTERN) must not flag either."""
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(_good_job(title), {"python", "aws"})
+    assert passes is True, f"{title!r} was wrongly rejected: {reason}"
+
+
+@pytest.mark.parametrize("title", [
+    "Senior Backend Engineer, Architecture Engineering: Nonlinear Productivity",
+    "Site Reliability Engineer - Video Live Streaming Architecture",
+    "Staff Backend Engineer, Architecture Engineering: Nonlinear Productivity",
+])
+def test_prefilter_does_not_reject_architecture_team_titles(title):
+    """Regression guard for the same class of bug as the intern/international
+    collision: 'architect' is a substring of 'Architecture', which appears in
+    real backend/SRE team names on Gitlab's board. Confirmed via
+    scripts/tune_prefilter.py against the live corpus before this test was
+    written — these are genuine hands-on IC roles, not pre-sales Architects."""
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(_good_job(title), {"python", "aws"})
+    assert passes is True, f"{title!r} was wrongly rejected: {reason}"
+
+
+def test_prefilter_does_not_reject_salesforce_titles():
+    """Regression guard: 'sales' is a substring of 'Salesforce', a real
+    platform-engineering title observed in the corpus (Ashby/Benchling:
+    'Salesforce Engineer, Business Technology Team'). This is why
+    REJECT_TITLE_KEYWORDS uses scoped phrases like 'sales engineer' instead
+    of a bare 'sales' keyword."""
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(
+        _good_job("Salesforce Engineer, Business Technology Team"), {"python", "aws"}
+    )
+    assert passes is True, f"wrongly rejected: {reason}"
+
+
+def test_prefilter_does_not_reject_security_partnerships_title():
+    """Regression guard: 'partner' is not a bare reject keyword because it
+    matched 'Staff Security Engineer, Security Partnerships' — a real IC
+    security role — in the live corpus scan."""
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(
+        _good_job("Staff Security Engineer, Security Partnerships"), {"python", "aws"}
+    )
+    assert passes is True, f"wrongly rejected: {reason}"
+
+
+# --- Recall guard: fails if a future change makes the filter too aggressive ---
+
+@pytest.mark.parametrize("title", [
+    "Senior Site Reliability Engineer",
+    "DevOps Engineer",
+    "Backend Engineer, Platform Team",
+    "Full Stack Software Engineer",
+    "Staff Software Engineer, Infrastructure",
+    "Software Engineer, New Grad",
+    "Cloud Infrastructure Engineer",
+])
+def test_prefilter_admits_realistic_good_jobs(title):
+    """Recall guard, not a precision test: these are ordinary, on-target
+    SRE/DevOps/fullstack titles with a solid JD (the _GOOD_DESC fixture,
+    fresh posting, Dublin location) and must keep passing. If a future
+    change to REJECT_TITLE_KEYWORDS / _WORD_BOUNDARY_REJECT_PATTERN /
+    MIN_SKILL_OVERLAP over-broadens the filter (e.g. a bare 'engineer' or
+    'staff' keyword, or raising the skill-overlap bar too high), this is the
+    test that should catch it — a filter that hits its volume target by
+    throwing away good, ordinary matches is worse than no filter."""
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(_good_job(title), merge_dedup.DEFAULT_USER_SKILLS)
+    assert passes is True, f"{title!r} was wrongly rejected: {reason}"
+
+
+# ---------------------------------------------------------------------------
+# Part 2 — widened backfill window (was a hardcoded 7 days; a job that
+# missed it was lost permanently, not merely delayed — 2026-09-25 audit P0-4).
+# ---------------------------------------------------------------------------
+
+def test_backfill_lookback_widened_beyond_old_7_day_window():
+    """Direct regression guard on the constant itself: if this ever drifts
+    back down to 7, the P0-4 bug (jobs that miss the window are lost
+    forever, not delayed) is silently reintroduced."""
+    import merge_dedup
+    assert merge_dedup.BACKFILL_LOOKBACK_DAYS > 7
+    assert merge_dedup.BACKFILL_LOOKBACK_DAYS == 30
+
+
+def _make_supabase_for_backfill(today_data, backfill_data, existing_jobs_data=None):
+    """Mock a Supabase client where the SAME jobs_raw table is queried twice
+    in one handler() run (Source 2 "today", Source 3 "backfill") with
+    different .gte()/.lt() bounds. Returns today_data on the first .execute()
+    call and backfill_data on the second, so the test can tell the two
+    queries apart — unlike _make_supabase above, which was never exercised
+    against a non-empty backfill path (MagicMock's default empty __iter__
+    silently no-ops it)."""
+    mock_client = MagicMock()
+
+    raw_chain = MagicMock()
+    raw_chain.select.return_value = raw_chain
+    raw_chain.gte.return_value = raw_chain
+    raw_chain.lt.return_value = raw_chain
+    calls = {"n": 0}
+
+    def execute_side_effect():
+        calls["n"] += 1
+        result = MagicMock()
+        result.data = today_data if calls["n"] == 1 else backfill_data
+        return result
+
+    raw_chain.execute.side_effect = execute_side_effect
+
+    existing_chain = MagicMock()
+    existing_chain.select.return_value = existing_chain
+    existing_chain.eq.return_value = existing_chain
+    existing_chain.not_ = existing_chain
+    existing_chain.is_.return_value = existing_chain
+    existing_result = MagicMock()
+    existing_result.data = existing_jobs_data or []
+    existing_chain.execute.return_value = existing_result
+
+    empty_chain = MagicMock()
+    empty_result = MagicMock()
+    empty_result.data = []
+    empty_chain.select.return_value = empty_chain
+    empty_chain.eq.return_value = empty_chain
+    empty_chain.execute.return_value = empty_result
+
+    def table_side_effect(name):
+        if name == "jobs_raw":
+            return raw_chain
+        elif name == "jobs":
+            return existing_chain
+        return empty_chain
+
+    mock_client.table.side_effect = table_side_effect
+    return mock_client, raw_chain
+
+
+def test_backfill_reaches_20_day_old_unscored_job():
+    """A job scraped 20 days ago (inside the new 30-day window, outside the
+    old 7-day one) and never scored must still be found and scored — this is
+    exactly the "misses its window, lost forever" bug the widened window
+    fixes. posted_date is set fresh so Rule 0 (freshness) doesn't reject it
+    for an unrelated reason and mask what's being tested."""
+    import merge_dedup
+    old_job = _good_job("Senior Backend Engineer", job_hash="old-unscored", company="Acme")
+    db, raw_chain = _make_supabase_for_backfill(today_data=[], backfill_data=[old_job])
+
+    with patch("merge_dedup.get_supabase", return_value=db):
+        result = merge_dedup.handler({"user_id": "user-1"}, None)
+
+    assert "old-unscored" in result["new_job_hashes"]
+    # The backfill query's .gte() bound must reflect ~30 days, not the old 7.
+    gte_calls = [c for c in raw_chain.gte.call_args_list if c.args[0] == "scraped_at"]
+    assert len(gte_calls) == 2  # Source 2 (today) + Source 3 (backfill)
+    lookback_arg = gte_calls[1].args[1]
+    today = datetime.now(timezone.utc).date()
+    lookback_date = datetime.fromisoformat(lookback_arg).date()
+    assert (today - lookback_date).days == merge_dedup.BACKFILL_LOOKBACK_DAYS
+
+
+# ---------------------------------------------------------------------------
+# Part 1 (defense in depth) — MAX_JOBS_PER_RUN hard cap. The content filter
+# above does most of the work, but a burst day can still out-produce it (the
+# real 2026-04-01 corpus admits 500+ under the content filter alone — see
+# the throughput fix report) — this cap is what actually guarantees
+# ScoreBatchMap never receives more than capacity allows.
+# ---------------------------------------------------------------------------
+
+def _job_with_overlap(n, overlap_count, job_hash, company):
+    """Build a passing job whose description mentions exactly `overlap_count`
+    distinct DEFAULT_USER_SKILLS keywords, for deterministic relevance
+    ranking in the cap tests."""
+    keywords = ["python", "aws", "kubernetes", "docker", "react", "java"][:overlap_count]
+    desc = (
+        f"We are hiring for role number {n}. Our stack: " + ", ".join(keywords) + ". "
+        + "We build reliable, well-tested, cloud-native systems for our customers. " * 5
+    )
+    return {
+        "job_hash": job_hash,
+        "title": f"Software Engineer {n}",
+        "company": company,
+        "source": "greenhouse",
+        "description": desc,
+        "location": "Dublin, Ireland",
+        "posted_date": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _distinct_company(i: int) -> str:
+    """A company name for index i that won't fuzzy-match a neighboring
+    index's name. f"Company{i}" would: SequenceMatcher scores "company1" vs
+    "company2" as near-identical (one trailing digit differs), so Tier 2
+    fuzzy dedup collapses them all into "the same job" — correct dedup
+    behavior, but it defeats a test that needs N genuinely distinct jobs. A
+    shared word/suffix scheme has the same problem once two indices land in
+    the same word bucket (tried first; still collapsed 175 -> 60). A hash
+    digest has no shared structure between neighboring indices at all, so
+    SequenceMatcher ratios stay low regardless of how many jobs are
+    generated."""
+    import hashlib
+    return hashlib.md5(str(i).encode()).hexdigest()[:12]
+
+
+def test_max_jobs_per_run_caps_total_output():
+    import merge_dedup
+    n_jobs = merge_dedup.MAX_JOBS_PER_RUN + 25
+    jobs_raw = [
+        _job_with_overlap(i, overlap_count=2, job_hash=f"hash-{i}", company=_distinct_company(i))
+        for i in range(n_jobs)
+    ]
+    db = _make_supabase(jobs_raw_data=jobs_raw, existing_jobs_data=[])
+
+    with patch("merge_dedup.get_supabase", return_value=db):
+        import merge_dedup as md
+        result = md.handler({"user_id": "user-1"}, None)
+
+    assert result["total_new"] == merge_dedup.MAX_JOBS_PER_RUN
+    assert len(result["new_job_hashes"]) == merge_dedup.MAX_JOBS_PER_RUN
+    assert result["capacity_capped"] == n_jobs - merge_dedup.MAX_JOBS_PER_RUN
+
+
+def test_max_jobs_per_run_keeps_highest_skill_overlap():
+    """When the cap has to drop jobs, it must drop the LEAST relevant ones
+    first, not an arbitrary/order-dependent subset — a filter that hits its
+    volume target by discarding the best matches is worse than no filter."""
+    import merge_dedup
+    jobs_raw = [
+        _job_with_overlap(1, overlap_count=2, job_hash="low-overlap", company="LowCo"),
+        _job_with_overlap(2, overlap_count=4, job_hash="mid-overlap", company="MidCo"),
+        _job_with_overlap(3, overlap_count=6, job_hash="high-overlap", company="HighCo"),
+    ]
+    db = _make_supabase(jobs_raw_data=jobs_raw, existing_jobs_data=[])
+
+    with patch("merge_dedup.get_supabase", return_value=db), \
+         patch("merge_dedup.MAX_JOBS_PER_RUN", 2):
+        result = merge_dedup.handler({"user_id": "user-1"}, None)
+
+    assert result["total_new"] == 2
+    assert set(result["new_job_hashes"]) == {"mid-overlap", "high-overlap"}
+    assert "low-overlap" not in result["new_job_hashes"]
+    assert result["capacity_capped"] == 1
+
+
+def test_max_jobs_per_run_does_not_trigger_under_cap():
+    """Fewer than MAX_JOBS_PER_RUN passing jobs: nothing is capped, and the
+    field says so explicitly (0, not None/missing) for callers that log it."""
+    import merge_dedup
+    jobs_raw = [_job_with_overlap(1, overlap_count=2, job_hash="only-one", company="SoloCo")]
+    db = _make_supabase(jobs_raw_data=jobs_raw, existing_jobs_data=[])
+
+    with patch("merge_dedup.get_supabase", return_value=db):
+        result = merge_dedup.handler({"user_id": "user-1"}, None)
+
+    assert result["total_new"] == 1
+    assert result["capacity_capped"] == 0

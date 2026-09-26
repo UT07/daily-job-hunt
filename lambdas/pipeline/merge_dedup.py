@@ -29,8 +29,72 @@ def _get_ssm():
         _ssm = boto3.client("ssm")
     return _ssm
 
-# Pre-filter: seniority keywords that indicate too-senior roles
-REJECT_TITLE_KEYWORDS = {"director", "vp", "vice president", "head of", "chief", "principal architect", "cto", "cio"}
+# Pre-filter: title keywords that mark a role as either too senior or the
+# wrong function for this pipeline's two IC resume archetypes (sre_devops,
+# fullstack — confirmed via the live /api/health "resumes_loaded" field;
+# there is no manager/data-science/sales-engineering archetype to tailor
+# against, so a JD in one of those tracks cannot produce a good tailored
+# resume regardless of how well its buzzwords overlap with DEFAULT_USER_SKILLS).
+#
+# Tuned 2026-09-25 against the full 12,672-row jobs_raw corpus
+# (scripts/tune_prefilter.py) — every addition below was checked against its
+# real matching titles in that corpus before being kept; see
+# .superpowers/sdd/2026-09-22-ey-genai-platform-upgrade/fix-throughput-report.md
+# for the sample review. Two findings drove most of this:
+#   - "architect" (see _WORD_BOUNDARY_REJECT_PATTERN below, not this set):
+#     all 105 admitted titles containing it were Solutions/Partner/Presales/
+#     Cloud-Solutions/Professional-Services Architect (pre-sales or
+#     consulting) or Staff/Principal-tier — zero were a reachable hands-on
+#     IC role. Subsumes the old "principal architect".
+#   - "manager": all 383 admitted titles containing it, INCLUDING the
+#     "Engineering Manager" / "Manager, Site Reliability Engineering" ones,
+#     are a people-management track this pipeline has no resume archetype
+#     for — an IC-only base resume does not tailor into a credible EM
+#     resume just because the JD is SRE-flavored.
+# "sales" and "partner" are deliberately NOT bare keywords: "sales" is a
+# substring of "Salesforce" (a real platform-engineering title observed in
+# the corpus), and "partner" matched "Staff Security Engineer, Security
+# Partnerships" (a real IC security role). Scoped phrases below avoid both.
+REJECT_TITLE_KEYWORDS = {
+    # Seniority tiers unreachable for a graduate/mid-level IC candidate.
+    "director", "vp", "vice president", "head of", "chief", "cto", "cio",
+    "distinguished",
+    # Management track — no resume archetype exists for it (see above).
+    "manager",
+    # Sales / GTM / pre-sales / customer-facing technical roles — JD
+    # boilerplate mentions the same stack as an IC role next to it, but the
+    # job itself is not hands-on engineering.
+    "sales engineer", "sales specialist", "sales operations", "account executive",
+    "business development", "solutions consultant", "presales", "pre-sales",
+    "professional services",
+    # Other roles this pipeline's two archetypes cannot credibly tailor
+    # toward, or that the user has explicitly ruled out.
+    "developer advocate", "data scientist", "recruiter", "compensation analyst",
+    "controller", "revenue analytics", "revenue technology", "revenue technical",
+    # Not a job posting at all — observed verbatim on a real Greenhouse board:
+    # "2026 - Women in Tech Summit, EMEA".
+    "summit",
+}
+
+# Keywords that need word-boundary matching, not the plain substring check
+# REJECT_TITLE_KEYWORDS uses above, because their bare substring collides
+# with real words that show up in genuine on-target titles:
+#   - "intern" is a substring of "International" and "Internal" — both
+#     observed on real, senior, on-target titles ("Staff Software Engineer,
+#     International", "...Data Platforms & Internal Tooling"). Rejecting
+#     internships at all matches existing user feedback (feedback_graduated.md
+#     — the user has already graduated).
+#   - "architect" is a substring of "Architecture" — caught 2 real backend/SRE
+#     titles that only mention "Architecture" as an org/team name ("Senior
+#     Backend Engineer, Architecture Engineering: Nonlinear Productivity",
+#     "Site Reliability Engineer - Video Live Streaming Architecture") before
+#     this was moved out of the plain-substring set above.
+# Every other collision this same corpus-scan checked for ("manager",
+# "sales engineer", "partner", the multi-word phrases) came back clean — see
+# the throughput fix report for the specific counts.
+_WORD_BOUNDARY_REJECT_PATTERN = re.compile(
+    r"\b(intern|interns|internship|architect|architects)\b", re.IGNORECASE
+)
 
 # Freshness pre-filter — drop jobs whose posted_date is older than this many
 # days at scrape time. Configurable via JOB_MAX_AGE_DAYS env var. Default 14:
@@ -39,6 +103,39 @@ REJECT_TITLE_KEYWORDS = {"director", "vp", "vice president", "head of", "chief",
 # where posted_date is None pass through this filter unchanged — we don't
 # want to throw away rows just because the source didn't supply it.
 JOB_MAX_AGE_DAYS = int(os.environ.get("JOB_MAX_AGE_DAYS", "14"))
+
+# How many days back Source 3 (backfill, see handler() below) looks in
+# jobs_raw for rows that were scraped but never made it into the scored
+# `jobs` table. Was a hardcoded 7 — anything that missed that window was
+# lost permanently, not merely delayed (2026-09-25 audit, P0-4): with
+# scoring throughput capped well below scrape volume, a job can easily sit
+# unscored for longer than a week without anything being wrong.
+#
+# Widened, not made unbounded. A job's own staleness is already governed
+# independently by Rule 0 above (JOB_MAX_AGE_DAYS, keyed off posted_date,
+# not scraped_at) — widening how far back we SEARCH for unscored rows does
+# not let a genuinely stale posting reach the user, because Rule 0 still
+# rejects it either way. What an unbounded window WOULD cost is a
+# jobs_raw scan that grows forever (12,672 rows today, more every day this
+# pipeline runs), re-fetched on every single invocation. 30 days is
+# double JOB_MAX_AGE_DAYS's default and comfortably covers any realistic
+# pipeline gap this project has actually had (the current parking is a
+# deliberate months-long exception, not something a backfill window should
+# be sized around — a gap that long calls for fresh scraping, not
+# resurrecting month-old raw rows whose postings are almost certainly gone).
+BACKFILL_LOOKBACK_DAYS = int(os.environ.get("BACKFILL_LOOKBACK_DAYS", "30"))
+
+# Hard ceiling on how many jobs one run hands to ScoreBatchMap, regardless of
+# how many pass the relevance filter below. Groq's free tier caps AI scoring
+# at roughly 80-120 jobs/day (8,000 tokens/minute ≈ 1.4 calls/minute); 150
+# leaves headroom without depending entirely on the content filter to hold
+# the line on a burst day. On 2026-09-01 (1,427 raw jobs, the single
+# biggest day on record) the tuned relevance filter alone still admitted
+# more than this on its own — see the throughput fix report. When more than
+# MAX_JOBS_PER_RUN pass the relevance filter, keep the best ones (highest
+# tech-skill overlap with the user's stack) rather than an arbitrary/
+# order-dependent subset — see _job_relevance_rank below.
+MAX_JOBS_PER_RUN = int(os.environ.get("MAX_JOBS_PER_RUN", "150"))
 
 # Pre-filter: minimum tech skill keywords to match against JD
 DEFAULT_USER_SKILLS = {
@@ -90,6 +187,22 @@ def _extract_tech_keywords(text: str) -> set:
         if re.search(r'\b' + pattern + r'\b', text):
             found.add(pattern.replace("\\", "").replace(".?", ""))
     return found
+
+
+def _job_relevance_rank(job: dict, user_skills: set) -> tuple:
+    """Rank a job for the MAX_JOBS_PER_RUN cutoff — higher is better.
+
+    Primary key is skill overlap (the same signal Rule 3 already uses to
+    admit/reject, just used here to order rather than gate), tie-broken by
+    freshness (lower age wins) so that among equally-relevant jobs the most
+    recently posted one survives the cut. Age ties broken to 0 when
+    unavailable — never rank a missing-date job LAST by treating "unknown"
+    as "old"; Rule 0 already chose not to penalize missing posted_date, and
+    ranking should stay consistent with that.
+    """
+    overlap = len(_extract_tech_keywords(job.get("description") or "") & user_skills)
+    age = _job_age_days(job)
+    return (overlap, -(age if age is not None else 0.0))
 
 
 def _richness_score(job: dict) -> tuple:
@@ -173,10 +286,16 @@ def _prefilter_job(job: dict, user_skills: set, max_age_days: int = JOB_MAX_AGE_
     if age is not None and age > max_age_days:
         return False, f"stale:{int(age)}d_old"
 
-    # Rule 1: Seniority filter
+    # Rule 1: Seniority / off-track-function filter (renamed from
+    # "too_senior" — the set now also covers function mismatches like
+    # "sales engineer" that have nothing to do with seniority, and an
+    # honest reason string matters for anyone reading the reject logs).
     for kw in REJECT_TITLE_KEYWORDS:
         if kw in title:
-            return False, f"too_senior:{kw}"
+            return False, f"role_mismatch:{kw}"
+    word_match = _WORD_BOUNDARY_REJECT_PATTERN.search(title)
+    if word_match:
+        return False, f"role_mismatch:{word_match.group(1).lower()}"
 
     # Rule 2: Description quality gate
     if len(desc) < 200:
@@ -220,8 +339,10 @@ def handler(event, context):
 
     # --- Source 3: Catch unscored jobs from recent days (backfill) ---
     # If the pipeline failed mid-run or was offline, jobs sit in jobs_raw
-    # but never make it to the scored 'jobs' table. Pick them up within 7 days.
-    lookback = (datetime.now(timezone.utc).date() - timedelta(days=7)).isoformat()
+    # but never make it to the scored 'jobs' table. Pick them up within
+    # BACKFILL_LOOKBACK_DAYS (see its own comment above for why 30, not 7,
+    # and why widening this doesn't let stale postings through).
+    lookback = (datetime.now(timezone.utc).date() - timedelta(days=BACKFILL_LOOKBACK_DAYS)).isoformat()
     recent = db.table("jobs_raw").select("job_hash, title, company, source, description, location, posted_date") \
         .gte("scraped_at", lookback).lt("scraped_at", today).execute()
     if recent.data:
@@ -229,7 +350,7 @@ def handler(event, context):
         backfill = [j for j in recent.data if j["job_hash"] not in today_hashes]
         if backfill:
             all_jobs.extend(backfill)
-            logger.info(f"[merge_dedup] Backfill: {len(backfill)} unscored jobs from last 7 days")
+            logger.info(f"[merge_dedup] Backfill: {len(backfill)} unscored jobs from last {BACKFILL_LOOKBACK_DAYS} days")
 
     if not all_jobs and not fargate_hashes:
         return {"new_job_hashes": [], "total_new": 0, "filtered_out": 0}
@@ -329,7 +450,7 @@ def handler(event, context):
 
     cross_query_skipped = 0
     batch_dedup_skipped = 0
-    new_hashes = []
+    new_jobs: list[dict] = []
     batch_dedup_keys: set[str] = set()  # Track within current batch too
     for j in filtered_jobs:
         if j["job_hash"] in existing_hashes:
@@ -350,7 +471,7 @@ def handler(event, context):
                 filtered_out += 1
                 continue
         batch_dedup_keys.add(key)
-        new_hashes.append(j["job_hash"])
+        new_jobs.append(j)
 
     if batch_dedup_skipped:
         logger.info(f"[merge_dedup] Batch dedup: skipped {batch_dedup_skipped} within-batch duplicates")
@@ -358,9 +479,32 @@ def handler(event, context):
     if cross_query_skipped:
         logger.info(f"[merge_dedup] Cross-query dedup: skipped {cross_query_skipped} jobs already in jobs table")
 
+    # --- Hard capacity cap (see MAX_JOBS_PER_RUN comment) ---
+    # Deliberately kept separate from `filtered_out`: that field means "did
+    # not pass the relevance/quality rules", this is "passed everything but
+    # there wasn't scoring capacity for it today" — a different reason a
+    # future reader (or self_improver.py) shouldn't have to disentangle from
+    # the logs after the fact.
+    capacity_capped = 0
+    if len(new_jobs) > MAX_JOBS_PER_RUN:
+        capacity_capped = len(new_jobs) - MAX_JOBS_PER_RUN
+        new_jobs.sort(key=lambda j: _job_relevance_rank(j, user_skills), reverse=True)
+        new_jobs = new_jobs[:MAX_JOBS_PER_RUN]
+        logger.info(
+            f"[merge_dedup] Capacity cap: {len(new_jobs) + capacity_capped} passed the relevance filter, "
+            f"MAX_JOBS_PER_RUN={MAX_JOBS_PER_RUN} — dropped the {capacity_capped} lowest skill-overlap matches"
+        )
+
+    new_hashes = [j["job_hash"] for j in new_jobs]
+
     logger.info(
         f"[merge_dedup] {len(all_jobs)} scraped → {len(unique_jobs)} unique "
         f"→ {len(filtered_jobs)} passed filter ({filtered_out} filtered) "
         f"→ {len(new_hashes)} new for scoring"
     )
-    return {"new_job_hashes": new_hashes, "total_new": len(new_hashes), "filtered_out": filtered_out}
+    return {
+        "new_job_hashes": new_hashes,
+        "total_new": len(new_hashes),
+        "filtered_out": filtered_out,
+        "capacity_capped": capacity_capped,
+    }
