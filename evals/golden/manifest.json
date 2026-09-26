@@ -1,0 +1,170 @@
+{
+  "_comment": "Provenance for evals/golden/*.json. Regenerate with scripts/build_evals_golden_set.py. See that script's docstring for why this stratifies on match_score/score_tier (not final_score) and why D-tier is structurally sparse.",
+  "generated_at": "2026-09-26T01:43:05Z",
+  "user_id": "7b28f6d3-46c9-4c46-a3a8-d5d7b3480e39",
+  "source_table": "jobs",
+  "description_min_chars": 300,
+  "per_tier_target": 5,
+  "target_total": 25,
+  "server_exact_count_match_score_not_null": 1243,
+  "rows_fetched_after_pagination": 1243,
+  "rows_after_description_filter": 1228,
+  "full_population_tier_distribution": {
+    "S": 116,
+    "A": 499,
+    "B": 262,
+    "C": 350,
+    "D": 1
+  },
+  "selected_tier_distribution": {
+    "S": 6,
+    "A": 6,
+    "B": 6,
+    "C": 6,
+    "D": 1
+  },
+  "shortfalls_vs_base_per_tier_target": {
+    "D": 4
+  },
+  "topped_up_from_surplus_tiers": {
+    "S": 1,
+    "A": 1,
+    "B": 1,
+    "C": 1
+  },
+  "total_fixtures_written": 25,
+  "tailor_fixture_ids": [
+    "03288c83de65",
+    "12ed5b1de5e8",
+    "254a4d0d9cf068113067671d552fcd59",
+    "3e7c3b204fd56dbfd6d490766a2f153d",
+    "d2fc52b4c75af8e9e6f98e4fc0384677"
+  ],
+  "fixtures": [
+    {
+      "id": "3e7c3b204fd5",
+      "tier": "S",
+      "task": "tailor"
+    },
+    {
+      "id": "d2fc52b4c75a",
+      "tier": "S",
+      "task": "tailor"
+    },
+    {
+      "id": "3704e55d2ac9",
+      "tier": "S",
+      "task": "score"
+    },
+    {
+      "id": "02283fcd2eef",
+      "tier": "S",
+      "task": "score"
+    },
+    {
+      "id": "03f0420586cf",
+      "tier": "S",
+      "task": "score"
+    },
+    {
+      "id": "0f2e05363875",
+      "tier": "S",
+      "task": "score"
+    },
+    {
+      "id": "03288c83de65",
+      "tier": "A",
+      "task": "tailor"
+    },
+    {
+      "id": "043086e54b35",
+      "tier": "A",
+      "task": "score"
+    },
+    {
+      "id": "0801fe95bbe0",
+      "tier": "A",
+      "task": "score"
+    },
+    {
+      "id": "116bf118734f",
+      "tier": "A",
+      "task": "score"
+    },
+    {
+      "id": "13869ea9da69",
+      "tier": "A",
+      "task": "score"
+    },
+    {
+      "id": "170e0474ff9c",
+      "tier": "A",
+      "task": "score"
+    },
+    {
+      "id": "254a4d0d9cf0",
+      "tier": "B",
+      "task": "tailor"
+    },
+    {
+      "id": "3705986579d1",
+      "tier": "B",
+      "task": "score"
+    },
+    {
+      "id": "4b9e8386cb35",
+      "tier": "B",
+      "task": "score"
+    },
+    {
+      "id": "64d12273d095",
+      "tier": "B",
+      "task": "score"
+    },
+    {
+      "id": "756b911dd607",
+      "tier": "B",
+      "task": "score"
+    },
+    {
+      "id": "97085e3c5e52",
+      "tier": "B",
+      "task": "score"
+    },
+    {
+      "id": "12ed5b1de5e8",
+      "tier": "C",
+      "task": "tailor"
+    },
+    {
+      "id": "1b75ba955889",
+      "tier": "C",
+      "task": "score"
+    },
+    {
+      "id": "2fbcc6dfe4f0",
+      "tier": "C",
+      "task": "score"
+    },
+    {
+      "id": "3469ac3e7f4b",
+      "tier": "C",
+      "task": "score"
+    },
+    {
+      "id": "3cebbba9261b",
+      "tier": "C",
+      "task": "score"
+    },
+    {
+      "id": "4dd7d0a15f1d",
+      "tier": "C",
+      "task": "score"
+    },
+    {
+      "id": "f029aa2530ba",
+      "tier": "D",
+      "task": "score"
+    }
+  ]
+}

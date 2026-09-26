@@ -1,0 +1,15 @@
+{
+  "id": "d2fc52b4c75a",
+  "task": "tailor",
+  "title": "Full Stack Developer (Python / React / AWS)",
+  "company": "RECRUITERS",
+  "description": "Full Stack Developer (Python / React / AWS) Salary: \u20ac55,000 to \u20ac70,000 DOE + bonus + benefits Location: Dublin City Centre Hybrid: 3 days per week in the office Our client is a global financial services company supporting investment funds, multinational companies and private clients worldwide. With over 6,000 employees across more than 40 countries, they build technology platforms that support key financial operations such as treasury, collateral management and trade processing. Dublin is one of their main technology hubs where many strategic systems are developed. Our client is looking for a Full Stack Developer to join a global engineering team building core platforms used by treasury, collateral and trade operations teams. You will work across the full development lifecycle building modern cloud based systems. The stack is focused on React on the frontend and Python on the backend running on AWS. There is currently a strong focus on improving and redesigning user interfaces across multiple applications. Must Have (Key Requirements) 2+ years Python development experience AWS cloud experience Experience using code generation tools such as GitHub Copilot or Amazon Q Experience with a JavaScript framework such as React or Angular Experience building or integrating APIs Strong understanding of system design and modern development practices The main stack includes Python, React, FastAPI, PostgreSQL and AWS. Experience with Django or Flask is also relevant. Nice to Have DevOps experience Cloud native architecture experience Understanding of GenAI or agentic systems Event driven architecture Financial services experience What You\u2019ll Do Build new features and improve existing platforms Develop frontend interfaces and backend services Design and integrate APIs Work with AWS cloud services and databases Write unit tests and support test driven development The hiring manager is looking for strong engineers who enjoy building systems and working across both frontend and backend in a collaborative team environment.",
+  "expected": {
+    "must_contain": [
+      "Python",
+      "AWS"
+    ],
+    "must_pass_guards": true,
+    "no_fabrication": true
+  }
+}

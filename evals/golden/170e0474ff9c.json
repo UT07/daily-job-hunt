@@ -1,0 +1,10 @@
+{
+  "id": "170e0474ff9c",
+  "task": "score",
+  "title": "Full-Stack AI Engineer (Contract)",
+  "company": "Form AI",
+  "description": "Form AI | Full-Stack AI Engineer (Contract) | REMOTE (US) / Austin |\nhttps://formai.build\nForm is an AI fluency/integration startup for executives & their teams. We build AI applications tailored to how clients work, and need an engineer to do the building.\nA typical engagement starts with a client describing a workflow eating their week. You scope alongside them, then build something that makes it disappear. Stack is whatever fits: TypeScript and Python, React or Next.js, Claude and other LLM APIs, integrations with the SaaS our clients use (Notion, Slack, Google Workspace). RAG, agents, prompt engineering, and evals when the work calls for them, not for show.\nWe're looking for someone who has shipped end-to-end as an early engineer somewhere small, has real opinions about LLM applications, and writes readable code. Comfort scoping with clients and communicating in writing is essential, since most of our work happens that way.\n1099 fractional, paid monthly. 10-20 hrs/week, $75-150/hour. 40-hour monthly minimum, scaling with client demand. Potential to convert to a full-time role ($150k-$220k) as the practice grows.\nRemote, Austin/US-based.\nTo apply:\nhttps://formai.build/jobs\nor email jobs@formai.build.",
+  "expected": {
+    "tier": "A"
+  }
+}

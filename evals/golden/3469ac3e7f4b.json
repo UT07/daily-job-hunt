@@ -1,0 +1,10 @@
+{
+  "id": "3469ac3e7f4b",
+  "task": "score",
+  "title": "Software Engineers (Python, Full-Stack)",
+  "company": "Lantern ( Series A )",
+  "description": "Lantern ( Series A )  | Software Engineers (Python, Full-Stack) | NYC (Onsite) | Full-time | withlantern.com\nLantern is building AI-powered revenue intelligence\u2014autonomous agents that turn cold outreach into warm conversations. We detect buying signals across your tech stack, prioritize opportunities, and help B2B sales teams focus on deals that actually close. We're early, agentic-first, and moving fast.\nSenior Software Engineer: You'll own complex technical problems end-to-end\u2014translating customer needs into scalable architecture, optimizing AI model efficiency through prompt engineering, and shipping features that directly impact how revenue teams operate. We want bold ideas and people who push boundaries.\nJunior Software Engineer: You'll work across our stack (Python, FastAPI, Next.js, React) alongside senior engineers, contributing to real features from day one. Great fit if you're hungry to learn, ship fast, and grow with a startup building cutting-edge agentic systems.\nNew Grad Software Engineer: Entry point for recent grads excited about AI and agentic systems.\nYou'll get hands-on experience with our modern data stack (Postgres, ElasticSearch, ClickHouse, DuckDB), Kubernetes/AWS deployment, and Temporal.io, pi.dev, context engineering, workflow orchestration while shipping production code.\nThis role is based in our Manhattan office (4 days/week in-person). Full health and dental coverage.\nContacts : Maksym at withlantern.com",
+  "expected": {
+    "tier": "C"
+  }
+}

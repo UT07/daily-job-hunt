@@ -1,0 +1,14 @@
+{
+  "id": "254a4d0d9cf0",
+  "task": "tailor",
+  "title": "AWS Devops Engineer - Working within a team building Agentic AI Products!",
+  "company": "DB Recruitment",
+  "description": "DB Recruitment is delighted to present a DevOps engineering opportunity within a leading Agentic AI product team based in Dublin City Centre.\nThis is a unique opportunity to join a really cool company who are at the early stages of their Irish growth journey (with big plans to grow!). \nThe ideal candidate will have:Strong experience architecting & managing AWS solutions. AWS Certifications (DevOps Engineer, Solutions Architect, or Security Specialty).Experience in regulated environments (FedRAMP, HIPAA, SOC2).Familiarity with Zero Trust architectures and secrets management.Experience implementing policy-as-code and compliance automation tools.\nGreat learning opportunity with strong package on offer. DM me here or reach out to claire@db-recruitment.ie for more info. Candidates must be based in Ireland to be considered \u2618\ufe0f This is a hybrid role requiring 2-3 days onsite in Dublin City Centre.",
+  "expected": {
+    "must_contain": [
+      "AWS"
+    ],
+    "must_pass_guards": true,
+    "no_fabrication": true
+  }
+}
