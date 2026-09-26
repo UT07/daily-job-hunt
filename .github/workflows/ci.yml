@@ -138,27 +138,41 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt -r tests/requirements-test.txt
 
-      # lambdas/pipeline/ai_helper.py fetches provider API keys (Groq,
-      # OpenRouter, ...) AND the Supabase ai_cache table's credentials from
-      # SSM Parameter Store (get_param), never from plain environment
-      # variables — so AI provider secrets as plain `env:` entries here
-      # would be silently unused. This is the same AWS auth
-      # .github/workflows/deploy.yml already uses to reach this account.
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: eu-west-1
-
+      # lambdas/pipeline/ai_helper.py's get_param() checks an env var first —
+      # derived from the SSM parameter's last path segment, e.g.
+      # /naukribaba/GROQ_API_KEY -> GROQ_API_KEY — before ever calling SSM
+      # (see that function's docstring for the full precedence contract).
+      # This job supplies every provider key and Supabase credential it
+      # needs as a plain `env:` secret below, so get_param never falls
+      # through to SSM and this job needs no AWS credentials at all.
+      #
+      # It previously configured aws-actions/configure-aws-credentials (the
+      # same auth .github/workflows/deploy.yml uses) to let get_param reach
+      # SSM directly, but that IAM user has no ssm:GetParameter grant —
+      # every provider call failed with AccessDeniedException and the gate
+      # reported a meaningless result. Fixing that IAM grant is out of
+      # scope; needing no AWS access here at all is the simpler fix.
       - name: Run golden set
         env:
-          AWS_DEFAULT_REGION: eu-west-1
           # Loading the base resume (evals/harness.py:_load_base_resume) and
           # building the golden set both use the direct-env Supabase client
-          # (db_client.py), not ai_helper.get_supabase()'s SSM lookup — same
-          # split every one-off script under scripts/ already has.
+          # (db_client.py), not ai_helper.get_supabase() — same split every
+          # one-off script under scripts/ already has. This also now covers
+          # any ai_helper.get_supabase() call reached via the council path,
+          # through get_param's env-var-first precedence above.
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # Council provider keys (lambdas/pipeline/ai_helper.py
+          # _build_provider_list), resolved via get_param's env-var-first
+          # lookup instead of SSM. Groq is the primary provider; the other
+          # three are failover depth. DeepSeek is deliberately omitted —
+          # CLAUDE.md backlog notes its balance is empty (always 402s) — a
+          # provider whose key is absent or whose call fails is simply
+          # skipped by the council's own failover, same as in production.
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
         # repeats=1: the CI default. See evals/harness.py's module docstring
         # for why repeats>1 (meaningful score_variance) costs real provider
         # quota and is a local/manual-run knob, not a CI one.

@@ -28,6 +28,34 @@ def _get_ssm():
 
 
 def get_param(name):
+    """Resolve a `/naukribaba/...` config value.
+
+    Precedence: environment variable first, SSM Parameter Store second. The
+    env var name is derived deterministically from `name`'s last path
+    segment — e.g. `/naukribaba/GROQ_API_KEY` -> `GROQ_API_KEY` — so callers
+    never need a separate mapping table.
+
+    Why: this is the single choke point every provider-key/Supabase-cred
+    lookup goes through (council providers, get_supabase()). CI's AI Eval
+    Gate (.github/workflows/ci.yml `ai-eval` job) runs under an IAM user
+    with no `ssm:GetParameter` grant — deliberately; it should need no AWS
+    access at all — so it supplies these as plain `env:` secrets instead.
+    Local runs benefit the same way (no SSM round-trip needed).
+
+    This does NOT change behavior for any deployed Lambda: every pipeline
+    Lambda's IAM role already grants ssm:GetParameter (see template.yaml)
+    and none of them sets these param basenames as plain environment
+    variables, so the env lookup below misses and SSM stays the sole
+    source of truth there — exactly as before this change. (JobHuntApi is
+    the one Lambda whose `Environment.Variables` already mirrors this same
+    name mapping — see template.yaml — so for it this makes an
+    already-intentional env var actually take effect instead of being
+    silently ignored in favor of an extra SSM round-trip.)
+    """
+    env_name = name.rsplit("/", 1)[-1]
+    env_value = os.environ.get(env_name)
+    if env_value:
+        return env_value
     return _get_ssm().get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
 
 

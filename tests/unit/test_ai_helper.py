@@ -365,3 +365,82 @@ class TestLazySsmInit:
             # Second call reuses the same client (no second create)
             ai_helper.get_param("/foo")
             assert mock_client.call_count == 1, "ssm client should be reused, not recreated"
+
+
+# ---------------------------------------------------------------------------
+# get_param env-var-first lookup (AI Eval Gate: CI has no ssm:GetParameter)
+# ---------------------------------------------------------------------------
+
+class TestGetParamEnvFallback:
+    """get_param checks an env var derived from the SSM parameter's last path
+    segment before ever calling SSM. This lets CI's AI Eval Gate (and local
+    runs) supply provider keys as plain `env:` secrets without needing an
+    IAM principal with ssm:GetParameter — see .github/workflows/ci.yml's
+    `ai-eval` job and this function's own docstring for the full rationale.
+    """
+
+    def test_env_var_takes_precedence_over_ssm(self, monkeypatch):
+        import importlib
+        import ai_helper
+        importlib.reload(ai_helper)
+        monkeypatch.setenv("GROQ_API_KEY", "env-supplied-key")
+        with patch("ai_helper.boto3.client") as mock_client:
+            result = ai_helper.get_param("/naukribaba/GROQ_API_KEY")
+        assert result == "env-supplied-key"
+        mock_client.assert_not_called()  # SSM must not be touched when the env var is set
+
+    def test_env_var_name_is_derived_from_the_last_path_segment(self, monkeypatch):
+        import importlib
+        import ai_helper
+        importlib.reload(ai_helper)
+        monkeypatch.delenv("naukribaba", raising=False)  # sanity: not the full path
+        monkeypatch.setenv("SUPABASE_SERVICE_KEY", "env-service-key")
+        result = ai_helper.get_param("/naukribaba/SUPABASE_SERVICE_KEY")
+        assert result == "env-service-key"
+
+    def test_falls_back_to_ssm_when_env_var_is_absent(self, monkeypatch):
+        import importlib
+        import ai_helper
+        importlib.reload(ai_helper)
+        monkeypatch.delenv("GROQ_API_KEY", raising=False)
+        with patch("ai_helper.boto3.client") as mock_client:
+            mock_client.return_value.get_parameter.return_value = {
+                "Parameter": {"Value": "ssm-value"}
+            }
+            result = ai_helper.get_param("/naukribaba/GROQ_API_KEY")
+        assert result == "ssm-value"
+        mock_client.return_value.get_parameter.assert_called_once_with(
+            Name="/naukribaba/GROQ_API_KEY", WithDecryption=True
+        )
+
+    def test_empty_env_var_falls_back_to_ssm_rather_than_returning_blank(self, monkeypatch):
+        # An empty string is not a usable API key/URL -- treat it the same
+        # as "unset" instead of handing callers a value that will fail auth
+        # in a way that's harder to diagnose than a clear SSM lookup.
+        import importlib
+        import ai_helper
+        importlib.reload(ai_helper)
+        monkeypatch.setenv("GROQ_API_KEY", "")
+        with patch("ai_helper.boto3.client") as mock_client:
+            mock_client.return_value.get_parameter.return_value = {
+                "Parameter": {"Value": "ssm-value"}
+            }
+            result = ai_helper.get_param("/naukribaba/GROQ_API_KEY")
+        assert result == "ssm-value"
+
+    def test_production_lambda_shape_is_unaffected(self, monkeypatch):
+        """No zip-based pipeline Lambda sets these param basenames as plain
+        env vars (only JobHuntApi's container does, deliberately) -- so for
+        every OTHER Lambda this is a guaranteed miss and SSM stays the sole
+        source of truth, unchanged from before this fix."""
+        import importlib
+        import ai_helper
+        importlib.reload(ai_helper)
+        monkeypatch.delenv("SUPABASE_URL", raising=False)
+        with patch("ai_helper.boto3.client") as mock_client:
+            mock_client.return_value.get_parameter.return_value = {
+                "Parameter": {"Value": "https://prod.supabase.co"}
+            }
+            result = ai_helper.get_param("/naukribaba/SUPABASE_URL")
+        assert result == "https://prod.supabase.co"
+        mock_client.return_value.get_parameter.assert_called_once()
