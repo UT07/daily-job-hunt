@@ -53,6 +53,15 @@ COPY lambdas/ ${LAMBDA_TASK_ROOT}/lambdas/
 # request returns 500. Adding the COPY here fixes it.
 COPY config/ ${LAMBDA_TASK_ROOT}/config/
 
+# `mcp_server/` (Task 26/27, MCP transport) is a repo-root package like
+# `shared/` above, not a `lambdas/pipeline/` subpackage like agents/
+# retrieval/guardrails — see tests/unit/test_deploy_path_parity.py for why.
+# `COPY *.py` above only copies top-level modules, never a package
+# directory, so without this line app.py's
+# `from mcp_server.server import build_server` would ModuleNotFoundError
+# here exactly the way `shared/` and `lambdas/` once did.
+COPY mcp_server/ ${LAMBDA_TASK_ROOT}/mcp_server/
+
 RUN chmod -R 755 ${LAMBDA_TASK_ROOT}/
 
 ENV PYTHONDONTWRITEBYTECODE=1

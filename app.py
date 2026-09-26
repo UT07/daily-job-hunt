@@ -32,8 +32,11 @@ Endpoints:
 - GET  /api/gdpr/export             — export user data (Article 15)
 - DELETE /api/gdpr/delete           — request deletion
 - GET  /api/health                  — health check (public)
+- /mcp/*                            — MCP tool transport (SSE): search_jobs,
+                                      score_job, get_job. See mcp_server/.
 
 All endpoints except /api/health and /api/templates require a valid Supabase JWT.
+This includes /mcp/* (RequireSupabaseJWT wraps the mounted MCP transport).
 """
 
 import io
@@ -79,6 +82,8 @@ from cover_letter import generate_cover_letter
 from latex_compiler import compile_tex_to_pdf
 from s3_uploader import upload_file as s3_upload_file
 from matcher import match_jobs
+from mcp_server.http_auth import RequireSupabaseJWT
+from mcp_server.server import build_server
 from resume_scorer import score_and_improve
 from tailorer import tailor_resume
 from utils.canonical_hash import canonical_hash
@@ -151,6 +156,18 @@ app.add_middleware(
 
 # Audit trail middleware — DB reference is set in startup() via set_audit_db()
 app.add_middleware(AuditMiddleware)
+
+# MCP transport over this same FastAPI app, so the tools share the deployed
+# runtime instead of standing up a second service. JobHuntApi has no
+# authentication at the API-Gateway/ALB layer (see template.yaml) — every
+# /api/* route below enforces its own Supabase JWT via
+# `Depends(get_current_user)`, which never runs for a `Mount` (a mounted
+# ASGI app is opaque to FastAPI's dependency injection). RequireSupabaseJWT
+# applies that same JWT check at the ASGI level instead, so `/mcp/*` isn't
+# an unauthenticated hole onto search_jobs/score_job's private job-hunt
+# data. See mcp_server/http_auth.py for why a mount specifically needs this
+# rather than a route dependency.
+app.mount("/mcp", RequireSupabaseJWT(build_server().sse_app()))
 
 # Global state (initialized on startup)
 _ai_client: Optional[AIClient] = None
