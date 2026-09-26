@@ -413,6 +413,8 @@ Resources:
       Environment:
         Variables:
           COUNCIL_ENGINE: !Ref CouncilEngine
+          LANGCHAIN_TRACING_V2: "true"
+          LANGCHAIN_PROJECT: naukribaba-council
       Policies:
         - SSMParameterReadPolicy:
             ParameterName: naukribaba/*
@@ -464,6 +466,8 @@ Resources:
         Variables:
           COUNCIL_ENGINE: !Ref CouncilEngine
           BULLET_RAG: !Ref BulletRag
+          LANGCHAIN_TRACING_V2: "true"
+          LANGCHAIN_PROJECT: naukribaba-council
       Policies:
         - SSMParameterReadPolicy:
             ParameterName: naukribaba/*
@@ -517,6 +521,8 @@ Resources:
       Environment:
         Variables:
           COUNCIL_ENGINE: !Ref CouncilEngine
+          LANGCHAIN_TRACING_V2: "true"
+          LANGCHAIN_PROJECT: naukribaba-council
       Policies:
         - SSMParameterReadPolicy:
             ParameterName: naukribaba/*

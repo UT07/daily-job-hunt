@@ -198,6 +198,14 @@ def handler(event, context):
             "tailoring_model": f"{score_result.get('provider', 'council')}:{score_result.get('model', 'consensus')}",
             "matched_resume": resume_type,
             "first_seen": datetime.utcnow().isoformat(),
+            # Links this row to the LangGraph council run that produced its
+            # score, when the AI call that scored it went through the
+            # council and returned one (Task 10). None today for every row:
+            # score_single_job (above) calls ai_complete_cached, a single-
+            # model call that never returns a trace_id -- only
+            # council_complete_langgraph does. Forward-compatible plumbing,
+            # not a claim that scoring currently runs through the council.
+            "trace_id": score_result.get("trace_id"),
         }
         try:
             db.table("jobs").insert(job_record).execute()
@@ -207,7 +215,8 @@ def handler(event, context):
                 for col in ("key_matches", "gaps", "match_reasoning", "score_tier",
                             "archetype", "seniority", "remote", "requirement_map",
                             "matched_resume", "apply_platform",
-                            "apply_board_token", "apply_posting_id"):
+                            "apply_board_token", "apply_posting_id",
+                            "trace_id"):
                     job_record.pop(col, None)
                 try:
                     db.table("jobs").insert(job_record).execute()
@@ -369,6 +378,12 @@ Resume: {resume_text}"""
         # Include model info so we can save it to DB
         result["provider"] = response_dict.get("provider", "council")
         result["model"] = response_dict.get("model", "auto")
+        # Carries a council trace_id through if the underlying call ever
+        # produces one (today ai_complete_cached/ai_complete never do -- see
+        # handler()'s job_record comment); `.get` keeps this a no-op absent
+        # that, rather than requiring every caller of ai_complete_cached to
+        # grow the key first.
+        result["trace_id"] = response_dict.get("trace_id")
 
         # Ensure match_score is computed consistently
         if "match_score" not in result:
