@@ -80,6 +80,11 @@ tests/__pycache__/
 htmlcov/
 .coverage
 
+# Eval harness run artifacts (regenerated per run; CI uploads report.json
+# as a build artifact instead of committing it — see evals/harness.py)
+evals/report.json
+evals/.checkpoint.json
+
 # Local Netlify folder
 .netlify
 .mcp.json
