@@ -22,10 +22,15 @@ def test_end_to_end_picks_highest_scoring_candidate():
 
 
 def test_return_shape_matches_legacy_contract():
+    """council_complete_langgraph's contract is legacy's three keys PLUS
+    trace_id (Task 10) -- legacy has no tracing, so trace_id is intentionally
+    a langgraph-only addition, not a fourth key legacy is expected to grow.
+    """
     with patch("agents.nodes.select_generators", return_value=[P1]), \
          patch("agents.nodes.call_one", return_value=CAND_A):
         out = graph_mod.council_complete_langgraph("p", "s", "desc", n_generators=1)
-    assert set(out) == {"content", "provider", "model"}
+    assert set(out) == {"content", "provider", "model", "trace_id"}
+    assert out["trace_id"]
 
 
 def test_raises_when_every_generator_fails():
