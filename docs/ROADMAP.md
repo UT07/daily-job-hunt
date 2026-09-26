@@ -1,6 +1,6 @@
 # NaukriBaba — Roadmap & Current State
 
-**Last verified: 2026-09-25.** Every number here was checked against the live
+**Last verified: 2026-09-26.** Every number here was checked against the live
 system or the code on that date, not copied from an older document. Where
 something could not be verified it says so.
 
@@ -15,7 +15,7 @@ only file that claims to describe the present.
 
 A job-hunt automation system with two modes that share one core:
 
-- **Batch** — a Step Functions pipeline scrapes job boards, deduplicates,
+- **Batch** — a Step Functions pipeline (live; daily at 07:00 UTC weekdays) scrapes job boards, deduplicates,
   scores each job against the user's resume with an ensemble of LLMs, and
   generates tailored LaTeX resumes and cover letters as PDFs.
 - **Interactive** — a React dashboard and FastAPI backend where a user pastes
@@ -73,16 +73,35 @@ headcount.
 | | |
 |---|---|
 | Jobs in database | 1,243 |
-| Not expired | **64** |
-| Not expired **and scored** | **0** |
-| Never scored (`pending`) | **1,137** |
-| Jobs with a tailored PDF | 39 |
-| Test suite | 1,252 passing, 46 skipped |
+| **Jobs actually scored (`match_score > 0`)** | **1,243 — all of them** |
+| Not expired | 64 |
+| Test suite | 1,373 passing, 46 skipped |
 
-**The pipeline ingests roughly twelve times faster than it can evaluate.**
-Groq's free tier caps scoring at ~80–120 jobs/day; scrape volume runs ~1,500/day.
-This is the binding constraint on everything else, and the reason the dashboard
-looks empty.
+**Two corrections to the 2026-09-25 version of this file.** It claimed a
+1,137-job scoring backlog and that 0 of 64 live jobs were scored. Both were
+wrong — they queried `score_status`, a column nothing reliably writes and
+nothing reads. The app renders `match_score` and sorts on it. `final_score` is
+null for all 1,243 rows. **Both columns are dead; do not plan around them.**
+
+### Throughput, re-derived from CloudWatch
+
+The earlier "80-120 jobs/day" figure was off by an order of magnitude.
+Real `naukribaba-score-batch` metrics:
+
+| Date | Invocations | Avg duration | Max |
+|---|---|---|---|
+| 2026-09-01 | 15 | 133s | 275s |
+| 2026-08-31 | 18 | 403s | **900s — Lambda timeout** |
+
+At `chunk_size` 10 and `MaxConcurrency: 1`, 2026-09-01 scored **150 jobs in
+~33 minutes** — about **4.5 jobs/minute**. The binding constraint is not a
+daily token budget; it is how long a run stays inside the 900s per-chunk
+timeout before Groq's 8k TPM throttling stretches a chunk past it. At 150 jobs
+that is comfortable; at 180 (2026-08-31) chunks died at exactly 900,000ms.
+
+Observed on the first live run after re-enabling (2026-09-26):
+`2,000 scraped -> 1,129 unique -> 53 passed filter -> 27 new for scoring`.
+Well inside capacity. The filter may now be too tight rather than too loose.
 
 ### Cost
 
@@ -97,24 +116,33 @@ from the development environment and needs a console login.
 
 Ordered by dependency, not by preference.
 
-### Must land before the EventBridge schedules are enabled
+### Done since this file was written
 
-1. **Match intake to scoring capacity.** Tighten the relevance pre-filter in
-   `merge_dedup.py` so ~150 jobs/day reach scoring instead of ~1,500. Tune it
-   against the real corpus and verify the rejected set does not contain good
-   jobs. *In progress.*
-2. **Remove the 7-day backfill cutoff.** Jobs that miss their scoring window
-   are currently lost permanently rather than delayed. *In progress.*
-3. **Rescore the backlog.** 1,137 pending jobs, of which the 64 live ones
-   matter most. Needs a resumable, rate-limited script and a deliberate
-   decision to spend the quota. *Script in progress; the run is the user's call.*
-4. ~~Fix the `ArtifactsCompiled` metric field mismatch~~ — **done** (`0b43dd3`).
-5. ~~Subscribe an address to the alarm topic~~ — **done in `template.yaml`**;
-   requires `sam deploy` and then clicking AWS's confirmation email.
-6. ~~Fix `send_followup_reminders` querying a nonexistent column~~ — **done**
-   (`3b9c832`). It had failed 100% of runs since 2026-08-12.
-7. **Verify the LangGraph council at pipeline scale.** It was cut over less
-   than 48 hours ago and has only been exercised on single jobs.
+- **Schedules re-enabled** (#93). First automatic daily run is Monday
+  2026-09-28 07:00 UTC — the cron is weekdays only, so nothing fires at the
+  weekend. One supervised manual run was triggered on 2026-09-26.
+- **Scoring intake capped** at the measured-capacity volume (#92), backfill
+  window widened 7 -> 30 days so jobs that miss a run are no longer lost.
+- **Guardrails wired as graph nodes and armed per task** (#91). Before this,
+  every call resolved the `default` policy because nothing set `task`, so the
+  LaTeX-structure and fabrication guards were unreachable through the node path.
+- **`ArtifactsCompiled` metric fixed** (#90). It read a field `save_job` never
+  returns, reported 0 on 74/74 sampled days, and had been stuck in ALARM since
+  2026-04-30 against a topic with zero subscribers.
+- **Three schedule-blocking bugs fixed** (#90), including
+  `send_followup_reminders` querying a nonexistent column — 100% failure since
+  2026-08-12, on one of the four schedules now live.
+- **Dashboard** default view, dead nav and Card View actions (#90).
+- **Bounded checkpointer** replacing the unbounded `MemorySaver`; there is no
+  `SUPABASE_DB_URL` in SSM, so the durable Postgres option is unavailable
+  rather than merely undone.
+
+### Outstanding, needing a human
+
+- **Confirm the SNS email subscription.** Still `PendingConfirmation`. The
+  alarms now compute correctly and notify nobody until the link is clicked.
+- **Watch Monday's 07:00 UTC run.** Nothing has run at full scale
+  unsupervised since 2026-09-02.
 
 ### Should land before the interview
 
