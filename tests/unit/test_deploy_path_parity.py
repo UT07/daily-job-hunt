@@ -471,3 +471,56 @@ def test_guardrails_package_lives_under_lambdas_pipeline():
         "lambdas/pipeline/guardrails/ -- two copies of the same package is "
         "exactly the shadowing hazard this move exists to eliminate"
     )
+
+
+# ---------------------------------------------------------------------------
+# mcp_server/ (Task 26, MCP tool definitions) is the INVERSE case from
+# agents/, retrieval/, and guardrails/ above -- and deliberately mirrors
+# "shared" (the one entry in APP_PACKAGES) instead of joining that list.
+#
+# agents/retrieval/guardrails all had to move OFF the repo root and INTO
+# lambdas/pipeline/ because their consumers are zip-based pipeline Lambdas,
+# whose CodeUri (lambdas/pipeline/) SAM hashes directly -- putting them in
+# the shared layer instead risks the layer-only-change-doesn't-publish trap
+# documented above. mcp_server/'s only consumer is app.py, which ships in
+# the container-image API Lambda (Dockerfile.lambda COPYs the whole repo's
+# first-party modules there), never in a zip-based pipeline Lambda -- so
+# there is no flattened-CodeUri hazard for it to avoid, and it stays at the
+# repo root like "shared" (which the container image ALSO needs an explicit
+# COPY for -- see Dockerfile.lambda's own comment on that).
+#
+# It is NOT added to APP_PACKAGES above, though: that list's second check
+# (test_package_in_layer_build_script) would then require mcp_server/ in
+# layer/build.sh's FIRST_PARTY list too, and mcp_server/ has no zip-Lambda
+# consumer that reads the shared layer at all -- adding it there would only
+# bloat every pipeline Lambda's layer with a package none of them import.
+# ---------------------------------------------------------------------------
+
+
+def test_mcp_server_package_exists():
+    assert (REPO / "mcp_server" / "__init__.py").is_file(), "mcp_server is not a package"
+
+
+def test_mcp_server_in_dockerfile():
+    """Mirrors test_package_in_dockerfile(pkg) for APP_PACKAGES: `COPY *.py`
+    does not pick up a package directory, so without an explicit
+    `COPY mcp_server/ ...` line, app.py's `from mcp_server.server import
+    build_server` would ModuleNotFoundError in the deployed container
+    Lambda -- exactly the shape of bug this whole file exists to catch,
+    just for a new package instead of `shared/`.
+    """
+    dockerfile = (REPO / "Dockerfile.lambda").read_text()
+    assert "COPY mcp_server/" in dockerfile, (
+        "mcp_server/ missing from Dockerfile.lambda -- `COPY *.py` does not "
+        "copy a package directory, so it will 404/ModuleNotFoundError at "
+        "runtime in the container Lambda"
+    )
+
+
+def test_mcp_server_not_in_layer_build_first_party_list():
+    packages = _first_party_packages_in_layer_build_sh()
+    assert "mcp_server" not in packages, (
+        "mcp_server/ has no consumer among the zip-based pipeline Lambdas "
+        "-- it is imported only by app.py, in the container image -- so it "
+        "must not be added to the shared layer's FIRST_PARTY list"
+    )

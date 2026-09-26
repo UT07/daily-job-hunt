@@ -18,3 +18,14 @@ openpyxl>=3.1.2
 # (the shared-deps layer is for layer-based pipeline Lambdas, not the
 # API container).
 posthog>=3.0.0
+# MCP (Model Context Protocol) server — mcp_server/, mounted by app.py.
+# Pinned below 2.0: `mcp>=2` renames `mcp.server.fastmcp.FastMCP` to
+# `mcp.server.mcpserver.MCPServer` (confirmed via a live install on
+# 2026-09-26) and changes other APIs this module relies on. mcp_server/ is
+# a repo-root package like `shared/` — it ships in this container image via
+# Dockerfile.lambda's own `COPY mcp_server/` line, not via the shared layer.
+# NOTE: not yet added to root requirements.txt (owned by a concurrent
+# session's changes on this branch's parent); `python -m mcp_server.server`
+# for local/stdio use needs `mcp` installed in the shared .venv directly
+# until that is reconciled.
+mcp>=1.2.0,<2
