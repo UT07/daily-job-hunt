@@ -14,3 +14,13 @@ pyyaml>=6.0
 mangum>=0.19.0
 pydantic>=2.0
 python-jose[cryptography]>=3.3
+# mcp_server/ (mounted by app.py) needs the real `mcp` package to import —
+# app.py's module-level `app.mount("/mcp", ...)` calls build_server() at
+# import time, so ANY test that imports app.py (even one unrelated to MCP,
+# e.g. test_invalid_token_in_artifact.py) needs this installed too. Test-only:
+# it is never bundled into a deployed Lambda (requirements.txt feeds the
+# shared layer's dependency list; this file is CI/local-dev only). The
+# actual runtime dependency for the container-image API Lambda is pinned in
+# requirements-web.txt — kept identical here so CI exercises the same
+# `mcp` major version production runs.
+mcp>=1.2.0,<2
