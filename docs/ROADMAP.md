@@ -83,6 +83,32 @@ wrong — they queried `score_status`, a column nothing reliably writes and
 nothing reads. The app renders `match_score` and sorts on it. `final_score` is
 null for all 1,243 rows. **Both columns are dead; do not plan around them.**
 
+### Which columns are authoritative
+
+The `jobs` table carries several generations of near-duplicate score and
+artifact columns — the `score_status` / `final_score` trap above is one
+symptom of a wider problem. Re-verified against the live database and the
+code on 2026-09-26, later the same day as the count above: row count had
+grown to **1,251** (+8, from the supervised run under §3) and `final_score`
+was no longer null everywhere — a narrower helper had started populating it
+for a minority of rows. Full rationale lives in the `COMMENT ON COLUMN`
+migration `supabase/migrations/20260926150000_document_authoritative_job_columns.sql`;
+the set below is pinned by `tests/unit/test_authoritative_columns.py`, which
+parses `app.py` and `web/src` rather than trusting this table to stay in sync.
+
+| Column | Populated / 1,251 | Status | Use instead |
+|---|---:|---|---|
+| `match_score` | 1,251 | **Authoritative** — the score | — |
+| `resume_s3_url` | 921 | **Authoritative** — resume artifact link | — |
+| `cover_letter_s3_url` | 658 | **Authoritative** — cover letter link | — |
+| `score_status` | 1,251 | Legacy — stuck at default `'pending'` | `match_score` (`>0`) |
+| `score_version` | 1,251 | Legacy — rescore-script bookkeeping only | n/a |
+| `final_score` | 129 | Legacy/partial — mirrors tailored `match_score` on one narrow path | `match_score` |
+| `scored_at` | 111 | Legacy — rescore/backfill scripts only | `first_seen` / `last_seen` |
+| `tailored_pdf_path` | 39 | Legacy — local path from `main.py` dry-runs | `resume_s3_url` |
+| `cover_letter_pdf_path` | 35 | Legacy — local path from `main.py` dry-runs | `cover_letter_s3_url` |
+| `resume_doc_url` | 12 | Legacy — pre-LaTeX Google Docs link | `resume_s3_url` |
+
 ### Throughput, re-derived from CloudWatch
 
 The earlier "80-120 jobs/day" figure was off by an order of magnitude.
