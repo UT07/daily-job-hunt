@@ -1552,7 +1552,7 @@ Resources:
       # (Lambda $0.0001, Step Functions $0). Re-enable by flipping to ENABLED;
       # every Lambda, layer and state machine is left deployed and idle, and
       # idle Lambda costs nothing.
-      State: DISABLED
+      State: ENABLED
       Targets:
         - Arn: !GetAtt DailyPipelineStateMachine.Arn
           Id: DailyPipelineTarget
@@ -1572,7 +1572,7 @@ Resources:
       # (Lambda $0.0001, Step Functions $0). Re-enable by flipping to ENABLED;
       # every Lambda, layer and state machine is left deployed and idle, and
       # idle Lambda costs nothing.
-      State: DISABLED
+      State: ENABLED
       Targets:
         - Arn: !Ref CheckExpiryFunctionAliaslive
           Id: ExpiryCheckTarget
@@ -1620,7 +1620,7 @@ Resources:
       # (Lambda $0.0001, Step Functions $0). Re-enable by flipping to ENABLED;
       # every Lambda, layer and state machine is left deployed and idle, and
       # idle Lambda costs nothing.
-      State: DISABLED
+      State: ENABLED
       Targets:
         - Arn: !Ref StaleNudgeFunctionAliaslive
           Id: StaleNudgeTarget
@@ -1650,7 +1650,7 @@ Resources:
       # (Lambda $0.0001, Step Functions $0). Re-enable by flipping to ENABLED;
       # every Lambda, layer and state machine is left deployed and idle, and
       # idle Lambda costs nothing.
-      State: DISABLED
+      State: ENABLED
       Targets:
         - Arn: !Ref FollowUpReminderFunctionAliaslive
           Id: FollowUpTarget
