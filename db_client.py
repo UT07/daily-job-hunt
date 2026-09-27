@@ -12,12 +12,36 @@ Requires environment variables:
 from __future__ import annotations
 import logging
 import os
+import re
 from datetime import date, time, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from supabase import create_client, Client
 
 logger = logging.getLogger(__name__)
+
+# Matches both the raw Postgres wording (`column "x" of relation "y" does
+# not exist`, e.g. what score_batch.py's own retry logic looks for) and
+# PostgREST's schema-cache wording (`Could not find the 'x' column of 'y'
+# in the schema cache`, the same shape already seen in this codebase for
+# the match_jobs_semantic RPC in mcp_server.py) -- the two error shapes a
+# write against a not-yet-migrated optional column can come back as.
+_MISSING_COLUMN_PATTERNS = (
+    re.compile(r'column "([^"]+)" of relation "[^"]+" does not exist'),
+    re.compile(r"Could not find the '([^']+)' column of '[^']+' in the schema cache"),
+)
+
+
+def _missing_optional_column(exc: Exception) -> Optional[str]:
+    """Return the column name if `exc` looks like an "unknown column" error
+    from Postgres/PostgREST, else None so callers only swallow this one,
+    narrow condition and re-raise everything else."""
+    text = str(exc)
+    for pattern in _MISSING_COLUMN_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return match.group(1)
+    return None
 
 
 class SupabaseClient:
@@ -127,7 +151,13 @@ class SupabaseClient:
     # ── Search Config ─────────────────────────────────────────────
 
     def get_search_config(self, user_id: str) -> Optional[Dict[str, Any]]:
-        """Get the search config for a user. Returns None if not set."""
+        """Get the search config for a user. Returns None if not set.
+
+        Uses `select("*")` rather than an explicit column list, so this
+        already degrades gracefully when an optional column (e.g.
+        enabled_sources, before its migration is applied) doesn't exist yet
+        -- it just isn't in the returned dict, no error.
+        """
         result = (
             self.client.table("user_search_configs")
             .select("*")
@@ -139,13 +169,37 @@ class SupabaseClient:
     def upsert_search_config(
         self, user_id: str, data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """Insert or update search config. Uses the user_id unique constraint."""
-        data["user_id"] = user_id
-        result = (
-            self.client.table("user_search_configs")
-            .upsert(data, on_conflict="user_id")
-            .execute()
-        )
+        """Insert or update search config. Uses the user_id unique constraint.
+
+        Degrades gracefully when `data` includes a column that doesn't exist
+        in the live schema yet -- e.g. enabled_sources before
+        supabase/migrations/20260506_user_search_configs_enabled_sources.sql
+        is applied via the dashboard. Without this, PUT /api/search-config
+        500s on every "Save Sources" click because the upsert raises and
+        nothing catches it. Retries without the offending column instead,
+        matching the retry-without-optional-columns pattern already used in
+        score_batch.py for the `jobs` table.
+        """
+        payload = dict(data)
+        payload["user_id"] = user_id
+        while True:
+            try:
+                result = (
+                    self.client.table("user_search_configs")
+                    .upsert(payload, on_conflict="user_id")
+                    .execute()
+                )
+                break
+            except Exception as e:
+                col = _missing_optional_column(e)
+                if col is None or col not in payload:
+                    raise
+                logger.warning(
+                    f"[DB] user_search_configs.{col} not in schema yet "
+                    f"(migration pending) -- dropping from upsert for user "
+                    f"{user_id}: {e}"
+                )
+                payload.pop(col)
         logger.info(f"[DB] Upserted search config for user {user_id}")
         return result.data[0]
 

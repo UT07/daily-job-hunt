@@ -87,8 +87,34 @@ def test_uses_default_config_when_no_search_config_found(mock_supabase_factory):
     assert result["min_match_score"] == 60
     assert "query_hash" in result
     assert len(result["query_hash"]) == 12
-    # Default queries should be present
-    assert "software engineer" in result["queries"]
+    # No configured queries -> empty, not a guessed job title (see below).
+    assert result["queries"] == []
+
+
+def test_default_queries_are_not_it_biased(mock_supabase_factory):
+    """Guard against an IT-specific query fallback creeping back in.
+
+    No single job title is domain-neutral across a nurse, an accountant, a
+    teacher, and a software engineer -- defaulting to one (the old
+    ["software engineer"] fallback) silently assumed every unconfigured
+    user was in tech and returned nothing useful for anyone else. The
+    correct behaviour is an empty list: scrape nothing until the user
+    configures a real search, rather than guess wrong.
+    """
+    db = mock_supabase_factory(search_config_data=[], adjustments_data=[])
+
+    with patch("load_config.get_supabase", return_value=db):
+        import load_config
+        result = load_config.handler({"user_id": "user-nurse"}, None)
+
+    assert result["queries"] == []
+    # Defense in depth beyond the exact-equality check above: fail even if a
+    # future change swaps the empty default for some *other* IT-flavored
+    # guess (e.g. ["Software Developer"]) instead of literally reverting to
+    # "software engineer".
+    banned_words = {"software", "engineer", "engineering", "developer", "programmer", "tech", "it"}
+    query_words = set(" ".join(result["queries"]).lower().split())
+    assert not (query_words & banned_words)
 
 
 # --- Tests for load_config_with_adjustments ---

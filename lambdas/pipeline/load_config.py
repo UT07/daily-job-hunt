@@ -77,7 +77,18 @@ def handler(event, context):
         .select("*").eq("user_id", user_id).execute()
 
     config = search_config.data[0] if search_config.data else {
-        "queries": ["software engineer"],
+        # No single job title is a domain-neutral default -- "software
+        # engineer" (the old fallback) silently assumed every unconfigured
+        # user was in tech, which returns nothing useful (and looks broken)
+        # for a nurse, accountant, or teacher. Empty is the honest answer:
+        # scrape nothing for a user who hasn't told us what they're looking
+        # for, rather than guess wrong. Downstream scrapers already treat an
+        # empty `queries` list as "nothing to search" (they only fall back
+        # to their own default when the key is missing entirely, and this
+        # dict always supplies the key), so this doesn't crash anything --
+        # it just means the pipeline does no work until Settings has a real
+        # query, which is the correct "configure your search" signal.
+        "queries": [],
         "locations": ["ireland"],
         "sources": ["linkedin", "indeed", "adzuna", "hn", "yc", "gradireland"],
         "min_match_score": 60,
