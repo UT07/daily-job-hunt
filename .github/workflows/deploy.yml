@@ -112,4 +112,7 @@ jobs:
               "CapSolverApiKey=${CAPSOLVER_KEY}" \
               "DailyPipelineUserId=${DAILY_USER_ID}" \
               "PostHogApiKey=${POSTHOG_KEY}" \
-              "PostHogHost=https://eu.i.posthog.com"
+              "PostHogHost=https://eu.i.posthog.com" \
+              "CouncilEngine=langgraph" \
+              "SemanticDedup=on" \
+              "BulletRag=on"
