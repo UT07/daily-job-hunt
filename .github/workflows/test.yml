@@ -109,6 +109,59 @@ jobs:
       - working-directory: web
         run: npm run build
 
+  # Frontend's own lint + unit tests. Owned/added by the web/ test-coverage
+  # effort — previously CI only ran `npm run build` for the frontend
+  # (lint-and-build above), so ESLint and Vitest never gated a PR. That gap
+  # is how two P1 bugs shipped (audit-dashboard.md, 2026-09-25):
+  # `CardView` in Dashboard.jsx silently dropped `onStatusChange`/`onDelete`
+  # (flagged by `npm run lint` as "defined but never used"), and four
+  # JobTable.jsx sort headers (Location/Source/Resume Type/AI Model) did
+  # nothing when clicked because the backend's sort whitelist doesn't cover
+  # them. Both are now covered by tests here.
+  #
+  # This is a separate job from `lint-and-build` (not folded into it) so it
+  # stays entirely under web/ ownership, can be marked "Required" in branch
+  # protection independently, and never touches the Python-owned steps
+  # above. The `npm run build` re-run here is intentionally redundant with
+  # lint-and-build's — cheap, and it keeps this job fully self-contained.
+  #
+  # Lint baseline: `npm run lint` failed with 21 pre-existing problems
+  # (18 errors, 3 warnings) before this job was added. 13 were fixed outright
+  # (real dead code, a stale `global` vs `globalThis` test bug, and an
+  # ESLint config gap that produced 3 confirmed false positives — see
+  # audit-dashboard.md P2-12). The remaining 6 errors are pre-existing
+  # architectural items (React Fast-Refresh export-location rules, two new
+  # `react-hooks` v7 `set-state-in-effect` findings) that need a dedicated
+  # refactor, not a hasty fix inside a test-coverage PR — they're recorded
+  # as a ratchet baseline in web/eslint-suppressions.json (ESLint's native
+  # bulk-suppressions feature: fails if a suppressed rule/file's violation
+  # count ever goes UP, passes as today's count stays the same or drops).
+  # 2 pre-existing react-hooks/exhaustive-deps warnings in AddJob.jsx are
+  # left as plain warnings (ESLint's default exit code only fails on
+  # errors). Nothing here lowers any rule's severity.
+  frontend:
+    name: "Frontend: lint + test"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - working-directory: web
+        run: npm ci
+      - name: Lint
+        working-directory: web
+        run: npm run lint
+      - name: Unit tests
+        working-directory: web
+        run: npm run test
+      - name: Build
+        working-directory: web
+        run: npm run build
+
   unit-tests:
     runs-on: ubuntu-latest
     timeout-minutes: 5
