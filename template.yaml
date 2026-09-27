@@ -112,26 +112,35 @@ Parameters:
     Description: Which council implementation the pipeline uses.
   SemanticDedup:
     Type: String
-    Default: "off"
+    Default: "on"
     AllowedValues: ["off", "on"]
     Description: >
       Enables MergeDedupFunction's tier-4 pgvector semantic dedup
       (retrieval/dedup.py), which catches the same posting reworded across
-      queries. Defaults off because it depends on the pgvector schema and
-      RPC migrations (db/migrations, Tasks 11/13), which are not yet
-      applied to production.
+      queries. Flipped on 2026-09-27: match_jobs_in_company RPC is live and
+      all 1,232 job embeddings are backfilled. Threshold 0.97, tuned against
+      that real data (21 true-duplicate pairs, zero false positives in a
+      40-sample check) — see retrieval/dedup.py's SEMANTIC_THRESHOLD comment.
+      Fails open: an unreachable vector store degrades to the pre-existing
+      3-tier dedup, it does not error the run.
   BulletRag:
     Type: String
-    Default: "off"
+    Default: "on"
     AllowedValues: ["off", "on"]
     Description: >
       Enables TailorResumeFunction's evidence-pool injection
       (retrieval/bullets.py): bullets retrieved from the candidate's own
       resume are appended to the tailoring prompt so the model is bounded to
-      facts that already appear there, reducing fabrication. Defaults off
-      because it depends on the pgvector schema/RPC migrations (Tasks
-      11/13) and the resume_bullets table being populated (Task 16), which
-      are not yet indexed for production users.
+      facts that already appear there, intended to reduce fabrication.
+      Flipped on 2026-09-27: match_resume_bullets RPC is live and 35 resume
+      bullets are indexed. NOTE — its fabrication benefit is unproven, not
+      proven-good: Task 18's bench (scripts/bench_retrieval.py) measured
+      0.0% vs 0.0% flagged (n=10) because guardrails/output_guards.py's
+      check_fabrication only scans a ~15-skill Skills-section blocklist and
+      cannot see the Experience/Projects/Summary sections an evidence pool
+      is meant to ground. Fails open: safe_evidence_block() in
+      tailor_resume.py swallows retrieval failures and returns "", so
+      tailoring proceeds unchanged rather than erroring.
 
 Resources:
 
