@@ -529,6 +529,10 @@ def handler(event, context):
     batch_dedup_skipped = 0
     new_jobs: list[dict] = []
     batch_dedup_keys: set[str] = set()  # Track within current batch too
+    semantic = None
+    if os.environ.get("SEMANTIC_DEDUP", "off") == "on":
+        from retrieval.dedup import SemanticDedupSession
+        semantic = SemanticDedupSession()
     for j in filtered_jobs:
         if j["job_hash"] in existing_hashes:
             continue
@@ -541,12 +545,11 @@ def handler(event, context):
             logger.debug(f"[batch dedup] Skipping duplicate in batch: '{j.get('title')}' @ '{j.get('company')}'")
             continue
         # Tier 4: semantic. Catches the same posting reworded across queries.
-        if os.environ.get("SEMANTIC_DEDUP", "off") == "on":
-            from retrieval.dedup import find_semantic_duplicate
-            duplicate = find_semantic_duplicate(j)
-            if duplicate:
-                filtered_out += 1
-                continue
+        # Guarded: a retrieval failure keeps the job rather than aborting the
+        # step that persists the whole day's scrape. See SemanticDedupSession.
+        if semantic is not None and semantic.find_duplicate(j):
+            filtered_out += 1
+            continue
         batch_dedup_keys.add(key)
         new_jobs.append(j)
 
@@ -584,4 +587,7 @@ def handler(event, context):
         "total_new": len(new_hashes),
         "filtered_out": filtered_out,
         "capacity_capped": capacity_capped,
+        # Present only when SEMANTIC_DEDUP is on. Lets a reader tell "no
+        # duplicates found" apart from "dedup was broken for this run".
+        **({"semantic_dedup": semantic.stats()} if semantic is not None else {}),
     }
