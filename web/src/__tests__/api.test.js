@@ -103,11 +103,11 @@ describe('api 401 session-expiry handling', () => {
   beforeEach(() => {
     signOut.mockReset().mockResolvedValue({ error: null })
     getSession.mockReset().mockResolvedValue({ data: { session: { access_token: 'tok' } } })
-    global.fetch = vi.fn()
+    globalThis.fetch = vi.fn()
   })
 
   it('apiGet clears the local session and throws SESSION_EXPIRED on 401', async () => {
-    global.fetch.mockResolvedValue({
+    globalThis.fetch.mockResolvedValue({
       ok: false,
       status: 401,
       json: async () => ({ detail: 'Invalid or expired token' }),
@@ -117,7 +117,7 @@ describe('api 401 session-expiry handling', () => {
   })
 
   it('apiCall clears the local session and throws SESSION_EXPIRED on 401', async () => {
-    global.fetch.mockResolvedValue({
+    globalThis.fetch.mockResolvedValue({
       ok: false,
       status: 401,
       json: async () => ({ detail: 'Missing authorization header' }),
@@ -127,7 +127,7 @@ describe('api 401 session-expiry handling', () => {
   })
 
   it('does NOT sign out on a 422 validation error (only 401 triggers logout)', async () => {
-    global.fetch.mockResolvedValue({
+    globalThis.fetch.mockResolvedValue({
       ok: false,
       status: 422,
       json: async () => ({ detail: [{ loc: ['body', 'x'], msg: 'bad' }] }),
@@ -137,7 +137,7 @@ describe('api 401 session-expiry handling', () => {
   })
 
   it('does NOT sign out on a 500 server error', async () => {
-    global.fetch.mockResolvedValue({
+    globalThis.fetch.mockResolvedValue({
       ok: false,
       status: 500,
       json: async () => ({ detail: 'boom' }),

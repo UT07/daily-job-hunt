@@ -1,4 +1,5 @@
 import '@testing-library/jest-dom'
+import { vi } from 'vitest'
 
 // posthog-js is initialized in main.jsx with a key from import.meta.env. In
 // tests we don't initialize it; capture-style helpers must no-op when posthog

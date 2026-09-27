@@ -23,7 +23,15 @@ export default defineConfig([
       },
     },
     rules: {
-      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      // argsIgnorePattern mirrors the existing varsIgnorePattern convention
+      // (capitalized/`_`-prefixed = intentionally unchecked, matching React
+      // component-naming). Without it, a destructured-and-renamed function
+      // parameter like `function AssetIcon({ icon: Icon })` was flagged as
+      // "defined but never used" even when used as a JSX tag name
+      // (`<Icon />`) in the function body — audit-dashboard.md P2-12 confirmed
+      // this as a false positive in JobTable.jsx, Sidebar.jsx and
+      // MobileNav.jsx, all of which use the same `icon: Icon` pattern.
+      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^[A-Z_]' }],
     },
   },
 ])

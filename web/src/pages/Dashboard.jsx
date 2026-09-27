@@ -410,6 +410,15 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
+    // filterVersion is intentionally listed even though the callback body
+    // never reads it directly — it reads filtersRef.current instead so the
+    // callback's own identity doesn't change on every keystroke. Bumping
+    // filterVersion (see handleFilterApply/handleClearAllFilters/tier-tab
+    // clicks) is the deliberate signal that a NEW fetchJobs identity should
+    // be produced, which is what re-triggers the `useEffect` below that
+    // calls fetchJobs on filter-apply. Removing it would silently break
+    // "Apply Filters" / tier tabs / sort — they'd stop re-fetching.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterVersion, page, perPage]);
 
   const fetchStats = useCallback(async () => {

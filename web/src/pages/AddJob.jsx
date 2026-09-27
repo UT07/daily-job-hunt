@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { apiCall, pollPipeline } from '../api';
 import Button from '../components/ui/Button';
 import Input, { Textarea, Select } from '../components/ui/Input';
@@ -90,7 +90,6 @@ export default function AddJob() {
   const [progressKey, setProgressKey] = useState(null);   // current step key for progress indicator
   const [progressSteps, setProgressSteps] = useState([]);  // which step list is active
   const [errors, setErrors] = useState([]);
-  const abortRef = useRef(null);
 
   const jdTooShort = jd.trim().length > 0 && jd.trim().length < 100;
 

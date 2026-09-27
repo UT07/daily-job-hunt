@@ -1,5 +1,4 @@
 import { Link } from 'react-router-dom'
-import { useAuth } from '../auth/useAuth'
 import Card, { CardBody } from '../components/ui/Card'
 
 function Section({ title, children }) {
@@ -12,8 +11,6 @@ function Section({ title, children }) {
 }
 
 export default function Privacy() {
-  const { user, signOut } = useAuth()
-
   return (
     <div>
       <h1 className="text-2xl font-heading font-bold text-black tracking-tight mb-6">Privacy Policy</h1>

@@ -1,0 +1,30 @@
+{
+  "src/auth/AuthProvider.jsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    },
+    "react-refresh/only-export-components": {
+      "count": 1
+    }
+  },
+  "src/components/JobTable.jsx": {
+    "react-refresh/only-export-components": {
+      "count": 1
+    }
+  },
+  "src/components/NotificationBell.jsx": {
+    "react-hooks/set-state-in-effect": {
+      "count": 1
+    }
+  },
+  "src/components/ui/NoticePeriodPicker.jsx": {
+    "react-refresh/only-export-components": {
+      "count": 1
+    }
+  },
+  "src/hooks/useUserProfile.jsx": {
+    "react-refresh/only-export-components": {
+      "count": 1
+    }
+  }
+}
