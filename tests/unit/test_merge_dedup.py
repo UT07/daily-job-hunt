@@ -752,3 +752,140 @@ def test_max_jobs_per_run_does_not_trigger_under_cap():
 
     assert result["total_new"] == 1
     assert result["capacity_capped"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Rule 3 domain-neutral fix (2026-09-27) — _extract_tech_keywords only
+# recognises a closed software vocabulary (python, kubernetes, ...), so a
+# genuinely relevant non-IT job description (nursing, accounting, teaching)
+# always had zero overlap with it and was rejected by Rule 3 regardless of
+# real relevance — the "For a non-IT user those may reject everything"
+# concern this section verifies. _prefilter_job now also accepts
+# query_phrases: two-word phrases built from the user's OWN search queries,
+# checked directly against the JD text via _query_phrase_overlap, as an
+# alternate signal. Either signal clearing its threshold is enough, so an
+# IT user's existing tech-keyword-only admit behaviour is unchanged
+# (query_phrases defaults to empty, matching every pre-existing call site
+# above). PHRASES, not lone words -- see _query_phrases' docstring for the
+# live-corpus false-positive this avoids (single query words like "full"
+# and "engineer" matching unrelated "Full Time"/"Full-time" boilerplate).
+# ---------------------------------------------------------------------------
+
+_NURSE_DESC = (
+    "We are looking for a Registered Nurse to join our ICU team. The role "
+    "involves patient assessment, medication administration, and care "
+    "planning for critically ill patients. You will work closely with "
+    "physicians and the wider clinical team on a rotating shift schedule. "
+    "Current NMBI registration required."
+)
+
+
+def test_prefilter_rejects_relevant_non_it_job_without_query_phrases():
+    """Documents the pre-fix bug directly: with only the hardcoded tech
+    vocabulary to check against, a real, on-target nursing job has zero
+    overlap and is rejected — this is exactly why query_phrases exists."""
+    import merge_dedup
+    job = _good_job("Registered Nurse - ICU", description=_NURSE_DESC)
+    passes, reason = merge_dedup._prefilter_job(job, merge_dedup.DEFAULT_USER_SKILLS)
+    assert passes is False
+    assert reason == "skill_overlap:0"
+
+
+def test_prefilter_admits_non_it_job_via_query_phrase_overlap():
+    """The fix: a nurse's own search query ("ICU Registered Nurse") gives
+    Rule 3 a domain-neutral overlap signal, so her real jobs are no longer
+    rejected just because the JD doesn't mention Python or AWS."""
+    import merge_dedup
+    job = _good_job("Registered Nurse - ICU", description=_NURSE_DESC)
+    query_phrases = merge_dedup._query_phrases(["ICU Registered Nurse"])
+    passes, reason = merge_dedup._prefilter_job(
+        job, merge_dedup.DEFAULT_USER_SKILLS, query_phrases=query_phrases,
+    )
+    assert passes is True
+    assert reason == "pass"
+
+
+def test_prefilter_tech_path_unaffected_by_absent_query_phrases():
+    """Regression guard: an IT user's existing tech-keyword-overlap admit
+    behaviour is unchanged when query_phrases is left at its default —
+    every pre-existing caller in this file invokes _prefilter_job without
+    it."""
+    import merge_dedup
+    job = _good_job("Backend Engineer")
+    passes, reason = merge_dedup._prefilter_job(job, {"python", "aws"})
+    assert passes is True
+    assert reason == "pass"
+
+
+def test_query_phrases_builds_bigrams_and_keeps_single_words():
+    import merge_dedup
+    assert merge_dedup._query_phrases(["Site Reliability Engineer"]) == {
+        "site reliability", "reliability engineer",
+    }
+    assert merge_dedup._query_phrases(["Nursing"]) == {"nursing"}
+
+
+def test_query_phrase_overlap_matches_whole_phrases_only():
+    """No substring false positives (e.g. "nurse" inside "nursery"), and no
+    hyphen-formatting false negatives ("full-stack" must still match the
+    "full stack" phrase)."""
+    import merge_dedup
+    desc = "we need someone experienced in nursery education and childcare"
+    assert merge_dedup._query_phrase_overlap(desc, frozenset({"nurse"})) == set()
+    assert merge_dedup._query_phrase_overlap(
+        desc, frozenset({"nursery education", "childcare"})
+    ) == {"nursery education", "childcare"}
+    assert merge_dedup._query_phrase_overlap(
+        "looking for a full-stack developer", frozenset({"full stack"})
+    ) == {"full stack"}
+
+
+def test_prefilter_rejects_single_generic_word_boilerplate_collision():
+    """The exact false positive the phrase redesign fixes: a job that only
+    shares generic, individually-common words with the user's query (here
+    "full" from employment-type boilerplate, plus the near-universal
+    "engineer") must NOT be admitted just because two such lone words
+    happen to co-occur -- unlike a real "full stack"/"site reliability"
+    phrase match, that's noise, not relevance."""
+    import merge_dedup
+    desc = (
+        "Join our team as a Scientific Software Engineer working on "
+        "simulation tooling for physics research. Full Time, on-site. "
+        "We offer competitive pay and great benefits for the right "
+        "candidate with a strong academic background."
+    )
+    job = _good_job("Scientific Software Engineer", description=desc)
+    query_phrases = merge_dedup._query_phrases(["Full Stack Engineer"])
+    passes, reason = merge_dedup._prefilter_job(
+        job, merge_dedup.DEFAULT_USER_SKILLS, query_phrases=query_phrases,
+    )
+    assert passes is False
+    assert reason == "skill_overlap:0"
+
+
+def test_handler_admits_non_it_job_end_to_end_via_configured_queries():
+    """Full handler() path: a user whose user_search_configs.queries are
+    nursing terms gets their real nursing job admitted, not silently
+    filtered down to zero results the way the pre-fix DEFAULT_USER_SKILLS-
+    only overlap check would have."""
+    import merge_dedup
+    nurse_job = {
+        "job_hash": "nurse-job-1",
+        "title": "Registered Nurse - ICU",
+        "company": "St. James's Hospital",
+        "source": "indeed",
+        "description": _NURSE_DESC,
+        "location": "Dublin, Ireland",
+        "posted_date": datetime.now(timezone.utc).isoformat(),
+    }
+    db = _make_supabase(
+        jobs_raw_data=[nurse_job],
+        existing_jobs_data=[],
+        search_config_data=[{"queries": ["ICU Registered Nurse"]}],
+    )
+
+    with patch("merge_dedup.get_supabase", return_value=db):
+        result = merge_dedup.handler({"user_id": "nurse-user"}, None)
+
+    assert result["new_job_hashes"] == ["nurse-job-1"]
+    assert result["total_new"] == 1

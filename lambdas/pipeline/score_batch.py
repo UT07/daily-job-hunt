@@ -282,9 +282,9 @@ SCORING GUIDANCE FOR JUNIOR/GRADUATE ROLES:
 - Anti-inflation rules still apply but with relaxed thresholds: ATS cap becomes 80, TR cap becomes 80.
 
 CRITICAL — INTERN/STUDENT ELIGIBILITY FILTER:
-- The candidate has COMPLETED their MSc (graduated). They are NOT a current student.
-- If the JD explicitly requires "currently enrolled", "must be pursuing a degree", "ongoing education", "returning to studies after internship", or similar language indicating the role is ONLY for current students: ALL scores must be capped at 40 (effectively disqualifying the role).
-- This applies to most internship programs. Roles like "New Grad" or "Entry Level" that do NOT require current enrollment are fine.
+- Check the candidate's resume/education section for whether they are a CURRENTLY ENROLLED student (an in-progress degree, no completion date) versus already graduated/not a student.
+- If the JD explicitly requires "currently enrolled", "must be pursuing a degree", "ongoing education", "returning to studies after internship", or similar language indicating the role is ONLY for current students, AND the candidate's resume does not show them as a currently enrolled student: ALL scores must be capped at 40 (effectively disqualifying the role).
+- This applies to most internship programs. Roles like "New Grad" or "Entry Level" that do NOT require current enrollment are fine regardless of the candidate's student status.
 - Add "ineligible: not currently enrolled student" to the gaps list when this filter triggers.
 
 STRUCTURED EVALUATION (career-ops Block A+B methodology):

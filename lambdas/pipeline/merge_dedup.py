@@ -271,7 +271,64 @@ def _job_age_days(job: dict, now: datetime | None = None) -> float | None:
     return (now - dt).total_seconds() / 86400.0
 
 
-def _prefilter_job(job: dict, user_skills: set, max_age_days: int = JOB_MAX_AGE_DAYS) -> tuple[bool, str]:
+def _query_phrases(queries: list) -> frozenset:
+    """Turn the user's own search queries into phrase-level match signals:
+    consecutive word pairs, e.g. "Site Reliability Engineer" ->
+    {"site reliability", "reliability engineer"}. A single-word query keeps
+    its one word (nothing to pair it with).
+
+    Phrases, not lone words, on purpose. An earlier version of this
+    function matched individual query words directly and was verified
+    (2026-09-27, live jobs_raw corpus, ~13.6k rows) to raise the real
+    production user's admit rate from 13.3% to 17.4% -- almost entirely
+    noise: "full" from "Full Stack Engineer" matching plain "Full Time"/
+    "Full-time" employment-type boilerplate, and "engineer" alone matching
+    nearly every posting in an all-tech pool. A two-word phrase match is a
+    far more specific, low-noise signal than either word alone.
+    """
+    phrases: set = set()
+    for q in queries:
+        words = [w.lower() for w in re.findall(r"[A-Za-z]+", q) if len(w) > 2]
+        if len(words) == 1:
+            phrases.add(words[0])
+        for i in range(len(words) - 1):
+            phrases.add(f"{words[i]} {words[i + 1]}")
+    return frozenset(phrases)
+
+
+def _query_phrase_overlap(desc_lower: str, query_phrases: frozenset) -> set:
+    """Which of the user's own query phrases appear in the JD text.
+
+    Domain-neutral counterpart to `_extract_tech_keywords`, which only
+    recognises a closed software vocabulary (python, kubernetes, ...) and
+    therefore can never find a match for a non-IT JD -- a nurse's or
+    accountant's job description simply doesn't contain any of those
+    patterns. This checks the JD against whatever the user actually
+    searched for instead, so it works for any profession. Hyphens/slashes
+    in the JD ("full-stack", "on-site") are normalised to spaces so they
+    still match a space-joined query phrase.
+    """
+    if not query_phrases:
+        return set()
+    normalized = re.sub(r"[-/]", " ", desc_lower)
+    hits = set()
+    for phrase in query_phrases:
+        # Escape each word separately, THEN join with \s+ -- re.escape()
+        # itself escapes plain spaces (it's conservative about re.VERBOSE),
+        # so escaping the whole phrase first and patching afterwards would
+        # leave a stray literal backslash in the pattern instead of \s+.
+        pattern = r"\s+".join(re.escape(w) for w in phrase.split(" "))
+        if re.search(r"\b" + pattern + r"\b", normalized):
+            hits.add(phrase)
+    return hits
+
+
+def _prefilter_job(
+    job: dict,
+    user_skills: set,
+    max_age_days: int = JOB_MAX_AGE_DAYS,
+    query_phrases: frozenset = frozenset(),
+) -> tuple[bool, str]:
     """Apply relevance pre-filter. Returns (pass, reason).
 
     Freshness (rule 0) runs first — cheapest to check and the most user-
@@ -301,11 +358,23 @@ def _prefilter_job(job: dict, user_skills: set, max_age_days: int = JOB_MAX_AGE_
     if len(desc) < 200:
         return False, "description_too_short"
 
-    # Rule 3: Minimum skill overlap
+    # Rule 3: Minimum skill overlap. Two independent signals, either one
+    # sufficient: the closed tech-keyword vocabulary (>=2 matches; unchanged
+    # from before, so an IT user's admit/reject behaviour on this path is
+    # identical), OR at least one of the user's own query phrases showing up
+    # in the JD (domain-neutral: works for "registered nurse" exactly as it
+    # does for "site reliability engineer"). Without this second path, any
+    # user whose target role isn't in the hardcoded tech vocabulary would
+    # have every job rejected here regardless of real relevance. A single
+    # PHRASE match (not a lone word -- see _query_phrases) is the bar here,
+    # not >=2, because a two-word-or-longer literal phrase match is already
+    # a precise, low-noise signal on its own.
+    desc_lower = desc.lower()
     jd_skills = _extract_tech_keywords(desc)
-    overlap = jd_skills & user_skills
-    if len(overlap) < 2:
-        return False, f"skill_overlap:{len(overlap)}"
+    tech_overlap = jd_skills & user_skills
+    phrase_overlap = _query_phrase_overlap(desc_lower, query_phrases)
+    if len(tech_overlap) < 2 and not phrase_overlap:
+        return False, f"skill_overlap:{len(tech_overlap)}"
 
     # Rule 4: Location compatibility (basic)
     incompatible_in_office = {"india", "bangalore", "mumbai", "hyderabad", "pune", "chennai"}
@@ -412,20 +481,28 @@ def handler(event, context):
     # --- Pre-filter: relevance check ---
     # Load user skills (from search config or defaults)
     user_skills = DEFAULT_USER_SKILLS
+    query_phrases: frozenset = frozenset()
     if user_id:
         try:
             config = db.table("user_search_configs").select("queries").eq("user_id", user_id).execute()
-            if config.data and config.data[0].get("queries"):
-                # Add user's search queries as additional skill signals
-                for q in config.data[0]["queries"]:
+            user_queries = config.data[0].get("queries") if config.data else None
+            if user_queries:
+                # Add user's search queries as additional skill signals, and
+                # derive phrase-level signals too (see _query_phrases) --
+                # the tech-keyword vocabulary above can't recognise a
+                # non-IT user's own terms, so query_phrases is what makes
+                # Rule 3 in _prefilter_job work for e.g. "registered nurse"
+                # or "staff accountant", not just software roles.
+                for q in user_queries:
                     user_skills |= {w.lower() for w in q.split() if len(w) > 2}
+                query_phrases = _query_phrases(user_queries)
         except Exception:
             pass
 
     filtered_jobs = []
     filtered_out = 0
     for job in unique_jobs:
-        passes, reason = _prefilter_job(job, user_skills)
+        passes, reason = _prefilter_job(job, user_skills, query_phrases=query_phrases)
         if passes:
             filtered_jobs.append(job)
         else:
