@@ -12,7 +12,7 @@ reported SUCCEEDED. Two defects combined:
      legitimately matched nothing.
 """
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -68,3 +68,72 @@ def test_total_insert_failure_raises_instead_of_reporting_success():
     """A run that writes nothing must not return matched_count: 0 quietly."""
     with pytest.raises(RuntimeError, match="refusing to report success"):
         _run_with_insert_errors([Exception("connection reset"), Exception("connection reset")])
+
+
+# --- Surgical retry: one missing column must cost exactly one column ---
+
+@pytest.mark.parametrize("message,expected", [
+    (PGRST204, "trace_id"),
+    (RAW_PG, "trace_id"),
+    ("Could not find the 'score_tier' column of 'jobs' in the schema cache", "score_tier"),
+    ("connection reset", None),
+])
+def test_extracts_the_named_column(message, expected):
+    assert score_batch._missing_column_name(Exception(message)) == expected
+
+
+def test_retry_drops_only_the_named_column():
+    """Regression: the old retry popped a hardcoded list of 13 columns whenever
+    ANY one was missing. Measured 2026-09-28 -- trace_id alone being absent cost
+    score_tier, key_matches, gaps, match_reasoning, archetype, seniority,
+    remote, requirement_map and matched_resume on all 17 rows of a live run,
+    so jobs landed with a score and no tier and the dashboard's tier filter
+    had nothing to filter on."""
+    good = {**SAMPLE_JOB, "description": "x" * 150}
+    db = _make_supabase(jobs_raw_data=[good], resume_data=[{"tex_content": SAMPLE_RESUME_TEX}])
+
+    sent = []
+
+    def insert(record):
+        sent.append(dict(record))
+        chain = MagicMock()
+        if "trace_id" in record:
+            chain.execute.side_effect = Exception(PGRST204)
+        else:
+            chain.execute.return_value = None
+        return chain
+
+    db.table("jobs").insert.side_effect = insert
+
+    with patch("score_batch.get_supabase", return_value=db), \
+         patch("score_batch.ai_complete_cached", return_value={
+             "content": json.dumps(VALID_AI_SCORE), "provider": "groq", "model": "llama"}):
+        result = score_batch.handler(
+            {"user_id": "user-1", "new_job_hashes": ["hash-001"], "min_match_score": 60}, None)
+
+    assert result["inserted"] == 1
+    assert result["insert_failures"] == 0
+    assert len(sent) == 2, "expected one failed attempt then one retry"
+    # Only trace_id may differ between the two attempts.
+    assert set(sent[0]) - set(sent[1]) == {"trace_id"}
+    # The columns the old blunt retry used to discard must survive.
+    for col in ("score_tier", "key_matches", "gaps", "match_reasoning",
+                "archetype", "seniority", "matched_resume"):
+        assert col in sent[1], f"{col} was dropped but was never the problem"
+
+
+def test_unidentifiable_error_does_not_guess():
+    """If the error names no column, stop -- do not start popping fields."""
+    assert score_batch._missing_column_name(Exception("PGRST204 something odd")) is None
+
+
+@pytest.mark.parametrize("message", [
+    'column "trace_id" does not exist',
+    'column "trace_id" of relation "jobs" does not exist',
+])
+def test_both_postgres_spellings_name_the_column(message):
+    """Postgres uses both forms depending on whether the statement gave it a
+    relation to name. Matching only the short one left the retry unable to
+    identify the column in the common case."""
+    assert score_batch._missing_column_name(Exception(message)) == "trace_id"
+    assert score_batch._is_missing_column_error(Exception(message)) is True

@@ -1,6 +1,7 @@
 import json
 import logging
 import random
+import re
 import statistics
 import uuid
 from datetime import datetime
@@ -67,6 +68,26 @@ _NON_TECH_TITLE_REJECTS = (
     "project manager", "product manager", "program manager",
     "business analyst", "business development",
 )
+
+
+def _missing_column_name(exc: Exception) -> str | None:
+    """The column name a missing-column error refers to, if it names one.
+
+    PostgREST: "Could not find the 'trace_id' column of 'jobs' ..."
+    Postgres:  'column "trace_id" does not exist'
+               'column "trace_id" of relation "jobs" does not exist'
+
+    Postgres uses both spellings depending on whether the statement gave it a
+    relation to name, and matching only the shorter one leaves the retry unable
+    to identify the column in the longer case -- caught by
+    test_handler_survives_missing_trace_id_column.
+    """
+    text = str(exc)
+    m = re.search(r"Could not find the '([^']+)' column", text)
+    if m:
+        return m.group(1)
+    m = re.search(r'column "([^"]+)"(?: of relation "[^"]+")? does not exist', text)
+    return m.group(1) if m else None
 
 
 def _is_missing_column_error(exc: Exception) -> bool:
@@ -235,20 +256,38 @@ def handler(event, context):
             db.table("jobs").insert(job_record).execute()
             inserted += 1
         except Exception as e:
-            # Retry without optional columns if they don't exist yet
+            # Retry without the column the error actually names.
+            #
+            # This used to pop a hardcoded list of 13 "optional" columns
+            # whenever ANY one of them was missing. Measured on 2026-09-28:
+            # trace_id alone being absent cost score_tier, key_matches, gaps,
+            # match_reasoning, archetype, seniority, remote, requirement_map
+            # and matched_resume on every row -- 17 jobs landed with a score
+            # and no tier, which breaks the dashboard's tier filter. One
+            # missing column should cost one column.
             if _is_missing_column_error(e):
-                for col in ("key_matches", "gaps", "match_reasoning", "score_tier",
-                            "archetype", "seniority", "remote", "requirement_map",
-                            "matched_resume", "apply_platform",
-                            "apply_board_token", "apply_posting_id",
-                            "trace_id"):
-                    job_record.pop(col, None)
-                try:
-                    db.table("jobs").insert(job_record).execute()
-                except Exception as e2:
+                dropped, err = [], e
+                while _is_missing_column_error(err):
+                    col = _missing_column_name(err)
+                    if not col or col not in job_record:
+                        break          # can't identify it -- stop, don't guess
+                    job_record.pop(col)
+                    dropped.append(col)
+                    try:
+                        db.table("jobs").insert(job_record).execute()
+                        err = None
+                        break
+                    except Exception as retry_err:
+                        err = retry_err
+                if err is not None:
                     insert_failures += 1
-                    logger.warning(f"[score_batch] Insert retry failed for {job['job_hash']}: {e2}")
+                    logger.warning(
+                        f"[score_batch] Insert retry failed for {job['job_hash']} "
+                        f"after dropping {dropped or 'nothing'}: {err}")
                     continue
+                logger.warning(
+                    f"[score_batch] Inserted {job['job_hash']} without {dropped} "
+                    f"-- apply the migration that adds these columns")
                 inserted += 1
             else:
                 insert_failures += 1
