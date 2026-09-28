@@ -113,25 +113,50 @@ def test_nvidia_is_disabled_and_stays_disabled():
     )
 
 
-def test_the_single_account_limit_is_documented_not_solved():
-    """Honest state of the pool: Groq and OpenRouter are the only quotas, and
-    OpenRouter's is one shared daily allowance. Cool it and what remains is
-    Groq alone — two families, which two generators consume, leaving no
-    cross-family critic.
+def test_gemini_keeps_the_council_alive_when_openrouter_is_exhausted():
+    """The 2026-09-28 failure, and the fix that cost nothing.
 
-    This is the 2026-09-28 failure, still unfixed. The remedies are a paid
-    independent quota (ENABLE_PAID_QWEN) or OpenRouter credits to lift the
-    daily cap. Both are cost decisions, not code. This test exists so the
-    limit is visible in the suite rather than rediscovered from a degraded run.
+    OpenRouter's free pool shares one daily allowance across every model on it.
+    When it emptied, only Groq remained — two families, both consumed by the
+    two generators, so select_critic fell back to "any provider" and the critic
+    could be the same family as a generator. A critic reviewing its own
+    family's output is not reviewing.
+
+    Google AI Studio is an independent quota and was already available: the key
+    had been in SSM since 2026-09-24 for pgvector embeddings, and the council
+    had simply never used it. Unlike NVIDIA NIM, it holds under load —
+    24/24 against NVIDIA's 2/6 — which is why it is trusted and NVIDIA is not.
     """
     pool = ai_helper._build_provider_list()
     ai_helper.note_provider_failure({"name": "openrouter/anything", "model": "m"}, 429)
     usable = [p for p in pool if ai_helper._is_available(p)]
     families = {ai_helper._model_family(p["model"]) for p in usable}
-    assert len(families) < 3, (
-        "if this passes, an independent-quota provider was added and the limit "
-        "is lifted — replace this test with the failover property"
-    )
+
+    assert "gemini" in families, "gemini must survive an OpenRouter outage — different account"
+    assert len(families) >= 3, f"only {sorted(families)} — no room for a cross-family critic"
+
+    gens = ai_helper._select_diverse_providers(usable, n=2)
+    gen_families = {ai_helper._model_family(g["model"]) for g in gens}
+    critic = ai_helper._select_diverse_providers(usable, n=1, exclude_families=gen_families)
+    assert critic, "no cross-family critic with OpenRouter cooled"
+    assert ai_helper._model_family(critic[0]["model"]) not in gen_families
+
+
+def test_gemini_and_groq_cool_independently():
+    """Separate accounts must not share a cooldown, or the failover is not one."""
+    pool = ai_helper._build_provider_list()
+    gemini = [p for p in pool if p["key_param"].endswith("GEMINI_API_KEY")]
+    assert gemini, "no gemini entries in the pool"
+    ai_helper.note_provider_failure({"name": "groq/gpt-oss-120b", "model": "m"}, 429)
+    assert all(ai_helper._is_available(p) for p in gemini), "a Groq 429 cooled gemini"
+
+
+def test_gemini_models_share_one_family():
+    """All five collapse to "gemini", so selection cannot pick three of them and
+    call that diverse."""
+    pool = ai_helper._build_provider_list()
+    fams = {ai_helper._model_family(p["model"]) for p in pool if "gemini" in p["name"]}
+    assert fams == {"gemini"}, f"gemini entries split across families: {fams}"
 
 
 def test_pool_is_wide_enough_to_rotate():

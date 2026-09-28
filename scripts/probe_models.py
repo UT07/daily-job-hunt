@@ -36,6 +36,10 @@ ENDPOINTS = {
     "nvidia":     ("https://integrate.api.nvidia.com/v1/chat/completions", "NVIDIA_API_KEY"),
     "deepseek":   ("https://api.deepseek.com/chat/completions",       "DEEPSEEK_API_KEY"),
     "qwen":       ("https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions", "QWEN_API_KEY"),
+    # Google AI Studio speaks the OpenAI dialect at this path, so it needs no
+    # special-casing. Its quota is independent of Groq and OpenRouter, which is
+    # the property the council was missing.
+    "gemini":     ("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "GEMINI_API_KEY"),
 }
 
 # Exclude anything that is not a general chat model.
