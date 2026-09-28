@@ -6,7 +6,7 @@ import os
 import random
 import time
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import boto3
 import httpx
@@ -303,7 +303,10 @@ _COOLDOWNS: dict[str, float] = {}
 
 _RATE_LIMIT_COOLDOWN_S = {
     "groq": 90,          # 8k tokens/min — recovers within the minute
-    "openrouter": 1800,  # shared free-pool DAILY quota; long, but not all day
+    # Fallback for a 429 whose body does NOT name a per-day quota — i.e. a
+    # short throttle. The daily case is detected from the body and cooled until
+    # UTC midnight instead; see _rate_limit_cooldown_seconds.
+    "openrouter": 1800,
     "qwen": 120,
     "nvidia": 300,
     "deepseek": 300,
@@ -323,11 +326,53 @@ def _cool_down(key: str, seconds: int) -> None:
         _COOLDOWNS[key] = until
 
 
-def note_provider_failure(provider: dict, status: int | None) -> None:
-    """Record a failure so selection can route around it."""
+# Markers for a PER-DAY quota, matched on the kind of limit rather than on who
+# sent it. The phrasing is OpenRouter's today; hard-coding the account would
+# silently mistreat the next provider to adopt the same wording.
+_DAILY_LIMIT_MARKERS = ("per-day", "per day", "daily limit", "requests/day")
+
+
+def _seconds_to_utc_midnight(now: datetime | None = None) -> int:
+    """Seconds until the next UTC midnight, when per-day quotas reset."""
+    now = now or datetime.now(UTC)
+    nxt = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    # Floor at a minute so a call landing a hair before midnight still backs off.
+    return max(60, int((nxt - now).total_seconds()))
+
+
+def _rate_limit_cooldown_seconds(account: str, detail: str) -> int:
+    """How long to route around `account` after it returned HTTP 429.
+
+    `detail` is the response body, which is the only thing distinguishing the
+    two very different limits a provider can mean by "429":
+
+      * a PER-MINUTE throttle — clears in seconds, the provider is healthy, and
+        a short cooldown is correct.
+      * a PER-DAY quota — OpenRouter's free pool sends "Rate limit exceeded:
+        free-models-per-day" and will not clear until UTC midnight. Measured
+        2026-09-28: 50 requests/day without credits on the account, applied
+        account-wide, so all eight OpenRouter models die together.
+
+    Treating them alike was costing ~48 pointless retry sweeps a day. Treating
+    EVERY 429 as the daily case would be the opposite error — a transient
+    throttle would bench a healthy provider for up to 24 hours, and that may be
+    the only live failover the council has. So the body decides, and an absent
+    or unrecognised body takes the conservative short cooldown.
+    """
+    if detail and any(m in detail.lower() for m in _DAILY_LIMIT_MARKERS):
+        return _seconds_to_utc_midnight()
+    return _RATE_LIMIT_COOLDOWN_S.get(account, 300)
+
+
+def note_provider_failure(provider: dict, status: int | None, detail: str = "") -> None:
+    """Record a failure so selection can route around it.
+
+    `detail` carries the provider's response body when there is one. It is
+    optional so existing call sites keep working unchanged.
+    """
     account = _account_of(provider)
     if status == 429:
-        secs = _RATE_LIMIT_COOLDOWN_S.get(account, 300)
+        secs = _rate_limit_cooldown_seconds(account, detail)
         _cool_down(f"account:{account}", secs)
         logger.info(f"[ai] cooling account '{account}' for {secs}s after 429")
     elif status == 404:
@@ -447,7 +492,7 @@ def _call_provider(
             return {"content": content, "provider": provider["name"], "model": provider["model"]}
         elif resp.status_code == 429:
             logger.warning(f"[ai] {provider['name']} rate limited")
-            note_provider_failure(provider, 429)
+            note_provider_failure(provider, 429, resp.text)
         else:
             logger.warning(f"[ai] {provider['name']} returned {resp.status_code}")
             note_provider_failure(provider, resp.status_code)
