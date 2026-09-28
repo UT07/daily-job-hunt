@@ -82,8 +82,10 @@ export default function StudioSections({ sections, onChange, onSectionBlur }) {
         <div key={`${entry.company}-${ei}`}>
           <span className={LABEL}>{entry.company} — {entry.title}</span>
           {(entry.bullets || []).map((b, bi) => (
+            // Keyed by index deliberately. Bullets are a plain string array
+            // with no id, so position IS the identity. Keying on the text
+            // would remount the input on every keystroke and lose focus.
             <input
-              // eslint-disable-next-line react/no-array-index-key
               key={bi}
               aria-label={`${entry.company} bullet ${bi + 1}`}
               className={`${FIELD} mb-1`}

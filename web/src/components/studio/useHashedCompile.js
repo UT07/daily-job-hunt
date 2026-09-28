@@ -21,7 +21,22 @@ export function hashSections(sections) {
   return String(h);
 }
 
-export function useHashedCompile(sections, compileFn) {
+/**
+ * @param sections   the structured content to compile
+ * @param compileFn  (sections) => Promise<pdfUrl>
+ * @param options.renderedHashSeed
+ *   hashSections(...) of content the caller is ALREADY displaying a PDF for.
+ *   The Studio has one: GET .../sections parses the same _tailored.tex the
+ *   existing PDF was compiled from, so the two correspond by construction.
+ *   Without it the rendered hash stays null, the first blur looks like a
+ *   change, and 15s goes on recompiling a document nobody edited.
+ *
+ *   The CALLER computes it, deliberately. The hook cannot know whether a
+ *   pre-existing PDF matches the sections it was handed, and a caller with no
+ *   such PDF genuinely does need that first compile. Passing it in also keeps
+ *   the hook free of a capture-once ref read during render.
+ */
+export function useHashedCompile(sections, compileFn, { renderedHashSeed = null } = {}) {
   const [pdfUrl, setPdfUrl] = useState(null);
   const [compiling, setCompiling] = useState(false);
   const [error, setError] = useState(null);
@@ -38,8 +53,12 @@ export function useHashedCompile(sections, compileFn) {
   const sectionsRef = useRef(sections);
   useEffect(() => { sectionsRef.current = sections; }, [sections]);
 
-  const renderedHashRef = useRef(renderedHash);
-  useEffect(() => { renderedHashRef.current = renderedHash; }, [renderedHash]);
+  // Nothing compiled yet in this session falls back to what the caller says is
+  // already on screen.
+  const effectiveRenderedHash = renderedHash ?? renderedHashSeed;
+
+  const renderedHashRef = useRef(effectiveRenderedHash);
+  useEffect(() => { renderedHashRef.current = effectiveRenderedHash; }, [effectiveRenderedHash]);
 
   const inFlight = useRef(new Set());
 
@@ -76,7 +95,8 @@ export function useHashedCompile(sections, compileFn) {
     pdfUrl,
     compiling,
     error,
-    pendingChanges: renderedHash !== null && renderedHash !== currentHash ? 1 : 0,
+    pendingChanges:
+      effectiveRenderedHash !== null && effectiveRenderedHash !== currentHash ? 1 : 0,
     requestCompile,
   };
 }

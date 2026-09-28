@@ -10,7 +10,7 @@
  */
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { useHashedCompile } from '../useHashedCompile';
+import { hashSections, useHashedCompile } from '../useHashedCompile';
 
 const A = { summary: 'first' };
 const B = { summary: 'second' };
@@ -79,5 +79,41 @@ describe('useHashedCompile', () => {
     await act(async () => { result.current.requestCompile(); });
     await waitFor(() => expect(result.current.error).toMatch(/tectonic exploded/));
     expect(result.current.pdfUrl).toBe('pdf-1');
+  });
+});
+
+describe('useHashedCompile with a PDF already on screen', () => {
+  it('does not recompile content it was told is already rendered', async () => {
+    // The Studio's case: GET .../sections parses the same _tailored.tex the
+    // existing PDF was built from, so opening a job and blurring a field you
+    // did not change must not spend 15s rebuilding an identical document.
+    const compile = vi.fn(() => Promise.resolve('pdf-new'));
+    const { result } = renderHook(
+      () => useHashedCompile(A, compile, { renderedHashSeed: hashSections(A) }),
+    );
+    await act(async () => { result.current.requestCompile(); });
+    expect(compile).not.toHaveBeenCalled();
+    expect(result.current.pendingChanges).toBe(0);
+  });
+
+  it('still compiles once the content actually changes', async () => {
+    const compile = vi.fn(() => Promise.resolve('pdf-new'));
+    const { result, rerender } = renderHook(
+      ({ s }) => useHashedCompile(s, compile, { renderedHashSeed: hashSections(A) }),
+      { initialProps: { s: A } },
+    );
+    rerender({ s: B });
+    expect(result.current.pendingChanges).toBe(1);
+    await act(async () => { result.current.requestCompile(); });
+    await waitFor(() => expect(result.current.pdfUrl).toBe('pdf-new'));
+  });
+
+  it('without the flag, the first compile still runs', async () => {
+    // A caller with no pre-existing PDF genuinely needs that first compile.
+    const compile = vi.fn(() => Promise.resolve('pdf-1'));
+    const { result } = renderHook(() => useHashedCompile(A, compile));
+    await act(async () => { result.current.requestCompile(); });
+    await waitFor(() => expect(result.current.pdfUrl).toBe('pdf-1'));
+    expect(compile).toHaveBeenCalledTimes(1);
   });
 });
