@@ -90,27 +90,46 @@ def test_critic_is_available_while_both_accounts_are_up():
     assert ai_helper._model_family(critic[0]["model"]) not in fams
 
 
-def test_nvidia_is_disabled_and_stays_disabled():
-    """NVIDIA NIM free tier cannot serve as a failover, measured 2026-09-28.
+def test_nvidia_is_in_the_pool_on_a_corrected_measurement():
+    """NVIDIA NIM is the fourth independent quota. This test used to assert the
+    opposite, and the reversal is the point.
 
-    It authenticates, and a single call returns 200 in ~5s — which is exactly
-    what made it look viable and what an earlier version of this file asserted
-    as a working failover. Sustained load disproved it: 2/6 back-to-back
-    succeeded, 4/6 with a 3s gap, the rest 503. In CI the same capacity limit
-    surfaced as reads timing out, and the eval job was cancelled at 20 minutes.
+    An earlier version disabled NVIDIA on 2026-09-28 with: "2/6 back-to-back
+    succeeded, 4/6 with a 3s gap, the rest 503 ... it costs 75s per attempt to
+    learn nothing." That run went out through a VPN endpoint NVIDIA was
+    throttling. Re-measured the same day from an unblocked egress:
 
-    A failover is hit hardest precisely when the primary is exhausted, so one
-    that degrades under load is worse than absent: it costs 75s per attempt to
-    learn nothing. The entries stay in the registry, disabled, so nobody
-    re-probes with a single call and reaches the same wrong conclusion.
+        sequential, 4 calls x 3 models   12/12   3-5s / 5-11s / 21-26s
+        concurrent, 6 at once             4/6    503s returned in ~0.5s
+
+    So the 503s under concurrency are real and the cost estimate was wrong by
+    two orders of magnitude. A hop that answers two thirds of the time and
+    fails in half a second is nearly free — and this account's limits are
+    shared with nothing else in the chain, which is the property the council
+    was short of.
+
+    The lesson kept from the original test: measure under the load you will
+    actually apply, and from the egress you will actually use.
     """
     pool = ai_helper._build_provider_list()
     nvidia = [p for p in pool if p["key_param"].endswith("NVIDIA_API_KEY")]
-    assert not nvidia, (
-        f"NVIDIA entries are in the live pool: {[p['name'] for p in nvidia]}. "
-        "They 503 under load; re-enable only with a sustained-load measurement, "
-        "not a one-shot probe."
-    )
+    assert nvidia, "NVIDIA_API_KEY unused — the council is back to three quotas"
+
+
+def test_nvidia_timeout_stays_tight():
+    """A long timeout on NVIDIA only ever pays for a hang.
+
+    Successes land in 3-5s and 503s in ~0.5s, so anything beyond ~45s buys
+    nothing and delays the next hop. The 60-75s budget the entries originally
+    carried was sized for a latency profile never observed.
+    """
+    pool = ai_helper._build_provider_list()
+    for p in pool:
+        if p["key_param"].endswith("NVIDIA_API_KEY"):
+            assert p["timeout"] <= 45, (
+                f"{p['name']} timeout={p['timeout']}s — measured successes are "
+                "3-5s and failures 0.5s; a longer budget only delays failover"
+            )
 
 
 def test_gemini_keeps_the_council_alive_when_openrouter_is_exhausted():
@@ -124,8 +143,12 @@ def test_gemini_keeps_the_council_alive_when_openrouter_is_exhausted():
 
     Google AI Studio is an independent quota and was already available: the key
     had been in SSM since 2026-09-24 for pgvector embeddings, and the council
-    had simply never used it. Unlike NVIDIA NIM, it holds under load —
-    24/24 against NVIDIA's 2/6 — which is why it is trusted and NVIDIA is not.
+    had simply never used it. It holds under load — 24/24 — and answers in
+    ~0.9s, which is why it sits ahead of every other failover.
+
+    (An earlier version of this docstring contrasted it with "NVIDIA's 2/6".
+    That NVIDIA figure was measured through a throttled VPN egress and does not
+    hold; see test_nvidia_is_in_the_pool_on_a_corrected_measurement.)
     """
     pool = ai_helper._build_provider_list()
     ai_helper.note_provider_failure({"name": "openrouter/anything", "model": "m"}, 429)

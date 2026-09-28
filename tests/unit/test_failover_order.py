@@ -129,3 +129,50 @@ def test_ab_shuffle_never_promotes_a_cooled_down_provider(monkeypatch):
         "a cooled-down OpenRouter provider was tried before a live one:\n  "
         + "\n  ".join(f"{i:2d}. {n}" for i, n in enumerate(seen))
     )
+
+
+# ---------------------------------------------------------------------------
+# NVIDIA NIM — re-enabled on a corrected measurement
+# ---------------------------------------------------------------------------
+
+def test_nvidia_is_a_fourth_independent_quota():
+    """NVIDIA NIM has its own account, so it survives a Groq/OpenRouter outage.
+
+    It was disabled earlier on 2026-09-28 for "503s under load, costing 75s per
+    attempt". Re-measured the same day from an unblocked egress: the earlier
+    run went out through a VPN that NVIDIA was throttling. Sequential load is
+    12/12 across all three models; concurrency is 4/6 — and, decisively, the
+    503s return in ~0.5s, not 75s. The cost estimate that justified disabling
+    it was simply wrong, and a two-thirds-reliable hop that fails in half a
+    second is worth having.
+    """
+    keys = {p["key_param"] for p in ai_helper._build_provider_list()}
+    assert "/naukribaba/NVIDIA_API_KEY" in keys, (
+        "NVIDIA_API_KEY unused — the council is back to three quotas"
+    )
+
+
+def test_nvidia_sits_between_gemini_and_openrouter():
+    """Order by measured reliability: Gemini 0.9s/always, NVIDIA 3-5s/two-thirds,
+    OpenRouter 50-requests-a-day.
+    """
+    names = _names()
+    gem = _first_index(names, "gemini/")
+    nv = _first_index(names, "nvidia/")
+    orr = _first_index(names, "openrouter/")
+    assert nv is not None, f"no nvidia provider in the chain: {names}"
+    assert gem < nv < orr, (
+        f"expected gemini({gem}) < nvidia({nv}) < openrouter({orr}); order: {names}"
+    )
+
+
+def test_the_slow_nemotron_stays_out():
+    """nemotron-3.5-lightning-30b-a3b answers in 21-26s.
+
+    Excluded on LATENCY, not availability — it was 4/4 sequential. A failover
+    hop four to eight times slower than the alternatives above it is a bad
+    trade when Gemini answers the same prompt in 0.9s. Recorded explicitly so
+    the next person does not "fix" its absence by re-enabling it.
+    """
+    models = [p["model"] for p in ai_helper._build_provider_list()]
+    assert "nvidia/nemotron-3.5-lightning-30b-a3b" not in models

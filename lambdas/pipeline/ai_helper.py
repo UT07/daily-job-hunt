@@ -186,6 +186,32 @@ def _build_provider_list() -> list[dict]:
         "model": "gemini-3.5-flash-lite",
         "timeout": 60,
     })
+
+    # NVIDIA NIM — the fourth independent quota, and the reason it is here
+    # rather than disabled is a correction worth recording.
+    #
+    # It was disabled earlier on 2026-09-28 with the note "503s under sustained
+    # load ... while costing 75s per attempt". Re-measured the same day after
+    # the VPN that NVIDIA was throttling came off:
+    #
+    #   sequential, 4 calls x 3 models   12/12   3-5s / 5-11s / 21-26s
+    #   concurrent, 6 at once             4/6    503s returned in ~0.5s
+    #
+    # The 503s are real; the cost estimate was not. A hop that answers two
+    # thirds of the time and fails in half a second is nearly free, and this
+    # is an account whose limits are shared with nothing else in the chain.
+    # Placed after Gemini (0.9s, always answers) and ahead of OpenRouter
+    # (50 requests/day without credits, routinely exhausted).
+    #
+    # timeout=45: successes land in 3-5s and failures in 0.5s, so the old 60-75s
+    # budget only ever paid for a hang.
+    providers.append({
+        "name": "nvidia/nemotron-3-super-120b-a12b",
+        "url": "https://integrate.api.nvidia.com/v1/chat/completions",
+        "key_param": "/naukribaba/NVIDIA_API_KEY",
+        "model": "nvidia/nemotron-3-super-120b-a12b",
+        "timeout": 45,
+    })
     for m in openrouter_models:
         providers.append({
             "name": f"openrouter/{m.split('/')[-1].split(':')[0]}",
