@@ -9,12 +9,15 @@ Board UI: https://jobs.ashbyhq.com/{company}
 import html
 import logging
 import re
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from utils.canonical_hash import canonical_hash
 
 import boto3
 import httpx
+
+from shared.location_policy import build_location_policy, location_verdict
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -25,10 +28,6 @@ ssm = boto3.client("ssm")
 DEFAULT_COMPANIES = [
     "anthropic", "linear", "vercel", "notion", "figma", "retool",
 ]
-
-# Location keywords to filter for (case-insensitive)
-LOCATION_KEYWORDS = {"ireland", "dublin", "remote", "emea", "europe", "anywhere"}
-
 
 def get_param(name):
     return ssm.get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
@@ -47,17 +46,28 @@ def _clean(text):
     return text.strip()
 
 
-def _location_matches(location_name: str, is_remote: bool) -> bool:
-    """Check if job location matches our target regions."""
-    if is_remote:
-        return True
-    loc_lower = (location_name or "").lower()
-    return any(kw in loc_lower for kw in LOCATION_KEYWORDS)
+def _posting_location(job: dict) -> str:
+    """Ashby returns `location` as a bare string or an object, by API version."""
+    loc = job.get("location", "")
+    if isinstance(loc, dict):
+        return loc.get("name", "") or ""
+    return loc or ""
 
 
 def handler(event, context):
     query_hash = event.get("query_hash", "")
     cache_ttl_hours = event.get("cache_ttl_hours", 24)
+
+    # Which locations this user actually asked for. Threaded from
+    # load_config through the state machine ("locations.$": "$.locations");
+    # before 2026-09-28 this scraper carried its own hardcoded
+    # LOCATION_KEYWORDS = {"ireland", "dublin", "remote", "emea", "europe",
+    # "anywhere"} and the user's configured locations reached nothing.
+    policy = build_location_policy(event.get("locations"))
+    logger.info(
+        f"[ashby] location policy: source={policy.source} "
+        f"locations={list(policy.locations)} regions={sorted(policy.target_regions)}"
+    )
 
     db = get_supabase()
 
@@ -91,26 +101,32 @@ def handler(event, context):
             data = resp.json()
             jobs = data.get("jobs", [])
 
-            # Filter by location (Ashby also has isRemote at the top level per job)
-            matched = [
-                j for j in jobs
-                if _location_matches(
-                    j.get("location", "") if isinstance(j.get("location"), str)
-                    else (j.get("location") or {}).get("name", ""),
-                    j.get("isRemote", False),
+            # Filter by location, against this user's own policy. Ashby's
+            # per-posting `isRemote` is passed through rather than used as an
+            # unconditional admit, which is what it was until 2026-09-28: it
+            # let 983 "New York, NY (HQ)" postings into jobs_raw untouched by
+            # any location check. location_verdict treats it as "this role is
+            # not tied to a place", which still admits a genuinely
+            # location-free posting and no longer admits an office address.
+            matched = []
+            rejects = Counter()
+            for j in jobs:
+                admit, reason = location_verdict(
+                    _posting_location(j), policy, bool(j.get("isRemote", False))
                 )
-            ]
-            logger.info(f"[ashby] {company}: {len(matched)}/{len(jobs)} match location filter")
+                if admit:
+                    matched.append(j)
+                else:
+                    rejects[reason.split(":", 1)[0]] += 1
+            logger.info(
+                f"[ashby] {company}: {len(matched)}/{len(jobs)} match location filter"
+                + (f" (rejected: {dict(rejects)})" if rejects else "")
+            )
 
             for j in matched:
                 title = (j.get("title") or "").strip()
 
-                # Location may be a string or an object depending on API version
-                loc = j.get("location", "")
-                if isinstance(loc, dict):
-                    location = loc.get("name", "")
-                else:
-                    location = loc or ""
+                location = _posting_location(j)
                 if j.get("isRemote"):
                     location = location or "Remote"
 

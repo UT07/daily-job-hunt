@@ -8,12 +8,15 @@ API: GET https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true
 import html
 import logging
 import re
+from collections import Counter
 from datetime import datetime, timedelta, timezone
 
 from utils.canonical_hash import canonical_hash
 
 import boto3
 import httpx
+
+from shared.location_policy import build_location_policy, location_verdict
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -25,9 +28,6 @@ DEFAULT_BOARDS = [
     "stripe", "intercom", "mongodb", "twilio", "datadog",
     "pagerduty", "toast", "cloudflare", "elastic", "ripple",
 ]
-
-# Location keywords to filter for (case-insensitive)
-LOCATION_KEYWORDS = {"ireland", "dublin", "remote", "emea", "europe", "anywhere"}
 
 
 def get_param(name):
@@ -47,15 +47,20 @@ def _clean(text):
     return text.strip()
 
 
-def _location_matches(location_name: str) -> bool:
-    """Check if job location matches our target regions."""
-    loc_lower = (location_name or "").lower()
-    return any(kw in loc_lower for kw in LOCATION_KEYWORDS)
-
-
 def handler(event, context):
     query_hash = event.get("query_hash", "")
     cache_ttl_hours = event.get("cache_ttl_hours", 24)
+
+    # Which locations this user actually asked for. Threaded from
+    # load_config through the state machine ("locations.$": "$.locations");
+    # before 2026-09-28 this scraper carried its own hardcoded
+    # LOCATION_KEYWORDS = {"ireland", "dublin", "remote", "emea", "europe",
+    # "anywhere"} and the user's configured locations reached nothing.
+    policy = build_location_policy(event.get("locations"))
+    logger.info(
+        f"[greenhouse] location policy: source={policy.source} "
+        f"locations={list(policy.locations)} regions={sorted(policy.target_regions)}"
+    )
 
     db = get_supabase()
 
@@ -89,9 +94,23 @@ def handler(event, context):
             data = resp.json()
             jobs = data.get("jobs", [])
 
-            # Filter by location
-            matched = [j for j in jobs if _location_matches(j.get("location", {}).get("name", ""))]
-            logger.info(f"[greenhouse] {slug}: {len(matched)}/{len(jobs)} match location filter")
+            # Filter by location, against this user's own policy.
+            matched = []
+            rejects = Counter()
+            for j in jobs:
+                loc = j.get("location") or {}
+                admit, reason = location_verdict(
+                    loc.get("name", "") if isinstance(loc, dict) else str(loc),
+                    policy,
+                )
+                if admit:
+                    matched.append(j)
+                else:
+                    rejects[reason.split(":", 1)[0]] += 1
+            logger.info(
+                f"[greenhouse] {slug}: {len(matched)}/{len(jobs)} match location filter"
+                + (f" (rejected: {dict(rejects)})" if rejects else "")
+            )
 
             for j in matched:
                 title = (j.get("title") or "").strip()

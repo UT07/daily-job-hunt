@@ -14,6 +14,8 @@ from difflib import SequenceMatcher
 
 import boto3
 
+from shared import location_policy as shared_location_policy
+
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -176,21 +178,14 @@ _IT_OFF_FUNCTION_PATTERN = _compile_title_pattern(IT_OFF_FUNCTION_KEYWORDS)
 # frequently emit a bare city with no country ("Dublin", "Bangalore"), so
 # matching on the region name alone would fail open on exactly the rows the
 # old rule was written to catch. Extend as users configure new regions.
-REGION_LOCATION_TOKENS = {
-    "ireland": frozenset({"ireland", "dublin", "cork", "galway", "limerick"}),
-    "india": frozenset({
-        "india", "bangalore", "bengaluru", "mumbai", "hyderabad", "pune",
-        "chennai", "delhi", "gurgaon", "noida", "kolkata",
-    }),
-    "us": frozenset({
-        "united states", "usa", "u.s.", " us ", "austin", "new york", "seattle",
-        "san francisco", "boston", "chicago", "denver", "atlanta",
-    }),
-    "uk": frozenset({
-        "united kingdom", "england", "london", "manchester", "birmingham",
-        "edinburgh", "glasgow", "bristol",
-    }),
-}
+#
+# The data itself now lives in shared/location_policy.py, because the
+# scrapers filter on location too and need the identical answer to "which
+# region is Bangalore in". Re-exported under the original name so every
+# existing reference (Rule 4 below, scripts/tune_prefilter.py, the tests)
+# keeps working; this is a move, not a change -- the contents are byte-identical
+# to what this module held before 2026-09-28.
+REGION_LOCATION_TOKENS = shared_location_policy.REGION_LOCATION_TOKENS
 
 # Regions whose remote-only status Rule 4 does NOT yet enforce.
 #

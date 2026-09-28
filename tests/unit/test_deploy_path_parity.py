@@ -524,3 +524,68 @@ def test_mcp_server_not_in_layer_build_first_party_list():
         "-- it is imported only by app.py, in the container image -- so it "
         "must not be added to the shared layer's FIRST_PARTY list"
     )
+
+
+# ---------------------------------------------------------------------------
+# A zip Lambda that imports `shared` needs the layer that carries it.
+#
+# The checks above assert that `shared/` reaches both deploy paths at all.
+# This asserts the per-function half: the layer mounts at /opt/python only
+# for functions that actually attach it, and two zip functions in this
+# template (ChunkHashesFunction, AggregateScoresFunction) deliberately do
+# not. Adding `from shared.x import y` to one of those -- or to a new
+# function written without the layer -- is a green deploy and a runtime
+# ModuleNotFoundError, the same shape as the 2026-09-23 incident this file
+# is named for.
+#
+# Direct module-level imports in the handler's own file only: that is where
+# the risk lives (a lazily imported `shared` at least fails inside a Task
+# the state machine can Catch), and it is checkable without resolving the
+# whole import graph.
+# ---------------------------------------------------------------------------
+
+
+def _handler_module_path(props):
+    handler = props.get("Handler", "")
+    code_uri = props.get("CodeUri", "")
+    if not handler or not code_uri or "." not in handler:
+        return None
+    module = handler.rsplit(".", 1)[0]
+    path = REPO / code_uri / f"{module}.py"
+    return path if path.is_file() else None
+
+
+def _imports_shared_at_module_level(path):
+    tree = ast.parse(path.read_text())
+    for node in tree.body:  # module level only
+        if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "shared":
+            return True
+        if isinstance(node, ast.Import):
+            if any(a.name.split(".")[0] == "shared" for a in node.names):
+                return True
+    return False
+
+
+def test_functions_importing_shared_attach_the_shared_layer():
+    template = _load_template_tolerant_of_cfn_tags()
+    offenders = []
+    for name, resource in template["Resources"].items():
+        if not isinstance(resource, dict):
+            continue
+        if resource.get("Type") != "AWS::Serverless::Function":
+            continue
+        props = resource.get("Properties", {})
+        if props.get("PackageType") == "Image":
+            continue  # Dockerfile.lambda COPYs shared/ directly
+        path = _handler_module_path(props)
+        if path is None or not _imports_shared_at_module_level(path):
+            continue
+        layers = " ".join(str(x) for x in (props.get("Layers") or []))
+        if "SharedDepsLayer" not in layers:
+            offenders.append(f"{name} ({path.relative_to(REPO)})")
+    assert not offenders, (
+        "these zip Lambdas import `shared` at module level but do not attach "
+        "SharedDepsLayer, which is where /opt/python/shared comes from — the "
+        "deploy succeeds and every invocation ModuleNotFoundErrors:\n  "
+        + "\n  ".join(offenders)
+    )
