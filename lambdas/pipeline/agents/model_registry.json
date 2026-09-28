@@ -2,7 +2,7 @@
   "_README": "Verified model registry. Every entry was proved by a LIVE call at ~2900 chars (a realistic scoring-shaped prompt) that had to return parseable JSON with a numeric score -- not merely HTTP 200. Regenerate with scripts/probe_models.py. Free-model IDs rot silently, so re-probe before trusting this file: see ai_council_model_rot in project memory.",
   "_CAVEAT": "These are verified model ENDPOINTS, not proven-distinct weights. Some vendor IDs may be snapshots or aliases of one another; that cannot be determined from the API. An attempt to discriminate them by comparing temperature=0 outputs was invalid -- the control showed one model giving three different answers to the same prompt at temperature=0, because hosted MoE serving is nondeterministic regardless of temperature.",
   "verified_on": "2026-09-28",
-  "count": 34,
+  "count": 33,
   "families": [
     "gemini",
     "inclusionai",
@@ -103,21 +103,6 @@
       "min_output_tokens": 1024,
       "suitable_for_scoring": false,
       "unsuitable_reason": "36s probe for a score of 40 \u2014 slow and weak. Same profile as meta/muse-glimmer-30b, which timed out twice in one eval run and was dropped. A pool slot has to earn its latency."
-    },
-    {
-      "name": "openrouter/ling-3.0-flash-fin",
-      "provider": "openrouter",
-      "model": "inclusionai/ling-3.0-flash-fin:free",
-      "family": "inclusionai",
-      "url": "https://openrouter.ai/api/v1/chat/completions",
-      "key_param": "/naukribaba/OPENROUTER_API_KEY",
-      "verified_on": "2026-09-28",
-      "probe_latency_s": 2.1,
-      "probe_score": 45,
-      "timeout": 60,
-      "reasoning": false,
-      "min_output_tokens": 1024,
-      "suitable_for_scoring": true
     },
     {
       "name": "openrouter/ling-3.0-flash-sante",
@@ -419,7 +404,7 @@
       "reasoning": false,
       "min_output_tokens": 1024,
       "suitable_for_scoring": false,
-      "unsuitable_reason": "NVIDIA NIM free tier 503s under sustained load: measured 2/6 back-to-back and 4/6 with a 3s gap, on 2026-09-28. A single probe returns 200 in ~5s, which is what made it look viable. A failover is hit hardest exactly when the primary is exhausted, and this degrades fastest under precisely that condition \u2014 while costing 75s per attempt. Re-enable only if the account moves off the free tier; re-probe with sustained load, not one call."
+      "unsuitable_reason": "Excluded on LATENCY, not availability: 4/4 sequential but 21-26s per call, four to eight times slower than every provider ahead of it, and Gemini answers the same prompt in 0.9s. Re-enable only if the faster NVIDIA entries stop being available."
     },
     {
       "name": "nvidia/nemotron-3-super-120b-a12b",
@@ -431,11 +416,10 @@
       "verified_on": "2026-09-28",
       "probe_latency_s": 4.1,
       "probe_score": 45,
-      "timeout": 60,
+      "timeout": 45,
       "reasoning": false,
       "min_output_tokens": 1024,
-      "suitable_for_scoring": false,
-      "unsuitable_reason": "NVIDIA NIM free tier 503s under sustained load: measured 2/6 back-to-back and 4/6 with a 3s gap, on 2026-09-28. A single probe returns 200 in ~5s, which is what made it look viable. A failover is hit hardest exactly when the primary is exhausted, and this degrades fastest under precisely that condition \u2014 while costing 75s per attempt. Re-enable only if the account moves off the free tier; re-probe with sustained load, not one call."
+      "suitable_for_scoring": true
     },
     {
       "name": "nvidia/nemotron-3-ultra-550b-a55b",
@@ -447,11 +431,10 @@
       "verified_on": "2026-09-28",
       "probe_latency_s": 8.3,
       "probe_score": 30,
-      "timeout": 60,
+      "timeout": 45,
       "reasoning": false,
       "min_output_tokens": 1024,
-      "suitable_for_scoring": false,
-      "unsuitable_reason": "NVIDIA NIM free tier 503s under sustained load: measured 2/6 back-to-back and 4/6 with a 3s gap, on 2026-09-28. A single probe returns 200 in ~5s, which is what made it look viable. A failover is hit hardest exactly when the primary is exhausted, and this degrades fastest under precisely that condition \u2014 while costing 75s per attempt. Re-enable only if the account moves off the free tier; re-probe with sustained load, not one call."
+      "suitable_for_scoring": true
     },
     {
       "name": "gemini/gemini-3.5-flash-lite",
@@ -531,6 +514,7 @@
   ],
   "_TOKENS": "min_output_tokens is a floor, not a preference. Reasoning models consume the budget internally before emitting, so calling one below its floor yields empty content with HTTP 200 -- a silent no-op, not an error. Measured 2026-09-28: gpt-oss-120b emitted nothing at max_tokens=60, and score_batch's global SCORE_MAX_TOKENS=2048 starved gpt-oss-20b in prod.",
   "_CAPABILITY": "suitable_for_scoring is separate from verification. Every entry here was PROVED to respond correctly at realistic prompt size; that says nothing about whether it can reason about a job description. Selecting the pool on family diversity alone put a code model and a 2.6B model into the council and the AI Eval Gate measured tier_accuracy falling 63.2% -> 25.0%.",
-  "_NVIDIA": "NVIDIA NIM entries are RETAINED BUT DISABLED. They authenticate and a single call returns 200 in ~5s, which is why they were added as an independent-quota failover. Sustained-load measurement disproved that: 2/6 back-to-back, 4/6 with a 3s gap, the rest 503. In CI the same limit surfaced as reads timing out, and the eval job was cancelled at 20 minutes having spent most of it waiting. They are kept here so the next person does not repeat the one-shot probe and reach the same conclusion.",
-  "_GEMINI": "Google AI Studio, on a quota independent of both Groq and OpenRouter \u2014 the property the council was missing, and free. The key was already in SSM for pgvector embeddings; the council had simply never used it.\n\nSustained-load tested BEFORE being added, because NVIDIA passed a single probe and then 503'd under rate: gemini 24/24 back-to-back and spaced, 1.2-1.6s throughout, against NVIDIA's 2/6. A one-shot 200 is not evidence a provider can carry load, and a failover is used precisely when load is highest."
+  "_NVIDIA": "Re-measured 2026-09-28 from an unblocked egress. The earlier disable cited '503s under sustained load while costing 75s per attempt'; that run went out through a VPN NVIDIA was throttling, and the cost figure was wrong. Actual: sequential 12/12 across all three models (3-5s / 5-11s / 21-26s), concurrent 4/6, and the 503s return in ~0.5s. A hop that answers two thirds of the time and fails in half a second is worth having, especially as the only quota in the pool shared with nothing else.",
+  "_GEMINI": "Google AI Studio, on a quota independent of both Groq and OpenRouter \u2014 the property the council was missing, and free. The key was already in SSM for pgvector embeddings; the council had simply never used it.\n\nSustained-load tested BEFORE being added, because NVIDIA passed a single probe and then 503'd under rate: gemini 24/24 back-to-back and spaced, 1.2-1.6s throughout, against NVIDIA's 2/6. A one-shot 200 is not evidence a provider can carry load, and a failover is used precisely when load is highest.",
+  "_MODEL_ROT": "Free model ids are withdrawn without notice. ling-3.0-flash-fin:free was removed 2026-09-28: it is absent from OpenRouter's live /models listing (16 free models that day) and returned 404 on every CI call. Re-check this file against the live listing before trusting the entry count \u2014 a registry row is a claim about a remote catalog, and the catalog moves."
 }

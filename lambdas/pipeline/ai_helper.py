@@ -6,7 +6,7 @@ import os
 import random
 import time
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import boto3
 import httpx
@@ -122,7 +122,9 @@ def _build_provider_list() -> list[dict]:
     #   nemotron-3.5-lightning     65
     #   nemotron-3-ultra-550b      50
     #   nemotron-3-super-120b      48
-    #   ling-3.0-flash-fin         45
+    #   ling-3.0-flash-fin         45   <- REMOVED 2026-09-28, withdrawn from
+    #                                      OpenRouter; absent from the live
+    #                                      /models listing, 404 on every call
     #   ling-3.0-flash-sante       40
     #   north-mini-code            30   <- dropped, code model
     #   lfm-2.5-2.6b               25   <- dropped, 2.6B and 63s
@@ -130,7 +132,6 @@ def _build_provider_list() -> list[dict]:
         "nvidia/nemotron-3.5-lightning:free",
         "nvidia/nemotron-3-ultra-550b-a55b:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
-        "inclusionai/ling-3.0-flash-fin:free",
         "inclusionai/ling-3.0-flash-sante:free",
     ]
 
@@ -161,6 +162,56 @@ def _build_provider_list() -> list[dict]:
         # every request. Re-add only if a probe passes at a realistic prompt
         # size (~3,800 tokens), not a one-word smoke test.
     ]
+    # Google AI Studio — the council's only quota independent of Groq and
+    # OpenRouter, and free. Sustained-load verified 24/24 before being trusted;
+    # see the registry's _GEMINI note for why that mattered.
+    #
+    # ORDER MATTERS, and this sits AHEAD of the OpenRouter block deliberately.
+    # OpenRouter's free pool is capped per ACCOUNT per day — 50 requests
+    # without credits on the account — so all of its entries go 429 together
+    # and stay that way for the rest of the day. Measured 2026-09-28: the cap
+    # was exhausted, every OpenRouter model returned
+    # "429 free-models-per-day", and because Gemini was appended after them it
+    # sat at index 8. Each call spent five doomed hops (up to 90s of timeout
+    # budget apiece) before reaching the provider that answers in ~0.9s, and
+    # the CI eval gate reported families_served: ["groq"] on a pool that had a
+    # working second family the entire time.
+    #
+    # Groq stays first: ~300-800ms, its own quota, and the strongest models.
+    # Gemini is the first FAILOVER. OpenRouter is depth behind both.
+    providers.append({
+        "name": "gemini/gemini-3.5-flash-lite",
+        "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "key_param": "/naukribaba/GEMINI_API_KEY",
+        "model": "gemini-3.5-flash-lite",
+        "timeout": 60,
+    })
+
+    # NVIDIA NIM — the fourth independent quota, and the reason it is here
+    # rather than disabled is a correction worth recording.
+    #
+    # It was disabled earlier on 2026-09-28 with the note "503s under sustained
+    # load ... while costing 75s per attempt". Re-measured the same day after
+    # the VPN that NVIDIA was throttling came off:
+    #
+    #   sequential, 4 calls x 3 models   12/12   3-5s / 5-11s / 21-26s
+    #   concurrent, 6 at once             4/6    503s returned in ~0.5s
+    #
+    # The 503s are real; the cost estimate was not. A hop that answers two
+    # thirds of the time and fails in half a second is nearly free, and this
+    # is an account whose limits are shared with nothing else in the chain.
+    # Placed after Gemini (0.9s, always answers) and ahead of OpenRouter
+    # (50 requests/day without credits, routinely exhausted).
+    #
+    # timeout=45: successes land in 3-5s and failures in 0.5s, so the old 60-75s
+    # budget only ever paid for a hang.
+    providers.append({
+        "name": "nvidia/nemotron-3-super-120b-a12b",
+        "url": "https://integrate.api.nvidia.com/v1/chat/completions",
+        "key_param": "/naukribaba/NVIDIA_API_KEY",
+        "model": "nvidia/nemotron-3-super-120b-a12b",
+        "timeout": 45,
+    })
     for m in openrouter_models:
         providers.append({
             "name": f"openrouter/{m.split('/')[-1].split(':')[0]}",
@@ -178,19 +229,6 @@ def _build_provider_list() -> list[dict]:
              "key_param": "/naukribaba/QWEN_API_KEY", "model": "qwen-plus",
              "timeout": 90},
         )
-    # Google AI Studio — the council's only quota independent of Groq and
-    # OpenRouter, and free. Added to the core list rather than left to the
-    # registry merge because it is load-bearing: cool OpenRouter and without
-    # this the pool is Groq alone, two families, no cross-family critic.
-    # Sustained-load verified 24/24 before being trusted; see the registry's
-    # _GEMINI note for why that mattered.
-    providers.append({
-        "name": "gemini/gemini-3.5-flash-lite",
-        "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-        "key_param": "/naukribaba/GEMINI_API_KEY",
-        "model": "gemini-3.5-flash-lite",
-        "timeout": 60,
-    })
     providers.extend(_registry_providers({p["model"] for p in providers}))
     return providers
 
@@ -291,7 +329,10 @@ _COOLDOWNS: dict[str, float] = {}
 
 _RATE_LIMIT_COOLDOWN_S = {
     "groq": 90,          # 8k tokens/min — recovers within the minute
-    "openrouter": 1800,  # shared free-pool DAILY quota; long, but not all day
+    # Fallback for a 429 whose body does NOT name a per-day quota — i.e. a
+    # short throttle. The daily case is detected from the body and cooled until
+    # UTC midnight instead; see _rate_limit_cooldown_seconds.
+    "openrouter": 1800,
     "qwen": 120,
     "nvidia": 300,
     "deepseek": 300,
@@ -311,11 +352,53 @@ def _cool_down(key: str, seconds: int) -> None:
         _COOLDOWNS[key] = until
 
 
-def note_provider_failure(provider: dict, status: int | None) -> None:
-    """Record a failure so selection can route around it."""
+# Markers for a PER-DAY quota, matched on the kind of limit rather than on who
+# sent it. The phrasing is OpenRouter's today; hard-coding the account would
+# silently mistreat the next provider to adopt the same wording.
+_DAILY_LIMIT_MARKERS = ("per-day", "per day", "daily limit", "requests/day")
+
+
+def _seconds_to_utc_midnight(now: datetime | None = None) -> int:
+    """Seconds until the next UTC midnight, when per-day quotas reset."""
+    now = now or datetime.now(UTC)
+    nxt = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    # Floor at a minute so a call landing a hair before midnight still backs off.
+    return max(60, int((nxt - now).total_seconds()))
+
+
+def _rate_limit_cooldown_seconds(account: str, detail: str) -> int:
+    """How long to route around `account` after it returned HTTP 429.
+
+    `detail` is the response body, which is the only thing distinguishing the
+    two very different limits a provider can mean by "429":
+
+      * a PER-MINUTE throttle — clears in seconds, the provider is healthy, and
+        a short cooldown is correct.
+      * a PER-DAY quota — OpenRouter's free pool sends "Rate limit exceeded:
+        free-models-per-day" and will not clear until UTC midnight. Measured
+        2026-09-28: 50 requests/day without credits on the account, applied
+        account-wide, so all eight OpenRouter models die together.
+
+    Treating them alike was costing ~48 pointless retry sweeps a day. Treating
+    EVERY 429 as the daily case would be the opposite error — a transient
+    throttle would bench a healthy provider for up to 24 hours, and that may be
+    the only live failover the council has. So the body decides, and an absent
+    or unrecognised body takes the conservative short cooldown.
+    """
+    if detail and any(m in detail.lower() for m in _DAILY_LIMIT_MARKERS):
+        return _seconds_to_utc_midnight()
+    return _RATE_LIMIT_COOLDOWN_S.get(account, 300)
+
+
+def note_provider_failure(provider: dict, status: int | None, detail: str = "") -> None:
+    """Record a failure so selection can route around it.
+
+    `detail` carries the provider's response body when there is one. It is
+    optional so existing call sites keep working unchanged.
+    """
     account = _account_of(provider)
     if status == 429:
-        secs = _RATE_LIMIT_COOLDOWN_S.get(account, 300)
+        secs = _rate_limit_cooldown_seconds(account, detail)
         _cool_down(f"account:{account}", secs)
         logger.info(f"[ai] cooling account '{account}' for {secs}s after 429")
     elif status == 404:
@@ -435,7 +518,7 @@ def _call_provider(
             return {"content": content, "provider": provider["name"], "model": provider["model"]}
         elif resp.status_code == 429:
             logger.warning(f"[ai] {provider['name']} rate limited")
-            note_provider_failure(provider, 429)
+            note_provider_failure(provider, 429, resp.text)
         else:
             logger.warning(f"[ai] {provider['name']} returned {resp.status_code}")
             note_provider_failure(provider, resp.status_code)
@@ -454,12 +537,30 @@ def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096, temperatu
     """Call AI provider with failover chain. Tries each provider once."""
     providers = _build_provider_list()
 
-    # A/B testing: 20% of calls shuffle tail providers
-    if random.random() < 0.2:
-        tail = providers[1:]
+    # Cooled-down providers go to the BACK, always. The cooldown table is the
+    # only memory this chain has of what just failed; ignoring it means paying
+    # a full timeout to rediscover a 429 already recorded. They are moved
+    # rather than dropped, so a stale or over-long cooldown can never empty
+    # the chain — worst case we end up exactly where we started.
+    live = [p for p in providers if _is_available(p)]
+    cooled = [p for p in providers if not _is_available(p)]
+
+    # A/B testing: ~20% of calls shuffle the tail of the LIVE group.
+    #
+    # Exploration is worth a round-trip only among providers that might answer.
+    # This shuffle predates the cooldown table and originally reordered the
+    # whole list, which meant that once OpenRouter's account-wide
+    # free-models-per-day cap tripped, one call in five promoted a provider
+    # already known to be exhausted. Measured 2026-09-28 with that cap blown:
+    # the unrestricted shuffle put four cooled providers ahead of four live
+    # ones, and it showed up as a 1-in-7 flake in the unit suite.
+    if live and random.random() < 0.2:
+        tail = live[1:]
         random.shuffle(tail)
-        providers = [providers[0]] + tail
-        logger.info(f"[ab_test] shuffled: {[p['name'] for p in providers[:3]]}...")
+        live = [live[0]] + tail
+        logger.info(f"[ab_test] shuffled: {[p['name'] for p in live[:3]]}...")
+
+    providers = live + cooled
 
     last_error = None
     for provider in providers:
