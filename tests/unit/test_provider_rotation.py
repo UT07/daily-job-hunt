@@ -111,3 +111,27 @@ def test_missing_registry_degrades_to_the_core_pool(monkeypatch):
     monkeypatch.setattr(ai_helper.os.path, "dirname", lambda _: "/nonexistent")
     pool = ai_helper._build_provider_list()
     assert len(pool) >= 5, "core pool must survive a missing registry"
+
+
+def test_unsuitable_models_never_reach_the_pool():
+    """Regression: removing a model from the hand-maintained list is not enough.
+
+    _registry_providers() merges agents/model_registry.json for rotation
+    breadth. Until it checked suitable_for_scoring, a code-completion model and
+    a 2.6B model that had been deleted from openrouter_models walked straight
+    back in through that merge, and the AI Eval Gate stayed at 25.0%
+    tier_accuracy against a 63.2% baseline even after the "fix".
+
+    Marking data unsuitable does nothing if the code consuming it ignores the
+    mark.
+    """
+    import json
+    import pathlib
+
+    reg = json.loads((pathlib.Path("lambdas/pipeline/agents/model_registry.json")).read_text())
+    unsuitable = {m["model"] for m in reg["models"] if not m.get("suitable_for_scoring", True)}
+    assert unsuitable, "fixture expects at least one model marked unsuitable"
+
+    pool_models = {p["model"] for p in ai_helper._build_provider_list()}
+    leaked = unsuitable & pool_models
+    assert not leaked, f"unsuitable models reached the council pool: {sorted(leaked)}"

@@ -213,6 +213,14 @@ def _registry_providers(already: set[str]) -> list[dict]:
     for e in entries:
         if e["model"] in already:
             continue
+        # Verified != suitable. Every entry was proved to RESPOND correctly at
+        # realistic prompt size; that says nothing about whether it can reason
+        # about a job description. Skipping this check is how a code-completion
+        # model and a 2.6B model walked back into the council through the side
+        # door after being removed from the list above, and the AI Eval Gate
+        # measured tier_accuracy stuck at 25.0% against a 63.2% baseline.
+        if not e.get("suitable_for_scoring", True):
+            continue
         if e["provider"] == "qwen" and not paid_qwen:
             continue
         already.add(e["model"])
