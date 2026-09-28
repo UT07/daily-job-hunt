@@ -21,9 +21,21 @@ logger.setLevel(logging.INFO)
 
 ssm = boto3.client("ssm")
 
-# Default companies — Dublin/Ireland-relevant startups on Ashby
+# Default companies — used ONLY when /naukribaba/ASHBY_COMPANIES is unreadable.
+# Mirrors the production SSM list, so an SSM outage degrades to the boards
+# production actually scrapes rather than to a separately-rotting set.
+#
+# Audited 2026-09-28: the previous defaults had rotted unnoticed. `anthropic`,
+# `figma` and `retool` all returned 404 (no such board) and `vercel` returned
+# 200 with 0 postings, so an SSM failure would have silently dropped this
+# scraper to 2 working boards out of 6 while still reporting success.
+#
+# A slug belongs here only if
+#   GET https://api.ashbyhq.com/posting-api/job-board/{slug}
+# returns 200 with a non-empty `jobs` array. Re-verify before editing:
+#   NAUKRIBABA_LIVE_BOARD_CHECK=1 pytest tests/unit/test_scraper_default_boards.py
 DEFAULT_COMPANIES = [
-    "anthropic", "linear", "vercel", "notion", "figma", "retool",
+    "linear", "notion", "ramp", "benchling", "abridge", "livekit",
 ]
 
 # Location keywords to filter for (case-insensitive)
@@ -69,27 +81,58 @@ def handler(event, context):
     if cached.count and cached.count > 0:
         return {"count": cached.count, "source": "ashby", "cached": True}
 
-    # Read company slugs from SSM (fallback to defaults)
+    # Read company slugs from SSM (fallback to defaults).
+    #
+    # This fallback used to be entirely silent — `except Exception: companies =
+    # DEFAULT_COMPANIES` with no log line — so a run on defaults was
+    # indistinguishable from a normal run in CloudWatch. Which list a run used
+    # is the first thing you need when the job count drops.
     try:
         import json
         companies_json = get_param("/naukribaba/ASHBY_COMPANIES")
         companies = json.loads(companies_json)
-    except Exception:
-        companies = DEFAULT_COMPANIES
+        config_source = "ssm"
+    except Exception as e:
+        companies = list(DEFAULT_COMPANIES)
+        config_source = "default"
+        logger.error(
+            f"[ashby] SSM_FALLBACK: /naukribaba/ASHBY_COMPANIES unreadable "
+            f"({type(e).__name__}: {e}) — using the {len(companies)} built-in "
+            f"defaults {companies}"
+        )
 
     all_jobs = []
+    boards_ok = []
+    boards_failed = []
     client = httpx.Client(timeout=30)
 
     for company in companies:
         try:
             url = f"https://api.ashbyhq.com/posting-api/job-board/{company}"
             resp = client.get(url)
+            if resp.status_code == 404:
+                # A configured board that 404s is a config error, not a blip:
+                # the slug is wrong or the board was taken down, and it will
+                # never recover on its own. ERROR + a greppable marker, so it
+                # can carry a log metric filter and an alarm.
+                logger.error(
+                    f"[ashby] BOARD_NOT_FOUND: {company} returned HTTP 404 — slug is "
+                    f"wrong or the board was removed (config={config_source})"
+                )
+                boards_failed.append({"company": company, "status": 404, "reason": "not_found"})
+                continue
             if resp.status_code != 200:
-                logger.warning(f"[ashby] {company}: HTTP {resp.status_code}")
+                # Everything else (429, 5xx) is plausibly transient.
+                logger.warning(f"[ashby] BOARD_UNAVAILABLE: {company} returned HTTP {resp.status_code}")
+                boards_failed.append({"company": company, "status": resp.status_code, "reason": "http_error"})
                 continue
 
             data = resp.json()
             jobs = data.get("jobs", [])
+            if not jobs:
+                # 200 with an empty board reads as healthy but yields nothing —
+                # the shape `vercel` was in during the 2026-09-28 audit.
+                logger.warning(f"[ashby] BOARD_EMPTY: {company} returned 200 with 0 postings")
 
             # Filter by location (Ashby also has isRemote at the top level per job)
             matched = [
@@ -145,8 +188,14 @@ def handler(event, context):
                     "posted_date": posted_date,
                 })
 
+            # Counted OK only here, once the whole body completed — so
+            # boards_ok and boards_failed stay disjoint and sum to the
+            # configured count.
+            boards_ok.append(company)
+
         except Exception as e:
-            logger.error(f"[ashby] {company} failed: {e}")
+            logger.error(f"[ashby] BOARD_ERROR: {company} failed: {e}")
+            boards_failed.append({"company": company, "status": None, "reason": type(e).__name__})
 
     client.close()
 
@@ -168,9 +217,35 @@ def handler(event, context):
             chunk = all_jobs[i:i + 50]
             db.table("jobs_raw").upsert(chunk, on_conflict="job_hash").execute()
 
-    logger.info(f"[ashby] {len(all_jobs)} jobs from {len(companies)} companies")
+    # A partially-dead board list is the failure mode this scraper actually
+    # hits: it still returns jobs, so nothing downstream notices. self_improve
+    # only flags a scraper after 3 consecutive days of ZERO jobs, which a
+    # half-working list never reaches. So say it on the summary line — which
+    # used to read "N jobs from 6 companies" whether 6 or 2 of them answered —
+    # and put it in the return value, where it lands in the Step Functions
+    # execution output alongside `count`.
+    summary = (
+        f"[ashby] {len(all_jobs)} jobs from {len(boards_ok)}/{len(companies)} boards "
+        f"(config={config_source})"
+    )
+    not_found = [b for b in boards_failed if b["reason"] == "not_found"]
+    if not_found:
+        logger.error(
+            f"{summary} — {len(boards_failed)} board(s) FAILED, {len(not_found)} of them "
+            f"permanently (404): {boards_failed}"
+        )
+    elif boards_failed:
+        # Transient-looking only (429/5xx/network) — worth seeing, not paging.
+        logger.warning(f"{summary} — {len(boards_failed)} board(s) FAILED: {boards_failed}")
+    else:
+        logger.info(summary)
+
     return {
         "count": len(all_jobs),
         "source": "ashby",
+        "config_source": config_source,
+        "boards_configured": len(companies),
+        "boards_ok": len(boards_ok),
+        "boards_failed": boards_failed,
         "new_job_hashes": [j["job_hash"] for j in all_jobs],
     }
