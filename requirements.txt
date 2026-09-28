@@ -48,4 +48,7 @@ posthog>=3.0.0
 # LangGraph orchestration for the AI council. langchain-community and provider
 # SDKs are deliberately excluded — they blow the 250MB Lambda ceiling.
 langgraph>=0.2.0
+# Every provider in agents/model_registry.json speaks the OpenAI chat
+# dialect, so one ChatOpenAI adapter covers the whole verified pool.
+langchain-openai>=0.2
 langchain-core>=0.3.0
