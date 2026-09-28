@@ -76,9 +76,16 @@ def should_disable_after_failure(attempted: int, failed: int, consecutive: int) 
     the exact failure this guard exists to prevent). Tripping late means a brief
     transient blip doesn't cost the whole run its Tier-4 dedup.
 
-    TODO(utkarsh): implement the policy.
+    Consecutive failures are the primary signal because a ratio trips
+    misleadingly on small runs -- 1 failure out of 2 jobs is 50% but means
+    nothing. The ratio arm is a backstop for the flapping case, where every
+    other call fails and the consecutive counter never reaches 5; it only
+    engages once there is a large enough sample for the ratio to mean
+    something.
     """
-    raise NotImplementedError
+    if consecutive >= 5:
+        return True
+    return attempted >= 20 and failed / attempted > 0.5
 
 
 class SemanticDedupSession:
