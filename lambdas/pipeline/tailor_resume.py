@@ -373,10 +373,29 @@ def handler(event, context):
     job = job.data[0]
 
     # Get latest resume
-    resume = db.table("user_resumes").select("*").eq("user_id", user_id) \
-        .order("created_at", desc=True).limit(1).execute()
-    if not resume.data:
-        raise TailorError(f"No base resume found for user {user_id}")
+    # Newest TAILORABLE resume, not simply newest. /api/resumes/upload stores
+    # PDF-extracted plain text in tex_content ("Store raw text for now"), and
+    # selection was newest-wins with no validity check — so on 2026-09-28 a PDF
+    # upload silently replaced a working LaTeX base resume and every tailoring
+    # attempt failed with "base resume has no \begin{document}", surfacing in
+    # the UI as "Regenerate failed: Pipeline failed".
+    resumes = db.table("user_resumes").select("*").eq("user_id", user_id) \
+        .order("created_at", desc=True).limit(10).execute()
+    from shared.resume_format import describe_why_not_latex, pick_latest_tailorable
+
+    row, skipped = pick_latest_tailorable(resumes.data or [])
+    if skipped:
+        logger.warning(
+            "[tailor] skipped %d newer resume(s) that are not LaTeX — %s",
+            skipped, describe_why_not_latex((resumes.data or [{}])[0].get("tex_content")),
+        )
+    if row is None:
+        newest = (resumes.data or [{}])[0].get("tex_content")
+        raise TailorError(
+            "No tailorable base resume: " + (describe_why_not_latex(newest) or
+            f"no resume found for user {user_id}")
+        )
+    resume = type("R", (), {"data": [row]})()
     base_tex = resume.data[0].get("tex_content", "")
 
     # Read user profile so the header-marker validation uses THIS user's

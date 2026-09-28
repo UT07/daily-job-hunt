@@ -14,6 +14,7 @@ Set APIFY_API_KEY in .env for Apify. Set SERPER_API_KEY for fallback.
 
 from __future__ import annotations
 import json
+from datetime import timedelta
 import logging
 import os
 import re
@@ -82,7 +83,12 @@ def _apify_google_search(query: str, num_results: int = 3) -> List[Dict[str, str
         logger.debug(f"[CONTACTS] Running Apify Google Search: {query}")
         run = client.actor(APIFY_GOOGLE_SEARCH_ACTOR).call(
             run_input=run_input,
-            timeout_secs=APIFY_RUN_TIMEOUT_SECS,
+            # apify-client v3 renamed timeout_secs -> run_timeout and made it a
+            # timedelta. requirements.txt had `apify-client>=1.6.0` with no upper
+            # bound, so the Docker-built layer pulled 3.2.0 while the local venv
+            # sat on 2.5.0: every call raised TypeError in production, was caught
+            # as a warning, and logged "0 contacts found" as though it had searched.
+            run_timeout=timedelta(seconds=APIFY_RUN_TIMEOUT_SECS),
             memory_mbytes=APIFY_RUN_MEMORY_MB,
         )
 
@@ -160,7 +166,12 @@ def _apify_linkedin_people_search(
         logger.debug(f"[CONTACTS] Running Apify LinkedIn People Search: {search_keywords}")
         run = client.actor(APIFY_LINKEDIN_SEARCH_ACTOR).call(
             run_input=run_input,
-            timeout_secs=APIFY_RUN_TIMEOUT_SECS,
+            # apify-client v3 renamed timeout_secs -> run_timeout and made it a
+            # timedelta. requirements.txt had `apify-client>=1.6.0` with no upper
+            # bound, so the Docker-built layer pulled 3.2.0 while the local venv
+            # sat on 2.5.0: every call raised TypeError in production, was caught
+            # as a warning, and logged "0 contacts found" as though it had searched.
+            run_timeout=timedelta(seconds=APIFY_RUN_TIMEOUT_SECS),
             memory_mbytes=APIFY_RUN_MEMORY_MB,
         )
 
@@ -451,7 +462,7 @@ def _get_search_roles(job: Job, ai_client: AIClient, prompt: str) -> list[dict]:
             # Truncate to LinkedIn's 300 char limit (prompt states 280-char max)
             if len(message) > 280:
                 message = message[:277] + "..."
-                logger.debug(f"[CONTACTS] Truncated connection message to 280 chars")
+                logger.debug("[CONTACTS] Truncated connection message to 280 chars")
             roles.append({
                 "search_title": c.get("search_title", ""),
                 "role_type": c.get("role_type", "peer"),

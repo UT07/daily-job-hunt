@@ -59,7 +59,7 @@ def test_both_pdfs_present_generates_presigned_urls_and_saves():
     update_payload = update_calls[0][0][0]
     assert "resume_s3_url" in update_payload
     assert "cover_letter_s3_url" in update_payload
-    assert update_payload["application_status"] == "ready"
+    assert "application_status" not in update_payload  # user's column, not the pipeline's
 
 
 def test_missing_cover_letter_still_saves_resume():
@@ -83,11 +83,17 @@ def test_missing_cover_letter_still_saves_resume():
     update_payload = db.table.return_value.update.call_args_list[0][0][0]
     assert "resume_s3_url" in update_payload
     assert "cover_letter_s3_url" not in update_payload
-    assert update_payload["application_status"] == "ready"
+    assert "application_status" not in update_payload  # user's column, not the pipeline's
 
 
-def test_no_pdfs_still_saves_status_only():
-    """When no PDF keys are present, save_job still sets application_status='scored'."""
+def test_no_pdfs_writes_nothing_at_all():
+    """No PDF keys means nothing to say — and nothing to write.
+
+    This used to assert application_status='scored', a pipeline state written
+    into the USER's column purely so the update dict was non-empty. It erased
+    a real status (a job marked "Applied" reverted on the next run) and made
+    the dashboard's Status filter unable to match ~68% of rows.
+    """
     event = {**BASE_EVENT}  # no compile_result
     s3 = _make_s3_mock()
     db = _make_supabase()
@@ -97,12 +103,13 @@ def test_no_pdfs_still_saves_status_only():
         import save_job
         result = save_job.handler(event, None)
 
-    assert result["saved"] is True
+    assert result["saved"] is False, "nothing was written, so saved must not claim otherwise"
     assert result["job_hash"] == "hash-abc"
     s3.generate_presigned_url.assert_not_called()
-    # Should still update status to 'scored' even without PDFs (SaveJobAfterError path)
-    update_payload = db.table.return_value.update.call_args_list[0][0][0]
-    assert update_payload["application_status"] == "scored"
+    assert db.table.return_value.update.call_args_list == [], (
+        "issued a database update with nothing to update — the old code wrote "
+        "application_status='scored' purely to make the dict non-empty"
+    )
 
 
 def test_compile_error_marks_job_failed():
@@ -129,7 +136,8 @@ def test_compile_error_marks_job_failed():
     s3.generate_presigned_url.assert_not_called()
 
     update_payload = db.table.return_value.update.call_args_list[0][0][0]
-    assert update_payload["application_status"] == "failed"
+    assert "application_status" not in update_payload
+    assert update_payload["failure_reason"]  # the failure is recorded here now
     assert update_payload["failure_reason"].startswith("compilation_failed: ")
     assert "Undefined control sequence" in update_payload["failure_reason"]
     assert "resume_s3_url" not in update_payload
@@ -150,7 +158,8 @@ def test_compile_no_pdf_output_marks_job_failed():
         save_job.handler(event, None)
 
     update_payload = db.table.return_value.update.call_args_list[0][0][0]
-    assert update_payload["application_status"] == "failed"
+    assert "application_status" not in update_payload
+    assert update_payload["failure_reason"]  # the failure is recorded here now
     assert update_payload["failure_reason"] == "no_pdf_output"
 
 
@@ -169,10 +178,10 @@ def test_tectonic_not_available_does_not_mark_failed():
         result = save_job.handler(event, None)
 
     assert result["failed"] is False
-    update_payload = db.table.return_value.update.call_args_list[0][0][0]
-    # Falls through to "no PDFs" path → 'scored', not 'failed'.
-    assert update_payload["application_status"] == "scored"
-    assert "failure_reason" not in update_payload
+    # The local-dev tectonic stub is not a real failure, so there is nothing to
+    # record and nothing to write — previously this wrote status='scored' into
+    # the user's column purely to make the update dict non-empty.
+    assert not db.table.return_value.update.call_args_list
 
 
 def test_successful_compile_clears_prior_failure_reason():
@@ -190,7 +199,7 @@ def test_successful_compile_clears_prior_failure_reason():
         save_job.handler(event, None)
 
     update_payload = db.table.return_value.update.call_args_list[0][0][0]
-    assert update_payload["application_status"] == "ready"
+    assert "application_status" not in update_payload  # user's column, not the pipeline's
     assert update_payload["failure_reason"] is None
 
 
@@ -217,6 +226,6 @@ def test_cover_letter_compile_failure_does_not_fail_job():
     assert result["has_resume"] is True
 
     update_payload = db.table.return_value.update.call_args_list[0][0][0]
-    assert update_payload["application_status"] == "ready"
+    assert "application_status" not in update_payload  # user's column, not the pipeline's
     assert "cover_letter_s3_url" not in update_payload
     assert "failure_reason" not in update_payload or update_payload["failure_reason"] is None
