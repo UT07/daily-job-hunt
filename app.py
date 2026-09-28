@@ -231,6 +231,29 @@ def _load_resumes(config: dict) -> dict[str, str]:
 # Request / response models
 # ---------------------------------------------------------------------------
 
+def _score_tier(score: float | None) -> str:
+    """Same bands as lambdas/pipeline/score_batch.score_to_tier:
+    S 90+, A 80-89, B 70-79, C 60-69, D <60.
+
+    Duplicated rather than imported because app.py runs in the API container
+    and score_batch.py ships in the pipeline zip; they share no import path.
+    test_score_tier_matches_the_pipeline pins the two together, because a
+    manually scored job landing in a different tier from a pipeline-scored one
+    would make the dashboard's tier filter quietly disagree with itself.
+    """
+    if score is None:
+        return "D"
+    if score >= 90:
+        return "S"
+    if score >= 80:
+        return "A"
+    if score >= 70:
+        return "B"
+    if score >= 60:
+        return "C"
+    return "D"
+
+
 class ScoreRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     job_description: str = Field(..., min_length=20)
@@ -250,6 +273,13 @@ class ScoreResponse(BaseModel):
     avg_score: float
     reasoning: str
     matched_resume: str
+    # The button is labelled "Save & Score" and, until 2026-09-28, only scored:
+    # /api/score computed a result, returned it, and persisted nothing, so a
+    # manually added job never appeared on the dashboard. job_id is the saved
+    # row; saved=False means scoring worked but the write did not, which the
+    # UI must be able to tell apart from success.
+    job_id: Optional[str] = None
+    saved: bool = False
 
 
 class TailorRequest(BaseModel):
@@ -456,6 +486,35 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
                 "jd_length": len(req.job_description),
             },
         )
+    # Persist, so the job shows up on the dashboard. Reuses the same
+    # _find_or_create_job path the tailor / cover-letter actions already use,
+    # which dedupes by canonical_hash -- scoring the same JD twice updates one
+    # row rather than creating a second.
+    job_id, saved = None, False
+    if _db and user.id:
+        try:
+            job_id = _find_or_create_job(user.id, {
+                "title": req.job_title,
+                "company": req.company,
+                "description": req.job_description,
+                "location": req.location,
+                "apply_url": req.apply_url,
+            })
+            _db.client.table("jobs").update({
+                "match_score": j.match_score,
+                "ats_score": j.ats_score,
+                "hiring_manager_score": j.hiring_manager_score,
+                "tech_recruiter_score": j.tech_recruiter_score,
+                "match_reasoning": j.match_reasoning,
+                "matched_resume": j.matched_resume or req.resume_type,
+                "score_tier": _score_tier(j.match_score),
+            }).eq("job_id", job_id).execute()
+            saved = True
+        except Exception as e:
+            # Surfaced via saved=False rather than swallowed: a silent warning
+            # here is exactly how the 2026-09-28 pipeline lost a day's jobs.
+            logger.error("Scored job %s but could not save it: %s", req.company, e)
+
     return ScoreResponse(
         ats_score=j.ats_score,
         hiring_manager_score=j.hiring_manager_score,
@@ -463,6 +522,8 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
         avg_score=j.match_score,
         reasoning=j.match_reasoning,
         matched_resume=j.matched_resume or req.resume_type,
+        job_id=job_id,
+        saved=saved,
     )
 
 
