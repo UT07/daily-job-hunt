@@ -178,6 +178,19 @@ def _build_provider_list() -> list[dict]:
              "key_param": "/naukribaba/QWEN_API_KEY", "model": "qwen-plus",
              "timeout": 90},
         )
+    # Google AI Studio — the council's only quota independent of Groq and
+    # OpenRouter, and free. Added to the core list rather than left to the
+    # registry merge because it is load-bearing: cool OpenRouter and without
+    # this the pool is Groq alone, two families, no cross-family critic.
+    # Sustained-load verified 24/24 before being trusted; see the registry's
+    # _GEMINI note for why that mattered.
+    providers.append({
+        "name": "gemini/gemini-3.5-flash-lite",
+        "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "key_param": "/naukribaba/GEMINI_API_KEY",
+        "model": "gemini-3.5-flash-lite",
+        "timeout": 60,
+    })
     providers.extend(_registry_providers({p["model"] for p in providers}))
     return providers
 
@@ -242,7 +255,7 @@ def _model_family(model: str) -> str:
     """
     m = model.lower().split("/")[-1]
     m = m.replace(":free", "")
-    for prefix in ("deepseek", "llama-3.3", "llama-3.1", "llama-4", "qwen3",
+    for prefix in ("gemini", "deepseek", "llama-3.3", "llama-3.1", "llama-4", "qwen3",
                     "qwen-plus", "qwen-turbo", "qwen-max", "gpt-oss",
                     "mistral-small", "nemotron", "hermes", "gemma", "glm",
                     "minimax", "step"):

@@ -90,28 +90,73 @@ def test_critic_is_available_while_both_accounts_are_up():
     assert ai_helper._model_family(critic[0]["model"]) not in fams
 
 
-def test_a_single_account_pool_CANNOT_supply_an_independent_critic():
-    """The structural limit, pinned deliberately rather than papered over.
+def test_nvidia_is_disabled_and_stays_disabled():
+    """NVIDIA NIM free tier cannot serve as a failover, measured 2026-09-28.
 
-    Cool OpenRouter — as its shared daily quota really does, and did on
-    2026-09-28 — and every remaining provider is Groq: two gpt-oss entries and
-    one qwen3, i.e. two families. Two generators consume both, and there is no
-    third family left for the critic.
+    It authenticates, and a single call returns 200 in ~5s — which is exactly
+    what made it look viable and what an earlier version of this file asserted
+    as a working failover. Sustained load disproved it: 2/6 back-to-back
+    succeeded, 4/6 with a 3s gap, the rest 503. In CI the same capacity limit
+    surfaced as reads timing out, and the eval job was cancelled at 20 minutes.
 
-    No amount of adding free models fixes this, because they all draw on the
-    same two quotas. The fix is a family on INDEPENDENT billing
-    (ENABLE_PAID_QWEN), which is a cost decision, not a code one. This test
-    exists so that limit is visible in the suite instead of being rediscovered
-    from a degraded eval run.
+    A failover is hit hardest precisely when the primary is exhausted, so one
+    that degrades under load is worse than absent: it costs 75s per attempt to
+    learn nothing. The entries stay in the registry, disabled, so nobody
+    re-probes with a single call and reaches the same wrong conclusion.
+    """
+    pool = ai_helper._build_provider_list()
+    nvidia = [p for p in pool if p["key_param"].endswith("NVIDIA_API_KEY")]
+    assert not nvidia, (
+        f"NVIDIA entries are in the live pool: {[p['name'] for p in nvidia]}. "
+        "They 503 under load; re-enable only with a sustained-load measurement, "
+        "not a one-shot probe."
+    )
+
+
+def test_gemini_keeps_the_council_alive_when_openrouter_is_exhausted():
+    """The 2026-09-28 failure, and the fix that cost nothing.
+
+    OpenRouter's free pool shares one daily allowance across every model on it.
+    When it emptied, only Groq remained — two families, both consumed by the
+    two generators, so select_critic fell back to "any provider" and the critic
+    could be the same family as a generator. A critic reviewing its own
+    family's output is not reviewing.
+
+    Google AI Studio is an independent quota and was already available: the key
+    had been in SSM since 2026-09-24 for pgvector embeddings, and the council
+    had simply never used it. Unlike NVIDIA NIM, it holds under load —
+    24/24 against NVIDIA's 2/6 — which is why it is trusted and NVIDIA is not.
     """
     pool = ai_helper._build_provider_list()
     ai_helper.note_provider_failure({"name": "openrouter/anything", "model": "m"}, 429)
     usable = [p for p in pool if ai_helper._is_available(p)]
     families = {ai_helper._model_family(p["model"]) for p in usable}
-    assert len(families) < 3, (
-        "if this passes, an independent-quota family was added and the "
-        "single-account limit no longer applies — update this test"
-    )
+
+    assert "gemini" in families, "gemini must survive an OpenRouter outage — different account"
+    assert len(families) >= 3, f"only {sorted(families)} — no room for a cross-family critic"
+
+    gens = ai_helper._select_diverse_providers(usable, n=2)
+    gen_families = {ai_helper._model_family(g["model"]) for g in gens}
+    critic = ai_helper._select_diverse_providers(usable, n=1, exclude_families=gen_families)
+    assert critic, "no cross-family critic with OpenRouter cooled"
+    assert ai_helper._model_family(critic[0]["model"]) not in gen_families
+
+
+def test_gemini_and_groq_cool_independently():
+    """Separate accounts must not share a cooldown, or the failover is not one."""
+    pool = ai_helper._build_provider_list()
+    gemini = [p for p in pool if p["key_param"].endswith("GEMINI_API_KEY")]
+    assert gemini, "no gemini entries in the pool"
+    ai_helper.note_provider_failure({"name": "groq/gpt-oss-120b", "model": "m"}, 429)
+    assert all(ai_helper._is_available(p) for p in gemini), "a Groq 429 cooled gemini"
+
+
+def test_gemini_models_share_one_family():
+    """All five collapse to "gemini", so selection cannot pick three of them and
+    call that diverse."""
+    pool = ai_helper._build_provider_list()
+    fams = {ai_helper._model_family(p["model"]) for p in pool if "gemini" in p["name"]}
+    assert fams == {"gemini"}, f"gemini entries split across families: {fams}"
 
 
 def test_pool_is_wide_enough_to_rotate():

@@ -173,6 +173,12 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          # Google AI Studio — the council's only quota independent of Groq and
+          # OpenRouter. Without it here the eval gate runs Groq-only: the
+          # 2026-09-28 run logged "gemini/... failed: Unable to locate
+          # credentials" for every gemini entry, because get_param falls
+          # through to SSM and this job has no AWS credentials.
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         # repeats=1: the CI default. See evals/harness.py's module docstring
         # for why repeats>1 (meaningful score_variance) costs real provider
         # quota and is a local/manual-run knob, not a CI one.
