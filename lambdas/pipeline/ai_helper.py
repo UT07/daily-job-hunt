@@ -122,7 +122,9 @@ def _build_provider_list() -> list[dict]:
     #   nemotron-3.5-lightning     65
     #   nemotron-3-ultra-550b      50
     #   nemotron-3-super-120b      48
-    #   ling-3.0-flash-fin         45
+    #   ling-3.0-flash-fin         45   <- REMOVED 2026-09-28, withdrawn from
+    #                                      OpenRouter; absent from the live
+    #                                      /models listing, 404 on every call
     #   ling-3.0-flash-sante       40
     #   north-mini-code            30   <- dropped, code model
     #   lfm-2.5-2.6b               25   <- dropped, 2.6B and 63s
@@ -130,7 +132,6 @@ def _build_provider_list() -> list[dict]:
         "nvidia/nemotron-3.5-lightning:free",
         "nvidia/nemotron-3-ultra-550b-a55b:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
-        "inclusionai/ling-3.0-flash-fin:free",
         "inclusionai/ling-3.0-flash-sante:free",
     ]
 
@@ -161,6 +162,30 @@ def _build_provider_list() -> list[dict]:
         # every request. Re-add only if a probe passes at a realistic prompt
         # size (~3,800 tokens), not a one-word smoke test.
     ]
+    # Google AI Studio — the council's only quota independent of Groq and
+    # OpenRouter, and free. Sustained-load verified 24/24 before being trusted;
+    # see the registry's _GEMINI note for why that mattered.
+    #
+    # ORDER MATTERS, and this sits AHEAD of the OpenRouter block deliberately.
+    # OpenRouter's free pool is capped per ACCOUNT per day — 50 requests
+    # without credits on the account — so all of its entries go 429 together
+    # and stay that way for the rest of the day. Measured 2026-09-28: the cap
+    # was exhausted, every OpenRouter model returned
+    # "429 free-models-per-day", and because Gemini was appended after them it
+    # sat at index 8. Each call spent five doomed hops (up to 90s of timeout
+    # budget apiece) before reaching the provider that answers in ~0.9s, and
+    # the CI eval gate reported families_served: ["groq"] on a pool that had a
+    # working second family the entire time.
+    #
+    # Groq stays first: ~300-800ms, its own quota, and the strongest models.
+    # Gemini is the first FAILOVER. OpenRouter is depth behind both.
+    providers.append({
+        "name": "gemini/gemini-3.5-flash-lite",
+        "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "key_param": "/naukribaba/GEMINI_API_KEY",
+        "model": "gemini-3.5-flash-lite",
+        "timeout": 60,
+    })
     for m in openrouter_models:
         providers.append({
             "name": f"openrouter/{m.split('/')[-1].split(':')[0]}",
@@ -178,19 +203,6 @@ def _build_provider_list() -> list[dict]:
              "key_param": "/naukribaba/QWEN_API_KEY", "model": "qwen-plus",
              "timeout": 90},
         )
-    # Google AI Studio — the council's only quota independent of Groq and
-    # OpenRouter, and free. Added to the core list rather than left to the
-    # registry merge because it is load-bearing: cool OpenRouter and without
-    # this the pool is Groq alone, two families, no cross-family critic.
-    # Sustained-load verified 24/24 before being trusted; see the registry's
-    # _GEMINI note for why that mattered.
-    providers.append({
-        "name": "gemini/gemini-3.5-flash-lite",
-        "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-        "key_param": "/naukribaba/GEMINI_API_KEY",
-        "model": "gemini-3.5-flash-lite",
-        "timeout": 60,
-    })
     providers.extend(_registry_providers({p["model"] for p in providers}))
     return providers
 
@@ -454,12 +466,30 @@ def ai_complete(prompt: str, system: str = "", max_tokens: int = 4096, temperatu
     """Call AI provider with failover chain. Tries each provider once."""
     providers = _build_provider_list()
 
-    # A/B testing: 20% of calls shuffle tail providers
-    if random.random() < 0.2:
-        tail = providers[1:]
+    # Cooled-down providers go to the BACK, always. The cooldown table is the
+    # only memory this chain has of what just failed; ignoring it means paying
+    # a full timeout to rediscover a 429 already recorded. They are moved
+    # rather than dropped, so a stale or over-long cooldown can never empty
+    # the chain — worst case we end up exactly where we started.
+    live = [p for p in providers if _is_available(p)]
+    cooled = [p for p in providers if not _is_available(p)]
+
+    # A/B testing: ~20% of calls shuffle the tail of the LIVE group.
+    #
+    # Exploration is worth a round-trip only among providers that might answer.
+    # This shuffle predates the cooldown table and originally reordered the
+    # whole list, which meant that once OpenRouter's account-wide
+    # free-models-per-day cap tripped, one call in five promoted a provider
+    # already known to be exhausted. Measured 2026-09-28 with that cap blown:
+    # the unrestricted shuffle put four cooled providers ahead of four live
+    # ones, and it showed up as a 1-in-7 flake in the unit suite.
+    if live and random.random() < 0.2:
+        tail = live[1:]
         random.shuffle(tail)
-        providers = [providers[0]] + tail
-        logger.info(f"[ab_test] shuffled: {[p['name'] for p in providers[:3]]}...")
+        live = [live[0]] + tail
+        logger.info(f"[ab_test] shuffled: {[p['name'] for p in live[:3]]}...")
+
+    providers = live + cooled
 
     last_error = None
     for provider in providers:
