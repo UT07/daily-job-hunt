@@ -212,6 +212,10 @@ def _run_score_case(case: dict, resume_tex: str, repeats: int) -> dict:
         "company": case["company"], "description": case["description"],
     }
     scores: list[float] = []
+    # Which model actually answered. Without this the report cannot tell a
+    # genuine quality regression from a run served by a narrower pool than the
+    # baseline's — see check_eval_gate.py.
+    served_by: list[str] = []
     start = time.perf_counter()
     cache_ctx = (
         patch.object(score_batch, "ai_complete_cached", _uncached_ai_complete)
@@ -226,6 +230,8 @@ def _run_score_case(case: dict, resume_tex: str, repeats: int) -> dict:
                 n_failed += 1
                 continue
             scores.append(out.get("match_score", 0))
+            if out.get("provider"):
+                served_by.append(str(out["provider"]))
     elapsed = time.perf_counter() - start
     ok = len(scores) > 0
     return {
@@ -234,6 +240,7 @@ def _run_score_case(case: dict, resume_tex: str, repeats: int) -> dict:
         "expected_tier": case["expected"]["tier"],
         "actual_tier": score_batch.score_to_tier(sum(scores) / len(scores)) if ok else "D",
         "scores": scores,
+        "served_by": sorted(set(served_by)),
         "guards_passed": True,
         "fabricated": False,
         "latency_s": elapsed / repeats,

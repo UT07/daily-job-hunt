@@ -53,6 +53,24 @@ def latency_percentiles(results: list[dict]) -> dict:
     }
 
 
+def families_served(results: list[dict]) -> list[str]:
+    """Distinct model families that actually answered during this run.
+
+    A quality comparison is only meaningful between runs served by comparable
+    pools. On 2026-09-28 an eval run scored 33.3% against a 63.2% baseline
+    while its p95 fell from 128s to 4.7s — no OpenRouter model had been reached
+    at all, because that account's shared daily quota was exhausted, so the
+    council ran Groq-only. The gate reported a quality regression; what it had
+    actually measured was provider availability.
+    """
+    fams = set()
+    for r in results:
+        for name in r.get("served_by") or []:
+            # "groq/gpt-oss-120b" -> "groq"; the account is the quota boundary.
+            fams.add(str(name).split("/", 1)[0])
+    return sorted(fams)
+
+
 def summarise(results: list[dict]) -> dict:
     return {
         "n": len(results),
@@ -60,5 +78,6 @@ def summarise(results: list[dict]) -> dict:
         "fabrication_rate": round(fabrication_rate(results), 4),
         "guard_pass_rate": round(guard_pass_rate(results), 4),
         "score_variance": round(score_variance(results), 4),
+        "families_served": families_served(results),
         **{k: round(v, 3) for k, v in latency_percentiles(results).items()},
     }
