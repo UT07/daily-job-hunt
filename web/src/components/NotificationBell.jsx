@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Bell, X } from 'lucide-react';
 import { apiGet } from '../api';
 
@@ -33,7 +33,14 @@ export default function NotificationBell({ collapsed = false }) {
   const [open, setOpen] = useState(false);
   const [runs, setRuns] = useState([]);
   const [toast, setToast] = useState(null);
-  const [lastKnownCount, setLastKnownCount] = useState(0);
+  // Ref, not state: the poll callback both READS and WRITES this value.
+  // As state it had to appear in fetchNotifications' dep array, so every
+  // poll handed the effect below a new callback identity — which cleared the
+  // 60s interval and re-armed it with an immediate extra fetch. The interval
+  // therefore almost never ran to term, and the component polled on every
+  // render instead. Nothing renders from this value, so a ref is its right
+  // home and the callback needs no dep on it at all.
+  const lastKnownCountRef = useRef(0);
 
   const fetchNotifications = useCallback(async () => {
     try {
@@ -51,26 +58,32 @@ export default function NotificationBell({ collapsed = false }) {
       setCount(recent.length);
 
       // Show toast if new runs appeared since last poll
+      const lastKnownCount = lastKnownCountRef.current;
       if (recent.length > lastKnownCount && lastKnownCount > 0) {
         setToast('Pipeline run completed! Check your new jobs.');
       }
-      setLastKnownCount(recent.length);
+      lastKnownCountRef.current = recent.length;
     } catch {
       // Silently fail -- notifications are non-critical
     }
-  }, [lastKnownCount]);
+  }, []);
 
-  // Poll every 60 seconds
+  // Poll every 60 seconds. fetchNotifications now has a stable identity, so
+  // this arms exactly one interval for the component's lifetime.
   useEffect(() => {
     fetchNotifications();
     const interval = setInterval(fetchNotifications, 60000);
     return () => clearInterval(interval);
   }, [fetchNotifications]);
 
+  // Toast's auto-dismiss effect deps on [onDismiss]; an inline arrow here
+  // restarted its 5s timer on every re-render of the bell.
+  const dismissToast = useCallback(() => setToast(null), []);
+
   return (
     <>
       {/* Toast */}
-      {toast && <Toast message={toast} onDismiss={() => setToast(null)} />}
+      {toast && <Toast message={toast} onDismiss={dismissToast} />}
 
       {/* Bell button */}
       <div className="relative">

@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { apiCall, pollPipeline } from '../api';
 import Button from '../components/ui/Button';
 import Input, { Textarea, Select } from '../components/ui/Input';
@@ -36,6 +36,72 @@ const LEGACY_PROGRESS_STEPS = {
 // scope so the object identity stays stable across renders (otherwise it
 // would be a new dep on the runLegacy useCallback every render).
 const LEGACY_MAX_WAIT_MS = { score: 120000, contacts: 600000 };
+
+// ---- Draft persistence ----
+//
+// AddJob is the one page where navigating away destroys real user work: a
+// pasted JD runs to several KB and is not recoverable once the page unmounts.
+// Dashboard solves the same "state didn't survive navigation" problem with
+// readFilterFromParams + useSearchParams; this is deliberately that same
+// shape — a DEFAULTS map, a typed per-field reader used in lazy useState
+// initialisers, and one effect that writes back only the non-default fields.
+//
+// The store is sessionStorage rather than the query string, for three
+// reasons specific to this form: the JD alone routinely exceeds the ~2KB that
+// proxies and older browsers will carry in a URL; a full job description in
+// the address bar leaks into history, bookmarks and Referer headers; and a
+// per-tab lifetime matches how the draft is actually used (type here, go
+// check the dashboard, come back and finish) without resurrecting a stale JD
+// in a brand-new tab days later.
+const DRAFT_STORAGE_KEY = 'naukribaba_addjob_draft';
+
+const DRAFT_DEFAULTS = {
+  jd: '',
+  job_title: 'Software Engineer',
+  company: '',
+  location: '',
+  apply_url: '',
+  resume_type: 'sre_devops',
+};
+
+function readDraft() {
+  try {
+    const raw = sessionStorage.getItem(DRAFT_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    // Disabled storage, a private-mode quota error, or a corrupt blob left by
+    // an older draft shape. An empty form is the right fallback here; losing
+    // a draft is survivable, crashing the page on mount is not.
+    return {};
+  }
+}
+
+function readDraftField(draft, key, fallback) {
+  const raw = draft[key];
+  return typeof raw === 'string' ? raw : fallback;
+}
+
+function writeDraft(values) {
+  try {
+    const next = {};
+    for (const [key, value] of Object.entries(values)) {
+      if (value === DRAFT_DEFAULTS[key] || value === '') continue;
+      next[key] = value;
+    }
+    // A pristine (or cleared-out) form leaves nothing behind, so the next
+    // visit starts clean instead of restoring an empty draft over the
+    // defaults.
+    if (Object.keys(next).length === 0) {
+      sessionStorage.removeItem(DRAFT_STORAGE_KEY);
+    } else {
+      sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(next));
+    }
+  } catch {
+    // Persistence is a convenience; never let it break typing.
+  }
+}
 
 // Map raw task status strings to step keys (for legacy actions)
 function statusToStepKey(rawStatus) {
@@ -79,12 +145,16 @@ function ProgressIndicator({ steps, currentKey }) {
 }
 
 export default function AddJob() {
-  const [jd, setJd] = useState('');
-  const [jobTitle, setJobTitle] = useState('Software Engineer');
-  const [company, setCompany] = useState('');
-  const [location, setLocation] = useState('');
-  const [applyUrl, setApplyUrl] = useState('');
-  const [resumeType, setResumeType] = useState('sre_devops');
+  // One parse at mount, shared by the six lazy initialisers below — the role
+  // `searchParams` plays for Dashboard's readFilterFromParams calls.
+  const [draft] = useState(readDraft);
+
+  const [jd, setJd] = useState(() => readDraftField(draft, 'jd', DRAFT_DEFAULTS.jd));
+  const [jobTitle, setJobTitle] = useState(() => readDraftField(draft, 'job_title', DRAFT_DEFAULTS.job_title));
+  const [company, setCompany] = useState(() => readDraftField(draft, 'company', DRAFT_DEFAULTS.company));
+  const [location, setLocation] = useState(() => readDraftField(draft, 'location', DRAFT_DEFAULTS.location));
+  const [applyUrl, setApplyUrl] = useState(() => readDraftField(draft, 'apply_url', DRAFT_DEFAULTS.apply_url));
+  const [resumeType, setResumeType] = useState(() => readDraftField(draft, 'resume_type', DRAFT_DEFAULTS.resume_type));
   const [results, setResults] = useState([]);
   const [actionLoading, setActionLoading] = useState({});
   const [progressKey, setProgressKey] = useState(null);   // current step key for progress indicator
@@ -93,6 +163,21 @@ export default function AddJob() {
   const abortRef = useRef(null);
 
   const jdTooShort = jd.trim().length > 0 && jd.trim().length < 100;
+
+  // Mirrors Dashboard's URL-sync effect: runs on every field change and
+  // persists only what differs from the defaults. `results` is intentionally
+  // not persisted — the payloads are large and each one is re-derivable by
+  // re-running the action against the restored JD.
+  useEffect(() => {
+    writeDraft({
+      jd,
+      job_title: jobTitle,
+      company,
+      location,
+      apply_url: applyUrl,
+      resume_type: resumeType,
+    });
+  }, [jd, jobTitle, company, location, applyUrl, resumeType]);
 
   function getPayload() {
     return {
