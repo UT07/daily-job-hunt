@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import date, time, datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from supabase import create_client, Client
@@ -239,6 +239,9 @@ class SupabaseClient:
             tailored     — if "true", only return jobs with resume_s3_url
             tier         — exact match on score_tier (S, A, B, C, D) or comma-separated (S,A)
             hide_expired — if True, exclude expired jobs
+            lifecycle    — "not_archived" (default), "active", "stale",
+                           "archived", or "all". Age-based, measured from
+                           first_seen; see shared/job_lifecycle.py.
         """
         query = (
             self.client.table("jobs")
@@ -267,6 +270,38 @@ class SupabaseClient:
                     query = query.in_("score_tier", tiers)
             if filters.get("hide_expired"):
                 query = query.eq("is_expired", False)
+            # Age-based lifecycle, independent of is_expired (which only means
+            # the apply_url 404'd). Default is to hide archived rows: a posting
+            # first seen 4 months ago is not something the user can act on, and
+            # leaving them in is what made the dashboard unreadable. Engaged
+            # rows (Applied / Rejected / ...) are exempt at every threshold.
+            lifecycle = filters.get("lifecycle", "not_archived")
+            if lifecycle != "all":
+                from shared.job_lifecycle import (
+                    ARCHIVE_AFTER_DAYS, ENGAGED_STATUSES, STALE_AFTER_DAYS, cutoff_iso,
+                )
+                engaged = ",".join(sorted(ENGAGED_STATUSES))
+                if lifecycle == "not_archived":
+                    query = query.or_(
+                        f"first_seen.gte.{cutoff_iso(ARCHIVE_AFTER_DAYS)},"
+                        f"first_seen.is.null,"
+                        f"application_status.in.({engaged})"
+                    )
+                elif lifecycle == "active":
+                    query = query.or_(
+                        f"first_seen.gte.{cutoff_iso(STALE_AFTER_DAYS)},"
+                        f"first_seen.is.null,"
+                        f"application_status.in.({engaged})"
+                    )
+                elif lifecycle == "stale":
+                    query = (query
+                             .lt("first_seen", cutoff_iso(STALE_AFTER_DAYS))
+                             .gte("first_seen", cutoff_iso(ARCHIVE_AFTER_DAYS))
+                             .not_.in_("application_status", list(ENGAGED_STATUSES)))
+                elif lifecycle == "archived":
+                    query = (query
+                             .lt("first_seen", cutoff_iso(ARCHIVE_AFTER_DAYS))
+                             .not_.in_("application_status", list(ENGAGED_STATUSES)))
             if "archetype" in filters:
                 query = query.eq("archetype", filters["archetype"])
             if "seniority" in filters:

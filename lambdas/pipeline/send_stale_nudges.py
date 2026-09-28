@@ -1,4 +1,6 @@
-"""Weekly stale job nudge: email jobs with status='New' older than 7 days."""
+"""Weekly stale job nudge: email jobs still in 'New' status inside the
+actionable age window (7 days old, but not yet archived at 30).
+"""
 import logging
 import smtplib
 from datetime import datetime, timedelta, timezone
@@ -6,6 +8,7 @@ from email.mime.text import MIMEText
 
 import boto3
 from ai_helper import get_supabase
+from shared.job_lifecycle import ARCHIVE_AFTER_DAYS
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -25,15 +28,27 @@ def get_param(name):
     return _get_ssm().get_parameter(Name=name, WithDecryption=True)["Parameter"]["Value"]
 
 
+NUDGE_AFTER_DAYS = 7
+
+
 def handler(event, context):
     user_id = event.get("user_id", "default")
     db = get_supabase()
 
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+    # Bounded on BOTH sides. The original query was `.lt(first_seen, now-7d)`
+    # with no lower bound, so a 144-day-old posting was as eligible as an
+    # 8-day-old one -- and since the order is by score, the 2026-09-28 email
+    # opened with roles from 4 months ago under "Time to apply!". Nudging is
+    # only useful while the posting is plausibly still open, so the window
+    # stops at the archive threshold.
+    nudge_after = (datetime.now(timezone.utc) - timedelta(days=NUDGE_AFTER_DAYS)).isoformat()
+    too_old = (datetime.now(timezone.utc) - timedelta(days=ARCHIVE_AFTER_DAYS)).isoformat()
     result = db.table("jobs").select("title, company, match_score, first_seen, apply_url") \
         .eq("user_id", user_id) \
         .eq("application_status", "New") \
-        .lt("first_seen", cutoff) \
+        .eq("is_expired", False) \
+        .lt("first_seen", nudge_after) \
+        .gte("first_seen", too_old) \
         .order("match_score", desc=True) \
         .limit(15) \
         .execute()
@@ -53,7 +68,7 @@ def handler(event, context):
 
     html = f"""<html><body>
 <h2>🔔 You have {len(stale_jobs)} stale job{'' if len(stale_jobs) == 1 else 's'}</h2>
-<p>These matched jobs have been sitting in "New" status for over 7 days. Time to apply or dismiss!</p>
+<p>These matched jobs have been sitting in "New" status for over {NUDGE_AFTER_DAYS} days and are still inside the {ARCHIVE_AFTER_DAYS}-day window. Time to apply or dismiss!</p>
 <table border="1" cellpadding="6" style="border-collapse:collapse;font-family:monospace;font-size:13px">
 <tr style="background:#fbbf24"><th>Title</th><th>Company</th><th>Score</th><th>Age</th><th>Action</th></tr>
 {rows}

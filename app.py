@@ -1583,6 +1583,7 @@ def get_dashboard_jobs(
     remote: Optional[str] = None,
     level_fit: Optional[str] = None,
     skill: Optional[str] = None,
+    lifecycle: Optional[str] = None,
 ):
     """Paginated, filterable job list.
 
@@ -1621,6 +1622,11 @@ def get_dashboard_jobs(
         filters["level_fit"] = level_fit
     if skill:
         filters["skill"] = skill
+    # Age-based lifecycle: "not_archived" (the default applied in get_jobs),
+    # "active", "stale", "archived", or "all". Lets the dashboard show a
+    # working list and a separate past/outdated section from one endpoint.
+    if lifecycle:
+        filters["lifecycle"] = lifecycle
 
     jobs, total = db.get_jobs(user.id, filters=filters, page=page, per_page=per_page)
     _refresh_s3_urls(jobs)
