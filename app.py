@@ -616,21 +616,50 @@ def _get_s3():
     return _s3_client
 
 
+_FILENAME_SAFE = re.compile(r"[^A-Za-z0-9]+")
+
+
+def artifact_filename(kind: str, company: str, title: str, owner: str = "") -> str:
+    """A download name a recruiter can read.
+
+    S3 keys are job-hash based (users/<id>/resumes/823af4d638be_tailored.pdf),
+    which is right for storage -- stable, dedupe-friendly, survives
+    re-tailoring -- and wrong for a human. Downloading one to attach to an
+    application produced "823af4d638be_tailored.pdf".
+
+    Set as ResponseContentDisposition on the presigned URL rather than by
+    renaming objects, so storage keys stay stable and no migration is needed.
+    """
+    parts = [owner, company or "", title or "", "CoverLetter" if kind == "cover_letter" else "Resume"]
+    slug = "_".join(_FILENAME_SAFE.sub("_", p).strip("_") for p in parts if p and p.strip())
+    slug = re.sub(r"_+", "_", slug).strip("_")
+    # S3 rejects an over-long header; 120 chars leaves room for the extension.
+    return f"{slug[:120]}.pdf"
+
+
 def _refresh_s3_urls(jobs: list) -> list:
     """Regenerate presigned URLs from stored S3 keys so they never expire."""
     bucket = os.environ.get("S3_BUCKET", os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt"))
+    # Prefix with the candidate's name when configured, so the file a
+    # recruiter receives identifies its sender.
+    owner = os.environ.get("ARTIFACT_OWNER_NAME", "")
     s3 = _get_s3()
     for job in jobs:
-        for key_field, url_field in [
-            ("resume_s3_key", "resume_s3_url"),
-            ("cover_letter_s3_key", "cover_letter_s3_url"),
+        for key_field, url_field, kind in [
+            ("resume_s3_key", "resume_s3_url", "resume"),
+            ("cover_letter_s3_key", "cover_letter_s3_url", "cover_letter"),
         ]:
             s3_key = job.get(key_field)
             if s3_key:
                 try:
+                    fname = artifact_filename(kind, job.get("company"), job.get("title"), owner)
                     job[url_field] = s3.generate_presigned_url(
                         "get_object",
-                        Params={"Bucket": bucket, "Key": s3_key},
+                        Params={
+                            "Bucket": bucket,
+                            "Key": s3_key,
+                            "ResponseContentDisposition": f'attachment; filename="{fname}"',
+                        },
                         ExpiresIn=7 * 24 * 3600,  # 7 days
                     )
                 except Exception:
