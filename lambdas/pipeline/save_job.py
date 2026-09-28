@@ -77,25 +77,50 @@ def handler(event, context):
         )
         update["cover_letter_s3_url"] = cl_url
 
-    # Status precedence: failed (resume compile error) > ready (have resume) > scored (fallback).
-    # Cover-letter failures are logged but don't fail the whole job (best-effort).
+    # application_status is the USER's column — what they did with the job
+    # (New / Applied / Interview / ...). This function used to write "failed",
+    # "ready" and "scored" into it, which are pipeline states, not user
+    # actions. Two consequences, both live on 2026-09-28:
+    #
+    #   1. Those values are not in app.py's _VALID_STATUSES, so the API would
+    #      400 a user setting them while the pipeline wrote them freely, and
+    #      the dashboard's Status filter could never match the ~68% of rows
+    #      holding one.
+    #   2. Writing one ERASED a real user status. A job the user marked
+    #      "Applied" reverted to "ready" on the next pipeline run.
+    #
+    # All three were already derivable, so nothing is lost by not writing them:
+    #   failed -> failure_reason IS NOT NULL
+    #   ready  -> resume_s3_url IS NOT NULL
+    #   scored -> match_score IS NOT NULL
     if resume_failure_reason:
-        update["application_status"] = "failed"
         update["failure_reason"] = resume_failure_reason
         logger.error(f"[save_job] {job_hash} compile failed: {resume_failure_reason}")
     elif resume_pdf_key:
-        update["application_status"] = "ready"
         # Clear any prior failure on a successful re-run.
         update["failure_reason"] = None
-    elif not update:
-        update["application_status"] = "scored"
 
     if cover_failure_reason:
         logger.warning(f"[save_job] {job_hash} cover-letter compile failed (non-fatal): {cover_failure_reason}")
 
+    if not update:
+        # Previously this branch was avoided by writing application_status
+        # "scored" purely so the dict was non-empty. Nothing to say is a valid
+        # outcome; an empty PATCH is not.
+        # Same shape as the normal return — a caller should not have to know
+        # which branch ran to read the result.
+        logger.info(f"[save_job] {job_hash}: nothing to update")
+        return {
+            "job_hash": job_hash,
+            "user_id": user_id,
+            "saved": False,
+            "has_resume": False,
+            "failed": False,
+        }
+
     db.table("jobs").update(update).eq("user_id", user_id).eq("job_hash", job_hash).execute()
 
-    logger.info(f"[save_job] Updated {job_hash} with {len(update)} fields (status={update.get('application_status')})")
+    logger.info(f"[save_job] Updated {job_hash} with {len(update)} fields: {sorted(update)}")
     return {
         "job_hash": job_hash,
         "user_id": user_id,

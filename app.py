@@ -2677,10 +2677,20 @@ async def upload_resume(
 
     sections = parse_resume_sections(text, ai_client=_ai_client)
 
+    # tex_content is named for LaTeX and the tailoring pipeline treats it as
+    # LaTeX; this endpoint stores PDF-extracted plain text in it. Nothing
+    # between the two ever checked, so on 2026-09-28 a PDF upload replaced a
+    # working LaTeX base resume and every tailoring attempt failed four layers
+    # later with "base resume has no \begin{document}". The pipeline now skips
+    # non-LaTeX rows; this tells the uploader why, at the moment they can act
+    # on it, instead of leaving them to discover it from a red banner.
+    from shared.resume_format import describe_why_not_latex, is_latex_document
+
+    tailorable = is_latex_document(text)
     resume_data = {
         "resume_key": resume_key,
         "label": label or file.filename,
-        "tex_content": text,  # Store raw text for now
+        "tex_content": text,
     }
 
     result = _db.upsert_resume(user.id, resume_data)
@@ -2718,6 +2728,15 @@ async def upload_resume(
     return {
         "resume_id": result.get("id"),
         "sections": sections,
+        # tailorable=False means the upload succeeded and was parsed for your
+        # profile, but tailoring will keep using your last LaTeX resume. Said
+        # here so the UI can show it, rather than letting the user find out
+        # from "Regenerate failed: Pipeline failed".
+        "tailorable": tailorable,
+        "tailoring_warning": "" if tailorable else (
+            f"Saved and used to fill your profile, but {describe_why_not_latex(text)} "
+            "Tailoring will keep using your most recent LaTeX resume."
+        ),
         "extracted_profile": {
             "name": sections.get("name", ""),
             "email": sections.get("email", ""),
