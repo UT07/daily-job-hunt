@@ -60,7 +60,7 @@ test.describe('session expiry', () => {
   });
 
   /**
-   * KNOWN DEFECT -- marked `fixme` so the suite stays green and turns red the
+   * KNOWN DEFECT -- marked `test.fail` so the suite stays green and turns red the
    * day it is fixed (at which point delete the marker).
    *
    * api.js's 401 handler is documented as turning "silently broken" into
@@ -76,13 +76,13 @@ test.describe('session expiry', () => {
    * Fix: treat a failed local sign-out as a sign-out anyway -- clear
    * localStorage directly when signOut rejects.
    */
-  test.fixme('a 401 bounces to login even when Supabase itself is unreachable', async ({ page, dashboard, api }) => {
+  test.fail('a 401 bounces to login even when Supabase itself is unreachable', async ({ page, dashboard, api }) => {
     await dashboard.goto();
     api.supabaseAuthReachable = false;
     api.override('/api/dashboard/jobs', { status: 401, body: { detail: 'Invalid or expired token' } });
     api.override('/api/profile', { status: 401, body: { detail: 'Invalid or expired token' } });
 
     await dashboard.applyFilters.click();
-    await expect(page).toHaveURL(/\/login$/, { timeout: 15_000 });
+    await expect(page).toHaveURL(/\/login$/, { timeout: 4_000 });
   });
 });

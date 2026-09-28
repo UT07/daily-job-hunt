@@ -48,7 +48,7 @@ test.describe('bug 1 — "Save & Score" saved nothing', () => {
   });
 
   /**
-   * KNOWN DEFECT -- `fixme` so the suite is green today and goes red the day
+   * KNOWN DEFECT -- `test.fail` so the suite is green today and goes red the day
    * someone fixes it (then delete the marker).
    *
    * The backend fix (c94494d) added `saved` to ScoreResponse precisely so a
@@ -63,7 +63,7 @@ test.describe('bug 1 — "Save & Score" saved nothing', () => {
    * Observed: an ordinary green Score Card, and nothing on the dashboard --
    * the exact silent failure the backend change set out to end.
    */
-  test.fixme('a scored-but-not-saved result tells the user the save failed', async ({ page, api }) => {
+  test.fail('a scored-but-not-saved result tells the user the save failed', async ({ page, api }) => {
     api.scoreResponse = {
       ats_score: 80, hiring_manager_score: 82, tech_recruiter_score: 78,
       avg_score: 80, reasoning: 'Scored fine.', matched_resume: 'sre_devops',
@@ -76,7 +76,8 @@ test.describe('bug 1 — "Save & Score" saved nothing', () => {
     await page.getByRole('button', { name: 'Save & Score' }).click();
 
     await expect(page.getByText(/Score Card — Unsaved Corp/)).toBeVisible();
-    await expect(page.getByText(/not saved|could not be saved|save failed/i)).toBeVisible();
+    await expect(page.getByText(/not saved|could not be saved|save failed/i))
+      .toBeVisible({ timeout: 3_000 });
   });
 });
 
@@ -136,7 +137,7 @@ test.describe('bug 3 — the lifecycle default sat inside `if filters:`', () => 
   });
 
   /**
-   * KNOWN DEFECT -- `fixme` so the suite stays green; delete the marker when
+   * KNOWN DEFECT -- `test.fail` so the suite stays green; delete the marker when
    * it is fixed.
    *
    * The owner's rule, as written at the top of PastJobsSection.jsx: "under 14
@@ -156,9 +157,9 @@ test.describe('bug 3 — the lifecycle default sat inside `if filters:`', () => 
    * not_archived default -- one word in Dashboard.fetchJobs's
    * buildJobQueryParams call.
    */
-  test.fixme('a stale job is NOT also in the working list', async ({ dashboard }) => {
+  test.fail('a stale job is NOT also in the working list', async ({ dashboard }) => {
     await dashboard.goto();
-    await expect(dashboard.row('Gamma Freight')).toHaveCount(0);
+    await expect(dashboard.row('Gamma Freight')).toHaveCount(0, { timeout: 3_000 });
   });
 });
 

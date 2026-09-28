@@ -82,7 +82,7 @@ test.describe('60 jobs, 25 to a page', () => {
   });
 
   /**
-   * KNOWN DEFECT -- `fixme`; delete the marker once it is fixed.
+   * KNOWN DEFECT -- `test.fail`; delete the marker once it is fixed.
    *
    * Every other way of narrowing the list goes through handleFilterApply(),
    * which does setPage(1). The tier tabs do not: their onClick is
@@ -96,14 +96,14 @@ test.describe('60 jobs, 25 to a page', () => {
    * Expected: page 1 of that tier.  Observed: page 3, empty.
    * Fix: add setPage(1) to the tier tab onClick in Dashboard.jsx.
    */
-  test.fixme('switching tier tabs returns to page 1', async ({ dashboard, api }) => {
+  test.fail('switching tier tabs returns to page 1', async ({ dashboard, api }) => {
     api.setJobs(manyJobs(60));
     await dashboard.goto();
     await dashboard.withListResponse(() => dashboard.pageButton(3).click());
     await expect.poll(() => api.lastListRequest().params.page).toBe('3');
 
     await dashboard.withListResponse(() => dashboard.tierTab('S').click());
-    await expect.poll(() => api.lastListRequest().params.page).toBe('1');
+    await expect.poll(() => api.lastListRequest().params.page, { timeout: 3_000 }).toBe('1');
     await expect(dashboard.rows).not.toHaveCount(0);
   });
 });

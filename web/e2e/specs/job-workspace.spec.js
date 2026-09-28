@@ -92,7 +92,7 @@ test.describe('inline editing', () => {
   });
 
   /**
-   * KNOWN DEFECT -- `fixme`; delete the marker when it is fixed.
+   * KNOWN DEFECT -- `test.fail`; delete the marker when it is fixed.
    *
    * The four edit fields render as `<label>Location</label>` beside an
    * `<Input>` that is given neither an `id` nor a `label` prop. Input.jsx
@@ -104,12 +104,12 @@ test.describe('inline editing', () => {
    * Fix: pass `label="Location"` to <Input> and drop the hand-rolled <label>,
    * which is exactly how the Add Job form already does it.
    */
-  test.fixme('the edit fields are reachable by their labels', async ({ page, dashboard }) => {
+  test.fail('the edit fields are reachable by their labels', async ({ page, dashboard }) => {
     await dashboard.goto();
     await dashboard.row('Aurora Systems').locator('td').nth(2).click();
     await page.getByRole('button', { name: 'Edit', exact: true }).click();
     for (const label of ['Title', 'Company', 'Location', 'Apply URL']) {
-      await expect(page.getByLabel(label, { exact: true })).toBeVisible();
+      await expect(page.getByLabel(label, { exact: true })).toBeVisible({ timeout: 3_000 });
     }
   });
 });

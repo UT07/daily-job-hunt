@@ -14,7 +14,6 @@ test.describe('harness smoke', () => {
   // `api` is required even though it is unused: it is the fixture that installs
   // the route handlers. Without it the app's fetches fall through to the Vite
   // proxy and nothing ever answers.
-  // eslint-disable-next-line no-unused-vars
   test('every request the app makes carries the session bearer token', async ({ page, dashboard, api }) => {
     const authHeaders = [];
     page.on('request', (req) => {

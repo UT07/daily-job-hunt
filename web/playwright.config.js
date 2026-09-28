@@ -23,6 +23,7 @@ import { defineConfig, devices } from '@playwright/test';
 const LIVE = process.env.E2E_LIVE === '1';
 const PORT = Number(process.env.E2E_PORT || 5174);
 const BASE_URL = process.env.E2E_BASE_URL || `http://127.0.0.1:${PORT}`;
+const API_URL = process.env.E2E_API_URL || 'http://127.0.0.1:8000';
 
 export default defineConfig({
   testDir: './e2e',
@@ -74,12 +75,24 @@ export default defineConfig({
     },
   ],
 
-  webServer: {
-    command: `npm run dev:e2e -- --port ${PORT} --strictPort`,
-    url: BASE_URL,
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  },
+  webServer: [
+    {
+      command: `npm run dev:e2e -- --port ${PORT} --strictPort`,
+      url: BASE_URL,
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+    // Live mode also needs the real backend. `reuseExistingServer` means an
+    // already-running uvicorn is used as-is rather than fought over.
+    ...(LIVE ? [{
+      command: 'bash ../scripts/e2e_backend.sh',
+      url: `${API_URL}/api/health`,
+      reuseExistingServer: true,
+      timeout: 120_000,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    }] : []),
+  ],
 });

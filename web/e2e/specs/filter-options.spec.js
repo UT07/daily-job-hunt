@@ -30,7 +30,7 @@ test.describe('the Status filter', () => {
   });
 
   /**
-   * KNOWN DEFECT -- `fixme`; delete the marker when it is fixed.
+   * KNOWN DEFECT -- `test.fail`; delete the marker when it is fixed.
    *
    * Dashboard.jsx's STATUS_OPTIONS is:
    *   All, New, Applied, Interview, Offer, Rejected, Withdrawn, Expired
@@ -53,7 +53,7 @@ test.describe('the Status filter', () => {
    * (StatusDropdown.STATUSES, JobWorkspace.VALID_STATUSES, app.py
    * _VALID_STATUSES) already agree with each other; only this one drifted.
    */
-  test.fixme('offers exactly the statuses the backend accepts', async ({ dashboard }) => {
+  test.fail('offers exactly the statuses the backend accepts', async ({ dashboard }) => {
     await dashboard.goto();
     const options = await dashboard.statusFilter.locator('option').allTextContents();
     expect(options).toEqual(['All', ...BACKEND_STATUSES]);
