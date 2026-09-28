@@ -92,11 +92,26 @@ def _build_provider_list() -> list[dict]:
     # per-account daily quota — without credits on the account these return
     # "429 free-models-per-day" regardless of which model is requested. They are
     # kept as council *depth*, not as the primary path; Groq carries the load.
+    # Re-probed 2026-09-28 by scripts/probe_models.py at ~2,900 chars (a
+    # realistic scoring prompt), requiring parseable JSON back -- not HTTP 200.
+    #
+    # REMOVED, all three confirmed dead or unusable in production that day:
+    #   minimax/minimax-m3   404 -- model id no longer exists
+    #   z-ai/glm-5.2         404 -- model id no longer exists
+    #   google/gemma-4-31b-it 429 -- shared free-pool daily quota, exhausted
+    #
+    # Those three were the ONLY non-Groq families in the pool, so every
+    # council run logged "[council] Critic call failed -- returning first
+    # candidate": generators took Groq, the cross-family critic had nowhere
+    # to go, and a 3-call council silently degraded to one unreviewed
+    # candidate. The replacements below each add a distinct working family,
+    # which is what the critic actually needs.
     openrouter_models = [
-        "minimax/minimax-m3:free",
         "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "z-ai/glm-5.2:free",
-        "google/gemma-4-31b-it:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "cohere/north-mini-code:free",
+        "inclusionai/ling-3.0-flash-fin:free",
+        "liquid/lfm-2.5-2.6b:free",
     ]
 
     # Groq is the primary provider — its own free tier is not shared with the
