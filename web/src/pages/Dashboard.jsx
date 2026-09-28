@@ -8,6 +8,9 @@ import StatsBar from '../components/StatsBar';
 import JobTable from '../components/JobTable';
 import { SkillsTags, ModelBadge, decodeHtml, DeleteButton } from '../components/JobTable';
 import StatusDropdown from '../components/StatusDropdown';
+import { STATUS_FILTER_OPTIONS } from '../lib/jobStatuses';
+import PastJobsSection from '../components/PastJobsSection';
+import { buildJobQueryParams } from '../lib/jobQuery';
 import { ScoreBadge } from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import { Select } from '../components/ui/Input';
@@ -18,7 +21,7 @@ import { Select } from '../components/ui/Input';
 // created via the on-demand "Add Job" flow the product has pivoted to) had
 // no option at all.
 const SOURCES = ['All', 'adzuna', 'linkedin', 'irishjobs', 'jobs_ie', 'gradireland', 'hn_hiring', 'glassdoor', 'greenhouse', 'ashby', 'indeed', 'manual'];
-const STATUS_OPTIONS = ['All', 'New', 'Applied', 'Interview', 'Offer', 'Rejected', 'Withdrawn', 'Expired'];
+const STATUS_OPTIONS = STATUS_FILTER_OPTIONS;
 const ARCHETYPES = ['All', 'sre_devops', 'backend', 'fullstack', 'platform_cloud', 'data'];
 const SENIORITIES = ['All', 'Junior/Graduate', 'Mid-Level', 'Senior', 'Staff/Lead'];
 const REMOTE_OPTIONS = ['All', 'Remote', 'Hybrid', 'On-site', 'Unknown'];
@@ -382,25 +385,13 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      const f = filtersRef.current;
-      const params = new URLSearchParams();
-      params.set('page', String(page));
-      params.set('per_page', String(perPage));
-      if (f.statusFilter !== 'All') params.set('status', f.statusFilter);
-      if (f.sourceFilter !== 'All') params.set('source', f.sourceFilter);
-      if (f.minScore > 0) params.set('min_score', String(f.minScore));
-      if (f.companySearch.trim()) params.set('company', f.companySearch.trim());
-      if (f.titleSearch && f.titleSearch.trim()) params.set('title', f.titleSearch.trim());
-      if (f.tailoredOnly) params.set('tailored', 'true');
-      if (f.tierFilter !== 'All') params.set('tier', f.tierFilter);
-      if (f.hideExpired) params.set('hide_expired', 'true');
-      if (f.sortBy) params.set('sort_by', f.sortBy);
-      if (f.sortOrder) params.set('sort_order', f.sortOrder);
-      if (f.archetypeFilter && f.archetypeFilter !== 'All') params.set('archetype', f.archetypeFilter);
-      if (f.seniorityFilter && f.seniorityFilter !== 'All') params.set('seniority', f.seniorityFilter);
-      if (f.remoteFilter && f.remoteFilter !== 'All') params.set('remote', f.remoteFilter);
-      if (f.levelFitFilter && f.levelFitFilter !== 'All') params.set('level_fit', f.levelFitFilter);
-      if (f.skillFilter && f.skillFilter.trim()) params.set('skill', f.skillFilter);
+      // lifecycle=active, NOT the backend's "not_archived" default. That
+      // default means age < 30, which INCLUDES the 14-30 day stale band -- so
+      // omitting it listed every stale job twice, once here and once in
+      // <PastJobsSection /> below, double-counting them in both totals.
+      const params = buildJobQueryParams(filtersRef.current, {
+        page, perPage, lifecycle: 'active',
+      });
 
       const data = await apiGet(`/api/dashboard/jobs?${params.toString()}`);
       setJobs(data.jobs || []);
@@ -831,6 +822,10 @@ export default function Dashboard() {
                 key={tier.key}
                 onClick={() => {
                   setTierFilter(tier.key === 'All' ? 'All' : tier.key);
+                  // Every other narrowing resets the page via handleFilterApply().
+                  // Without this, switching tier from page 3 requested page 3 of a
+                  // 12-row set and rendered the empty state.
+                  setPage(1);
                   setFilterVersion(v => v + 1);
                 }}
                 className={`px-5 py-2.5 text-sm font-heading font-bold transition-all border-b-3 -mb-[2px] cursor-pointer ${
@@ -1007,6 +1002,16 @@ export default function Dashboard() {
           </button>
         </div>
       )}
+
+      {/* Past / Outdated — the 14-30 day band, below the live list because it
+          is a footnote to it, not a peer. Renders nothing when empty.
+
+          Deliberately NOT gated on `!loading` like the blocks above: that
+          would unmount and remount it on every refetch, which both fires a
+          second redundant request and silently collapses the shelf the moment
+          the user touches a filter. It owns its own loading state and stays
+          mounted, refetching when filterVersion changes. */}
+      <PastJobsSection filters={filtersRef.current} filterVersion={filterVersion} />
     </div>
   );
 }

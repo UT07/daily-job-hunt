@@ -16,15 +16,51 @@ import sys
 ACCURACY_TOLERANCE = 0.05
 
 
+def pool_shrank(current: dict, baseline: dict) -> str | None:
+    """Whether this run was served by a narrower provider pool than the baseline.
+
+    A quality comparison is only meaningful between comparable pools. On
+    2026-09-28 a run scored 33.3% against a 63.2% baseline while its p95 fell
+    from 128s to 4.7s: no OpenRouter model had been reached at all, because
+    that account's shared daily quota was exhausted. The gate reported a
+    quality regression. What it had measured was provider availability.
+
+    Both sides need the field, so a baseline frozen before it existed simply
+    skips the check rather than blocking every PR.
+    """
+    now = current.get("families_served")
+    was = baseline.get("families_served")
+    if not now or not was:
+        return None
+    missing = sorted(set(was) - set(now))
+    if missing:
+        return (f"served by {len(now)} provider(s) {now} vs baseline's "
+                f"{len(was)} {was} — missing {missing}")
+    return None
+
+
 def evaluate_gate(current: dict, baseline: dict) -> tuple[bool, list[str]]:
     reasons: list[str] = []
 
     drop = baseline["tier_accuracy"] - current["tier_accuracy"]
     if drop > ACCURACY_TOLERANCE:
-        reasons.append(
-            f"tier_accuracy fell {drop:.1%} "
-            f"({baseline['tier_accuracy']:.1%} -> {current['tier_accuracy']:.1%})"
-        )
+        narrowed = pool_shrank(current, baseline)
+        if narrowed:
+            # Still a failure — an unmeasurable run must not merge silently,
+            # which is the same mistake as reporting SUCCEEDED on a no-op. But
+            # naming the cause stops the next reader "fixing" a quality
+            # regression that was really an exhausted quota.
+            reasons.append(
+                f"INCONCLUSIVE, not necessarily a regression: tier_accuracy fell {drop:.1%} "
+                f"({baseline['tier_accuracy']:.1%} -> {current['tier_accuracy']:.1%}), but the run was "
+                f"{narrowed}. Re-run once quota resets, or give the council a family on "
+                f"independent billing, before treating this as a quality change."
+            )
+        else:
+            reasons.append(
+                f"tier_accuracy fell {drop:.1%} "
+                f"({baseline['tier_accuracy']:.1%} -> {current['tier_accuracy']:.1%})"
+            )
 
     if current["fabrication_rate"] > baseline["fabrication_rate"]:
         reasons.append(

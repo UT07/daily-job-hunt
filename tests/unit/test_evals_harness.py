@@ -96,7 +96,10 @@ class TestRunScoreCase:
         assert seen == [True]
         assert result == {
             "id": "x", "task": "score", "expected_tier": "A", "actual_tier": "A",
-            "scores": [82], "guards_passed": True, "fabricated": False,
+            # served_by records which model answered, so the gate can tell a
+            # quality regression from a run served by a narrower pool. Empty
+            # here because this stub returns no "provider" key.
+            "scores": [82], "served_by": [], "guards_passed": True, "fabricated": False,
             "latency_s": result["latency_s"], "ok": True, "n_failed_calls": 0,
         }
 

@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import random
+import time
 import re
 from datetime import datetime, timedelta
 
@@ -92,11 +93,45 @@ def _build_provider_list() -> list[dict]:
     # per-account daily quota — without credits on the account these return
     # "429 free-models-per-day" regardless of which model is requested. They are
     # kept as council *depth*, not as the primary path; Groq carries the load.
+    # Re-probed 2026-09-28 by scripts/probe_models.py at ~2,900 chars (a
+    # realistic scoring prompt), requiring parseable JSON back -- not HTTP 200.
+    #
+    # REMOVED, all three confirmed dead or unusable in production that day:
+    #   minimax/minimax-m3   404 -- model id no longer exists
+    #   z-ai/glm-5.2         404 -- model id no longer exists
+    #   google/gemma-4-31b-it 429 -- shared free-pool daily quota, exhausted
+    #
+    # Those three were the ONLY non-Groq families in the pool, so every
+    # council run logged "[council] Critic call failed -- returning first
+    # candidate": generators took Groq, the cross-family critic had nowhere
+    # to go, and a 3-call council silently degraded to one unreviewed
+    # candidate. The replacements below each add a distinct working family,
+    # which is what the critic actually needs.
+    # Chosen for CAPABILITY first, family diversity second. The first cut of
+    # this list optimised only for distinct families and the AI Eval Gate
+    # caught it: tier_accuracy fell 63.2% -> 25.0%. Two of the four additions
+    # were structurally unsuited to scoring a job description —
+    # cohere/north-mini-code is a code-completion model, and liquid/lfm-2.5-2.6b
+    # is a 2.6B model that took 63s to answer the probe. A council whose
+    # generators and critic cannot reason about a JD produces confident
+    # nonsense, which is worse than the dead-critic failure it replaced.
+    #
+    # Probe scores on one fixed JD+resume pair, 2026-09-28 (not ground truth —
+    # the models genuinely disagree — but a 2.6B model scoring 25 where a 550B
+    # scores 50 is signal about capability, not about the job):
+    #   nemotron-3.5-lightning     65
+    #   nemotron-3-ultra-550b      50
+    #   nemotron-3-super-120b      48
+    #   ling-3.0-flash-fin         45
+    #   ling-3.0-flash-sante       40
+    #   north-mini-code            30   <- dropped, code model
+    #   lfm-2.5-2.6b               25   <- dropped, 2.6B and 63s
     openrouter_models = [
-        "minimax/minimax-m3:free",
+        "nvidia/nemotron-3.5-lightning:free",
         "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "z-ai/glm-5.2:free",
-        "google/gemma-4-31b-it:free",
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "inclusionai/ling-3.0-flash-fin:free",
+        "inclusionai/ling-3.0-flash-sante:free",
     ]
 
     # Groq is the primary provider — its own free tier is not shared with the
@@ -143,7 +178,60 @@ def _build_provider_list() -> list[dict]:
              "key_param": "/naukribaba/QWEN_API_KEY", "model": "qwen-plus",
              "timeout": 90},
         )
+    providers.extend(_registry_providers({p["model"] for p in providers}))
     return providers
+
+
+def _registry_providers(already: set[str]) -> list[dict]:
+    """Extra models from agents/model_registry.json, for rotation breadth.
+
+    The point of a large pool is not more opinions per decision — the council
+    still makes 3 calls. It is that 3 can be drawn from ~26 verified models
+    across 8 families, so no single provider's rate limit or daily quota can
+    take the council down. On 2026-09-28 the hand-maintained list held 8
+    entries and 3 of them were dead at once, which was enough to collapse it.
+
+    Every entry was proved by a live call at realistic prompt size (see
+    scripts/probe_models.py); the registry records the date. Entries whose
+    credentials are absent simply fail once and get cooled, which is why this
+    does not try to pre-validate them.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "agents", "model_registry.json")
+    try:
+        with open(path) as fh:
+            entries = json.load(fh).get("models", [])
+    except Exception as e:  # a missing registry must not break the pipeline
+        logger.warning(f"[ai] model registry unavailable, using core pool only: {e}")
+        return []
+
+    # DashScope is metered, unlike the free tiers above, so it stays behind the
+    # same opt-in flag the single qwen-plus entry already uses.
+    paid_qwen = os.environ.get("ENABLE_PAID_QWEN", "false").lower() == "true"
+
+    extra = []
+    for e in entries:
+        if e["model"] in already:
+            continue
+        # Verified != suitable. Every entry was proved to RESPOND correctly at
+        # realistic prompt size; that says nothing about whether it can reason
+        # about a job description. Skipping this check is how a code-completion
+        # model and a 2.6B model walked back into the council through the side
+        # door after being removed from the list above, and the AI Eval Gate
+        # measured tier_accuracy stuck at 25.0% against a 63.2% baseline.
+        if not e.get("suitable_for_scoring", True):
+            continue
+        if e["provider"] == "qwen" and not paid_qwen:
+            continue
+        already.add(e["model"])
+        entry = {
+            "name": e["name"], "url": e["url"], "key_param": e["key_param"],
+            "model": e["model"], "timeout": e.get("timeout", 90),
+        }
+        if e["provider"] == "openrouter":
+            entry["extra_headers"] = {"HTTP-Referer": "https://github.com/UT07/daily-job-hunt"}
+        extra.append(entry)
+    return extra
 
 
 def _model_family(model: str) -> str:
@@ -163,6 +251,84 @@ def _model_family(model: str) -> str:
     return m
 
 
+# ---------------------------------------------------------------------------
+# Provider rotation — the point of a large verified pool
+# ---------------------------------------------------------------------------
+# The pool is wide so the council can ROTATE off a provider that has hit a
+# limit, rather than retrying into the same wall. Without this, 2026-09-28 saw
+# every council call log "Critic call failed": the three non-Groq entries were
+# 404, 404 and 429 simultaneously, and selection kept offering them.
+#
+# Cooldown scope is not the same for every failure, and getting it wrong is
+# what makes rotation useless:
+#
+#   429  -> cool the ACCOUNT, not the model. OpenRouter's free pool shares one
+#           daily quota across every model on it, so a 429 on gemma means glm
+#           is equally unavailable. Groq's is a per-minute token budget, so it
+#           recovers in a minute; OpenRouter's is daily, so it does not.
+#   404  -> cool the MODEL, for a long time. Free model ids are withdrawn
+#           without notice (minimax-m3, glm-5.2); the account is fine.
+#   5xx / timeout -> cool the MODEL briefly; probably transient.
+#
+# State is module-level, so it survives across invocations while a Lambda
+# container stays warm — which is exactly the window a per-minute budget
+# cares about. A cold start simply starts over, which is correct: the limit
+# it was avoiding has almost certainly reset by then.
+_COOLDOWNS: dict[str, float] = {}
+
+_RATE_LIMIT_COOLDOWN_S = {
+    "groq": 90,          # 8k tokens/min — recovers within the minute
+    "openrouter": 1800,  # shared free-pool DAILY quota; long, but not all day
+    "qwen": 120,
+    "nvidia": 300,
+    "deepseek": 300,
+}
+_MODEL_GONE_COOLDOWN_S = 6 * 3600   # a withdrawn model id is not coming back today
+_TRANSIENT_COOLDOWN_S = 120
+
+
+def _account_of(provider: dict) -> str:
+    """The billing/quota bucket a provider draws from."""
+    return provider["name"].split("/", 1)[0]
+
+
+def _cool_down(key: str, seconds: int) -> None:
+    until = time.time() + seconds
+    if _COOLDOWNS.get(key, 0) < until:
+        _COOLDOWNS[key] = until
+
+
+def note_provider_failure(provider: dict, status: int | None) -> None:
+    """Record a failure so selection can route around it."""
+    account = _account_of(provider)
+    if status == 429:
+        secs = _RATE_LIMIT_COOLDOWN_S.get(account, 300)
+        _cool_down(f"account:{account}", secs)
+        logger.info(f"[ai] cooling account '{account}' for {secs}s after 429")
+    elif status == 404:
+        _cool_down(f"model:{provider['name']}", _MODEL_GONE_COOLDOWN_S)
+        logger.info(f"[ai] cooling model '{provider['name']}' — 404, id likely withdrawn")
+    else:
+        _cool_down(f"model:{provider['name']}", _TRANSIENT_COOLDOWN_S)
+
+
+def note_provider_success(provider: dict) -> None:
+    """A success proves both the account and the model are usable again."""
+    _COOLDOWNS.pop(f"account:{_account_of(provider)}", None)
+    _COOLDOWNS.pop(f"model:{provider['name']}", None)
+
+
+def _is_available(provider: dict, now: float | None = None) -> bool:
+    now = now if now is not None else time.time()
+    return (_COOLDOWNS.get(f"account:{_account_of(provider)}", 0) <= now
+            and _COOLDOWNS.get(f"model:{provider['name']}", 0) <= now)
+
+
+def _reset_cooldowns() -> None:
+    """Test hook — module state would otherwise leak between tests."""
+    _COOLDOWNS.clear()
+
+
 def _select_diverse_providers(
     providers: list[dict],
     n: int,
@@ -176,7 +342,16 @@ def _select_diverse_providers(
     """
     exclude_families = exclude_families or set()
 
-    shuffled = list(providers)
+    # Prefer providers that are not cooling. Fail OPEN when every candidate is
+    # cooling: a stale cooldown estimate must never leave the council with
+    # nothing to call, and the worst case is one wasted request that re-cools
+    # the provider anyway.
+    usable = [p for p in providers if _is_available(p)]
+    if not usable:
+        logger.warning("[ai] every provider is cooling — ignoring cooldowns for this pick")
+        usable = list(providers)
+
+    shuffled = list(usable)
     random.shuffle(shuffled)
 
     seen: set[str] = set()
@@ -243,14 +418,18 @@ def _call_provider(
                 else:
                     logger.warning(f"[ai] {provider['name']} returned empty content")
                 return None
+            note_provider_success(provider)
             return {"content": content, "provider": provider["name"], "model": provider["model"]}
         elif resp.status_code == 429:
             logger.warning(f"[ai] {provider['name']} rate limited")
+            note_provider_failure(provider, 429)
         else:
             logger.warning(f"[ai] {provider['name']} returned {resp.status_code}")
+            note_provider_failure(provider, resp.status_code)
         return None
     except Exception as e:
         logger.warning(f"[ai] {provider['name']} failed: {e}")
+        note_provider_failure(provider, None)
         return None
 
 

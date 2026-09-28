@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../auth/useAuth';
 import {
   LayoutDashboard,
+  FolderOpen,
   PlusCircle,
   Settings,
   LogOut,
@@ -18,6 +19,7 @@ import NotificationBell from '../NotificationBell';
 const NAV_ITEMS = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
   { to: '/add-job', icon: PlusCircle, label: 'Add Job' },
+  { to: '/artifacts', icon: FolderOpen, label: 'Artifacts' },
 ];
 
 const ACCOUNT_ITEMS = [
