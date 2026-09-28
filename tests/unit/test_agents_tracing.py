@@ -90,7 +90,12 @@ def test_configure_langsmith_tracing_fetches_key_when_tracing_enabled(monkeypatc
     """
     monkeypatch.setenv("LANGCHAIN_TRACING_V2", "true")
     monkeypatch.delenv("LANGCHAIN_API_KEY", raising=False)
-    with patch("ai_helper.get_param", return_value="sk-test-key") as mk:
+    # The key is also probed once per container now, so a rejected key can
+    # disable tracing instead of logging a 403 per traced call. Stubbed here:
+    # this test is about the SSM fetch path, and without the stub it would
+    # make a real network call to LangSmith with a fake key.
+    with patch("ai_helper.get_param", return_value="sk-test-key") as mk, \
+         patch.object(graph_mod, "_langsmith_key_accepted", return_value=True):
         graph_mod._configure_langsmith_tracing()
         # Assert inside the patch context, before LANGCHAIN_API_KEY is
         # cleaned up below and before monkeypatch unwinds LANGCHAIN_TRACING_V2.

@@ -282,12 +282,54 @@ def _configure_langsmith_tracing() -> None:
     except ImportError:
         from lambdas.pipeline.ai_helper import get_param  # container image
     try:
-        os.environ["LANGCHAIN_API_KEY"] = get_param("/naukribaba/LANGCHAIN_API_KEY")
+        key = get_param("/naukribaba/LANGCHAIN_API_KEY")
     except Exception:
         logger.warning(
             "[council] LangSmith tracing requested (LANGCHAIN_TRACING_V2=true) but "
             "LANGCHAIN_API_KEY could not be fetched from SSM — continuing without tracing"
         )
+        os.environ["LANGCHAIN_TRACING_V2"] = "false"
+        return
+
+    if not _langsmith_key_accepted(key):
+        # Fetching a key is not the same as having a working one. On
+        # 2026-09-28 every traced call logged "Failed to POST
+        # .../runs/multipart ... 403 Forbidden" — one warning per LLM call,
+        # drowning the log that the pipeline's real diagnostics live in, and
+        # costing a doomed network round trip each time. A rejected key is a
+        # permanent condition for this process, so treat it like the
+        # _dead_providers quarantine: decide once, not per call.
+        logger.warning(
+            "[council] LangSmith rejected the API key (401/403) — tracing disabled for "
+            "this container. Rotate /naukribaba/LANGCHAIN_API_KEY to restore it."
+        )
+        os.environ["LANGCHAIN_TRACING_V2"] = "false"
+        return
+
+    os.environ["LANGCHAIN_API_KEY"] = key
+
+
+def _langsmith_key_accepted(key: str) -> bool:
+    """One cheap auth probe, so a dead key is discovered once per container.
+
+    Fails OPEN on anything that is not an explicit rejection: a network blip
+    or an endpoint change must not silently disable working tracing. Only a
+    401 or 403 — the server actively refusing this credential — turns it off.
+    """
+    if not key:
+        return False
+    try:
+        import httpx
+
+        resp = httpx.get(
+            f"{os.environ.get('LANGCHAIN_ENDPOINT', 'https://api.smith.langchain.com')}"
+            "/api/v1/sessions?limit=1",
+            headers={"x-api-key": key},
+            timeout=6,
+        )
+        return resp.status_code not in (401, 403)
+    except Exception:
+        return True  # can't tell — leave tracing on rather than guess
 
 
 _GRAPH = None
