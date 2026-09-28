@@ -9,6 +9,7 @@ import PreviewBanner from './components/PreviewBanner';
 // Lazy-loaded pages
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const AddJob = lazy(() => import('./pages/AddJob'));
+const Artifacts = lazy(() => import('./pages/Artifacts'));
 const JobWorkspace = lazy(() => import('./pages/JobWorkspace'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Onboarding = lazy(() => import('./pages/Onboarding'));
@@ -62,6 +63,7 @@ export default function App() {
                 <Route index element={<Dashboard />} />
                 <Route path="/jobs/:jobId" element={<JobWorkspace />} />
                 <Route path="/add-job" element={<AddJob />} />
+                <Route path="/artifacts" element={<Artifacts />} />
                 {/* Redundant stub — real resume upload/management lives at /settings */}
                 <Route path="/upload-resume" element={<Navigate to="/settings" replace />} />
                 <Route path="/settings" element={<Settings />} />
