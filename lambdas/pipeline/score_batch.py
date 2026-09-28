@@ -386,6 +386,15 @@ Block B — Requirement Mapping:
 For each KEY requirement in the JD, cite the SPECIFIC resume evidence that satisfies it.
 If no evidence exists, mark as a gap with severity (blocker vs nice-to-have).
 
+OUTPUT LENGTH — a hard constraint, not a preference:
+- "requirement_map": at most 8 entries, blocker_gap first. Do NOT list every
+  requirement; list the 8 that most affect the decision.
+- Keep each "requirement" and "evidence" string under 120 characters.
+- "key_matches" and "gaps": at most 8 items each.
+- "reasoning": 2-3 sentences, no more.
+A response that overruns the token budget is truncated and its trailing fields
+are lost, so brevity here is correctness, not style.
+
 Return ONLY valid JSON (no markdown, no code fences):
 {
     "ats_score": <0-100>,
@@ -421,6 +430,40 @@ Return ONLY valid JSON (no markdown, no code fences):
 # 702 of them reasoning; 2048 leaves headroom for more verbose jobs.
 MAX_DESCRIPTION_CHARS = 4000
 SCORE_MAX_TOKENS = 2048
+
+
+# The three perspective scores are declared FIRST in the schema above, so a
+# response cut off in the trailing prose still carries all of them.
+_SALVAGE_PERSPECTIVES = ("ats_score", "hiring_manager_score", "tech_recruiter_score")
+
+
+def _salvage_scores(text: str) -> dict | None:
+    """Recover the numeric scores from a JSON object truncated mid-string.
+
+    Measured in CI on 2026-09-28: 10 of 25 eval cases failed as JSON parse
+    errors, not provider failures. A model answered every time; the answer was
+    cut off inside `requirement_map` or `reasoning`, and the whole job was
+    dropped — including three scores that had already arrived intact.
+
+    This recovers ONLY the numbers, and only when all three perspectives are
+    present and in range. Everything else (reasoning, key_matches, gaps,
+    requirement_map) is genuinely lost and is left to the caller's defaults.
+    A perspective score outside 0-100 is treated as corruption rather than
+    clamped: the point is to rescue work the model did, never to invent it.
+    """
+    out: dict = {}
+    for field in (*_SALVAGE_PERSPECTIVES, "match_score"):
+        m = re.search(rf'"{field}"\s*:\s*(-?\d+)', text)
+        if not m:
+            continue
+        value = int(m.group(1))
+        if 0 <= value <= 100:
+            out[field] = value
+        elif field in _SALVAGE_PERSPECTIVES:
+            return None
+    if not all(f in out for f in _SALVAGE_PERSPECTIVES):
+        return None
+    return out
 
 
 def score_single_job(job: dict, resume_tex: str, temperature: float = 0) -> dict | None:
@@ -460,7 +503,22 @@ Resume: {resume_text}"""
             text = text.split("```")[1]
             if text.startswith("json"):
                 text = text[4:]
-        result = json.loads(text.strip())
+        text = text.strip()
+        try:
+            result = json.loads(text)
+        except json.JSONDecodeError as parse_error:
+            result = _salvage_scores(text)
+            if result is None:
+                logger.error(
+                    f"[score_batch] JSON parse error for {job['job_hash']}: "
+                    f"{parse_error} (no scores recoverable, {len(text)} chars)")
+                return None
+            # Flagged, never silent: a salvaged score must be distinguishable
+            # from a clean parse by anything that reads this.
+            result["truncated"] = True
+            logger.warning(
+                f"[score_batch] truncated response for {job['job_hash']} "
+                f"({parse_error}) — salvaged the scores, lost the prose fields")
 
         # Include model info so we can save it to DB
         result["provider"] = response_dict.get("provider", "council")
@@ -480,10 +538,9 @@ Resume: {resume_text}"""
             result["match_score"] = round((ats + hm + tr) / 3)
 
         return result
-    except json.JSONDecodeError as e:
-        logger.error(f"[score_batch] JSON parse error for {job['job_hash']}: {e}")
-        return None
     except Exception as e:
+        # Parse failures are handled above, where the raw text is still in
+        # scope and salvage is possible; this is for the call itself failing.
         logger.error(f"[score_batch] AI scoring failed for {job['job_hash']}: {e}")
         return None
 
