@@ -80,23 +80,49 @@ def test_success_clears_both_keys():
     assert ai_helper._is_available(GROQ2) is True
 
 
-def test_critic_can_still_be_found_after_a_whole_account_cools():
-    """The exact 2026-09-28 shape: generators take one account, that account
-    then rate-limits, and the critic must come from elsewhere."""
+def test_critic_is_available_while_both_accounts_are_up():
+    """Generators take one account, the critic must come from another family."""
     pool = ai_helper._build_provider_list()
-    ai_helper.note_provider_failure({"name": "openrouter/x", "model": "y"}, 429)
     gens = ai_helper._select_diverse_providers(pool, n=2)
     fams = {ai_helper._model_family(g["model"]) for g in gens}
     critic = ai_helper._select_diverse_providers(pool, n=1, exclude_families=fams)
-    assert critic, "no critic available with OpenRouter cooling"
+    assert critic, "no cross-family critic available with a healthy pool"
     assert ai_helper._model_family(critic[0]["model"]) not in fams
+
+
+def test_a_single_account_pool_CANNOT_supply_an_independent_critic():
+    """The structural limit, pinned deliberately rather than papered over.
+
+    Cool OpenRouter — as its shared daily quota really does, and did on
+    2026-09-28 — and every remaining provider is Groq: two gpt-oss entries and
+    one qwen3, i.e. two families. Two generators consume both, and there is no
+    third family left for the critic.
+
+    No amount of adding free models fixes this, because they all draw on the
+    same two quotas. The fix is a family on INDEPENDENT billing
+    (ENABLE_PAID_QWEN), which is a cost decision, not a code one. This test
+    exists so that limit is visible in the suite instead of being rediscovered
+    from a degraded eval run.
+    """
+    pool = ai_helper._build_provider_list()
+    ai_helper.note_provider_failure({"name": "openrouter/anything", "model": "m"}, 429)
+    usable = [p for p in pool if ai_helper._is_available(p)]
+    families = {ai_helper._model_family(p["model"]) for p in usable}
+    assert len(families) < 3, (
+        "if this passes, an independent-quota family was added and the "
+        "single-account limit no longer applies — update this test"
+    )
 
 
 def test_pool_is_wide_enough_to_rotate():
     pool = ai_helper._build_provider_list()
     fams = {ai_helper._model_family(p["model"]) for p in pool}
-    assert len(pool) >= 10, f"only {len(pool)} providers — too few to rotate"
-    assert len(fams) >= 7, f"only {len(fams)} families — critic choice too narrow"
+    # Thresholds track reality: 9 providers / 6 families after three models
+    # were marked unsuitable for scoring (a code model, a 2.6B model, and a 7B
+    # Arabic-focused model). Raising these numbers by re-admitting models that
+    # cannot score a JD would make the assertion actively harmful.
+    assert len(pool) >= 8, f"only {len(pool)} providers — too few to rotate"
+    assert len(fams) >= 5, f"only {len(fams)} families — critic choice too narrow"
 
 
 def test_metered_qwen_stays_opt_in(monkeypatch):
