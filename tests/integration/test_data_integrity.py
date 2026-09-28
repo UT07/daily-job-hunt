@@ -563,8 +563,19 @@ class TestScoreBatchJobRecords:
         assert "AWS experience" in record["gaps"]
 
     @pytest.mark.integration
-    def test_db_insert_failure_does_not_crash(self):
-        """If Supabase insert fails, score_batch should continue without crashing."""
+    def test_total_db_insert_failure_raises(self):
+        """A run where EVERY insert fails must raise, not report matched_count: 0.
+
+        Contract changed deliberately in bcf42aa. This test previously asserted
+        the opposite -- that the handler swallows the failure and returns
+        cleanly -- and that behaviour is exactly how the 2026-09-28 07:00 run
+        scored 58 jobs, wrote none, and reported SUCCEEDED to Step Functions.
+
+        Partial failures still degrade quietly; see the companion test below.
+        Only "attempted some, landed none" raises, because that shape only
+        occurs for systemic causes: an unapplied migration, an RLS change,
+        bad credentials.
+        """
         mock_db = MagicMock()
         raw_chain = MagicMock()
         raw_chain.select.return_value = raw_chain
@@ -600,10 +611,56 @@ class TestScoreBatchJobRecords:
         with patch("score_batch.get_supabase", return_value=mock_db), \
              patch("score_batch.ai_complete_cached", return_value=self.VALID_AI_RESPONSE):
             import score_batch
+            with pytest.raises(RuntimeError, match="refusing to report success"):
+                score_batch.handler(
+                    {"user_id": "user-1", "new_job_hashes": ["abc123"], "min_match_score": 60},
+                    None,
+                )
+
+    def test_partial_db_insert_failure_still_degrades_quietly(self):
+        """One bad row must not fail the whole chunk -- only a total loss does."""
+        mock_db = MagicMock()
+        raw_chain = MagicMock()
+        raw_chain.select.return_value = raw_chain
+        raw_chain.in_.return_value = raw_chain
+        raw_result = MagicMock()
+        second = {**self.SAMPLE_JOB_RAW, "job_hash": "def456"}
+        raw_result.data = [self.SAMPLE_JOB_RAW, second]
+        raw_chain.execute.return_value = raw_result
+
+        resume_chain = MagicMock()
+        resume_chain.select.return_value = resume_chain
+        resume_chain.eq.return_value = resume_chain
+        resume_chain.order.return_value = resume_chain
+        resume_chain.limit.return_value = resume_chain
+        resume_result = MagicMock()
+        resume_result.data = [self.SAMPLE_RESUME]
+        resume_chain.execute.return_value = resume_result
+
+        insert_chain = MagicMock()
+        insert_chain.insert.return_value = insert_chain
+        # first row fails, second lands
+        insert_chain.execute.side_effect = [Exception("DB write failed"), None]
+
+        def table_router(name):
+            if name == "jobs_raw":
+                return raw_chain
+            elif name == "user_resumes":
+                return resume_chain
+            elif name == "jobs":
+                return insert_chain
+            return MagicMock()
+
+        mock_db.table.side_effect = table_router
+
+        with patch("score_batch.get_supabase", return_value=mock_db), \
+             patch("score_batch.ai_complete_cached", return_value=self.VALID_AI_RESPONSE):
+            import score_batch
             result = score_batch.handler(
-                {"user_id": "user-1", "new_job_hashes": ["abc123"], "min_match_score": 60},
+                {"user_id": "user-1", "new_job_hashes": ["abc123", "def456"],
+                 "min_match_score": 60},
                 None,
             )
 
-        # Should return empty matches (insert failed) but not raise
-        assert result["matched_count"] == 0
+        assert result["insert_failures"] == 1
+        assert result["inserted"] == 1
