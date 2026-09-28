@@ -97,3 +97,13 @@ layer/python/
 layer-tectonic/bin/
 .playwright-mcp/
 AGENTS.md
+
+# Playwright E2E (web/)
+web/e2e/.auth/
+web/test-results/
+web/playwright-report/
+web/blob-report/
+
+# Claude Code worktrees live under .claude/ — never commit them.
+# (.claude/launch.json itself is checked in.)
+.claude/worktrees/
