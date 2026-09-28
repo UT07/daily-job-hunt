@@ -97,6 +97,12 @@ class TestAiComplete:
             "content": "Hello!",
             "provider": first["name"],
             "model": first["model"],
+            # Carried out of the response rather than dropped, so callers can
+            # tell a finished answer from one cut off at max_tokens. This mock
+            # response has no finish_reason at all, which is not "length" and
+            # so is not truncated.
+            "finish_reason": None,
+            "truncated": False,
         }
 
     def test_tries_next_provider_when_first_fails_with_exception(self):

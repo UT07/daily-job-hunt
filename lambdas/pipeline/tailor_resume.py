@@ -4,7 +4,7 @@ import re
 
 import boto3
 
-from ai_helper import ai_complete, council_complete, get_supabase
+from ai_helper import ai_complete, council_complete, get_supabase, rewrite_budget
 
 try:
     from retrieval.bullets import retrieve_evidence
@@ -36,6 +36,16 @@ class TailorError(Exception):
     whole execution instead of just this one job in the Map.
 
     Raising lets the existing Catch route to SaveJobAfterError as designed.
+    """
+
+
+class _RetryRejected(Exception):
+    """Internal: the quality retry produced something unusable.
+
+    Module-private and never escapes handler() — it only unwinds out of the
+    retry block back to "keep the council's body", which is the same outcome
+    as a retry that simply didn't improve anything. Deliberately NOT a
+    TailorError: nothing about the job has failed.
     """
 
 
@@ -469,8 +479,19 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
     # user_prompt by value.
     user_prompt += safe_evidence_block(user_id, description)
 
+    # The answer to this prompt is a re-emission of base_body, so the output
+    # budget has to be sized from base_body -- not left at the council's 4096
+    # default, which is smaller than some base resumes need and leaves a
+    # reasoning model nothing to write with once it has finished thinking.
+    # That shortfall is what produced tailored bodies ending inside Technical
+    # Skills; see ai_helper.rewrite_budget.
+    tailor_max_tokens = rewrite_budget(base_body)
+
     # ALWAYS use council — no single-call bypass regardless of tier
-    logger.info(f"[tailor] Council mode for {job_hash} (depth={tailoring_depth}, archetype={archetype})")
+    logger.info(
+        f"[tailor] Council mode for {job_hash} (depth={tailoring_depth}, "
+        f"archetype={archetype}, max_tokens={tailor_max_tokens})"
+    )
     try:
         response_dict = council_complete(
             prompt=user_prompt,
@@ -484,6 +505,7 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
             ),
             n_generators=2,
             temperature=0.3,
+            max_tokens=tailor_max_tokens,
             task="tailor",
             base_skills=base_skills_text,
             base_body=base_body,
@@ -508,6 +530,17 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         logger.error(f"[tailor] Council failed: {e}")
         raise TailorError(f"council failed for {job_hash}: {e}") from e
     ai_response = response_dict["content"]
+    if response_dict.get("truncated"):
+        # Say it at the point of failure. The hard gates below will reject
+        # this body for missing sections and fall back to the base resume,
+        # and without this line that log reads as "the model ignored the
+        # instructions" when what actually happened is that it never got to
+        # finish. Not raised: the fallback is still the right outcome.
+        logger.warning(
+            f"[tailor] council winner for {job_hash} was cut off at "
+            f"max_tokens={tailor_max_tokens} ({len(ai_response)} chars) — the "
+            "tailored body is incomplete and will not pass the section gates"
+        )
 
     # Strip markdown code fences (```latex, ```tex, etc.)
     ai_response = ai_response.strip()
@@ -608,11 +641,33 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
                 + "\nPlease fix ALL of them. Return ONLY the corrected body."
             )
             try:
-                retry_dict = ai_complete(retry_prompt, system=system_prompt, temperature=0.3)
+                # Same budget as the council call above: the retry asks for the
+                # whole body again, so the 4096 default would truncate it for
+                # exactly the reason the council call no longer does.
+                retry_dict = ai_complete(
+                    retry_prompt, system=system_prompt, temperature=0.3,
+                    max_tokens=tailor_max_tokens,
+                )
                 retry_body = retry_dict.get("content", "").strip()
                 if "\\begin{document}" in retry_body:
                     _, retry_body = _split_tex(retry_body)
                 retry_body = retry_body.removesuffix("\\end{document}").strip()
+                # Structure before style. "Fewer warnings" is not an
+                # improvement if the retry got there by dropping half the
+                # document: a shorter body trivially contains fewer banned
+                # phrases, so an incomplete retry scores BETTER on the count
+                # below than the complete body it would replace. The hard
+                # gates above already ran on `ai_body`; nothing re-ran them on
+                # `retry_body`, so this is where a truncated retry used to be
+                # able to overwrite a valid tailored resume.
+                retry_missing = _check_required_sections(retry_body)
+                if retry_dict.get("truncated") or retry_missing:
+                    logger.warning(
+                        f"[tailor] Discarding quality retry for {job_hash}: "
+                        + ("cut off at max_tokens" if retry_dict.get("truncated")
+                           else f"missing sections {retry_missing}")
+                    )
+                    raise _RetryRejected
                 # Re-check quality
                 retry_quality = _check_banned_phrases(retry_body) + _check_textbf_preservation(base_body, retry_body)
                 if len(retry_quality) < len(quality_warnings):
@@ -630,6 +685,8 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
                         tailored_tex = preamble_part + body_part
                 else:
                     logger.info("[tailor] Retry did not improve quality, keeping original")
+            except _RetryRejected:
+                pass  # already logged above; keep the council's body
             except RuntimeError:
                 logger.warning("[tailor] Quality retry failed, keeping original")
 

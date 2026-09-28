@@ -7,10 +7,16 @@ generate nodes can append provider results without translating them.
 from typing import Annotated, Any, TypedDict
 
 
-class Candidate(TypedDict):
+class Candidate(TypedDict, total=False):
     content: str
     provider: str
     model: str
+    # Set by _call_provider from the response's finish_reason. `truncated`
+    # True means the provider stopped at max_tokens mid-answer, so `content`
+    # is a fragment. total=False because tests and older checkpoints build
+    # Candidate dicts with the first three keys only.
+    finish_reason: str
+    truncated: bool
 
 
 def add_candidates(left: list[Candidate], right: list[Candidate]) -> list[Candidate]:
@@ -26,6 +32,7 @@ class CouncilState(TypedDict, total=False):
     task_description: str
     temperature: float
     n_generators: int
+    max_tokens: int           # per-generator output budget; see ai_helper.rewrite_budget
 
     # Guard context, supplied by the caller for tailoring tasks
     base_skills: str

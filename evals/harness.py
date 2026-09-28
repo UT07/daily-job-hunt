@@ -130,7 +130,7 @@ _ensure_lambda_paths()
 from evals import load_golden  # noqa: E402
 from evals.metrics import summarise  # noqa: E402
 from lambdas.pipeline import score_batch  # noqa: E402
-from lambdas.pipeline.ai_helper import ai_complete, council_complete  # noqa: E402
+from lambdas.pipeline.ai_helper import ai_complete, council_complete, rewrite_budget  # noqa: E402
 from lambdas.pipeline.guardrails.output_guards import check_output  # noqa: E402
 
 
@@ -281,6 +281,12 @@ def _run_tailor_case(case: dict, resume_tex: str) -> dict:
         f"BASE RESUME BODY:\n{base_body}\n\n"
         "Return ONLY the tailored body."
     )
+    # The answer is a re-emission of base_body, so the output budget is sized
+    # from base_body — see ai_helper.rewrite_budget. At the council's old
+    # hardcoded 4096 this call asked a model to reproduce an 11k-17k-character
+    # LaTeX document inside a budget a reasoning model has largely spent
+    # before it writes its first character, and the body came back ending
+    # inside Technical Skills. That is what guard_pass_rate 0.92 was measuring.
     try:
         result = council_complete(
             user_prompt,
@@ -290,6 +296,7 @@ def _run_tailor_case(case: dict, resume_tex: str) -> dict:
             task="tailor",
             base_skills=base_skills,
             base_body=base_body,
+            max_tokens=rewrite_budget(base_body),
         )
     except Exception as exc:
         return {
@@ -306,12 +313,28 @@ def _run_tailor_case(case: dict, resume_tex: str) -> dict:
         "expected_tier": None,
         "actual_tier": None,
         "scores": [],
+        # Same field the score cases record, so metrics.families_served sees
+        # the provider that tailored too — previously a tailor failure could
+        # not be attributed to a provider at all.
+        "served_by": [str(result["provider"])] if result.get("provider") else [],
         "guards_passed": guard.passed and not missing,
         "fabricated": any(v.rule == "fabrication" for v in guard.violations),
         "latency_s": time.perf_counter() - start,
         "ok": True,
         "missing_keywords": missing,
         "violations": [f"{v.rule}:{v.severity}: {v.detail}" for v in guard.violations],
+        # Why a tailor case failed its guards, not just that it did. A
+        # required_sections violation has two completely different causes —
+        # the model ignored the instruction, or the provider stopped it
+        # mid-document — and the report used to record neither, so CI run
+        # 36481897936 could show four missing sections with nothing to say
+        # which had happened. `truncated` comes from the response's
+        # finish_reason; `body_chars` against `base_body_chars` shows how far
+        # through the document it got.
+        "truncated": bool(result.get("truncated")),
+        "finish_reason": result.get("finish_reason"),
+        "body_chars": len(content),
+        "base_body_chars": len(base_body),
     }
 
 
