@@ -90,27 +90,49 @@ def test_critic_is_available_while_both_accounts_are_up():
     assert ai_helper._model_family(critic[0]["model"]) not in fams
 
 
-def test_a_single_account_pool_CANNOT_supply_an_independent_critic():
-    """The structural limit, pinned deliberately rather than papered over.
+def test_nvidia_provides_failover_when_openrouter_is_exhausted():
+    """The 2026-09-28 failure, and the fix for it.
 
-    Cool OpenRouter — as its shared daily quota really does, and did on
-    2026-09-28 — and every remaining provider is Groq: two gpt-oss entries and
-    one qwen3, i.e. two families. Two generators consume both, and there is no
-    third family left for the critic.
+    OpenRouter's free pool shares ONE daily allowance across every model on it.
+    When it emptied, every remaining provider was Groq — two gpt-oss entries
+    and one qwen3, i.e. two families. Two generators consumed both and no third
+    family remained, so every council call logged "Critic call failed" and a
+    three-model council ran as one.
 
-    No amount of adding free models fixes this, because they all draw on the
-    same two quotas. The fix is a family on INDEPENDENT billing
-    (ENABLE_PAID_QWEN), which is a cost decision, not a code one. This test
-    exists so that limit is visible in the suite instead of being rediscovered
-    from a degraded eval run.
+    NVIDIA NIM hosts the same nemotron weights on SEPARATE billing. It adds no
+    new families deliberately — it adds a second route to families the council
+    already wanted, which is what survives a quota outage. This test replaces
+    an earlier one that asserted the limit was structural; it was, until the
+    pool gained an independent-quota host.
     """
     pool = ai_helper._build_provider_list()
     ai_helper.note_provider_failure({"name": "openrouter/anything", "model": "m"}, 429)
+
     usable = [p for p in pool if ai_helper._is_available(p)]
     families = {ai_helper._model_family(p["model"]) for p in usable}
-    assert len(families) < 3, (
-        "if this passes, an independent-quota family was added and the "
-        "single-account limit no longer applies — update this test"
+    assert len(families) >= 3, (
+        f"only {sorted(families)} usable with OpenRouter cooled — not enough "
+        "for two generators plus a cross-family critic"
+    )
+
+    gens = ai_helper._select_diverse_providers(usable, n=2)
+    gen_families = {ai_helper._model_family(g["model"]) for g in gens}
+    critic = ai_helper._select_diverse_providers(usable, n=1, exclude_families=gen_families)
+    assert critic, "no cross-family critic available with OpenRouter cooled"
+    assert ai_helper._model_family(critic[0]["model"]) not in gen_families
+
+
+def test_nvidia_and_openrouter_draw_on_different_quotas():
+    """The whole point: a 429 on one must not cool the other. Cooling by
+    account rather than by model is what makes that true."""
+    pool = ai_helper._build_provider_list()
+    nvidia = [p for p in pool if p["key_param"].endswith("NVIDIA_API_KEY")]
+    assert nvidia, "no NVIDIA-hosted entries in the pool"
+
+    ai_helper.note_provider_failure({"name": "openrouter/gemma", "model": "g"}, 429)
+    assert all(ai_helper._is_available(p) for p in nvidia), (
+        "an OpenRouter 429 cooled NVIDIA — they are separate accounts and "
+        "must cool independently"
     )
 
 

@@ -2,13 +2,14 @@
   "_README": "Verified model registry. Every entry was proved by a LIVE call at ~2900 chars (a realistic scoring-shaped prompt) that had to return parseable JSON with a numeric score -- not merely HTTP 200. Regenerate with scripts/probe_models.py. Free-model IDs rot silently, so re-probe before trusting this file: see ai_council_model_rot in project memory.",
   "_CAVEAT": "These are verified model ENDPOINTS, not proven-distinct weights. Some vendor IDs may be snapshots or aliases of one another; that cannot be determined from the API. An attempt to discriminate them by comparing temperature=0 outputs was invalid -- the control showed one model giving three different answers to the same prompt at temperature=0, because hosted MoE serving is nondeterministic regardless of temperature.",
   "verified_on": "2026-09-28",
-  "count": 26,
+  "count": 30,
   "families": [
     "allam",
     "cohere",
     "dots-studio",
     "inclusionai",
     "liquid",
+    "meta",
     "nvidia",
     "openai",
     "qwen"
@@ -406,8 +407,69 @@
       "reasoning": false,
       "min_output_tokens": 1024,
       "suitable_for_scoring": true
+    },
+    {
+      "name": "nvidia/nemotron-3.5-lightning-30b-a3b",
+      "provider": "nvidia",
+      "model": "nvidia/nemotron-3.5-lightning-30b-a3b",
+      "family": "nvidia",
+      "url": "https://integrate.api.nvidia.com/v1/chat/completions",
+      "key_param": "/naukribaba/NVIDIA_API_KEY",
+      "verified_on": "2026-09-28",
+      "probe_latency_s": 44.6,
+      "probe_score": 65,
+      "timeout": 163,
+      "reasoning": false,
+      "min_output_tokens": 1024,
+      "suitable_for_scoring": true
+    },
+    {
+      "name": "nvidia/nemotron-3-super-120b-a12b",
+      "provider": "nvidia",
+      "model": "nvidia/nemotron-3-super-120b-a12b",
+      "family": "nvidia",
+      "url": "https://integrate.api.nvidia.com/v1/chat/completions",
+      "key_param": "/naukribaba/NVIDIA_API_KEY",
+      "verified_on": "2026-09-28",
+      "probe_latency_s": 4.1,
+      "probe_score": 45,
+      "timeout": 60,
+      "reasoning": false,
+      "min_output_tokens": 1024,
+      "suitable_for_scoring": true
+    },
+    {
+      "name": "nvidia/nemotron-3-ultra-550b-a55b",
+      "provider": "nvidia",
+      "model": "nvidia/nemotron-3-ultra-550b-a55b",
+      "family": "nvidia",
+      "url": "https://integrate.api.nvidia.com/v1/chat/completions",
+      "key_param": "/naukribaba/NVIDIA_API_KEY",
+      "verified_on": "2026-09-28",
+      "probe_latency_s": 8.3,
+      "probe_score": 30,
+      "timeout": 60,
+      "reasoning": false,
+      "min_output_tokens": 1024,
+      "suitable_for_scoring": true
+    },
+    {
+      "name": "nvidia/muse-glimmer-30b",
+      "provider": "nvidia",
+      "model": "meta/muse-glimmer-30b",
+      "family": "meta",
+      "url": "https://integrate.api.nvidia.com/v1/chat/completions",
+      "key_param": "/naukribaba/NVIDIA_API_KEY",
+      "verified_on": "2026-09-28",
+      "probe_latency_s": 31.1,
+      "probe_score": 40,
+      "timeout": 123,
+      "reasoning": false,
+      "min_output_tokens": 1024,
+      "suitable_for_scoring": true
     }
   ],
   "_TOKENS": "min_output_tokens is a floor, not a preference. Reasoning models consume the budget internally before emitting, so calling one below its floor yields empty content with HTTP 200 -- a silent no-op, not an error. Measured 2026-09-28: gpt-oss-120b emitted nothing at max_tokens=60, and score_batch's global SCORE_MAX_TOKENS=2048 starved gpt-oss-20b in prod.",
-  "_CAPABILITY": "suitable_for_scoring is separate from verification. Every entry here was PROVED to respond correctly at realistic prompt size; that says nothing about whether it can reason about a job description. Selecting the pool on family diversity alone put a code model and a 2.6B model into the council and the AI Eval Gate measured tier_accuracy falling 63.2% -> 25.0%."
+  "_CAPABILITY": "suitable_for_scoring is separate from verification. Every entry here was PROVED to respond correctly at realistic prompt size; that says nothing about whether it can reason about a job description. Selecting the pool on family diversity alone put a code model and a 2.6B model into the council and the AI Eval Gate measured tier_accuracy falling 63.2% -> 25.0%.",
+  "_NVIDIA": "NVIDIA NIM entries are the same model FAMILIES already reachable via OpenRouter, deliberately. They are here for QUOTA independence, not breadth: OpenRouter's free pool shares one daily allowance across every model on it, and when it emptied on 2026-09-28 the council lost its only non-Groq families and collapsed to a single unreviewed model. NVIDIA is a second host for the same weights on separate billing, so the same council survives that. openai/gpt-oss-20b is reachable on this account but timed out at 100s on a realistic prompt, so it is not registered here."
 }
