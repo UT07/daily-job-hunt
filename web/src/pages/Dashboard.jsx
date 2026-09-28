@@ -8,6 +8,8 @@ import StatsBar from '../components/StatsBar';
 import JobTable from '../components/JobTable';
 import { SkillsTags, ModelBadge, decodeHtml, DeleteButton } from '../components/JobTable';
 import StatusDropdown from '../components/StatusDropdown';
+import PastJobsSection from '../components/PastJobsSection';
+import { buildJobQueryParams } from '../lib/jobQuery';
 import { ScoreBadge } from '../components/ui/Badge';
 import Button from '../components/ui/Button';
 import { Select } from '../components/ui/Input';
@@ -382,25 +384,10 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      const f = filtersRef.current;
-      const params = new URLSearchParams();
-      params.set('page', String(page));
-      params.set('per_page', String(perPage));
-      if (f.statusFilter !== 'All') params.set('status', f.statusFilter);
-      if (f.sourceFilter !== 'All') params.set('source', f.sourceFilter);
-      if (f.minScore > 0) params.set('min_score', String(f.minScore));
-      if (f.companySearch.trim()) params.set('company', f.companySearch.trim());
-      if (f.titleSearch && f.titleSearch.trim()) params.set('title', f.titleSearch.trim());
-      if (f.tailoredOnly) params.set('tailored', 'true');
-      if (f.tierFilter !== 'All') params.set('tier', f.tierFilter);
-      if (f.hideExpired) params.set('hide_expired', 'true');
-      if (f.sortBy) params.set('sort_by', f.sortBy);
-      if (f.sortOrder) params.set('sort_order', f.sortOrder);
-      if (f.archetypeFilter && f.archetypeFilter !== 'All') params.set('archetype', f.archetypeFilter);
-      if (f.seniorityFilter && f.seniorityFilter !== 'All') params.set('seniority', f.seniorityFilter);
-      if (f.remoteFilter && f.remoteFilter !== 'All') params.set('remote', f.remoteFilter);
-      if (f.levelFitFilter && f.levelFitFilter !== 'All') params.set('level_fit', f.levelFitFilter);
-      if (f.skillFilter && f.skillFilter.trim()) params.set('skill', f.skillFilter);
+      // No `lifecycle` param: the backend defaults to "not_archived", so the
+      // active list already excludes 30-days-and-older postings (engaged ones
+      // exempt). The 14-30 day band lives in <PastJobsSection /> below.
+      const params = buildJobQueryParams(filtersRef.current, { page, perPage });
 
       const data = await apiGet(`/api/dashboard/jobs?${params.toString()}`);
       setJobs(data.jobs || []);
@@ -1007,6 +994,16 @@ export default function Dashboard() {
           </button>
         </div>
       )}
+
+      {/* Past / Outdated — the 14-30 day band, below the live list because it
+          is a footnote to it, not a peer. Renders nothing when empty.
+
+          Deliberately NOT gated on `!loading` like the blocks above: that
+          would unmount and remount it on every refetch, which both fires a
+          second redundant request and silently collapses the shelf the moment
+          the user touches a filter. It owns its own loading state and stays
+          mounted, refetching when filterVersion changes. */}
+      <PastJobsSection filters={filtersRef.current} filterVersion={filterVersion} />
     </div>
   );
 }
