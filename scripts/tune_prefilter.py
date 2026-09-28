@@ -133,7 +133,29 @@ def main(samples: int) -> None:
     print(f"\nBy source: {dict(by_source.most_common())}")
 
     now = datetime.now(timezone.utc)
-    user_skills = merge_dedup.DEFAULT_USER_SKILLS
+
+    # Build the real user's prefilter profile from their live search config.
+    # Before 2026-09-28 this script passed DEFAULT_USER_SKILLS and no query
+    # phrases, so it measured a filter configured for nobody in particular --
+    # which understated the admit rate (it never exercised the query-phrase
+    # path PR #100 added) and could not measure a non-IT user at all.
+    cfg_rows = db.table("user_search_configs").select("*").execute().data or []
+    cfg = cfg_rows[0] if cfg_rows else {}
+    profile = merge_dedup.build_prefilter_profile(
+        queries=cfg.get("queries") or [],
+        experience_levels=cfg.get("experience_levels") or [],
+        geo_regions=cfg.get("geo_regions") or [],
+        locations=merge_dedup._config_locations(cfg.get("locations")),
+        include_internships=bool(cfg.get("include_internships", False)),
+    )
+    print(f"\nProfile under test: domain_tech={profile.is_domain_tech} "
+          f"skills={len(profile.skills)} phrases={len(profile.query_phrases)} "
+          f"excluded_tiers={sorted(profile.excluded_tiers)} "
+          f"remote_only={sorted(profile.remote_only_regions)} "
+          f"exempt={sorted(profile.exempt_regions)}")
+    if not cfg_rows:
+        print("  WARNING: no user_search_configs row found -- measuring an "
+              "UNGATED profile, which is not what production runs.")
 
     admitted, rejected = [], []
     reject_reason_counts = Counter()
@@ -142,7 +164,7 @@ def main(samples: int) -> None:
 
     for row in rows:
         sim_job = _replay_posted_date(row, now)
-        passes, reason = merge_dedup._prefilter_job(sim_job, user_skills)
+        passes, reason = merge_dedup._prefilter_job(sim_job, profile)
         day = (row.get("scraped_at") or "")[:10]
         per_day_total[day] += 1
         if passes:

@@ -8,6 +8,7 @@ score_batch.
 import logging
 import os
 import re
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 
@@ -29,72 +30,224 @@ def _get_ssm():
         _ssm = boto3.client("ssm")
     return _ssm
 
-# Pre-filter: title keywords that mark a role as either too senior or the
-# wrong function for this pipeline's two IC resume archetypes (sre_devops,
-# fullstack — confirmed via the live /api/health "resumes_loaded" field;
-# there is no manager/data-science/sales-engineering archetype to tailor
-# against, so a JD in one of those tracks cannot produce a good tailored
-# resume regardless of how well its buzzwords overlap with DEFAULT_USER_SKILLS).
+# ---------------------------------------------------------------------------
+# Rule 1 title vocabularies. Split by SOURCE OF TRUTH, not by matching style.
 #
-# Tuned 2026-09-25 against the full 12,672-row jobs_raw corpus
-# (scripts/tune_prefilter.py) — every addition below was checked against its
-# real matching titles in that corpus before being kept; see
-# .superpowers/sdd/2026-09-22-ey-genai-platform-upgrade/fix-throughput-report.md
-# for the sample review. Two findings drove most of this:
-#   - "architect" (see _WORD_BOUNDARY_REJECT_PATTERN below, not this set):
-#     all 105 admitted titles containing it were Solutions/Partner/Presales/
-#     Cloud-Solutions/Professional-Services Architect (pre-sales or
-#     consulting) or Staff/Principal-tier — zero were a reachable hands-on
-#     IC role. Subsumes the old "principal architect".
-#   - "manager": all 383 admitted titles containing it, INCLUDING the
-#     "Engineering Manager" / "Manager, Site Reliability Engineering" ones,
-#     are a people-management track this pipeline has no resume archetype
-#     for — an IC-only base resume does not tailor into a credible EM
-#     resume just because the JD is SRE-flavored.
-# "sales" and "partner" are deliberately NOT bare keywords: "sales" is a
-# substring of "Salesforce" (a real platform-engineering title observed in
-# the corpus), and "partner" matched "Staff Security Engineer, Security
-# Partnerships" (a real IC security role). Scoped phrases below avoid both.
-REJECT_TITLE_KEYWORDS = {
-    # Seniority tiers unreachable for a graduate/mid-level IC candidate.
-    "director", "vp", "vice president", "head of", "chief", "cto", "cio",
-    "distinguished",
-    # Management track — no resume archetype exists for it (see above).
-    "manager",
-    # Sales / GTM / pre-sales / customer-facing technical roles — JD
-    # boilerplate mentions the same stack as an IC role next to it, but the
-    # job itself is not hands-on engineering.
-    "sales engineer", "sales specialist", "sales operations", "account executive",
-    "business development", "solutions consultant", "presales", "pre-sales",
-    "professional services",
-    # Other roles this pipeline's two archetypes cannot credibly tailor
-    # toward, or that the user has explicitly ruled out.
-    "developer advocate", "data scientist", "recruiter", "compensation analyst",
-    "controller", "revenue analytics", "revenue technology", "revenue technical",
-    # Not a job posting at all — observed verbatim on a real Greenhouse board:
-    # "2026 - Women in Tech Summit, EMEA".
-    "summit",
+# Until 2026-09-28 this was a single flat REJECT_TITLE_KEYWORDS set applied to
+# every user. It conflated three unrelated policies with three different
+# correct owners, which is why PR #100 (a798e4c) could not fix any of them
+# incrementally and deferred the whole set as "too risky":
+#
+#   1. "not a job posting at all"  -> universal fact, belongs in code (below)
+#   2. "too senior / wrong track"  -> relative to the user's own target level,
+#                                     derived from experience_levels
+#   3. "wrong function for me"     -> depends entirely on the user's field,
+#                                     derived from their own queries
+#
+# The consequence of conflating them was that a non-IT user had their OWN
+# target role rejected before Rule 3 (the domain-neutral one PR #100 added)
+# ever ran: "Financial Controller" -> role_mismatch:controller, "Marketing
+# Manager" -> role_mismatch:manager, "Project Architect" ->
+# role_mismatch:architect, "Data Scientist" -> role_mismatch:data scientist.
+#
+# Two principles now govern every derived vocabulary:
+#
+#   A. A term the user searched for cannot reject them. "Manager" is a
+#      people-management track in tech and an IC seniority label in
+#      marketing, finance and product ("Marketing Manager", "Brand Manager").
+#      The word alone cannot tell you which, but the user's own query can.
+#   B. The IT vocabularies load only for a user whose queries are IT-shaped.
+#      A nurse doesn't get them overridden; they are never loaded at all.
+# ---------------------------------------------------------------------------
+
+
+def _compile_title_pattern(keywords) -> re.Pattern:
+    """Word-boundary alternation over `keywords`, longest-first.
+
+    Word boundaries throughout, deliberately. The old set matched most
+    keywords as bare substrings, which silently swallowed unrelated titles --
+    "cto" is inside "direCTOr", "doCTOr", "inspeCTOr", "colleCTOr",
+    "contraCTOr", "refraCTOry" and "seCTOr". That was invisible in an
+    all-tech corpus (the only colliding title such a corpus contains,
+    "...Director", is independently rejected by the "director" keyword) and so
+    survived the 2026-09-25 corpus tuning, which did hunt this exact class of
+    bug for "sales" vs "Salesforce" and "partner" vs "Partnerships".
+    Word-boundary matching is strictly more conservative than substring
+    matching -- it can only ever admit more, never reject more.
+
+    A trailing "s?" allows the plural ("Recruiters", "Data Scientists") that
+    the old substring match caught for free. On a multi-word keyword it
+    attaches to the final word, and on one like "head of" it is simply
+    inert.
+    """
+    alternation = "|".join(
+        re.escape(k) + "s?" for k in sorted(keywords, key=len, reverse=True)
+    )
+    return re.compile(r"\b(" + alternation + r")\b", re.IGNORECASE)
+
+
+# (1) Not a job posting at all. Universal -- true for a nurse, an accountant
+# and an SRE alike -- so this is the one title vocabulary that stays
+# hardcoded and is NOT overridable by the user's queries.
+#
+# Deliberately minimal. "summit" is here because it was observed verbatim on
+# a real Greenhouse board ("2026 - Women in Tech Summit, EMEA"). Other
+# plausible members ("career fair", "hiring event", "webinar") are NOT added
+# without a corpus hit first -- that evidence-before-keyword discipline is
+# what the 2026-09-25 tuning established and it is worth keeping.
+STRUCTURAL_REJECT_KEYWORDS = frozenset({"summit"})
+_STRUCTURAL_REJECT_PATTERN = _compile_title_pattern(STRUCTURAL_REJECT_KEYWORDS)
+
+# (2) Seniority / track tiers. Which tiers are excluded is NOT hardcoded --
+# it derives from the user's experience_levels via _LEVEL_TIER_EXCLUSIONS.
+SENIORITY_TIER_KEYWORDS = {
+    "exec": frozenset({
+        "director", "vp", "vice president", "head of", "chief", "cto", "cio",
+        "distinguished",
+    }),
+    "management": frozenset({"manager"}),
+}
+_SENIORITY_TIER_PATTERNS = {
+    tier: _compile_title_pattern(kws) for tier, kws in SENIORITY_TIER_KEYWORDS.items()
 }
 
-# Keywords that need word-boundary matching, not the plain substring check
-# REJECT_TITLE_KEYWORDS uses above, because their bare substring collides
-# with real words that show up in genuine on-target titles:
-#   - "intern" is a substring of "International" and "Internal" — both
-#     observed on real, senior, on-target titles ("Staff Software Engineer,
-#     International", "...Data Platforms & Internal Tooling"). Rejecting
-#     internships at all matches existing user feedback (feedback_graduated.md
-#     — the user has already graduated).
-#   - "architect" is a substring of "Architecture" — caught 2 real backend/SRE
-#     titles that only mention "Architecture" as an org/team name ("Senior
-#     Backend Engineer, Architecture Engineering: Nonlinear Productivity",
-#     "Site Reliability Engineer - Video Live Streaming Architecture") before
-#     this was moved out of the plain-substring set above.
-# Every other collision this same corpus-scan checked for ("manager",
-# "sales engineer", "partner", the multi-word phrases) came back clean — see
-# the throughput fix report for the specific counts.
-_WORD_BOUNDARY_REJECT_PATTERN = re.compile(
-    r"\b(intern|interns|internship|architect|architects)\b", re.IGNORECASE
-)
+# experience_level -> the tiers that level rules out. Owner-specified
+# 2026-09-28. "senior" deliberately still sees management-track postings: a
+# senior IC can judge an EM req for themselves, and over-filtering is the
+# failure mode this pipeline actually suffers from (a near-empty dashboard),
+# not under-filtering. "lead"/"manager" rule out nothing.
+#
+# When several levels are selected the MOST PERMISSIVE wins (set
+# intersection) -- otherwise ticking "senior" next to "mid_level" in Settings
+# would be silently ignored, which is a confusing thing for a UI to do.
+_LEVEL_TIER_EXCLUSIONS = {
+    "entry_level": frozenset({"exec", "management"}),
+    "mid_level": frozenset({"exec", "management"}),
+    "senior": frozenset({"exec"}),
+    "lead": frozenset(),
+    "manager": frozenset(),
+}
+
+# Internships are their own axis, NOT a seniority tier. Deriving "no
+# internships" from entry_level would be wrong in both directions: a new
+# graduate legitimately wants them, and a career-changing senior might too.
+# Default off, matching the owner's preference (feedback_graduated.md).
+#
+# FOLLOW-UP: the owner's real rule is narrower than "no internships" -- they
+# want to exclude only internships that REQUIRE CURRENT ENROLMENT, which is a
+# condition on the JD body, not the title. Deliberately out of scope here;
+# this flag is the title-level approximation.
+INTERNSHIP_KEYWORDS = frozenset({"intern", "internship"})
+_INTERNSHIP_PATTERN = _compile_title_pattern(INTERNSHIP_KEYWORDS)
+
+# (3) Off-function titles for an IT candidate. Loaded ONLY when the user's own
+# queries are IT-shaped (see _looks_like_tech_domain), and individually
+# cancelled by any query the user actually wrote. So "controller" still
+# rejects a Financial Controller req for an SRE, but never for the finance
+# user who searched for it -- and it is not even loaded for a nurse.
+#
+# These are the terms from the pre-2026-09-28 flat set that encode "this is
+# not hands-on IC engineering": sales/GTM/pre-sales, plus tracks with no
+# resume archetype to tailor against. "sales" and "partner" are still
+# deliberately absent as bare keywords (the Salesforce / Security
+# Partnerships collisions from the 2026-09-25 tuning).
+IT_OFF_FUNCTION_KEYWORDS = frozenset({
+    "sales engineer", "sales specialist", "sales operations", "account executive",
+    "business development", "solutions consultant", "presales", "pre-sales",
+    "professional services", "developer advocate", "data scientist", "recruiter",
+    "compensation analyst", "controller", "revenue analytics",
+    "revenue technology", "revenue technical", "architect",
+})
+_IT_OFF_FUNCTION_PATTERN = _compile_title_pattern(IT_OFF_FUNCTION_KEYWORDS)
+
+# ---------------------------------------------------------------------------
+# Rule 4 geography. The same fact/policy split as Rule 1.
+#
+# The old rule hardcoded {"india", "bangalore", "mumbai", ...} and rejected
+# in-office roles there -- the Dublin-based owner's personal exclusion,
+# applied to every user, which rejected a Mumbai-based user's entire local
+# market. The city list survives below as REFERENCE DATA ("Bangalore is in
+# India" is true for everyone). The POLICY -- which regions are acceptable
+# only remotely -- now reads the `remote_only` flag that the user's own
+# geo_regions config has always carried and that this filter simply ignored.
+# ---------------------------------------------------------------------------
+
+# Region name -> location tokens that identify it. Needed because scrapers
+# frequently emit a bare city with no country ("Dublin", "Bangalore"), so
+# matching on the region name alone would fail open on exactly the rows the
+# old rule was written to catch. Extend as users configure new regions.
+REGION_LOCATION_TOKENS = {
+    "ireland": frozenset({"ireland", "dublin", "cork", "galway", "limerick"}),
+    "india": frozenset({
+        "india", "bangalore", "bengaluru", "mumbai", "hyderabad", "pune",
+        "chennai", "delhi", "gurgaon", "noida", "kolkata",
+    }),
+    "us": frozenset({
+        "united states", "usa", "u.s.", " us ", "austin", "new york", "seattle",
+        "san francisco", "boston", "chicago", "denver", "atlanta",
+    }),
+    "uk": frozenset({
+        "united kingdom", "england", "london", "manchester", "birmingham",
+        "edinburgh", "glasgow", "bristol",
+    }),
+}
+
+# Regions whose remote-only status Rule 4 does NOT yet enforce.
+#
+# BEHAVIOUR-PRESERVATION CARVE-OUT (owner decision, 2026-09-28), sized by
+# measurement rather than by guesswork, after two live corpus runs over the
+# same 13,677-row pool:
+#
+#   - Deriving the policy from geo_regions[].remote_only alone DISABLED Rule 4
+#     in production (that key is written nowhere but config.yaml, so the DB row
+#     never carries it): incompatible_location 6 -> 0, and five Hyderabad/
+#     Bangalore in-office roles admitted against explicit owner intent.
+#   - Deriving it from `locations` with only "us" exempt OVER-rejected: the
+#     owner's locations are ['Dublin','Ireland'], so {india,uk,us} all became
+#     remote-only and 107 London/Manchester/Edinburgh SRE and DevOps roles --
+#     the owner's exact target roles -- were newly rejected (-0.75pp).
+#
+# The second failure is the instructive one: `locations` states a PREFERENCE,
+# not an exclusion. The pre-2026-09-28 rule excluded exactly one region and
+# left every other foreign location to shared/work_auth.py, which CAPS a
+# non-home-country job to A-tier instead of rejecting it. Turning a preference
+# list into an exclusion set silently contradicts that shipped design.
+#
+# So the exemption names the regions the old rule tolerated in-office. Tier 2
+# stays genuinely per-user -- a Mumbai-based user gets the mirror-image policy
+# from the same code path, with no special-casing -- while the owner's admit
+# rate is unchanged.
+#
+# Expressed as an EXEMPTION rather than an allow-list on purpose. Scoping
+# enforcement to named regions instead ("enforce india only") preserved the
+# owner's behaviour but silently disabled Rule 4 for everyone else, which
+# re-introduces the single-tenant assumption this change exists to remove.
+#
+# RETIRING IT: clear the env var. Correct, and costs this user ~107 UK jobs,
+# so it wants its own measured decision -- see
+# test_retiring_the_exemption_enforces_uk_too, already written.
+GEO_REMOTE_ONLY_EXEMPT = os.environ.get("GEO_REMOTE_ONLY_EXEMPT", "us,uk")
+
+# Last-resort geographic policy, for a profile where NOTHING expresses one.
+#
+# This is a single-tenant default and therefore exactly the kind of thing this
+# module is supposed to have stopped carrying. It is here because the live
+# corpus run (13,677 rows, 2026-09-28) proved that deriving the policy from
+# geo_regions[].remote_only alone disables Rule 4 in production: that key is
+# written nowhere but config.yaml -- not by the search-config API, not by
+# Settings.jsx -- so the DB row never has it. The measured effect was
+# incompatible_location rejects 6 -> 0 and five Hyderabad/Bangalore in-office
+# roles admitted against explicit owner intent.
+#
+# Scoped as tightly as it can be: it fires ONLY when neither an explicit
+# remote_only flag nor any target `locations` is available, so any user who has
+# expressed a geographic preference at all is unaffected -- including the
+# Mumbai-based user whose local market the old hardcoded list used to reject.
+#
+# REMOVAL: populate either signal for the user and this never fires again.
+# PrefilterProfile.geo_policy_source reports which tier actually applied, and
+# the handler logs it on every run so this cannot go stale unnoticed.
+LEGACY_REMOTE_ONLY_REGIONS = frozenset({"india"})
 
 # Freshness pre-filter — drop jobs whose posted_date is older than this many
 # days at scrape time. Configurable via JOB_MAX_AGE_DAYS env var. Default 14:
@@ -137,7 +290,21 @@ BACKFILL_LOOKBACK_DAYS = int(os.environ.get("BACKFILL_LOOKBACK_DAYS", "30"))
 # order-dependent subset — see _job_relevance_rank below.
 MAX_JOBS_PER_RUN = int(os.environ.get("MAX_JOBS_PER_RUN", "150"))
 
-# Pre-filter: minimum tech skill keywords to match against JD
+# Tech skill vocabulary, used for two things and NO LONGER as an
+# unconditional base for every user's skill set.
+#
+# Before 2026-09-28 `user_skills` started as this set for everybody and the
+# user's own query words were unioned on top, so a nurse's skill set
+# contained "kubernetes". That was near-harmless for Rule 3 (a nursing JD
+# rarely contains two of these) but it quietly broke _job_relevance_rank,
+# which ranks by exactly this overlap: every non-IT JD scored 0, so when a
+# run exceeded MAX_JOBS_PER_RUN the surviving 150 were chosen arbitrarily.
+# That is the worse of the two failures because it is silent -- no reject
+# reason, no log line, the job just loses a tiebreak.
+#
+# Now it serves as (a) the probe for whether a user's queries are IT-shaped
+# and (b) the skill vocabulary for those users only. Name retained because
+# scripts/tune_prefilter.py and the existing test corpus both reference it.
 DEFAULT_USER_SKILLS = {
     "python", "aws", "kubernetes", "docker", "terraform", "react", "typescript",
     "node", "fastapi", "linux", "ci/cd", "devops", "sre", "cloud", "java",
@@ -189,18 +356,247 @@ def _extract_tech_keywords(text: str) -> set:
     return found
 
 
-def _job_relevance_rank(job: dict, user_skills: set) -> tuple:
+@dataclass(frozen=True)
+class PrefilterProfile:
+    """Every vocabulary Rules 1/3/4 consult, resolved for ONE user.
+
+    Built once per run by build_prefilter_profile() from the user's own
+    search config, then passed into _prefilter_job. The point of gathering
+    these into one object is that it becomes impossible to add a new
+    hardcoded list to the prefilter without deciding, explicitly and in one
+    place, where that list comes from for a user who isn't the owner.
+
+    skills             tech vocabulary + query tokens for an IT user; query
+                       tokens ONLY otherwise
+    query_phrases      bigrams from the user's queries (see _query_phrases)
+    query_text         the user's queries joined, for cancellation lookups
+    is_domain_tech     do the user's own queries look IT-shaped?
+    excluded_tiers     seniority tiers ruled out by their experience_levels
+    include_internships
+    remote_only_regions region names the user accepts only remotely
+    exempt_regions     regions whose remote_only flag is not yet enforced
+                       (see GEO_REMOTE_ONLY_EXEMPT)
+    geo_policy_source  which tier supplied the geographic policy, so a silent
+                       fallback is visible in the logs rather than inferred
+    """
+
+    skills: frozenset = frozenset()
+    query_phrases: frozenset = frozenset()
+    query_text: str = ""
+    is_domain_tech: bool = False
+    excluded_tiers: frozenset = frozenset()
+    include_internships: bool = False
+    remote_only_regions: frozenset = frozenset()
+    exempt_regions: frozenset = frozenset()
+    geo_policy_source: str = "none"
+
+    def cancels(self, keyword: str) -> bool:
+        """Did the user ask for this term themselves?
+
+        Principle A: a term the user searched for cannot reject them. This is
+        what lets "manager" keep rejecting EM reqs for an SRE while admitting
+        "Marketing Manager" for a marketer -- in marketing, finance and
+        product "Manager" is an IC seniority label, not a people-management
+        track, and no amount of keyword curation can distinguish those two
+        senses. The user's own query can.
+        """
+        pattern = r"\s+".join(re.escape(w) for w in keyword.lower().split())
+        return bool(re.search(r"\b" + pattern + r"\b", self.query_text))
+
+
+def _looks_like_tech_domain(queries: list) -> bool:
+    """Do the user's own search queries place them in software?
+
+    Principle B: the IT vocabularies load only for IT users. This is the
+    predicate that decides it, and it is deliberately based on the user's
+    queries rather than on anything about the job being filtered -- the
+    question "which vocabulary applies to this person" has to be answered
+    per user, not per job, or a nurse's one AWS-mentioning JD would flip
+    them into the IT branch.
+    """
+    return bool(_extract_tech_keywords(" ".join(queries)))
+
+
+def _query_tokens(queries: list) -> frozenset:
+    """Content words from the user's queries, for Rule 3's skill overlap.
+
+    Same >2-char floor the pre-2026-09-28 handler used when it unioned query
+    words onto DEFAULT_USER_SKILLS, so an IT user's Rule 3 behaviour is
+    unchanged.
+    """
+    return frozenset(
+        w for q in queries for w in re.findall(r"[A-Za-z]+", q.lower()) if len(w) > 2
+    )
+
+
+def _config_locations(raw) -> list:
+    """Flatten the `locations` jsonb into a flat list of location strings.
+
+    Tolerates both shapes the project uses: a flat list, and config.yaml's
+    {"primary": [...], "secondary": [...]} nesting. Shape-tolerant on purpose
+    -- assuming one shape for a jsonb column is what disabled Rule 4 in
+    production in the first place.
+    """
+    if isinstance(raw, dict):
+        out = []
+        for v in raw.values():
+            if isinstance(v, list):
+                out.extend(str(x) for x in v)
+            elif v:
+                out.append(str(v))
+        return out
+    if isinstance(raw, list):
+        return [str(x) for x in raw]
+    return [str(raw)] if raw else []
+
+
+def _resolve_geo_policy(geo_regions, locations) -> tuple[frozenset, str]:
+    """Which regions the user accepts only remotely, and where that came from.
+
+    Three tiers, first one that actually expresses a policy wins. Returning
+    the provenance alongside the value is deliberate: the bug this function
+    exists to fix was a SILENT fallthrough to "no policy at all", which no
+    amount of unit testing caught because the tests supplied a config shape
+    production never produces. A caller that logs the source cannot be
+    quietly wrong in the same way twice.
+
+    Region names are resolved through the same matcher used on a job's
+    location string, so "US (Remote)" in config and "Austin, Texas" on a
+    posting cannot disagree about which region they mean.
+    """
+    regions = [r for r in (geo_regions or []) if isinstance(r, dict)]
+
+    # Tier 1: an explicit per-region flag. Only counts if the key is actually
+    # present -- a config that says remote_only=False everywhere IS a policy
+    # ("in-office is fine anywhere") and must not fall through to tier 2.
+    if any("remote_only" in r for r in regions):
+        return (
+            frozenset(filter(None, (
+                _region_for_location(str(r.get("name", "")))
+                for r in regions if r.get("remote_only")
+            ))),
+            "geo_regions.remote_only",
+        )
+
+    # Tier 2: the user's target locations. A region they are NOT targeting is
+    # treated as acceptable only remotely -- derived this way it works for a
+    # Mumbai-based user in reverse, without special-casing anybody.
+    #
+    # This is intentionally broader than the policy actually enforced, and
+    # GEO_REMOTE_ONLY_EXEMPT narrows it. `locations` is a PREFERENCE list, so
+    # reading it as a hard exclusion over-rejects: measured at 107 lost UK
+    # SRE/DevOps jobs for the owner, whose locations are ['Dublin','Ireland'].
+    # Non-home-country jobs are meant to be A-tier CAPPED by
+    # shared/work_auth.py, not rejected here. Do not widen the enforced set
+    # without re-running scripts/compare_prefilter_change.py.
+    targets = frozenset(filter(None, (
+        _region_for_location(str(loc)) for loc in (locations or [])
+    )))
+    if targets:
+        return frozenset(REGION_LOCATION_TOKENS) - targets, "locations"
+
+    # Tier 3: nothing to go on. See LEGACY_REMOTE_ONLY_REGIONS.
+    return LEGACY_REMOTE_ONLY_REGIONS, "legacy_fallback"
+
+
+def build_prefilter_profile(
+    queries: list | None = None,
+    experience_levels: list | None = None,
+    geo_regions: list | None = None,
+    locations: list | None = None,
+    include_internships: bool = False,
+    exempt_regions: str | None = None,
+) -> PrefilterProfile:
+    """Resolve one user's config into the vocabularies the prefilter needs.
+
+    Every argument is optional and an absent one means "no gate", never "use
+    the owner's value". That direction matters: PR #100 established that
+    guessing a default for an unconfigured user is how a non-IT user ends up
+    with an empty dashboard and a product that looks broken (its no-config
+    `queries` fallback used to be ["software engineer"]). An unconfigured
+    user here gets no seniority ceiling, no off-function list and no
+    geographic rejection -- they see more, not less.
+    """
+    queries = list(queries or [])
+    levels = [str(x).strip().lower() for x in (experience_levels or [])]
+
+    is_tech = _looks_like_tech_domain(queries)
+    tokens = _query_tokens(queries)
+
+    # Most permissive selected level wins; an unrecognised level contributes
+    # no exclusions rather than silently falling back to the strictest.
+    if levels:
+        excluded = frozenset.intersection(*[
+            _LEVEL_TIER_EXCLUSIONS.get(lv, frozenset()) for lv in levels
+        ])
+    else:
+        excluded = frozenset()
+
+    remote_only, geo_source = _resolve_geo_policy(geo_regions, locations)
+
+    return PrefilterProfile(
+        skills=frozenset(DEFAULT_USER_SKILLS) | tokens if is_tech else tokens,
+        query_phrases=_query_phrases(queries),
+        query_text=" | ".join(q.lower() for q in queries),
+        is_domain_tech=is_tech,
+        excluded_tiers=excluded,
+        include_internships=include_internships,
+        remote_only_regions=remote_only,
+        geo_policy_source=geo_source,
+        exempt_regions=frozenset(
+            s.strip().lower()
+            for s in (GEO_REMOTE_ONLY_EXEMPT if exempt_regions is None else exempt_regions).split(",")
+            if s.strip()
+        ),
+    )
+
+
+def _region_for_location(location: str) -> str | None:
+    """Which configured region a job's location string belongs to, or None.
+
+    Fails open (None -> no geographic rejection) when the location can't be
+    resolved, matching Rule 0's existing choice not to penalise a missing
+    posted_date. Throwing away a row because a scraper gave us a location
+    string we don't recognise would be the wrong kind of strict.
+    """
+    loc = f" {location.lower()} "
+    for region, tokens in REGION_LOCATION_TOKENS.items():
+        if any(tok in loc for tok in tokens):
+            return region
+    return None
+
+
+def _region_is_remote_only(region: str, profile: PrefilterProfile) -> bool:
+    """Does the user accept `region` only remotely, and do we enforce it?
+
+    The exemption is the behaviour-preservation carve-out documented on
+    GEO_REMOTE_ONLY_EXEMPT; everything not exempt is enforced.
+    """
+    if region in profile.exempt_regions:
+        return False
+    return region in profile.remote_only_regions
+
+
+def _job_relevance_rank(job: dict, profile: PrefilterProfile) -> tuple:
     """Rank a job for the MAX_JOBS_PER_RUN cutoff — higher is better.
 
-    Primary key is skill overlap (the same signal Rule 3 already uses to
+    Primary key is relevance overlap (the same signals Rule 3 uses to
     admit/reject, just used here to order rather than gate), tie-broken by
     freshness (lower age wins) so that among equally-relevant jobs the most
     recently posted one survives the cut. Age ties broken to 0 when
     unavailable — never rank a missing-date job LAST by treating "unknown"
     as "old"; Rule 0 already chose not to penalize missing posted_date, and
     ranking should stay consistent with that.
+
+    Both of Rule 3's signals count here, not just the tech one. Ranking on
+    tech overlap alone scored every non-IT JD at 0, so a non-IT user whose run
+    exceeded MAX_JOBS_PER_RUN had their surviving 150 chosen by nothing at
+    all — a silent failure with no reject reason and no log line to notice it
+    by. Query-phrase hits give every domain something to sort on.
     """
-    overlap = len(_extract_tech_keywords(job.get("description") or "") & user_skills)
+    desc = job.get("description") or ""
+    overlap = len(_extract_tech_keywords(desc) & profile.skills)
+    overlap += len(_query_phrase_overlap(desc.lower(), profile.query_phrases))
     age = _job_age_days(job)
     return (overlap, -(age if age is not None else 0.0))
 
@@ -323,16 +719,59 @@ def _query_phrase_overlap(desc_lower: str, query_phrases: frozenset) -> set:
     return hits
 
 
+def _title_reject_reason(title: str, profile: PrefilterProfile) -> str | None:
+    """Rule 1. Returns a reject reason, or None to admit.
+
+    Three checks, each with its own source of truth (see the vocabulary
+    section at the top of this module). Ordered cheapest-and-most-absolute
+    first. Every check except the structural one honours Principle A: a term
+    the user searched for cannot reject them.
+    """
+    # (1) Not a job posting at all. Universal, and NOT cancellable -- a
+    # posting for a conference is not a job no matter what you searched for.
+    structural = _STRUCTURAL_REJECT_PATTERN.search(title)
+    if structural:
+        return f"not_a_posting:{structural.group(1).lower()}"
+
+    # (2) Seniority / track, from the user's experience_levels.
+    for tier in profile.excluded_tiers:
+        match = _SENIORITY_TIER_PATTERNS[tier].search(title)
+        if match and not profile.cancels(match.group(1)):
+            return f"role_mismatch:{match.group(1).lower()}"
+
+    # (3) Internships -- an independent axis, never inferred from level.
+    if not profile.include_internships:
+        match = _INTERNSHIP_PATTERN.search(title)
+        if match and not profile.cancels(match.group(1)):
+            return f"role_mismatch:{match.group(1).lower()}"
+
+    # (4) Off-function, for IT users only. This is the check that used to
+    # reject a finance user's Financial Controller and an architect's Project
+    # Architect: not because the terms were wrong for an SRE, but because
+    # they were applied to everybody.
+    if profile.is_domain_tech:
+        match = _IT_OFF_FUNCTION_PATTERN.search(title)
+        if match and not profile.cancels(match.group(1)):
+            return f"role_mismatch:{match.group(1).lower()}"
+
+    return None
+
+
 def _prefilter_job(
     job: dict,
-    user_skills: set,
+    profile: PrefilterProfile,
     max_age_days: int = JOB_MAX_AGE_DAYS,
-    query_phrases: frozenset = frozenset(),
 ) -> tuple[bool, str]:
     """Apply relevance pre-filter. Returns (pass, reason).
 
     Freshness (rule 0) runs first — cheapest to check and the most user-
     impactful (a stale posting wastes every downstream cycle).
+
+    `profile` carries every vocabulary this function consults; build it with
+    build_prefilter_profile() from the user's own search config. It is
+    required rather than defaulted on purpose: a default would have to encode
+    somebody's domain, and silently encoding the owner's is the bug this
+    signature exists to prevent.
     """
     title = (job.get("title") or "").lower()
     desc = job.get("description") or ""
@@ -343,43 +782,46 @@ def _prefilter_job(
     if age is not None and age > max_age_days:
         return False, f"stale:{int(age)}d_old"
 
-    # Rule 1: Seniority / off-track-function filter (renamed from
-    # "too_senior" — the set now also covers function mismatches like
-    # "sales engineer" that have nothing to do with seniority, and an
-    # honest reason string matters for anyone reading the reject logs).
-    for kw in REJECT_TITLE_KEYWORDS:
-        if kw in title:
-            return False, f"role_mismatch:{kw}"
-    word_match = _WORD_BOUNDARY_REJECT_PATTERN.search(title)
-    if word_match:
-        return False, f"role_mismatch:{word_match.group(1).lower()}"
+    # Rule 1: Title gate — structural, seniority, internship, off-function
+    reason = _title_reject_reason(title, profile)
+    if reason:
+        return False, reason
 
     # Rule 2: Description quality gate
     if len(desc) < 200:
         return False, "description_too_short"
 
     # Rule 3: Minimum skill overlap. Two independent signals, either one
-    # sufficient: the closed tech-keyword vocabulary (>=2 matches; unchanged
-    # from before, so an IT user's admit/reject behaviour on this path is
-    # identical), OR at least one of the user's own query phrases showing up
-    # in the JD (domain-neutral: works for "registered nurse" exactly as it
-    # does for "site reliability engineer"). Without this second path, any
-    # user whose target role isn't in the hardcoded tech vocabulary would
-    # have every job rejected here regardless of real relevance. A single
-    # PHRASE match (not a lone word -- see _query_phrases) is the bar here,
-    # not >=2, because a two-word-or-longer literal phrase match is already
-    # a precise, low-noise signal on its own.
+    # sufficient: the tech-keyword vocabulary (>=2 matches, and only for a
+    # user whose queries are IT-shaped -- see PrefilterProfile.skills), OR at
+    # least one of the user's own query phrases showing up in the JD
+    # (domain-neutral: works for "registered nurse" exactly as it does for
+    # "site reliability engineer"). A single PHRASE match (not a lone word --
+    # see _query_phrases) is the bar, not >=2, because a two-word literal
+    # phrase match is already a precise, low-noise signal on its own.
+    # Fails OPEN on a profile with no signal at all. Before this refactor
+    # user_skills always started as DEFAULT_USER_SKILLS, so a user whose
+    # config row was missing or had empty `queries` still cleared this rule
+    # via the tech vocabulary. With that IT default gone, such a profile has
+    # nothing to match on -- and gating on it would reject 100% of the pool,
+    # which on a live pipeline is an outage rather than a filter. Consistent
+    # with Rule 0 passing a missing posted_date and _region_for_location
+    # failing open: an input we know nothing about is not evidence of
+    # irrelevance. MAX_JOBS_PER_RUN still bounds what reaches scoring.
     desc_lower = desc.lower()
-    jd_skills = _extract_tech_keywords(desc)
-    tech_overlap = jd_skills & user_skills
-    phrase_overlap = _query_phrase_overlap(desc_lower, query_phrases)
-    if len(tech_overlap) < 2 and not phrase_overlap:
-        return False, f"skill_overlap:{len(tech_overlap)}"
+    if profile.skills or profile.query_phrases:
+        tech_overlap = _extract_tech_keywords(desc) & profile.skills
+        phrase_overlap = _query_phrase_overlap(desc_lower, profile.query_phrases)
+        if len(tech_overlap) < 2 and not phrase_overlap:
+            return False, f"skill_overlap:{len(tech_overlap)}"
 
-    # Rule 4: Location compatibility (basic)
-    incompatible_in_office = {"india", "bangalore", "mumbai", "hyderabad", "pune", "chennai"}
-    if any(loc in location for loc in incompatible_in_office) and "remote" not in location:
-        return False, "incompatible_location:india_in_office"
+    # Rule 4: Location compatibility. Which regions are remote-only is the
+    # user's own geo_regions config; which cities belong to which region is
+    # geography. See the Rule 4 section at the top of this module for why
+    # those two were separated.
+    region = _region_for_location(location)
+    if region and "remote" not in location and _region_is_remote_only(region, profile):
+        return False, f"incompatible_location:{region}_in_office"
 
     return True, "pass"
 
@@ -479,30 +921,46 @@ def handler(event, context):
     unique_jobs = list(seen_fuzzy.values())
 
     # --- Pre-filter: relevance check ---
-    # Load user skills (from search config or defaults)
-    user_skills = DEFAULT_USER_SKILLS
-    query_phrases: frozenset = frozenset()
+    # Build this user's prefilter vocabularies from their own search config.
+    # select("*") rather than naming columns: get_search_config already
+    # degrades this way (PR #100), and a column that hasn't been migrated yet
+    # must not take the whole step down -- build_prefilter_profile treats
+    # every absent field as "no gate".
+    profile = build_prefilter_profile()
     if user_id:
         try:
-            config = db.table("user_search_configs").select("queries").eq("user_id", user_id).execute()
-            user_queries = config.data[0].get("queries") if config.data else None
-            if user_queries:
-                # Add user's search queries as additional skill signals, and
-                # derive phrase-level signals too (see _query_phrases) --
-                # the tech-keyword vocabulary above can't recognise a
-                # non-IT user's own terms, so query_phrases is what makes
-                # Rule 3 in _prefilter_job work for e.g. "registered nurse"
-                # or "staff accountant", not just software roles.
-                for q in user_queries:
-                    user_skills |= {w.lower() for w in q.split() if len(w) > 2}
-                query_phrases = _query_phrases(user_queries)
+            config = db.table("user_search_configs").select("*").eq("user_id", user_id).execute()
+            row = config.data[0] if config.data else {}
+            profile = build_prefilter_profile(
+                queries=row.get("queries") or [],
+                experience_levels=row.get("experience_levels") or [],
+                geo_regions=row.get("geo_regions") or [],
+                locations=_config_locations(row.get("locations")),
+                include_internships=bool(row.get("include_internships", False)),
+            )
         except Exception:
-            pass
+            logger.warning(
+                "[merge_dedup] could not load search config for user; "
+                "running with an ungated profile", exc_info=True
+            )
+    logger.info(
+        f"[merge_dedup] prefilter profile: domain_tech={profile.is_domain_tech} "
+        f"skills={len(profile.skills)} phrases={len(profile.query_phrases)} "
+        f"excluded_tiers={sorted(profile.excluded_tiers)} "
+        f"remote_only={sorted(profile.remote_only_regions)} "
+        f"geo_policy={profile.geo_policy_source}"
+    )
+    if profile.geo_policy_source == "legacy_fallback":
+        logger.warning(
+            "[merge_dedup] no geographic preference in this user's config -- "
+            "falling back to LEGACY_REMOTE_ONLY_REGIONS, a single-tenant "
+            "default. Populate geo_regions[].remote_only or locations to retire it."
+        )
 
     filtered_jobs = []
     filtered_out = 0
     for job in unique_jobs:
-        passes, reason = _prefilter_job(job, user_skills, query_phrases=query_phrases)
+        passes, reason = _prefilter_job(job, profile)
         if passes:
             filtered_jobs.append(job)
         else:
@@ -565,7 +1023,7 @@ def handler(event, context):
     capacity_capped = 0
     if len(new_jobs) > MAX_JOBS_PER_RUN:
         capacity_capped = len(new_jobs) - MAX_JOBS_PER_RUN
-        new_jobs.sort(key=lambda j: _job_relevance_rank(j, user_skills), reverse=True)
+        new_jobs.sort(key=lambda j: _job_relevance_rank(j, profile), reverse=True)
         new_jobs = new_jobs[:MAX_JOBS_PER_RUN]
         logger.info(
             f"[merge_dedup] Capacity cap: {len(new_jobs) + capacity_capped} passed the relevance filter, "

@@ -5,6 +5,48 @@ from unittest.mock import patch, MagicMock
 import pytest
 
 
+# ---------------------------------------------------------------------------
+# Legacy-semantics bridge. Every test ABOVE this line was written against the
+# pre-2026-09-28 prefilter, when the title/skill/location vocabularies were
+# module-level constants applied to every user. They are kept verbatim as the
+# behaviour-preservation guard for that refactor: same titles, same
+# assertions, only the call expression changed.
+#
+# This helper encodes ONE user's domain (IT, entry/mid ceiling, no
+# internships, India in-office excluded) -- which is exactly what was removed
+# from merge_dedup, so it belongs here in the tests and not in production.
+# ---------------------------------------------------------------------------
+
+def _legacy_profile(skills, query_phrases=frozenset()):
+    """A profile reproducing the pre-refactor always-on vocabularies."""
+    import dataclasses
+
+    import merge_dedup
+    base = merge_dedup.build_prefilter_profile(
+        experience_levels=["mid_level"],
+        geo_regions=[{"name": "India", "remote_only": True}],
+        exempt_regions="",
+    )
+    return dataclasses.replace(
+        base,
+        skills=frozenset(skills),
+        query_phrases=frozenset(query_phrases),
+        is_domain_tech=True,
+    )
+
+
+# Search-config row for handler tests whose assertions depend on the prefilter
+# vocabularies (the seniority ceiling, or skill overlap for the capacity-cap
+# ranking). Before 2026-09-28 these came from module-level IT constants and the
+# tests did not have to say which user they were about; now they do, which is
+# the point of the refactor.
+_IT_SEARCH_CONFIG = [{
+    "queries": ["Python Developer", "Site Reliability Engineer"],
+    "experience_levels": ["mid_level"],
+    "geo_regions": [{"name": "Ireland", "remote_only": False}],
+}]
+
+
 def _make_supabase(jobs_raw_data=None, existing_jobs_data=None, scrape_runs_data=None, search_config_data=None):
     """Build a mock Supabase client for merge_dedup tests."""
     mock_client = MagicMock()
@@ -151,7 +193,8 @@ def test_prefilter_rejects_too_senior():
             "location": "Dublin",
         },
     ]
-    db = _make_supabase(jobs_raw_data=jobs_raw, existing_jobs_data=[])
+    db = _make_supabase(jobs_raw_data=jobs_raw, existing_jobs_data=[],
+                        search_config_data=_IT_SEARCH_CONFIG)
 
     with patch("merge_dedup.get_supabase", return_value=db):
         import merge_dedup
@@ -324,7 +367,7 @@ def test_prefilter_passes_fresh_job():
     import merge_dedup
     job = _fresh_job_with_posted(days_ago=2)
     user_skills = {"python", "aws", "kubernetes"}
-    passes, reason = merge_dedup._prefilter_job(job, user_skills)
+    passes, reason = merge_dedup._prefilter_job(job, _legacy_profile(user_skills))
     assert passes is True
     assert reason == "pass"
 
@@ -334,7 +377,7 @@ def test_prefilter_rejects_stale_job():
     # Default max_age_days = 14
     job = _fresh_job_with_posted(days_ago=30)
     user_skills = {"python", "aws", "kubernetes"}
-    passes, reason = merge_dedup._prefilter_job(job, user_skills)
+    passes, reason = merge_dedup._prefilter_job(job, _legacy_profile(user_skills))
     assert passes is False
     assert reason.startswith("stale:")
     assert "30d_old" in reason
@@ -347,7 +390,7 @@ def test_prefilter_passes_job_with_null_posted_date():
     job = _fresh_job_with_posted(days_ago=0)
     job["posted_date"] = None
     user_skills = {"python", "aws", "kubernetes"}
-    passes, reason = merge_dedup._prefilter_job(job, user_skills)
+    passes, reason = merge_dedup._prefilter_job(job, _legacy_profile(user_skills))
     assert passes is True
 
 
@@ -360,7 +403,7 @@ def test_prefilter_freshness_runs_before_other_rules():
         title="VP of Engineering",   # would fail rule 1
         description="too short",     # would fail rule 2
     )
-    passes, reason = merge_dedup._prefilter_job(job, {"python"})
+    passes, reason = merge_dedup._prefilter_job(job, _legacy_profile({"python"}))
     assert passes is False
     assert reason.startswith("stale:")
 
@@ -370,7 +413,7 @@ def test_prefilter_custom_max_age():
     import merge_dedup
     job = _fresh_job_with_posted(days_ago=10)
     user_skills = {"python", "aws", "kubernetes"}
-    passes, reason = merge_dedup._prefilter_job(job, user_skills, max_age_days=7)
+    passes, reason = merge_dedup._prefilter_job(job, _legacy_profile(user_skills), max_age_days=7)
     assert passes is False
     assert "10d_old" in reason
 
@@ -424,7 +467,7 @@ def _good_job(title, **extra):
 ])
 def test_prefilter_rejects_sales_and_presales_titles(title):
     import merge_dedup
-    passes, reason = merge_dedup._prefilter_job(_good_job(title), {"python", "aws"})
+    passes, reason = merge_dedup._prefilter_job(_good_job(title), _legacy_profile({"python", "aws"}))
     assert passes is False
     assert reason.startswith("role_mismatch:")
 
@@ -440,7 +483,7 @@ def test_prefilter_rejects_manager_titles_including_engineering_manager(title):
     both IC resumes, so an EM-track JD can't be tailored well regardless of
     how relevant its buzzwords look."""
     import merge_dedup
-    passes, reason = merge_dedup._prefilter_job(_good_job(title), {"python", "aws"})
+    passes, reason = merge_dedup._prefilter_job(_good_job(title), _legacy_profile({"python", "aws"}))
     assert passes is False
     assert reason == "role_mismatch:manager"
 
@@ -452,7 +495,7 @@ def test_prefilter_rejects_manager_titles_including_engineering_manager(title):
 ])
 def test_prefilter_rejects_architect_titles(title):
     import merge_dedup
-    passes, reason = merge_dedup._prefilter_job(_good_job(title), {"python", "aws"})
+    passes, reason = merge_dedup._prefilter_job(_good_job(title), _legacy_profile({"python", "aws"}))
     assert passes is False
 
 
@@ -463,13 +506,26 @@ def test_prefilter_rejects_architect_titles(title):
     ("Compensation Analyst", "compensation analyst"),
     ("Controller", "controller"),
     ("Senior Revenue Analytics Analyst", "revenue analytics"),
-    ("2026 - Women in Tech Summit, EMEA", "summit"),
 ])
 def test_prefilter_rejects_off_archetype_titles(title, expected_kw):
     import merge_dedup
-    passes, reason = merge_dedup._prefilter_job(_good_job(title), {"python", "aws"})
+    passes, reason = merge_dedup._prefilter_job(_good_job(title), _legacy_profile({"python", "aws"}))
     assert passes is False
     assert reason == f"role_mismatch:{expected_kw}"
+
+
+def test_prefilter_rejects_non_posting_with_a_structural_reason():
+    """Split out of the parametrize above 2026-09-28. Still rejected, but the
+    reason moved role_mismatch: -> not_a_posting:, because "this is a
+    conference, not a job" is a universal fact rather than a statement about
+    what role suits this user -- it is the one title vocabulary a user's own
+    query cannot cancel."""
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(
+        _good_job("2026 - Women in Tech Summit, EMEA"), _legacy_profile({"python", "aws"})
+    )
+    assert passes is False
+    assert reason == "not_a_posting:summit"
 
 
 @pytest.mark.parametrize("title", [
@@ -482,7 +538,7 @@ def test_prefilter_rejects_internships(title):
     """Matches existing user feedback (feedback_graduated.md) — the user has
     already graduated, so internship postings are never worth a scoring slot."""
     import merge_dedup
-    passes, reason = merge_dedup._prefilter_job(_good_job(title), {"python", "aws"})
+    passes, reason = merge_dedup._prefilter_job(_good_job(title), _legacy_profile({"python", "aws"}))
     assert passes is False
     assert reason.startswith("role_mismatch:") and "intern" in reason
 
@@ -500,7 +556,7 @@ def test_prefilter_does_not_reject_international_or_internal_titles(title):
     titles observed in the live jobs_raw corpus. Word-boundary matching
     (_WORD_BOUNDARY_REJECT_PATTERN) must not flag either."""
     import merge_dedup
-    passes, reason = merge_dedup._prefilter_job(_good_job(title), {"python", "aws"})
+    passes, reason = merge_dedup._prefilter_job(_good_job(title), _legacy_profile({"python", "aws"}))
     assert passes is True, f"{title!r} was wrongly rejected: {reason}"
 
 
@@ -516,7 +572,7 @@ def test_prefilter_does_not_reject_architecture_team_titles(title):
     scripts/tune_prefilter.py against the live corpus before this test was
     written — these are genuine hands-on IC roles, not pre-sales Architects."""
     import merge_dedup
-    passes, reason = merge_dedup._prefilter_job(_good_job(title), {"python", "aws"})
+    passes, reason = merge_dedup._prefilter_job(_good_job(title), _legacy_profile({"python", "aws"}))
     assert passes is True, f"{title!r} was wrongly rejected: {reason}"
 
 
@@ -528,7 +584,7 @@ def test_prefilter_does_not_reject_salesforce_titles():
     of a bare 'sales' keyword."""
     import merge_dedup
     passes, reason = merge_dedup._prefilter_job(
-        _good_job("Salesforce Engineer, Business Technology Team"), {"python", "aws"}
+        _good_job("Salesforce Engineer, Business Technology Team"), _legacy_profile({"python", "aws"})
     )
     assert passes is True, f"wrongly rejected: {reason}"
 
@@ -539,7 +595,7 @@ def test_prefilter_does_not_reject_security_partnerships_title():
     security role — in the live corpus scan."""
     import merge_dedup
     passes, reason = merge_dedup._prefilter_job(
-        _good_job("Staff Security Engineer, Security Partnerships"), {"python", "aws"}
+        _good_job("Staff Security Engineer, Security Partnerships"), _legacy_profile({"python", "aws"})
     )
     assert passes is True, f"wrongly rejected: {reason}"
 
@@ -565,7 +621,7 @@ def test_prefilter_admits_realistic_good_jobs(title):
     test that should catch it — a filter that hits its volume target by
     throwing away good, ordinary matches is worse than no filter."""
     import merge_dedup
-    passes, reason = merge_dedup._prefilter_job(_good_job(title), merge_dedup.DEFAULT_USER_SKILLS)
+    passes, reason = merge_dedup._prefilter_job(_good_job(title), _legacy_profile(merge_dedup.DEFAULT_USER_SKILLS))
     assert passes is True, f"{title!r} was wrongly rejected: {reason}"
 
 
@@ -728,7 +784,8 @@ def test_max_jobs_per_run_keeps_highest_skill_overlap():
         _job_with_overlap(2, overlap_count=4, job_hash="mid-overlap", company="MidCo"),
         _job_with_overlap(3, overlap_count=6, job_hash="high-overlap", company="HighCo"),
     ]
-    db = _make_supabase(jobs_raw_data=jobs_raw, existing_jobs_data=[])
+    db = _make_supabase(jobs_raw_data=jobs_raw, existing_jobs_data=[],
+                        search_config_data=_IT_SEARCH_CONFIG)
 
     with patch("merge_dedup.get_supabase", return_value=db), \
          patch("merge_dedup.MAX_JOBS_PER_RUN", 2):
@@ -786,7 +843,7 @@ def test_prefilter_rejects_relevant_non_it_job_without_query_phrases():
     overlap and is rejected — this is exactly why query_phrases exists."""
     import merge_dedup
     job = _good_job("Registered Nurse - ICU", description=_NURSE_DESC)
-    passes, reason = merge_dedup._prefilter_job(job, merge_dedup.DEFAULT_USER_SKILLS)
+    passes, reason = merge_dedup._prefilter_job(job, _legacy_profile(merge_dedup.DEFAULT_USER_SKILLS))
     assert passes is False
     assert reason == "skill_overlap:0"
 
@@ -799,7 +856,7 @@ def test_prefilter_admits_non_it_job_via_query_phrase_overlap():
     job = _good_job("Registered Nurse - ICU", description=_NURSE_DESC)
     query_phrases = merge_dedup._query_phrases(["ICU Registered Nurse"])
     passes, reason = merge_dedup._prefilter_job(
-        job, merge_dedup.DEFAULT_USER_SKILLS, query_phrases=query_phrases,
+        job, _legacy_profile(merge_dedup.DEFAULT_USER_SKILLS, query_phrases),
     )
     assert passes is True
     assert reason == "pass"
@@ -812,7 +869,7 @@ def test_prefilter_tech_path_unaffected_by_absent_query_phrases():
     it."""
     import merge_dedup
     job = _good_job("Backend Engineer")
-    passes, reason = merge_dedup._prefilter_job(job, {"python", "aws"})
+    passes, reason = merge_dedup._prefilter_job(job, _legacy_profile({"python", "aws"}))
     assert passes is True
     assert reason == "pass"
 
@@ -857,7 +914,7 @@ def test_prefilter_rejects_single_generic_word_boilerplate_collision():
     job = _good_job("Scientific Software Engineer", description=desc)
     query_phrases = merge_dedup._query_phrases(["Full Stack Engineer"])
     passes, reason = merge_dedup._prefilter_job(
-        job, merge_dedup.DEFAULT_USER_SKILLS, query_phrases=query_phrases,
+        job, _legacy_profile(merge_dedup.DEFAULT_USER_SKILLS, query_phrases),
     )
     assert passes is False
     assert reason == "skill_overlap:0"
@@ -889,3 +946,713 @@ def test_handler_admits_non_it_job_end_to_end_via_configured_queries():
 
     assert result["new_job_hashes"] == ["nurse-job-1"]
     assert result["total_new"] == 1
+
+
+# ===========================================================================
+# Domain-neutral prefilter (2026-09-28) — the closed vocabularies in Rule 1,
+# Rule 3 and Rule 4 now derive from the user's own search config instead of a
+# hardcoded IT list.
+#
+# Background: PR #100 (a798e4c) gave Rule 3 a domain-neutral second path but
+# deliberately left REJECT_TITLE_KEYWORDS alone as "too risky to change
+# without a live golden-set re-run". The consequence was that a non-IT user
+# searching for their OWN target role still had it rejected before Rule 3 ever
+# ran: "Financial Controller" -> role_mismatch:controller, "Marketing Manager"
+# -> role_mismatch:manager, "Project Architect" -> role_mismatch:architect.
+#
+# The fix is a per-user profile (see build_prefilter_profile) that supplies
+# every vocabulary Rule 1/3/4 consults. Two principles the tests below pin:
+#   1. A term the user searched for CANNOT reject them ("your own words
+#      override the blocklist"). This is what makes "Marketing Manager" work
+#      without weakening "manager" for a user who never asked for it -- in
+#      marketing/finance/product "Manager" is an IC seniority label, in tech
+#      it's a people-management track. The word alone can't tell you which.
+#   2. The IT vocabularies apply ONLY to a user whose own queries are
+#      IT-shaped. A nurse or accountant doesn't get them overridden, they
+#      never get loaded.
+# ===========================================================================
+
+# Realistic non-IT job descriptions — long enough to clear Rule 2's 200-char
+# gate, and deliberately containing zero terms from _TECH_VOCABULARY so that
+# the only thing that can admit them is the user's own query phrases.
+_FINANCE_DESC = (
+    "We are seeking a Financial Controller to own the month-end close, statutory "
+    "reporting under IFRS, VAT returns and audit liaison. You will manage "
+    "reconciliations, budgeting and forecasting cycles, and business partnering "
+    "with commercial teams. ACA or ACCA qualified with strong Excel and ERP "
+    "experience is required for this role."
+)
+_MARKETING_DESC = (
+    "As Marketing Manager you will own campaign strategy, brand positioning and "
+    "demand generation across paid and organic channels. You will run search "
+    "engine optimisation, email nurture flows and content calendars, manage "
+    "agency relationships, and report on customer acquisition cost and return "
+    "on ad spend to the leadership team. Five years of B2B marketing required."
+)
+_ARCHITECTURE_DESC = (
+    "We are hiring a Project Architect to lead residential and mixed-use schemes "
+    "from concept through to construction. You will produce technical drawings, "
+    "coordinate with structural and mechanical consultants, manage planning "
+    "applications and run site inspections. RIAI accreditation and five years "
+    "of post-part-three practice experience are required."
+)
+_NURSING_DESC = (
+    "The ICU Registered Nurse delivers direct patient care in a twelve-bed "
+    "critical care unit, managing ventilated patients, titrating vasoactive "
+    "infusions, and collaborating with the multidisciplinary team. Active NMBI "
+    "registration and BLS or ACLS certification are required. Rotating shifts "
+    "including nights and weekends are part of this post."
+)
+
+# The production user's real config (config.yaml + user_search_configs) —
+# every behaviour-preservation assertion in this section is made against THIS
+# profile, so a regression in the owner's admit/reject behaviour fails loudly.
+_OWNER_QUERIES = [
+    "Site Reliability Engineer", "DevOps Engineer", "Platform Engineer",
+    "Cloud Engineer", "Infrastructure Engineer", "SRE", "Software Engineer",
+    "Full Stack Developer", "Backend Engineer", "Python Developer",
+    "Graduate Software Engineer", "AWS Engineer", "Kubernetes Engineer",
+    "Cloud Infrastructure Engineer",
+]
+_OWNER_EXPERIENCE_LEVELS = ["entry_level", "mid_level"]
+_OWNER_GEO_REGIONS = [
+    {"name": "Ireland", "remote_only": False},
+    {"name": "India", "remote_only": True},
+    {"name": "US (Remote)", "remote_only": True},
+]
+
+
+def _owner_profile():
+    """The production user's prefilter profile, built from their real config."""
+    import merge_dedup
+    return merge_dedup.build_prefilter_profile(
+        queries=_OWNER_QUERIES,
+        experience_levels=_OWNER_EXPERIENCE_LEVELS,
+        geo_regions=_OWNER_GEO_REGIONS,
+    )
+
+
+def _persona_profile(queries, experience_levels=("mid_level",), **kw):
+    """A prefilter profile for an arbitrary non-IT persona."""
+    import merge_dedup
+    return merge_dedup.build_prefilter_profile(
+        queries=list(queries), experience_levels=list(experience_levels), **kw
+    )
+
+
+def _jd_mentioning(role, body):
+    """A JD that names the role it is advertising, the way real postings do.
+
+    Needed because Rule 3 is a genuine relevance gate: pairing a persona's
+    title with an unrelated body makes the job legitimately irrelevant, so
+    the test would pass/fail on Rule 3 rather than on the Rule 1 title
+    vocabulary it is meant to exercise.
+    """
+    return f"About the role: we are recruiting a {role} to join our team. {body}"
+
+
+def _job(title, description, location="Dublin, Ireland", **extra):
+    base = {
+        "title": title,
+        "company": "Acme",
+        "description": description,
+        "location": location,
+        "posted_date": datetime.now(timezone.utc).isoformat(),
+    }
+    base.update(extra)
+    return base
+
+
+# --- Principle 1: a non-IT user's own target role is admitted ---------------
+
+@pytest.mark.parametrize("title,desc,queries", [
+    ("Financial Controller", _FINANCE_DESC, ["Financial Controller"]),
+    ("Marketing Manager", _MARKETING_DESC, ["Marketing Manager"]),
+    ("Project Architect", _ARCHITECTURE_DESC, ["Project Architect"]),
+    ("ICU Registered Nurse", _NURSING_DESC, ["ICU Registered Nurse"]),
+    ("Senior Data Scientist", _FINANCE_DESC, ["Data Scientist"]),
+    ("Compensation Analyst", _FINANCE_DESC, ["Compensation Analyst"]),
+    ("Technical Recruiter", _MARKETING_DESC, ["Technical Recruiter"]),
+    ("Finance Manager", _FINANCE_DESC, ["Finance Manager"]),
+    ("Brand Director", _MARKETING_DESC, ["Brand Director"]),
+])
+def test_prefilter_admits_non_it_persona_searching_for_that_exact_role(title, desc, queries):
+    """The headline bug: every one of these is rejected today with
+    role_mismatch, for a user whose search config asks for precisely it."""
+    import merge_dedup
+    job = _job(title, _jd_mentioning(title, desc))
+    passes, reason = merge_dedup._prefilter_job(job, _persona_profile(queries))
+    assert passes is True, f"{title!r} wrongly rejected for a user searching {queries!r}: {reason}"
+
+
+# --- Principle 2: the owner's behaviour is unchanged ------------------------
+
+@pytest.mark.parametrize("title", [
+    "Senior Data Scientist",
+    "Manager, Customer Success",
+    "Senior Engineering Manager - Developer Experience",
+    "Senior Sales Engineer - UK",
+    "Enterprise Account Executive, Juno",
+    "Director of Engineering",
+    "Head of Platform",
+    "Chief Technology Officer",
+    "Solutions Architect, Enterprise (Pre-sales)",
+    "Technical Recruiter",
+    "2026 - Women in Tech Summit, EMEA",
+])
+def test_owner_still_rejects_every_off_target_title(title):
+    """None of these appear in the owner's queries, so nothing cancels them
+    and every one must stay rejected. This is the guard that the refactor
+    didn't widen the owner's admit rate -- the scoring bottleneck depends on
+    it (Groq free tier caps AI scoring near 80-120 jobs/day)."""
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(_job(title, _GOOD_DESC), _owner_profile())
+    assert passes is False, f"{title!r} newly ADMITTED for the owner"
+    assert reason.startswith(("role_mismatch:", "not_a_posting:")), reason
+
+
+@pytest.mark.parametrize("title", [
+    "Site Reliability Engineer",
+    "Senior DevOps Engineer",
+    "Platform Engineer (Kubernetes)",
+    "Software Engineer, New Grad",
+    "Cloud Infrastructure Engineer",
+    "Staff Software Engineer, International",
+    "Senior Backend Engineer, Architecture Engineering",
+])
+def test_owner_still_admits_every_on_target_title(title):
+    """Recall guard for the owner: the refactor must not newly reject an
+    ordinary on-target title either. 'International' and 'Architecture' are
+    the word-boundary collision cases from the 2026-09-25 tuning."""
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(_job(title, _GOOD_DESC), _owner_profile())
+    assert passes is True, f"{title!r} newly REJECTED for the owner: {reason}"
+
+
+# --- Seniority ceiling derives from experience_levels ----------------------
+# Mapping (owner-specified 2026-09-28): entry_level/mid_level exclude exec +
+# management; senior excludes exec only; lead/manager exclude nothing. Senior
+# deliberately still sees management-track roles -- a senior IC can judge an
+# EM posting for themselves, and over-filtering is the failure mode that
+# actually bites this pipeline (a near-empty dashboard).
+
+@pytest.mark.parametrize("levels,title,expected_pass", [
+    (["entry_level"], "Director of Engineering", False),
+    (["entry_level"], "Engineering Manager", False),
+    (["mid_level"], "Director of Engineering", False),
+    (["mid_level"], "Engineering Manager", False),
+    (["senior"], "Director of Engineering", False),
+    (["senior"], "Engineering Manager", True),
+    (["lead"], "Director of Engineering", True),
+    (["manager"], "Engineering Manager", True),
+    # Multiple levels: the most permissive selected level wins, otherwise
+    # ticking "senior" alongside "mid_level" would be silently ignored.
+    (["mid_level", "senior"], "Engineering Manager", True),
+])
+def test_seniority_exclusions_derive_from_experience_levels(levels, title, expected_pass):
+    import merge_dedup
+    profile = merge_dedup.build_prefilter_profile(
+        queries=_OWNER_QUERIES, experience_levels=levels,
+    )
+    passes, reason = merge_dedup._prefilter_job(_job(title, _GOOD_DESC), profile)
+    assert passes is expected_pass, f"{title!r} at levels={levels!r}: {reason}"
+
+
+def test_no_experience_levels_configured_excludes_nothing_by_seniority():
+    """An unconfigured user gets no seniority gate at all -- guessing a
+    ceiling for someone who never told us their level is how a non-IT user
+    ends up with an empty dashboard."""
+    import merge_dedup
+    profile = merge_dedup.build_prefilter_profile(queries=["Financial Controller"])
+    passes, _ = merge_dedup._prefilter_job(
+        _job("Finance Director", _FINANCE_DESC), profile
+    )
+    assert passes is True
+
+
+# --- Internships are an independent flag, not a seniority tier -------------
+# Deriving "no internships" from entry_level would be wrong: a new graduate
+# legitimately wants them. The owner's real rule is narrower still ("only
+# internships requiring CURRENT enrolment"), which is a JD-text condition and
+# is deliberately out of scope here -- see the follow-up note in merge_dedup.
+
+def test_internships_rejected_by_default():
+    import merge_dedup
+    profile = merge_dedup.build_prefilter_profile(
+        queries=_OWNER_QUERIES, experience_levels=["entry_level"],
+    )
+    passes, reason = merge_dedup._prefilter_job(
+        _job("Software Engineering Intern", _GOOD_DESC), profile
+    )
+    assert passes is False
+    assert "intern" in reason
+
+
+def test_internships_admitted_when_include_internships_set():
+    import merge_dedup
+    profile = merge_dedup.build_prefilter_profile(
+        queries=_OWNER_QUERIES, experience_levels=["entry_level"],
+        include_internships=True,
+    )
+    passes, reason = merge_dedup._prefilter_job(
+        _job("Software Engineering Intern", _GOOD_DESC), profile
+    )
+    assert passes is True, reason
+
+
+def test_include_internships_is_independent_of_experience_level():
+    """entry_level must not imply internships, and senior must not forbid
+    them -- the two axes are unrelated."""
+    import merge_dedup
+    senior_wants_interns = merge_dedup.build_prefilter_profile(
+        queries=_OWNER_QUERIES, experience_levels=["senior"], include_internships=True,
+    )
+    passes, _ = merge_dedup._prefilter_job(
+        _job("Engineering Internship Programme", _GOOD_DESC), senior_wants_interns
+    )
+    assert passes is True
+
+
+# --- The 'cto' substring collision ----------------------------------------
+# "cto" was checked as a bare substring, and "cto" is inside "director",
+# "doctor", "inspector", "collector", "contractor", "refractory", "sector".
+# Invisible in an all-tech corpus (the only colliding title it contains,
+# "...Director", is independently rejected by "director") and therefore
+# missed by the 2026-09-25 corpus tuning, which did hunt this exact class of
+# bug for "sales"/"partner".
+
+@pytest.mark.parametrize("title,desc", [
+    ("Doctor", _NURSING_DESC),
+    ("Junior Doctor", _NURSING_DESC),
+    ("Site Inspector", _ARCHITECTURE_DESC),
+    ("Debt Collector", _FINANCE_DESC),
+    ("Sector Lead, Public Health", _NURSING_DESC),
+])
+def test_cto_substring_no_longer_swallows_unrelated_titles(title, desc):
+    import merge_dedup
+    profile = _persona_profile([title])
+    job = _job(title, _jd_mentioning(title, desc))
+    passes, reason = merge_dedup._prefilter_job(job, profile)
+    assert passes is True, f"{title!r} rejected by a 'cto' substring collision: {reason}"
+
+
+@pytest.mark.parametrize("title", ["Chief Technology Officer", "CTO", "CTO / Co-Founder", "Group CIO"])
+def test_cto_still_rejected_as_a_whole_word_for_the_owner(title):
+    """Fixing the collision must not stop 'CTO' rejecting an actual CTO
+    posting -- word-boundary matching, not removal."""
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(_job(title, _GOOD_DESC), _owner_profile())
+    assert passes is False, f"{title!r} newly admitted: {reason}"
+
+
+# --- IT vocabularies are not loaded at all for a non-IT persona ------------
+
+def test_non_it_persona_skills_contain_no_tech_vocabulary():
+    """DEFAULT_USER_SKILLS used to be the unconditional base of user_skills,
+    so a nurse's skill set contained 'kubernetes'. Harmless for Rule 3, but
+    _job_relevance_rank ranks by exactly this overlap -- which made every
+    non-IT JD tie at 0 and the MAX_JOBS_PER_RUN cut arbitrary."""
+    profile = _persona_profile(["ICU Registered Nurse"])
+    assert not (profile.skills & {"kubernetes", "python", "aws", "terraform"})
+    assert "nurse" in profile.skills
+
+
+def test_it_persona_still_gets_the_tech_vocabulary():
+    profile = _owner_profile()
+    assert {"python", "aws", "kubernetes"} <= profile.skills
+    assert profile.is_domain_tech is True
+
+
+def test_relevance_rank_orders_non_it_jobs_by_query_phrase_overlap():
+    """The cap-cutting rank must be able to tell two non-IT JDs apart."""
+    import merge_dedup
+    profile = _persona_profile(["ICU Registered Nurse", "Critical Care Nurse"])
+    on_target = {"description": _NURSING_DESC}
+    off_target = {"description": _FINANCE_DESC}
+    assert (merge_dedup._job_relevance_rank(on_target, profile)
+            > merge_dedup._job_relevance_rank(off_target, profile))
+
+
+# --- Rule 4: location policy derives from geo_regions ---------------------
+# The India city list survives as GEOGRAPHY REFERENCE DATA ("Bangalore is in
+# India" -- a fact true for every user). The *decision* to exclude in-office
+# India roles moves to the user's own geo_regions[...].remote_only flag.
+
+def test_in_office_job_in_a_remote_only_region_is_rejected():
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(
+        _job("Site Reliability Engineer", _GOOD_DESC, location="Bangalore, India"),
+        _owner_profile(),
+    )
+    assert passes is False
+    assert reason.startswith("incompatible_location:")
+
+
+def test_remote_job_in_a_remote_only_region_is_admitted():
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(
+        _job("Site Reliability Engineer", _GOOD_DESC, location="Bangalore, India (Remote)"),
+        _owner_profile(),
+    )
+    assert passes is True, reason
+
+
+def test_bare_city_name_still_resolves_to_its_region():
+    """Scrapers frequently emit a bare city with no country ('Dublin',
+    'Bangalore'), so region matching cannot rely on the country being in the
+    string -- that's what the gazetteer is for."""
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(
+        _job("Site Reliability Engineer", _GOOD_DESC, location="Bangalore"),
+        _owner_profile(),
+    )
+    assert passes is False, reason
+
+
+def test_region_marked_not_remote_only_is_admitted_in_office():
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(
+        _job("Site Reliability Engineer", _GOOD_DESC, location="Dublin, Ireland"),
+        _owner_profile(),
+    )
+    assert passes is True, reason
+
+
+def test_no_geo_signal_at_all_falls_back_to_the_legacy_shim():
+    """Documents the cost of LEGACY_REMOTE_ONLY_REGIONS honestly.
+
+    This test previously asserted the opposite -- that a user with no geo
+    config gets no location rejection at all, so a Mumbai-based user would
+    keep their local market. The live corpus run (2026-09-28) overruled it:
+    with no fallback, Rule 4 was disabled in production entirely and five
+    India in-office roles reached the dashboard against explicit owner intent.
+
+    So for the narrow case of "has queries but expresses no location
+    preference whatsoever" the old single-tenant default still applies, and a
+    Mumbai-based user in that state would still see their local market
+    rejected. The scope is genuinely narrow -- load_config's fallback supplies
+    locations, and Settings collects them, so tier 2 covers any real
+    configured user (see test_policy_tier2_mumbai_user_keeps_their_own_market)
+    -- but it is not zero, and it is the one place this refactor did not fully
+    remove the owner's domain from the prefilter."""
+    import merge_dedup
+    profile = merge_dedup.build_prefilter_profile(queries=["Financial Controller"])
+    assert profile.geo_policy_source == "legacy_fallback"
+    passes, reason = merge_dedup._prefilter_job(
+        _job("Financial Controller", _FINANCE_DESC, location="Mumbai, India"), profile
+    )
+    assert passes is False
+    assert reason == "incompatible_location:india_in_office"
+
+
+def test_mumbai_user_can_mark_ireland_remote_only_and_keep_local_jobs():
+    """The mirror image of the owner's config, to prove the policy is really
+    user-derived and not just the old list wearing a config hat."""
+    import merge_dedup
+    profile = merge_dedup.build_prefilter_profile(
+        queries=["Financial Controller"],
+        geo_regions=[{"name": "India", "remote_only": False},
+                     {"name": "Ireland", "remote_only": True}],
+    )
+    local, _ = merge_dedup._prefilter_job(
+        _job("Financial Controller", _FINANCE_DESC, location="Mumbai, India"), profile
+    )
+    foreign, reason = merge_dedup._prefilter_job(
+        _job("Financial Controller", _FINANCE_DESC, location="Dublin, Ireland"), profile
+    )
+    assert local is True
+    assert foreign is False, reason
+
+
+def test_us_in_office_still_admitted_for_the_owner_pending_followup():
+    """Deliberate behaviour-preservation carve-out (owner decision,
+    2026-09-28). The owner's geo_regions marks 'US (Remote)' remote_only, so
+    enforcing remote_only for every region would newly reject in-office US
+    jobs. Correct, but it lowers admit rate -- deferred until after the
+    Oct 1 demo. GEO_REMOTE_ONLY_EXEMPT names the exempted region; clearing
+    it to '' is the whole of the follow-up."""
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(
+        _job("Site Reliability Engineer", _GOOD_DESC, location="Austin, Texas"),
+        _owner_profile(),
+    )
+    assert passes is True, reason
+
+
+def test_geo_remote_only_exempt_none_rejects_us_in_office():
+    """The follow-up's forward test: with the exemption cleared, the same job
+    is rejected. Pins that the carve-out is scope-only, not a missing rule."""
+    import merge_dedup
+    profile = merge_dedup.build_prefilter_profile(
+        queries=_OWNER_QUERIES, experience_levels=_OWNER_EXPERIENCE_LEVELS,
+        geo_regions=_OWNER_GEO_REGIONS, exempt_regions="",
+    )
+    passes, reason = merge_dedup._prefilter_job(
+        _job("Site Reliability Engineer", _GOOD_DESC, location="Austin, Texas"), profile
+    )
+    assert passes is False, reason
+
+
+# --- Rule 3 fails OPEN when the profile carries no signal -----------------
+# Regression guard for a trap this refactor introduced and had to fix.
+# Pre-2026-09-28, user_skills began as DEFAULT_USER_SKILLS for everyone, so a
+# user whose user_search_configs row was missing or had empty `queries` still
+# admitted tech jobs through Rule 3. Removing that IT default means such a
+# profile has NO skills and NO phrases -- and Rule 3 then rejected 100% of
+# the pool. On a live pipeline with a config row out of sync with config.yaml
+# that is a total outage, not a tidy refactor.
+#
+# Skipping the rule is the honest response, and it matches how the rest of
+# this module already handles missing inputs: Rule 0 passes a job with no
+# posted_date, _region_for_location fails open on a city it can't resolve.
+# With nothing to measure relevance against, "irrelevant" is not a finding.
+# MAX_JOBS_PER_RUN still bounds the volume that reaches scoring.
+
+def test_rule3_skipped_entirely_when_profile_has_no_signal():
+    import merge_dedup
+    profile = merge_dedup.build_prefilter_profile()
+    assert not profile.skills and not profile.query_phrases
+    passes, reason = merge_dedup._prefilter_job(
+        _job("Registered Nurse", _NURSING_DESC), profile
+    )
+    assert passes is True, f"an unconfigured user must not have everything rejected: {reason}"
+
+
+def test_rule3_still_gates_once_the_profile_has_any_signal():
+    """Fail-open must apply ONLY to a genuinely empty profile -- otherwise it
+    would silently disable the relevance filter for everybody."""
+    import merge_dedup
+    profile = merge_dedup.build_prefilter_profile(queries=["ICU Registered Nurse"])
+    passes, reason = merge_dedup._prefilter_job(
+        _job("Financial Controller", _FINANCE_DESC), profile
+    )
+    assert passes is False
+    assert reason.startswith("skill_overlap:")
+
+
+def test_query_cancellation_matches_whole_words_not_substrings():
+    """The cancellation check must not repeat the substring bug it exists to
+    work around. "cto" is inside "doCTOr" and "inspeCTOr", so a naive
+    substring test let a user searching "Doctor" cancel the exec-tier "cto"
+    keyword and start seeing Chief Technology Officer postings."""
+    import merge_dedup
+    profile = merge_dedup.build_prefilter_profile(
+        queries=["Doctor", "Site Inspector"], experience_levels=["mid_level"],
+    )
+    assert profile.cancels("cto") is False
+    assert profile.cancels("doctor") is True
+
+
+def test_a_doctor_still_has_exec_titles_rejected():
+    """End-to-end consequence of the above."""
+    import merge_dedup
+    profile = merge_dedup.build_prefilter_profile(
+        queries=["Doctor"], experience_levels=["mid_level"],
+    )
+    passes, reason = merge_dedup._prefilter_job(
+        _job("Group CTO", _jd_mentioning("Doctor", _NURSING_DESC)), profile
+    )
+    assert passes is False
+    assert reason == "role_mismatch:cto"
+
+
+# --- Rule 4 policy source chain -------------------------------------------
+# Caught by the live corpus run (13,677 rows, 2026-09-28), which my unit tests
+# structurally could not catch: they built _OWNER_GEO_REGIONS by hand from
+# config.yaml, so they verified an ASSUMPTION about the config shape rather
+# than the shape production actually reads.
+#
+# `remote_only` is written nowhere but config.yaml -- not by the search-config
+# API, not by Settings.jsx -- so user_search_configs.geo_regions never carries
+# it. Deriving the policy from that field alone silently disabled Rule 4 in
+# production: incompatible_location rejects went 6 -> 0 and five Hyderabad/
+# Bangalore in-office roles were newly admitted, against explicit owner intent.
+#
+# So the policy now comes from the first source that actually expresses one:
+#   1. geo_regions[].remote_only  -- explicit, per region (config.yaml today)
+#   2. locations                  -- regions outside the user's target
+#                                    locations are acceptable only remotely
+#   3. LEGACY_REMOTE_ONLY_REGIONS -- single-tenant shim, documented, removable
+
+def test_policy_tier1_explicit_remote_only_flags_win():
+    import merge_dedup
+    profile = merge_dedup.build_prefilter_profile(
+        queries=["Cloud Engineer"],
+        geo_regions=[{"name": "India", "remote_only": True},
+                     {"name": "Ireland", "remote_only": False}],
+        locations=["Mumbai"],  # must NOT override an explicit flag
+    )
+    assert profile.remote_only_regions == frozenset({"india"})
+    assert profile.geo_policy_source == "geo_regions.remote_only"
+
+
+def test_policy_tier2_derives_from_target_locations():
+    """The live-config case: geo_regions carries name/geo_id but no
+    remote_only, so the target locations decide. Anything outside them is
+    acceptable only remotely."""
+    import merge_dedup
+    profile = merge_dedup.build_prefilter_profile(
+        queries=["Cloud Engineer"],
+        geo_regions=[{"name": "India", "geo_id": "102713980"}],
+        locations=["Dublin, Ireland", "Remote"],
+    )
+    assert profile.geo_policy_source == "locations"
+    assert "india" in profile.remote_only_regions
+    assert "ireland" not in profile.remote_only_regions
+
+
+def test_policy_tier2_mumbai_user_keeps_their_own_market():
+    """The bug the shim must not re-create: a Mumbai-based user's local
+    market stays in-office-acceptable, and Ireland becomes remote-only."""
+    import merge_dedup
+    profile = merge_dedup.build_prefilter_profile(
+        queries=["Financial Controller"], locations=["Mumbai, India"],
+    )
+    assert "india" not in profile.remote_only_regions
+    assert "ireland" in profile.remote_only_regions
+    local, _ = merge_dedup._prefilter_job(
+        _job("Financial Controller", _jd_mentioning("Financial Controller", _FINANCE_DESC),
+             location="Mumbai, India"), profile)
+    assert local is True
+
+
+def test_policy_tier3_legacy_shim_only_when_nothing_expresses_a_policy():
+    import merge_dedup
+    profile = merge_dedup.build_prefilter_profile(queries=["Cloud Engineer"])
+    assert profile.geo_policy_source == "legacy_fallback"
+    assert profile.remote_only_regions == merge_dedup.LEGACY_REMOTE_ONLY_REGIONS
+
+
+def test_live_config_shape_still_rejects_india_in_office():
+    """The exact regression the corpus run surfaced. geo_regions present but
+    carrying no remote_only key, which is what production reads."""
+    import merge_dedup
+    profile = merge_dedup.build_prefilter_profile(
+        queries=["Site Reliability Engineer", "Python Developer"],
+        experience_levels=["entry_level", "mid_level"],
+        geo_regions=[{"name": "Ireland", "geo_id": "104738515"},
+                     {"name": "India", "geo_id": "102713980"}],
+        locations=["Dublin, Ireland"],
+    )
+    for loc in ("Hyderabad, India", "Bangalore", "Tokyo, Bangalore"):
+        passes, reason = merge_dedup._prefilter_job(
+            _job("Site Reliability Engineer", _GOOD_DESC, location=loc), profile)
+        assert passes is False, f"{loc!r} newly admitted: this is the corpus regression"
+        assert reason.startswith("incompatible_location:")
+
+
+def test_live_config_shape_still_admits_us_in_office():
+    """The owner's carve-out must survive the new policy chain."""
+    import merge_dedup
+    profile = merge_dedup.build_prefilter_profile(
+        queries=["Site Reliability Engineer", "Python Developer"],
+        geo_regions=[{"name": "Ireland", "geo_id": "104738515"}],
+        locations=["Dublin, Ireland"],
+    )
+    passes, reason = merge_dedup._prefilter_job(
+        _job("Site Reliability Engineer", _GOOD_DESC, location="Austin, Texas"), profile)
+    assert passes is True, reason
+
+
+# --- The live config row, verbatim ----------------------------------------
+# Second corpus run (13,677 rows, 2026-09-28) printed the production row:
+#   queries=['Site Reliability Engineer','DevOps Engineer','Full Stack Engineer',
+#            'Backend Engineer']
+#   experience_levels=['mid_level']  locations=['Dublin','Ireland']
+#   geo_regions=None  include_internships=None
+#
+# Tier 2 therefore fires, and the FIRST version of it over-rejected badly:
+# targets={ireland} made {india,uk,us} remote-only, and with only "us" exempt
+# that rejected 107 jobs (-0.75pp), almost all of them London/Manchester/
+# Edinburgh SRE and DevOps roles -- the owner's exact target roles.
+#
+# Root cause: `locations` expresses a PREFERENCE, not an exclusion. The old
+# rule excluded exactly one region; every other foreign location was
+# deliberately left to shared/work_auth.py, which CAPS non-home-country jobs
+# to A-tier rather than rejecting them. Turning a preference list into an
+# exclusion set contradicts that shipped design.
+#
+# The exemption now covers the regions the old rule tolerated in-office, so
+# tier 2 stays genuinely derived from the user's own config while the owner's
+# admit rate is unchanged.
+
+_LIVE_CONFIG = dict(
+    queries=["Site Reliability Engineer", "DevOps Engineer", "Full Stack Engineer",
+             "Backend Engineer"],
+    experience_levels=["mid_level"],
+    locations=["Dublin", "Ireland"],
+    geo_regions=None,
+)
+
+
+def _live_profile(**over):
+    import merge_dedup
+    return merge_dedup.build_prefilter_profile(**{**_LIVE_CONFIG, **over})
+
+
+def test_live_config_enforces_india_only():
+    import merge_dedup
+    profile = _live_profile()
+    enforced = {r for r in profile.remote_only_regions
+                if merge_dedup._region_is_remote_only(r, profile)}
+    assert enforced == {"india"}, f"over-rejecting: {enforced}"
+
+
+@pytest.mark.parametrize("location", [
+    "London, UK", "Manchester, Greater Manchester", "Edinburgh, Scotland",
+    "Glasgow City Centre, Glasgow", "The City, Central London", "Shoreditch, London",
+])
+def test_live_config_still_admits_uk_in_office(location):
+    """The 107 jobs the first tier-2 cut wrongly rejected. Real titles and
+    locations taken from the corpus run's newly-rejected sample."""
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(
+        _job("Site Reliability Engineer", _GOOD_DESC, location=location), _live_profile())
+    assert passes is True, f"{location!r} wrongly rejected: {reason}"
+
+
+@pytest.mark.parametrize("location", ["Hyderabad, India", "Bangalore", "Tokyo, Bangalore"])
+def test_live_config_still_rejects_india_in_office(location):
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(
+        _job("Site Reliability Engineer", _GOOD_DESC, location=location), _live_profile())
+    assert passes is False
+    assert reason == "incompatible_location:india_in_office"
+
+
+def test_live_config_admits_dublin_and_us_in_office():
+    import merge_dedup
+    for location in ("Dublin, County Dublin, Ireland", "Austin, Texas", "Los Angeles, CA"):
+        passes, reason = merge_dedup._prefilter_job(
+            _job("Site Reliability Engineer", _GOOD_DESC, location=location), _live_profile())
+        assert passes is True, f"{location!r}: {reason}"
+
+
+def test_mumbai_mirror_of_the_live_config_keeps_local_jobs():
+    """Tier 2 is still genuinely per-user: the same code path gives a
+    Mumbai-based user the mirror-image policy, with no special-casing."""
+    import merge_dedup
+    profile = merge_dedup.build_prefilter_profile(
+        queries=["Financial Controller"], locations=["Mumbai", "India"])
+    assert profile.geo_policy_source == "locations"
+    local, _ = merge_dedup._prefilter_job(
+        _job("Financial Controller", _jd_mentioning("Financial Controller", _FINANCE_DESC),
+             location="Mumbai, India"), profile)
+    foreign, reason = merge_dedup._prefilter_job(
+        _job("Financial Controller", _jd_mentioning("Financial Controller", _FINANCE_DESC),
+             location="Dublin, Ireland"), profile)
+    assert local is True
+    assert foreign is False, reason
+
+
+def test_retiring_the_exemption_enforces_uk_too():
+    """Forward test for the follow-up. Clearing GEO_REMOTE_ONLY_EXEMPT makes
+    every region the user's config marks remote-only actually enforced --
+    which is correct, and costs ~107 jobs for this user, which is why it is
+    a deliberate follow-up rather than part of this change."""
+    import merge_dedup
+    passes, reason = merge_dedup._prefilter_job(
+        _job("Site Reliability Engineer", _GOOD_DESC, location="London, UK"),
+        _live_profile(exempt_regions=""))
+    assert passes is False
+    assert reason == "incompatible_location:uk_in_office"
