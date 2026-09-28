@@ -55,3 +55,34 @@ def pick_latest_tailorable(rows: list[dict]) -> tuple[dict | None, int]:
             return row, skipped
         skipped += 1
     return None, skipped
+
+
+# --- Did a conversion actually carry the content across? ---------------------
+
+# Sections that must hold something for a converted resume to be worth storing.
+# Any one of them is enough — a genuine resume has at least a summary, a skills
+# list, or work history.
+_SUBSTANTIVE_SECTIONS = ("summary", "skills", "experience", "projects", "education")
+
+
+def sections_have_content(sections: dict | None) -> bool:
+    """True when parsed sections carry more than an empty skeleton.
+
+    is_latex_document() only checks for \\documentclass and \\begin{document},
+    so a conversion that dropped every word still passes it. Measured
+    2026-09-28: parse_resume_sections() with no AI client returned only
+    raw_text, and rebuild_tex_from_sections turned 16,953 characters of resume
+    into 1,807 characters of valid, empty LaTeX — which would have replaced a
+    working resume while reporting success.
+
+    Structural validity is not evidence of content. This is the content check.
+    """
+    if not sections:
+        return False
+    for key in _SUBSTANTIVE_SECTIONS:
+        value = sections.get(key)
+        if isinstance(value, str) and value.strip():
+            return True
+        if isinstance(value, (list, tuple, dict)) and len(value) > 0:
+            return True
+    return False
