@@ -107,7 +107,10 @@ def handler(event, context):
         client = ApifyClient(apify_key)
         logger.info(f"[{source}] Running actor {actor_id}")
         # max_items is required at call level for pay-per-result actors (e.g. Glassdoor)
-        call_kwargs = {"run_input": run_input, "timeout_secs": 240}
+        # v3 renamed timeout_secs -> run_timeout (a timedelta). Unpinned
+        # apify-client let the layer reach 3.2.0 while local stayed on 2.5.0,
+        # so this raised TypeError in production only.
+        call_kwargs = {"run_input": run_input, "run_timeout": timedelta(seconds=240)}
         max_items = event.get("max_items")
         if max_items:
             call_kwargs["max_items"] = int(max_items)

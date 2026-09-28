@@ -7,6 +7,7 @@ and team leads at the company. Uses Apify for structured search results
 Cost: ~$0.008 per job (3 searches × ~5 results each).
 """
 import json
+from datetime import timedelta
 import logging
 
 import boto3
@@ -157,7 +158,12 @@ def handler(event, context):
                     "maxPagesPerQuery": 1,
                     "resultsPerPage": 5,
                 },
-                timeout_secs=30,
+                # apify-client v3 renamed timeout_secs -> run_timeout and made it a
+                # timedelta. requirements.txt had `apify-client>=1.6.0` with no upper
+                # bound, so the Docker-built layer pulled 3.2.0 while the local venv
+                # sat on 2.5.0: every call raised TypeError in production, was caught
+                # as a warning, and logged "0 contacts found" as though it had searched.
+                run_timeout=timedelta(seconds=30),
             )
             results = client.dataset(run["defaultDatasetId"]).list_items().items
             contacts = _extract_contacts_from_results(results, role_name, role_type, company)
