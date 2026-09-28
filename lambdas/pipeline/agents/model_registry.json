@@ -4,11 +4,7 @@
   "verified_on": "2026-09-28",
   "count": 29,
   "families": [
-    "allam",
-    "cohere",
-    "dots-studio",
     "inclusionai",
-    "liquid",
     "nvidia",
     "openai",
     "qwen"
@@ -421,7 +417,8 @@
       "timeout": 75,
       "reasoning": false,
       "min_output_tokens": 1024,
-      "suitable_for_scoring": true
+      "suitable_for_scoring": false,
+      "unsuitable_reason": "NVIDIA NIM free tier 503s under sustained load: measured 2/6 back-to-back and 4/6 with a 3s gap, on 2026-09-28. A single probe returns 200 in ~5s, which is what made it look viable. A failover is hit hardest exactly when the primary is exhausted, and this degrades fastest under precisely that condition \u2014 while costing 75s per attempt. Re-enable only if the account moves off the free tier; re-probe with sustained load, not one call."
     },
     {
       "name": "nvidia/nemotron-3-super-120b-a12b",
@@ -436,7 +433,8 @@
       "timeout": 60,
       "reasoning": false,
       "min_output_tokens": 1024,
-      "suitable_for_scoring": true
+      "suitable_for_scoring": false,
+      "unsuitable_reason": "NVIDIA NIM free tier 503s under sustained load: measured 2/6 back-to-back and 4/6 with a 3s gap, on 2026-09-28. A single probe returns 200 in ~5s, which is what made it look viable. A failover is hit hardest exactly when the primary is exhausted, and this degrades fastest under precisely that condition \u2014 while costing 75s per attempt. Re-enable only if the account moves off the free tier; re-probe with sustained load, not one call."
     },
     {
       "name": "nvidia/nemotron-3-ultra-550b-a55b",
@@ -451,10 +449,11 @@
       "timeout": 60,
       "reasoning": false,
       "min_output_tokens": 1024,
-      "suitable_for_scoring": true
+      "suitable_for_scoring": false,
+      "unsuitable_reason": "NVIDIA NIM free tier 503s under sustained load: measured 2/6 back-to-back and 4/6 with a 3s gap, on 2026-09-28. A single probe returns 200 in ~5s, which is what made it look viable. A failover is hit hardest exactly when the primary is exhausted, and this degrades fastest under precisely that condition \u2014 while costing 75s per attempt. Re-enable only if the account moves off the free tier; re-probe with sustained load, not one call."
     }
   ],
   "_TOKENS": "min_output_tokens is a floor, not a preference. Reasoning models consume the budget internally before emitting, so calling one below its floor yields empty content with HTTP 200 -- a silent no-op, not an error. Measured 2026-09-28: gpt-oss-120b emitted nothing at max_tokens=60, and score_batch's global SCORE_MAX_TOKENS=2048 starved gpt-oss-20b in prod.",
   "_CAPABILITY": "suitable_for_scoring is separate from verification. Every entry here was PROVED to respond correctly at realistic prompt size; that says nothing about whether it can reason about a job description. Selecting the pool on family diversity alone put a code model and a 2.6B model into the council and the AI Eval Gate measured tier_accuracy falling 63.2% -> 25.0%.",
-  "_NVIDIA": "NVIDIA NIM entries are the same model FAMILIES already reachable via OpenRouter, deliberately. They are here for QUOTA independence, not breadth: OpenRouter's free pool shares one daily allowance across every model on it, and when it emptied on 2026-09-28 the council lost its only non-Groq families and collapsed to a single unreviewed model. NVIDIA is a second host for the same weights on separate billing.\n\nTimeouts here are CAPPED at 75s regardless of probe latency. A failover must fail fast. Sizing them from probe latency (3x + 30) gave nemotron-3.5-lightning 163s, and the eval harness \u2014 23 sequential cases \u2014 was cancelled by CI after 20 minutes having spent most of it waiting on NVIDIA reads that timed out. A best-case single probe does not predict aggregate cost. meta/muse-glimmer-30b was dropped for the same reason: 31s probe, score 40, and it timed out twice in that one run."
+  "_NVIDIA": "NVIDIA NIM entries are RETAINED BUT DISABLED. They authenticate and a single call returns 200 in ~5s, which is why they were added as an independent-quota failover. Sustained-load measurement disproved that: 2/6 back-to-back, 4/6 with a 3s gap, the rest 503. In CI the same limit surfaced as reads timing out, and the eval job was cancelled at 20 minutes having spent most of it waiting. They are kept here so the next person does not repeat the one-shot probe and reach the same conclusion."
 }
