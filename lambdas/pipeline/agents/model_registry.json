@@ -27,7 +27,8 @@
       "timeout": 60,
       "reasoning": false,
       "min_output_tokens": 1024,
-      "suitable_for_scoring": true
+      "suitable_for_scoring": false,
+      "unsuitable_reason": "7B model from the National Center for AI, Arabic-focused. Scored 80 on the JD probe where 550B models scored 48-50 \u2014 an outlier that indicates it is not evaluating the description. With OpenRouter cooled it became the cross-family critic."
     },
     {
       "name": "groq/gpt-oss-120b",
