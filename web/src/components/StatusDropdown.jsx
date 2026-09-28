@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import { apiPatch } from '../api';
+import { STATUSES as JOB_STATUSES } from '../lib/jobStatuses';
 
 // Must match backend _VALID_STATUSES (app.py:1545) and JobWorkspace.jsx's
 // VALID_STATUSES — was missing 'Phone Screen' and 'Accepted', silently
 // blocking those two transitions from the fast inline table dropdown.
-const STATUSES = ['New', 'Applied', 'Phone Screen', 'Interview', 'Offer', 'Rejected', 'Withdrawn', 'Accepted'];
+const STATUSES = JOB_STATUSES;
 
 const STATUS_STYLES = {
   New:           'bg-info-light text-info border-info',

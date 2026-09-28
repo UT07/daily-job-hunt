@@ -23,6 +23,26 @@ export default function ScoreCard({ data, company }) {
       </div>
       <p className="text-sm text-stone-700 leading-relaxed">{data.reasoning}</p>
       <p className="text-xs text-stone-400 mt-3 font-mono">Resume: {data.matched_resume}</p>
+
+      {/* /api/score returns `saved` precisely so a scored-but-not-written job
+          can be told from a saved one. Without this the user gets an ordinary
+          green Score Card, goes looking for the job on the dashboard, and
+          finds nothing — the same silent failure the backend fix removed, one
+          layer up. `saved` is undefined for a response from before that field
+          existed, so only an explicit false is treated as a failure. */}
+      {data.saved === false ? (
+        <p
+          role="status"
+          className="mt-3 border-2 border-warning bg-warning-light px-3 py-2 text-xs font-mono text-warning-dark"
+        >
+          Scored, but <strong>not saved</strong> — this job will not appear on your
+          dashboard. The score above is still valid; try again, or check the API logs.
+        </p>
+      ) : data.job_id ? (
+        <p className="mt-3 text-xs font-mono text-success-dark">
+          Saved to your dashboard.
+        </p>
+      ) : null}
     </div>
   );
 }

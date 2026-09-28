@@ -14,7 +14,10 @@
  * Two things here are verified against prod rather than assumed, because both
  * had already gone wrong once:
  *
- * 1. The active list sends NO `lifecycle` param and relies on the backend's
+ * 1. The active list sends `lifecycle=active`. It must NOT rely on the
+ *    backend's `not_archived` default, which means age < 30 and therefore
+ *    INCLUDES the 14-30 day stale band -- leaving it off listed every stale
+ *    job twice, here and in the shelf, and double-counted both totals.
  *    `not_archived` default. That default used to sit inside a `if filters:`
  *    block in db_client.get_jobs, so an unfiltered call quietly returned all
  *    1,251 rows including the 1,164 archived ones.
@@ -105,7 +108,7 @@ function installApiGetRouter({ jobs = [], total, staleJobs = [], staleTotal, gra
 // Real active-list fetches carry per_page=25; the grand-total probe carries
 // per_page=1; the stale shelf carries lifecycle=stale.
 const activeListCalls = () =>
-  apiGet.mock.calls.map(([u]) => u).filter((u) => u.includes('per_page=25') && !u.includes('lifecycle='));
+  apiGet.mock.calls.map(([u]) => u).filter((u) => u.includes('per_page=25') && u.includes('lifecycle=active'));
 const staleCalls = () =>
   apiGet.mock.calls.map(([u]) => u).filter((u) => u.includes('lifecycle=stale'));
 
@@ -133,13 +136,13 @@ beforeEach(() => {
 });
 
 describe('Dashboard — the active list keeps the archived-hidden default', () => {
-  it('sends no lifecycle param, so the backend default (not_archived) applies', async () => {
+  it('sends lifecycle=active so the stale band is not also listed here', async () => {
     installApiGetRouter({ jobs: [makeJob()], total: 1, grandTotal: 1 });
     renderDashboard();
 
     await waitFor(() => expect(activeListCalls().length).toBeGreaterThan(0));
     for (const url of activeListCalls()) {
-      expect(url).not.toContain('lifecycle');
+      expect(url).toContain('lifecycle=active');
     }
   });
 
@@ -290,8 +293,12 @@ describe('Dashboard — the Past / Outdated shelf', () => {
     await waitFor(() => expect(staleCalls().length).toBeGreaterThan(0));
     const stale = new URLSearchParams(staleCalls()[0].split('?')[1]);
     expect(stale.get('lifecycle')).toBe('stale');
-    stale.delete('lifecycle');
     const active = new URLSearchParams(activeListCalls()[0].split('?')[1]);
+    expect(active.get('lifecycle')).toBe('active');
+    // Identical apart from lifecycle — that is the whole contract: both lists
+    // describe one corpus and differ only in which age band they ask for.
+    stale.delete('lifecycle');
+    active.delete('lifecycle');
     expect(stale.toString()).toBe(active.toString());
   });
 });

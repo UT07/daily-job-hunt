@@ -8,6 +8,7 @@ import StatsBar from '../components/StatsBar';
 import JobTable from '../components/JobTable';
 import { SkillsTags, ModelBadge, decodeHtml, DeleteButton } from '../components/JobTable';
 import StatusDropdown from '../components/StatusDropdown';
+import { STATUS_FILTER_OPTIONS } from '../lib/jobStatuses';
 import PastJobsSection from '../components/PastJobsSection';
 import { buildJobQueryParams } from '../lib/jobQuery';
 import { ScoreBadge } from '../components/ui/Badge';
@@ -20,7 +21,7 @@ import { Select } from '../components/ui/Input';
 // created via the on-demand "Add Job" flow the product has pivoted to) had
 // no option at all.
 const SOURCES = ['All', 'adzuna', 'linkedin', 'irishjobs', 'jobs_ie', 'gradireland', 'hn_hiring', 'glassdoor', 'greenhouse', 'ashby', 'indeed', 'manual'];
-const STATUS_OPTIONS = ['All', 'New', 'Applied', 'Interview', 'Offer', 'Rejected', 'Withdrawn', 'Expired'];
+const STATUS_OPTIONS = STATUS_FILTER_OPTIONS;
 const ARCHETYPES = ['All', 'sre_devops', 'backend', 'fullstack', 'platform_cloud', 'data'];
 const SENIORITIES = ['All', 'Junior/Graduate', 'Mid-Level', 'Senior', 'Staff/Lead'];
 const REMOTE_OPTIONS = ['All', 'Remote', 'Hybrid', 'On-site', 'Unknown'];
@@ -384,10 +385,13 @@ export default function Dashboard() {
     setLoading(true);
     setError(null);
     try {
-      // No `lifecycle` param: the backend defaults to "not_archived", so the
-      // active list already excludes 30-days-and-older postings (engaged ones
-      // exempt). The 14-30 day band lives in <PastJobsSection /> below.
-      const params = buildJobQueryParams(filtersRef.current, { page, perPage });
+      // lifecycle=active, NOT the backend's "not_archived" default. That
+      // default means age < 30, which INCLUDES the 14-30 day stale band -- so
+      // omitting it listed every stale job twice, once here and once in
+      // <PastJobsSection /> below, double-counting them in both totals.
+      const params = buildJobQueryParams(filtersRef.current, {
+        page, perPage, lifecycle: 'active',
+      });
 
       const data = await apiGet(`/api/dashboard/jobs?${params.toString()}`);
       setJobs(data.jobs || []);
@@ -818,6 +822,10 @@ export default function Dashboard() {
                 key={tier.key}
                 onClick={() => {
                   setTierFilter(tier.key === 'All' ? 'All' : tier.key);
+                  // Every other narrowing resets the page via handleFilterApply().
+                  // Without this, switching tier from page 3 requested page 3 of a
+                  // 12-row set and rendered the empty state.
+                  setPage(1);
                   setFilterVersion(v => v + 1);
                 }}
                 className={`px-5 py-2.5 text-sm font-heading font-bold transition-all border-b-3 -mb-[2px] cursor-pointer ${
