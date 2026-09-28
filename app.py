@@ -653,15 +653,26 @@ def _refresh_s3_urls(jobs: list) -> list:
             if s3_key:
                 try:
                     fname = artifact_filename(kind, job.get("company"), job.get("title"), owner)
-                    job[url_field] = s3.generate_presigned_url(
-                        "get_object",
-                        Params={
-                            "Bucket": bucket,
-                            "Key": s3_key,
-                            "ResponseContentDisposition": f'attachment; filename="{fname}"',
-                        },
-                        ExpiresIn=7 * 24 * 3600,  # 7 days
-                    )
+
+                    def _url(disposition):
+                        return s3.generate_presigned_url(
+                            "get_object",
+                            Params={
+                                "Bucket": bucket,
+                                "Key": s3_key,
+                                "ResponseContentDisposition": f'{disposition}; filename="{fname}"',
+                            },
+                            ExpiresIn=7 * 24 * 3600,  # 7 days
+                        )
+
+                    # TWO urls, because one header cannot serve both uses.
+                    # "attachment" makes a browser download rather than render,
+                    # so an <iframe> pointing at it shows a blank pane — which
+                    # is exactly what setting it unconditionally did to the job
+                    # workspace's PDF preview. "inline" renders AND still names
+                    # the file when saved.
+                    job[url_field] = _url("inline")
+                    job[f"{url_field.removesuffix('_url')}_download_url"] = _url("attachment")
                 except Exception:
                     pass  # keep existing URL
     return jobs
