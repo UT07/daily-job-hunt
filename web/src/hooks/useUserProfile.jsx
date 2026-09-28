@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { apiGet } from '../api'
 import { useAuth } from '../auth/useAuth'
 
@@ -43,8 +43,17 @@ export function ProfileProvider({ children }) {
     fetchProfile()
   }, [fetchProfile])
 
+  // Same class of bug AuthProvider had: an object literal here is a new
+  // identity on every render, so every useUserProfile() consumer re-rendered
+  // whenever ProfileProvider did — and any consumer listing `refetch` or the
+  // context object in an effect dep array re-ran with it.
+  const value = useMemo(
+    () => ({ profile, isLoading, refetch: fetchProfile }),
+    [profile, isLoading, fetchProfile],
+  )
+
   return (
-    <ProfileContext.Provider value={{ profile, isLoading, refetch: fetchProfile }}>
+    <ProfileContext.Provider value={value}>
       {children}
     </ProfileContext.Provider>
   )
