@@ -1,6 +1,7 @@
 import json
 import logging
 import random
+import re
 import statistics
 import uuid
 from datetime import datetime
@@ -67,6 +68,48 @@ _NON_TECH_TITLE_REJECTS = (
     "project manager", "product manager", "program manager",
     "business analyst", "business development",
 )
+
+
+def _missing_column_name(exc: Exception) -> str | None:
+    """The column name a missing-column error refers to, if it names one.
+
+    PostgREST: "Could not find the 'trace_id' column of 'jobs' ..."
+    Postgres:  'column "trace_id" does not exist'
+               'column "trace_id" of relation "jobs" does not exist'
+
+    Postgres uses both spellings depending on whether the statement gave it a
+    relation to name, and matching only the shorter one leaves the retry unable
+    to identify the column in the longer case -- caught by
+    test_handler_survives_missing_trace_id_column.
+    """
+    text = str(exc)
+    m = re.search(r"Could not find the '([^']+)' column", text)
+    if m:
+        return m.group(1)
+    m = re.search(r'column "([^"]+)"(?: of relation "[^"]+")? does not exist', text)
+    return m.group(1) if m else None
+
+
+def _is_missing_column_error(exc: Exception) -> bool:
+    """True when an insert failed because a column isn't in the schema yet.
+
+    Two different wordings reach us for the same condition, and matching only
+    one of them is how the 2026-09-28 run lost all 58 of its scored jobs:
+
+      - PostgREST (what Supabase actually returns): code PGRST204,
+        "Could not find the 'trace_id' column of 'jobs' in the schema cache"
+      - raw Postgres: 'column "trace_id" does not exist'
+
+    The original guard tested for "does not exist", which the PostgREST
+    wording does not contain, so the retry-without-optional-columns path
+    never ran and every row was warned-and-dropped instead.
+    """
+    text = str(exc)
+    return (
+        "PGRST204" in text
+        or ("column" in text and "does not exist" in text)
+        or ("Could not find" in text and "column" in text)
+    )
 
 
 def should_skip_scoring(job: dict) -> str | None:
@@ -143,6 +186,8 @@ def handler(event, context):
 
     matched_items = []
     skipped_count = 0
+    inserted = 0
+    insert_failures = 0
     for job in jobs:
         skip_status = should_skip_scoring(job)
         if skip_status:
@@ -209,21 +254,43 @@ def handler(event, context):
         }
         try:
             db.table("jobs").insert(job_record).execute()
+            inserted += 1
         except Exception as e:
-            # Retry without optional columns if they don't exist yet
-            if "column" in str(e) and "does not exist" in str(e):
-                for col in ("key_matches", "gaps", "match_reasoning", "score_tier",
-                            "archetype", "seniority", "remote", "requirement_map",
-                            "matched_resume", "apply_platform",
-                            "apply_board_token", "apply_posting_id",
-                            "trace_id"):
-                    job_record.pop(col, None)
-                try:
-                    db.table("jobs").insert(job_record).execute()
-                except Exception as e2:
-                    logger.warning(f"[score_batch] Insert retry failed for {job['job_hash']}: {e2}")
+            # Retry without the column the error actually names.
+            #
+            # This used to pop a hardcoded list of 13 "optional" columns
+            # whenever ANY one of them was missing. Measured on 2026-09-28:
+            # trace_id alone being absent cost score_tier, key_matches, gaps,
+            # match_reasoning, archetype, seniority, remote, requirement_map
+            # and matched_resume on every row -- 17 jobs landed with a score
+            # and no tier, which breaks the dashboard's tier filter. One
+            # missing column should cost one column.
+            if _is_missing_column_error(e):
+                dropped, err = [], e
+                while _is_missing_column_error(err):
+                    col = _missing_column_name(err)
+                    if not col or col not in job_record:
+                        break          # can't identify it -- stop, don't guess
+                    job_record.pop(col)
+                    dropped.append(col)
+                    try:
+                        db.table("jobs").insert(job_record).execute()
+                        err = None
+                        break
+                    except Exception as retry_err:
+                        err = retry_err
+                if err is not None:
+                    insert_failures += 1
+                    logger.warning(
+                        f"[score_batch] Insert retry failed for {job['job_hash']} "
+                        f"after dropping {dropped or 'nothing'}: {err}")
                     continue
+                logger.warning(
+                    f"[score_batch] Inserted {job['job_hash']} without {dropped} "
+                    f"-- apply the migration that adds these columns")
+                inserted += 1
             else:
+                insert_failures += 1
                 logger.warning(f"[score_batch] Insert failed for {job['job_hash']}: {e}")
                 continue
 
@@ -245,8 +312,28 @@ def handler(event, context):
             "skip_contacts": tier in ("B", "C"),
         })
 
-    logger.info(f"[score_batch] {len(jobs)} fetched, {skipped_count} skipped, {len(matched_items)} matched (min_score={min_score})")
-    return {"matched_items": matched_items, "matched_count": len(matched_items), "skipped_count": skipped_count}
+    logger.info(
+        f"[score_batch] {len(jobs)} fetched, {skipped_count} skipped, "
+        f"{inserted} inserted, {insert_failures} insert-failed, "
+        f"{len(matched_items)} matched (min_score={min_score})"
+    )
+    # A per-row insert failure is tolerable; every row failing is not. That
+    # shape means something systemic -- an unapplied migration, an RLS change,
+    # bad credentials -- and swallowing it is how a run scores 58 jobs, writes
+    # none of them, and still reports SUCCEEDED to Step Functions.
+    if insert_failures and inserted == 0:
+        raise RuntimeError(
+            f"[score_batch] all {insert_failures} inserts into jobs failed; "
+            "refusing to report success. Check the most recent [score_batch] "
+            "Insert failed warning for the underlying database error."
+        )
+    return {
+        "matched_items": matched_items,
+        "matched_count": len(matched_items),
+        "skipped_count": skipped_count,
+        "inserted": inserted,
+        "insert_failures": insert_failures,
+    }
 
 
 SCORE_SYSTEM_PROMPT = """You are an expert job-candidate evaluator. Score how well a candidate's resume matches a job listing from THREE distinct perspectives.

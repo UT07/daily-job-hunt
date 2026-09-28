@@ -5,5 +5,10 @@
   "guard_pass_rate": 1.0,
   "score_variance": 0.0,
   "p50": 5.393,
-  "p95": 127.999
+  "p95": 127.999,
+  "families_served": [
+    "groq",
+    "openrouter"
+  ],
+  "_families_served_note": "Inferred, not measured: this baseline was frozen before the harness recorded which model answered. p95=127.999s is impossible on Groq alone (sub-3s across its pool), so a non-Groq provider served part of the run. Present so the gate can tell a narrowed run apart from a quality regression; it changes no threshold. Re-freeze from a run where both providers answer and this becomes measured rather than inferred."
 }
