@@ -23,7 +23,18 @@ logger.setLevel(logging.INFO)
 
 ssm = boto3.client("ssm")
 
-# Default boards — Dublin/Ireland-relevant companies on Greenhouse
+# Default boards — used ONLY when /naukribaba/GREENHOUSE_BOARDS is unreadable.
+# Dublin/Ireland-relevant companies on Greenhouse.
+#
+# Audited 2026-09-28 alongside the Ashby defaults (which had rotted to 3x 404):
+# all ten of these answered 200 with a non-empty `jobs` array, so the list is
+# unchanged. It is pinned by tests/unit/test_scraper_default_boards.py so a
+# future edit has to state its own verification.
+#
+# A slug belongs here only if
+#   GET https://boards-api.greenhouse.io/v1/boards/{slug}/jobs
+# returns 200 with a non-empty `jobs` array. Re-verify before editing:
+#   NAUKRIBABA_LIVE_BOARD_CHECK=1 pytest tests/unit/test_scraper_default_boards.py
 DEFAULT_BOARDS = [
     "stripe", "intercom", "mongodb", "twilio", "datadog",
     "pagerduty", "toast", "cloudflare", "elastic", "ripple",
@@ -72,27 +83,57 @@ def handler(event, context):
     if cached.count and cached.count > 0:
         return {"count": cached.count, "source": "greenhouse", "cached": True}
 
-    # Read board slugs from SSM (fallback to defaults)
+    # Read board slugs from SSM (fallback to defaults).
+    #
+    # This fallback used to be entirely silent — `except Exception: boards =
+    # DEFAULT_BOARDS` with no log line — so a run on defaults was
+    # indistinguishable from a normal run in CloudWatch. Which list a run used
+    # is the first thing you need when the job count drops.
     try:
         import json
         boards_json = get_param("/naukribaba/GREENHOUSE_BOARDS")
         boards = json.loads(boards_json)
-    except Exception:
-        boards = DEFAULT_BOARDS
+        config_source = "ssm"
+    except Exception as e:
+        boards = list(DEFAULT_BOARDS)
+        config_source = "default"
+        logger.error(
+            f"[greenhouse] SSM_FALLBACK: /naukribaba/GREENHOUSE_BOARDS unreadable "
+            f"({type(e).__name__}: {e}) — using the {len(boards)} built-in "
+            f"defaults {boards}"
+        )
 
     all_jobs = []
+    boards_ok = []
+    boards_failed = []
     client = httpx.Client(timeout=30)
 
     for slug in boards:
         try:
             url = f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs?content=true"
             resp = client.get(url)
+            if resp.status_code == 404:
+                # A configured board that 404s is a config error, not a blip:
+                # the slug is wrong or the board was taken down, and it will
+                # never recover on its own. ERROR + a greppable marker, so it
+                # can carry a log metric filter and an alarm.
+                logger.error(
+                    f"[greenhouse] BOARD_NOT_FOUND: {slug} returned HTTP 404 — slug is "
+                    f"wrong or the board was removed (config={config_source})"
+                )
+                boards_failed.append({"board": slug, "status": 404, "reason": "not_found"})
+                continue
             if resp.status_code != 200:
-                logger.warning(f"[greenhouse] {slug}: HTTP {resp.status_code}")
+                # Everything else (429, 5xx) is plausibly transient.
+                logger.warning(f"[greenhouse] BOARD_UNAVAILABLE: {slug} returned HTTP {resp.status_code}")
+                boards_failed.append({"board": slug, "status": resp.status_code, "reason": "http_error"})
                 continue
 
             data = resp.json()
             jobs = data.get("jobs", [])
+            if not jobs:
+                # 200 with an empty board reads as healthy but yields nothing.
+                logger.warning(f"[greenhouse] BOARD_EMPTY: {slug} returned 200 with 0 postings")
 
             # Filter by location, against this user's own policy.
             matched = []
@@ -142,8 +183,14 @@ def handler(event, context):
                     "posted_date": posted_date,
                 })
 
+            # Counted OK only here, once the whole body completed — so
+            # boards_ok and boards_failed stay disjoint and sum to the
+            # configured count.
+            boards_ok.append(slug)
+
         except Exception as e:
-            logger.error(f"[greenhouse] {slug} failed: {e}")
+            logger.error(f"[greenhouse] BOARD_ERROR: {slug} failed: {e}")
+            boards_failed.append({"board": slug, "status": None, "reason": type(e).__name__})
 
     client.close()
 
@@ -165,9 +212,35 @@ def handler(event, context):
             chunk = all_jobs[i:i + 50]
             db.table("jobs_raw").upsert(chunk, on_conflict="job_hash").execute()
 
-    logger.info(f"[greenhouse] {len(all_jobs)} jobs from {len(boards)} boards")
+    # A partially-dead board list is the failure mode this scraper actually
+    # hits: it still returns jobs, so nothing downstream notices. self_improve
+    # only flags a scraper after 3 consecutive days of ZERO jobs, which a
+    # half-working list never reaches. So say it on the summary line — which
+    # used to read "N jobs from 10 boards" whether 10 or 2 of them answered —
+    # and put it in the return value, where it lands in the Step Functions
+    # execution output alongside `count`.
+    summary = (
+        f"[greenhouse] {len(all_jobs)} jobs from {len(boards_ok)}/{len(boards)} boards "
+        f"(config={config_source})"
+    )
+    not_found = [b for b in boards_failed if b["reason"] == "not_found"]
+    if not_found:
+        logger.error(
+            f"{summary} — {len(boards_failed)} board(s) FAILED, {len(not_found)} of them "
+            f"permanently (404): {boards_failed}"
+        )
+    elif boards_failed:
+        # Transient-looking only (429/5xx/network) — worth seeing, not paging.
+        logger.warning(f"{summary} — {len(boards_failed)} board(s) FAILED: {boards_failed}")
+    else:
+        logger.info(summary)
+
     return {
         "count": len(all_jobs),
         "source": "greenhouse",
+        "config_source": config_source,
+        "boards_configured": len(boards),
+        "boards_ok": len(boards_ok),
+        "boards_failed": boards_failed,
         "new_job_hashes": [j["job_hash"] for j in all_jobs],
     }
