@@ -138,3 +138,34 @@ def test_unsuitable_models_are_flagged_not_silently_dropped():
 def test_every_entry_states_its_suitability():
     for m in registry.all_models():
         assert "suitable_for_scoring" in m, f"{m['name']} does not say"
+
+
+FAILOVER_TIMEOUT_CAP = 75
+
+
+def test_failover_host_timeouts_are_capped():
+    """A failover must fail FAST, or it costs more than the outage it covers.
+
+    Timeouts were originally derived from probe latency (3x + 30), which gave
+    nemotron-3.5-lightning 163s off a 44.6s best-case probe. The eval harness
+    runs 23 cases sequentially; CI cancelled the job after 20 minutes, most of
+    it spent waiting on NVIDIA reads that timed out before the council could
+    reach a provider that worked.
+
+    A single probe measures best case. It does not predict aggregate cost when
+    the provider is degraded — which is exactly when a failover gets used.
+    """
+    slow = [(m["name"], m["timeout"]) for m in registry.all_models()
+            if m["provider"] == "nvidia" and m["timeout"] > FAILOVER_TIMEOUT_CAP]
+    assert not slow, f"NVIDIA failover entries exceed the {FAILOVER_TIMEOUT_CAP}s cap: {slow}"
+
+
+def test_no_entry_is_both_slow_and_weak():
+    """meta/muse-glimmer-30b was dropped for this: 31s probe, score 40, and it
+    timed out twice in one CI run. Breadth is not worth a slot that costs more
+    than it returns."""
+    offenders = [(m["name"], m["probe_latency_s"], m["probe_score"])
+                 for m in registry.all_models()
+                 if m.get("suitable_for_scoring", True)
+                 and m["probe_latency_s"] > 30 and m["probe_score"] < 45]
+    assert not offenders, f"slow AND weak entries still registered: {offenders}"
