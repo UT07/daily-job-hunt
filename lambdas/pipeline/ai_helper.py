@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import random
+import time
 import re
 from datetime import datetime, timedelta
 
@@ -158,7 +159,52 @@ def _build_provider_list() -> list[dict]:
              "key_param": "/naukribaba/QWEN_API_KEY", "model": "qwen-plus",
              "timeout": 90},
         )
+    providers.extend(_registry_providers({p["model"] for p in providers}))
     return providers
+
+
+def _registry_providers(already: set[str]) -> list[dict]:
+    """Extra models from agents/model_registry.json, for rotation breadth.
+
+    The point of a large pool is not more opinions per decision — the council
+    still makes 3 calls. It is that 3 can be drawn from ~26 verified models
+    across 8 families, so no single provider's rate limit or daily quota can
+    take the council down. On 2026-09-28 the hand-maintained list held 8
+    entries and 3 of them were dead at once, which was enough to collapse it.
+
+    Every entry was proved by a live call at realistic prompt size (see
+    scripts/probe_models.py); the registry records the date. Entries whose
+    credentials are absent simply fail once and get cooled, which is why this
+    does not try to pre-validate them.
+    """
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "agents", "model_registry.json")
+    try:
+        with open(path) as fh:
+            entries = json.load(fh).get("models", [])
+    except Exception as e:  # a missing registry must not break the pipeline
+        logger.warning(f"[ai] model registry unavailable, using core pool only: {e}")
+        return []
+
+    # DashScope is metered, unlike the free tiers above, so it stays behind the
+    # same opt-in flag the single qwen-plus entry already uses.
+    paid_qwen = os.environ.get("ENABLE_PAID_QWEN", "false").lower() == "true"
+
+    extra = []
+    for e in entries:
+        if e["model"] in already:
+            continue
+        if e["provider"] == "qwen" and not paid_qwen:
+            continue
+        already.add(e["model"])
+        entry = {
+            "name": e["name"], "url": e["url"], "key_param": e["key_param"],
+            "model": e["model"], "timeout": e.get("timeout", 90),
+        }
+        if e["provider"] == "openrouter":
+            entry["extra_headers"] = {"HTTP-Referer": "https://github.com/UT07/daily-job-hunt"}
+        extra.append(entry)
+    return extra
 
 
 def _model_family(model: str) -> str:
@@ -178,6 +224,84 @@ def _model_family(model: str) -> str:
     return m
 
 
+# ---------------------------------------------------------------------------
+# Provider rotation — the point of a large verified pool
+# ---------------------------------------------------------------------------
+# The pool is wide so the council can ROTATE off a provider that has hit a
+# limit, rather than retrying into the same wall. Without this, 2026-09-28 saw
+# every council call log "Critic call failed": the three non-Groq entries were
+# 404, 404 and 429 simultaneously, and selection kept offering them.
+#
+# Cooldown scope is not the same for every failure, and getting it wrong is
+# what makes rotation useless:
+#
+#   429  -> cool the ACCOUNT, not the model. OpenRouter's free pool shares one
+#           daily quota across every model on it, so a 429 on gemma means glm
+#           is equally unavailable. Groq's is a per-minute token budget, so it
+#           recovers in a minute; OpenRouter's is daily, so it does not.
+#   404  -> cool the MODEL, for a long time. Free model ids are withdrawn
+#           without notice (minimax-m3, glm-5.2); the account is fine.
+#   5xx / timeout -> cool the MODEL briefly; probably transient.
+#
+# State is module-level, so it survives across invocations while a Lambda
+# container stays warm — which is exactly the window a per-minute budget
+# cares about. A cold start simply starts over, which is correct: the limit
+# it was avoiding has almost certainly reset by then.
+_COOLDOWNS: dict[str, float] = {}
+
+_RATE_LIMIT_COOLDOWN_S = {
+    "groq": 90,          # 8k tokens/min — recovers within the minute
+    "openrouter": 1800,  # shared free-pool DAILY quota; long, but not all day
+    "qwen": 120,
+    "nvidia": 300,
+    "deepseek": 300,
+}
+_MODEL_GONE_COOLDOWN_S = 6 * 3600   # a withdrawn model id is not coming back today
+_TRANSIENT_COOLDOWN_S = 120
+
+
+def _account_of(provider: dict) -> str:
+    """The billing/quota bucket a provider draws from."""
+    return provider["name"].split("/", 1)[0]
+
+
+def _cool_down(key: str, seconds: int) -> None:
+    until = time.time() + seconds
+    if _COOLDOWNS.get(key, 0) < until:
+        _COOLDOWNS[key] = until
+
+
+def note_provider_failure(provider: dict, status: int | None) -> None:
+    """Record a failure so selection can route around it."""
+    account = _account_of(provider)
+    if status == 429:
+        secs = _RATE_LIMIT_COOLDOWN_S.get(account, 300)
+        _cool_down(f"account:{account}", secs)
+        logger.info(f"[ai] cooling account '{account}' for {secs}s after 429")
+    elif status == 404:
+        _cool_down(f"model:{provider['name']}", _MODEL_GONE_COOLDOWN_S)
+        logger.info(f"[ai] cooling model '{provider['name']}' — 404, id likely withdrawn")
+    else:
+        _cool_down(f"model:{provider['name']}", _TRANSIENT_COOLDOWN_S)
+
+
+def note_provider_success(provider: dict) -> None:
+    """A success proves both the account and the model are usable again."""
+    _COOLDOWNS.pop(f"account:{_account_of(provider)}", None)
+    _COOLDOWNS.pop(f"model:{provider['name']}", None)
+
+
+def _is_available(provider: dict, now: float | None = None) -> bool:
+    now = now if now is not None else time.time()
+    return (_COOLDOWNS.get(f"account:{_account_of(provider)}", 0) <= now
+            and _COOLDOWNS.get(f"model:{provider['name']}", 0) <= now)
+
+
+def _reset_cooldowns() -> None:
+    """Test hook — module state would otherwise leak between tests."""
+    _COOLDOWNS.clear()
+
+
 def _select_diverse_providers(
     providers: list[dict],
     n: int,
@@ -191,7 +315,16 @@ def _select_diverse_providers(
     """
     exclude_families = exclude_families or set()
 
-    shuffled = list(providers)
+    # Prefer providers that are not cooling. Fail OPEN when every candidate is
+    # cooling: a stale cooldown estimate must never leave the council with
+    # nothing to call, and the worst case is one wasted request that re-cools
+    # the provider anyway.
+    usable = [p for p in providers if _is_available(p)]
+    if not usable:
+        logger.warning("[ai] every provider is cooling — ignoring cooldowns for this pick")
+        usable = list(providers)
+
+    shuffled = list(usable)
     random.shuffle(shuffled)
 
     seen: set[str] = set()
@@ -258,14 +391,18 @@ def _call_provider(
                 else:
                     logger.warning(f"[ai] {provider['name']} returned empty content")
                 return None
+            note_provider_success(provider)
             return {"content": content, "provider": provider["name"], "model": provider["model"]}
         elif resp.status_code == 429:
             logger.warning(f"[ai] {provider['name']} rate limited")
+            note_provider_failure(provider, 429)
         else:
             logger.warning(f"[ai] {provider['name']} returned {resp.status_code}")
+            note_provider_failure(provider, resp.status_code)
         return None
     except Exception as e:
         logger.warning(f"[ai] {provider['name']} failed: {e}")
+        note_provider_failure(provider, None)
         return None
 
 
