@@ -15,6 +15,13 @@ import sys
 
 ACCURACY_TOLERANCE = 0.05
 
+# Tighter than ACCURACY_TOLERANCE, deliberately. A tier score is a sampled
+# judgement -- the same job scored 25 to 80 across 30 verified models -- so its
+# tolerance exists to absorb real noise. A guard is a deterministic check that
+# fired or did not; the only thing this slack absorbs is the golden set's case
+# mix shifting between runs.
+GUARD_TOLERANCE = 0.02
+
 
 def pool_shrank(current: dict, baseline: dict) -> str | None:
     """Whether this run was served by a narrower provider pool than the baseline.
@@ -60,6 +67,23 @@ def evaluate_gate(current: dict, baseline: dict) -> tuple[bool, list[str]]:
             reasons.append(
                 f"tier_accuracy fell {drop:.1%} "
                 f"({baseline['tier_accuracy']:.1%} -> {current['tier_accuracy']:.1%})"
+            )
+
+    # guard_pass_rate covers the guardrails layer -- injection detection and
+    # output guards. It was computed and reported from the beginning and gated
+    # by nothing: on 2026-09-28 it fell 1.00 -> 0.92 across a passing run and
+    # no check looked at it. A safety metric nobody reads is not a safety
+    # metric. Both sides must carry the field, so a baseline frozen before it
+    # existed skips the check rather than blocking every PR.
+    guard_now = current.get("guard_pass_rate")
+    guard_was = baseline.get("guard_pass_rate")
+    if guard_now is not None and guard_was is not None:
+        guard_drop = guard_was - guard_now
+        if guard_drop > GUARD_TOLERANCE:
+            reasons.append(
+                f"guard_pass_rate fell {guard_drop:.1%} "
+                f"({guard_was:.1%} -> {guard_now:.1%}) — the guardrails layer let "
+                f"more through than the baseline run did"
             )
 
     if current["fabrication_rate"] > baseline["fabrication_rate"]:
