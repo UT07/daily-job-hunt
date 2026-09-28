@@ -43,6 +43,7 @@ import io
 import json
 import logging
 import os
+import pathlib
 import re
 import tempfile
 import threading
@@ -637,6 +638,49 @@ def artifact_filename(kind: str, company: str, title: str, owner: str = "") -> s
     return f"{slug[:120]}.pdf"
 
 
+def _sections_to_tex(user_id: str, sections: dict) -> str:
+    """Build a compilable .tex from parsed sections, borrowing a preamble.
+
+    Preamble preference, most to least personal:
+      1. the user's most recent resume that IS valid LaTeX — keeps their own
+         macros, geometry and fonts
+      2. a bundled template from resumes/
+      3. whatever rebuild_tex_from_sections generates on its own
+
+    Never raises: a conversion failure must leave the upload succeeding with
+    the extracted text, exactly as before, rather than losing the file.
+    """
+    from shared.resume_format import is_latex_document
+
+    base_tex = ""
+    try:
+        rows = (_db.client.table("user_resumes").select("tex_content")
+                .eq("user_id", user_id).order("created_at", desc=True)
+                .limit(10).execute().data or [])
+        base_tex = next((r["tex_content"] for r in rows
+                         if is_latex_document(r.get("tex_content"))), "")
+    except Exception as e:
+        logger.warning("Could not read a previous resume for its preamble: %s", e)
+
+    if not base_tex:
+        for name in ("sre_devops.tex", "fullstack.tex"):
+            path = pathlib.Path(__file__).parent / "resumes" / name
+            if path.exists():
+                base_tex = path.read_text()
+                break
+
+    try:
+        from parse_sections import rebuild_tex_from_sections
+    except ImportError:
+        from lambdas.pipeline.parse_sections import rebuild_tex_from_sections
+
+    try:
+        return rebuild_tex_from_sections(sections, base_tex)
+    except Exception as e:
+        logger.error("PDF -> LaTeX conversion failed, storing extracted text: %s", e)
+        return ""
+
+
 def _refresh_s3_urls(jobs: list) -> list:
     """Regenerate presigned URLs from stored S3 keys so they never expire."""
     bucket = os.environ.get("S3_BUCKET", os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt"))
@@ -653,15 +697,26 @@ def _refresh_s3_urls(jobs: list) -> list:
             if s3_key:
                 try:
                     fname = artifact_filename(kind, job.get("company"), job.get("title"), owner)
-                    job[url_field] = s3.generate_presigned_url(
-                        "get_object",
-                        Params={
-                            "Bucket": bucket,
-                            "Key": s3_key,
-                            "ResponseContentDisposition": f'attachment; filename="{fname}"',
-                        },
-                        ExpiresIn=7 * 24 * 3600,  # 7 days
-                    )
+
+                    def _url(disposition):
+                        return s3.generate_presigned_url(
+                            "get_object",
+                            Params={
+                                "Bucket": bucket,
+                                "Key": s3_key,
+                                "ResponseContentDisposition": f'{disposition}; filename="{fname}"',
+                            },
+                            ExpiresIn=7 * 24 * 3600,  # 7 days
+                        )
+
+                    # TWO urls, because one header cannot serve both uses.
+                    # "attachment" makes a browser download rather than render,
+                    # so an <iframe> pointing at it shows a blank pane — which
+                    # is exactly what setting it unconditionally did to the job
+                    # workspace's PDF preview. "inline" renders AND still names
+                    # the file when saved.
+                    job[url_field] = _url("inline")
+                    job[f"{url_field.removesuffix('_url')}_download_url"] = _url("attachment")
                 except Exception:
                     pass  # keep existing URL
     return jobs
@@ -2661,7 +2716,15 @@ async def upload_resume(
     label: str = "",
     user: AuthUser = Depends(get_current_user),
 ):
-    """Upload a PDF resume, extract text, parse sections, store in DB."""
+    """Upload a resume (.tex or .pdf), parse sections, store in DB.
+
+    .tex is the preferred format and the only one that can be TAILORED. The
+    pipeline rewrites the document body and recompiles it, so it needs the
+    source; a PDF can only be read, not rewritten. Accepting .pdf and storing
+    its extracted text in a column named tex_content is what silently disabled
+    tailoring on 2026-09-28 — the upload succeeded, and every subsequent
+    tailoring attempt failed with "base resume has no \begin{document}".
+    """
     if not _db:
         raise HTTPException(503, "Database not configured")
 
@@ -2671,9 +2734,23 @@ async def upload_resume(
 
     from resume_parser import extract_text_from_pdf, parse_resume_sections
 
-    text = extract_text_from_pdf(contents)
-    if not text:
-        raise HTTPException(400, "Could not extract text from PDF")
+    filename = (file.filename or "").lower()
+    is_tex = filename.endswith((".tex", ".latex"))
+
+    if is_tex:
+        try:
+            text = contents.decode("utf-8")
+        except UnicodeDecodeError:
+            try:
+                text = contents.decode("latin-1")
+            except Exception:
+                raise HTTPException(400, "Could not read the .tex file as text")
+        if not text.strip():
+            raise HTTPException(400, "The .tex file is empty")
+    else:
+        text = extract_text_from_pdf(contents)
+        if not text:
+            raise HTTPException(400, "Could not extract text from PDF")
 
     sections = parse_resume_sections(text, ai_client=_ai_client)
 
@@ -2686,11 +2763,46 @@ async def upload_resume(
     # on it, instead of leaving them to discover it from a red banner.
     from shared.resume_format import describe_why_not_latex, is_latex_document
 
-    tailorable = is_latex_document(text)
+    if is_latex_document(text):
+        # A .tex upload is already the thing the pipeline wants.
+        tex_content, converted_from_pdf = text, False
+    else:
+        # Extracted PDF text is not tailorable — the pipeline rewrites the
+        # document body and recompiles it, so it needs LaTeX. Every piece
+        # needed to produce that already existed and was simply never
+        # connected: sections are parsed above (and were used only to
+        # populate the profile), and rebuild_tex_from_sections turns them
+        # back into a compilable document.
+        #
+        # The preamble comes from the user's most recent VALID LaTeX resume so
+        # their own formatting and macros survive; failing that, a bundled
+        # template; failing that, rebuild_tex_from_sections emits a minimal
+        # preamble of its own. A first-time user with only a PDF therefore
+        # still ends up with something tailorable.
+        # Only accept the conversion if the PARSE carried content across.
+        # is_latex_document() checks markers, not substance: with no AI client
+        # the parser returns only raw_text and the renderer emits a valid but
+        # EMPTY document, which would replace a working resume and report
+        # success. Measured: 16,953 chars in, 1,807 chars of empty LaTeX out.
+        from shared.resume_format import sections_have_content
+
+        converted = _sections_to_tex(user.id, sections) if sections_have_content(sections) else ""
+        if not converted:
+            logger.warning(
+                "PDF -> LaTeX conversion produced nothing usable for user %s; "
+                "storing extracted text and leaving tailoring on the previous resume",
+                user.id,
+            )
+        # A failed conversion must not lose the upload — fall back to the
+        # extracted text, which is exactly the previous behaviour.
+        tex_content = converted or text
+        converted_from_pdf = bool(converted)
+
+    tailorable = is_latex_document(tex_content)
     resume_data = {
         "resume_key": resume_key,
         "label": label or file.filename,
-        "tex_content": text,
+        "tex_content": tex_content,
     }
 
     result = _db.upsert_resume(user.id, resume_data)
@@ -2733,8 +2845,9 @@ async def upload_resume(
         # here so the UI can show it, rather than letting the user find out
         # from "Regenerate failed: Pipeline failed".
         "tailorable": tailorable,
+        "converted_from_pdf": converted_from_pdf,
         "tailoring_warning": "" if tailorable else (
-            f"Saved and used to fill your profile, but {describe_why_not_latex(text)} "
+            f"Saved and used to fill your profile, but {describe_why_not_latex(tex_content)} "
             "Tailoring will keep using your most recent LaTeX resume."
         ),
         "extracted_profile": {

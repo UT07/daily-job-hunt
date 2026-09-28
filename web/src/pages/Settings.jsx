@@ -445,7 +445,7 @@ function ResumeSection() {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".pdf"
+            accept=".tex,.latex,.pdf"
             className="hidden"
             onChange={(e) => handleFile(e.target.files[0])}
           />
