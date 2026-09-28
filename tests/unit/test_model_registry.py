@@ -56,15 +56,24 @@ def test_reasoning_models_get_a_higher_token_floor():
 
 def test_select_diverse_prefers_distinct_families():
     """The pool is skewed -- over half is one family -- so a uniform sample
-    would routinely return a single-vendor 'council'."""
-    picked = registry.select_diverse(5)
+    would routinely return a single-vendor 'council'.
+
+    Passes an explicit pool. select_diverse() otherwise defaults to
+    available_models(), which filters on credentials being present in the
+    environment: on CI there are none, so the pool is empty and this asserted
+    nothing. It passed locally only because an unrelated test file had called
+    load_dotenv() earlier in the same pytest process and left the keys in
+    os.environ -- a test of selection logic must not depend on that.
+    """
+    pool = registry.all_models()
+    picked = registry.select_diverse(5, pool=pool)
     assert len(picked) == 5
     assert len({m["family"] for m in picked}) == 5
 
 
 def test_select_diverse_honours_exclusions():
     excluded = {"qwen", "openai"}
-    for m in registry.select_diverse(6, exclude_families=excluded):
+    for m in registry.select_diverse(6, exclude_families=excluded, pool=registry.all_models()):
         assert m["family"] not in excluded
 
 
@@ -74,7 +83,17 @@ def test_select_diverse_cannot_exceed_the_pool():
 
 
 def test_select_diverse_is_empty_when_everything_is_excluded():
-    assert registry.select_diverse(3, exclude_families=registry.families()) == []
+    assert registry.select_diverse(
+        3, exclude_families=registry.families(), pool=registry.all_models()) == []
+
+
+def test_selection_needs_no_credentials(monkeypatch):
+    """Guards the CI failure above: with every provider key unset, an explicit
+    pool must still select. Only available_models() may depend on the env."""
+    for env in ("GROQ_API_KEY", "OPENROUTER_API_KEY", "QWEN_API_KEY",
+                "NVIDIA_API_KEY", "DEEPSEEK_API_KEY"):
+        monkeypatch.delenv(env, raising=False)
+    assert len(registry.select_diverse(3, pool=registry.all_models())) == 3
 
 
 def test_available_models_needs_credentials(monkeypatch):
@@ -98,3 +117,24 @@ def test_as_chat_model_strips_the_completions_suffix(monkeypatch):
     llm = registry.as_chat_model(entry)
     assert str(llm.openai_api_base).rstrip("/").endswith("/v1")
     assert "chat/completions" not in str(llm.openai_api_base)
+
+
+def test_unsuitable_models_are_flagged_not_silently_dropped():
+    """Verification and capability are different claims.
+
+    Every entry was PROVED to respond correctly at realistic prompt size; that
+    says nothing about whether it can reason about a job description. Selecting
+    the council pool on family diversity alone put a code-completion model and
+    a 2.6B model in it, and the AI Eval Gate measured tier_accuracy falling
+    63.2% -> 25.0%. They stay in the registry — they are genuinely verified —
+    but carry the reason they must not be selected for scoring.
+    """
+    unsuitable = [m for m in registry.all_models() if not m.get("suitable_for_scoring", True)]
+    assert unsuitable, "the two known-unsuitable models must stay flagged"
+    for m in unsuitable:
+        assert m.get("unsuitable_reason"), f"{m['name']} flagged with no reason"
+
+
+def test_every_entry_states_its_suitability():
+    for m in registry.all_models():
+        assert "suitable_for_scoring" in m, f"{m['name']} does not say"

@@ -107,12 +107,31 @@ def _build_provider_list() -> list[dict]:
     # to go, and a 3-call council silently degraded to one unreviewed
     # candidate. The replacements below each add a distinct working family,
     # which is what the critic actually needs.
+    # Chosen for CAPABILITY first, family diversity second. The first cut of
+    # this list optimised only for distinct families and the AI Eval Gate
+    # caught it: tier_accuracy fell 63.2% -> 25.0%. Two of the four additions
+    # were structurally unsuited to scoring a job description —
+    # cohere/north-mini-code is a code-completion model, and liquid/lfm-2.5-2.6b
+    # is a 2.6B model that took 63s to answer the probe. A council whose
+    # generators and critic cannot reason about a JD produces confident
+    # nonsense, which is worse than the dead-critic failure it replaced.
+    #
+    # Probe scores on one fixed JD+resume pair, 2026-09-28 (not ground truth —
+    # the models genuinely disagree — but a 2.6B model scoring 25 where a 550B
+    # scores 50 is signal about capability, not about the job):
+    #   nemotron-3.5-lightning     65
+    #   nemotron-3-ultra-550b      50
+    #   nemotron-3-super-120b      48
+    #   ling-3.0-flash-fin         45
+    #   ling-3.0-flash-sante       40
+    #   north-mini-code            30   <- dropped, code model
+    #   lfm-2.5-2.6b               25   <- dropped, 2.6B and 63s
     openrouter_models = [
+        "nvidia/nemotron-3.5-lightning:free",
         "nvidia/nemotron-3-ultra-550b-a55b:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
-        "cohere/north-mini-code:free",
         "inclusionai/ling-3.0-flash-fin:free",
-        "liquid/lfm-2.5-2.6b:free",
+        "inclusionai/ling-3.0-flash-sante:free",
     ]
 
     # Groq is the primary provider — its own free tier is not shared with the
