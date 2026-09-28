@@ -1004,7 +1004,7 @@ Resources:
                       "Resource": "${ScrapeLinkedInFunction.Alias}",
                       "Parameters": {
                         "queries.$": "$.queries",
-                        "location": "Ireland",
+                        "locations.$": "$.locations",
                         "query_hash.$": "$.query_hash",
                         "max_jobs": 50
                       },
@@ -1027,7 +1027,7 @@ Resources:
                       "Resource": "${ScrapeIndeedFunction.Alias}",
                       "Parameters": {
                         "queries.$": "$.queries",
-                        "location": "Ireland",
+                        "locations.$": "$.locations",
                         "query_hash.$": "$.query_hash",
                         "max_jobs": 50
                       },
@@ -1133,6 +1133,7 @@ Resources:
                       "Type": "Task",
                       "Resource": "${ScrapeGreenhouseFunction.Alias}",
                       "Parameters": {
+                        "locations.$": "$.locations",
                         "query_hash.$": "$.query_hash"
                       },
                       "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 10, "MaxAttempts": 2, "BackoffRate": 2}],
@@ -1153,6 +1154,7 @@ Resources:
                       "Type": "Task",
                       "Resource": "${ScrapeAshbyFunction.Alias}",
                       "Parameters": {
+                        "locations.$": "$.locations",
                         "query_hash.$": "$.query_hash"
                       },
                       "Retry": [{"ErrorEquals": ["States.ALL"], "IntervalSeconds": 10, "MaxAttempts": 2, "BackoffRate": 2}],

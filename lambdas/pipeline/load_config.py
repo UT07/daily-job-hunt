@@ -3,6 +3,8 @@ import logging
 
 import boto3
 
+from shared.location_policy import normalize_locations
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -114,10 +116,30 @@ def handler(event, context):
 
     config["user_id"] = user_id
 
+    # Normalise `locations` into a flat list of strings, unconditionally.
+    #
+    # Two reasons this is not left as whatever the jsonb column happened to
+    # hold. First, the state machine now passes it to the scrapers as
+    # `"locations.$": "$.locations"`, and a JSONPath reference to a key that
+    # is absent from the state input is not a validation error -- it is a
+    # States.Runtime failure at execution time, i.e. the whole RunScrapers
+    # branch dies. Setting the key on every path makes that unreachable.
+    # Second, the column is jsonb and the project writes two shapes into it
+    # (Settings.jsx writes a flat list, config.yaml uses
+    # {"primary": [...]}), so the scrapers would otherwise each have to
+    # re-derive the shape -- which is the duplication this change removes.
+    #
+    # Until 2026-09-28 the only thing this value was used for was salting
+    # query_hash below; it reached no scraper at all.
+    config["locations"] = normalize_locations(config.get("locations"))
+
     # Compute a short hash of the search parameters for cache-keying downstream
     query_str = "|".join(config.get("queries", []))
-    location_str = "|".join(config.get("locations", []))
+    location_str = "|".join(config["locations"])
     config["query_hash"] = hashlib.md5(f"{query_str}|{location_str}".encode()).hexdigest()[:12]
 
-    logger.info(f"[load_config] User {user_id}: {len(config.get('queries', []))} queries, min_score={config.get('min_match_score', 60)}")
+    logger.info(
+        f"[load_config] User {user_id}: {len(config.get('queries', []))} queries, "
+        f"locations={config['locations']}, min_score={config.get('min_match_score', 60)}"
+    )
     return config

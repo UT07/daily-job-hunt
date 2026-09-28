@@ -14,6 +14,8 @@ from urllib.parse import quote_plus
 import boto3
 import httpx
 
+from shared.location_policy import build_location_policy
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -215,10 +217,26 @@ def _fetch_job_detail(job_key, proxy_url):
 
 def handler(event, context):
     queries = event.get("queries", ["software engineer"])
-    location = event.get("location", "Ireland")
+    # The site's own search takes ONE location string, so this is the user's
+    # configured list resolved down to one (see
+    # location_policy._preferred_search_term: a country-level entry beats a
+    # city inside it, because these boards' location filters are
+    # hierarchical). Falls back to the legacy singular `location` key, then to
+    # location_policy.LEGACY_DEFAULT_LOCATIONS -- so a caller that has not
+    # been updated behaves exactly as before.
+    #
+    # Until 2026-09-28 template.yaml hardcoded "location": "Ireland" here and
+    # the user's configured locations reached no scraper at all.
+    policy = build_location_policy(event.get("locations") or event.get("location"))
+    location = policy.search_term
     query_hash = event.get("query_hash", "")
     cache_ttl_hours = event.get("cache_ttl_hours", 24)
     max_jobs = event.get("max_jobs", 50)
+
+    logger.info(
+        f"[indeed] location policy: source={policy.source} "
+        f"locations={list(policy.locations)} search_term={location!r}"
+    )
 
     db = get_supabase()
     proxy_url = get_param("/naukribaba/PROXY_URL")
