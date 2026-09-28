@@ -43,7 +43,10 @@ export default function ScoreStrip({ ats, hiringManager, techRecruiter, stale = 
             </span>
             {stale && (
               // Greyed, not spinning: the previous number is still information.
-              <span className="text-[10px] text-stone-400">last compiled</span>
+              // The wording matters — these scores are a verdict on the resume
+              // as it was BEFORE the edits, and saying "last compiled" implied
+              // they had merely lagged rather than gone out of date.
+              <span className="text-[10px] text-stone-400">before your edits</span>
             )}
           </div>
           <div className="flex gap-4 mt-1 text-xs font-mono text-stone-600">

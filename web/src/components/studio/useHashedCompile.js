@@ -22,6 +22,8 @@ export function hashSections(sections) {
 }
 
 /**
+ * Compile `sections` to a PDF — at most one at a time, latest content wins.
+ *
  * @param sections   the structured content to compile
  * @param compileFn  (sections) => Promise<pdfUrl>
  * @param options.renderedHashSeed
@@ -33,8 +35,18 @@ export function hashSections(sections) {
  *
  *   The CALLER computes it, deliberately. The hook cannot know whether a
  *   pre-existing PDF matches the sections it was handed, and a caller with no
- *   such PDF genuinely does need that first compile. Passing it in also keeps
- *   the hook free of a capture-once ref read during render.
+ *   such PDF genuinely does need that first compile.
+ *
+ * SERIALIZED, not merely de-duplicated. An earlier version allowed concurrent
+ * compiles and relied on a hash check to discard a stale RESULT. That kept the
+ * on-screen PDF honest but not the stored one: every compile writes the same
+ * S3 key (users/{uid}/resumes/{job_id}_tailored.pdf), so two in flight race
+ * server-side and whichever finishes last wins on disk — which can be the
+ * OLDER document. The client would then show the right PDF while the saved
+ * resume was silently wrong. One at a time removes that race at its source.
+ *
+ * The stale-result check is kept as defence in depth: it costs nothing, and it
+ * still fires when content changes while the single in-flight compile runs.
  */
 export function useHashedCompile(sections, compileFn, { renderedHashSeed = null } = {}) {
   const [pdfUrl, setPdfUrl] = useState(null);
@@ -60,36 +72,66 @@ export function useHashedCompile(sections, compileFn, { renderedHashSeed = null 
   const renderedHashRef = useRef(effectiveRenderedHash);
   useEffect(() => { renderedHashRef.current = effectiveRenderedHash; }, [effectiveRenderedHash]);
 
-  const inFlight = useRef(new Set());
+  const busy = useRef(false);
+  const queued = useRef(false);
 
-  const requestCompile = useCallback(() => {
+  const mounted = useRef(true);
+  useEffect(() => () => { mounted.current = false; }, []);
+
+  const compileFnRef = useRef(compileFn);
+  useEffect(() => { compileFnRef.current = compileFn; }, [compileFn]);
+
+  const run = useCallback(function run() {
+    // Read the hash and the content together, at start time, so the staleness
+    // check at the end compares like with like.
     const hash = currentHashRef.current;
-    if (hash === renderedHashRef.current) return; // nothing changed since the displayed PDF
-    if (inFlight.current.has(hash)) return;       // already queued for this exact content
-    inFlight.current.add(hash);
+    const payload = sectionsRef.current;
+
+    if (hash === renderedHashRef.current) {
+      busy.current = false;
+      setCompiling(false);
+      return;
+    }
+
+    busy.current = true;
     setCompiling(true);
     setError(null);
 
-    Promise.resolve(compileFn(sectionsRef.current))
+    Promise.resolve(compileFnRef.current(payload))
       .then((url) => {
-        // THE RULE: a result for content that is no longer current is dropped,
-        // never displayed. Without this, an out-of-order completion renders an
-        // older document with nothing on screen saying so.
+        if (!mounted.current) return;
+        // Content moved on while this ran, so this PDF is already out of date.
+        // Showing it would be an invisibly stale pane.
         if (hash !== currentHashRef.current) return;
         setPdfUrl(url);
         setRenderedHash(hash);
       })
       .catch((e) => {
-        if (hash !== currentHashRef.current) return;
+        if (!mounted.current) return;
         // Keep the last good PDF on screen; a stale-but-labelled document is
         // more useful than an empty pane.
         setError(e.message || 'Compile failed');
       })
       .finally(() => {
-        inFlight.current.delete(hash);
-        if (inFlight.current.size === 0) setCompiling(false);
+        busy.current = false;
+        if (!mounted.current) return;
+        if (queued.current) {
+          // Run the LATEST content, not whatever was current when the request
+          // was queued — intermediate states were superseded before they ever
+          // reached the server, and compiling them would waste 15s each.
+          queued.current = false;
+          run();
+        } else {
+          setCompiling(false);
+        }
       });
-  }, [compileFn]);
+  }, []);
+
+  const requestCompile = useCallback(() => {
+    if (currentHashRef.current === renderedHashRef.current) return;
+    if (busy.current) { queued.current = true; return; }
+    run();
+  }, [run]);
 
   return {
     pdfUrl,
