@@ -1265,7 +1265,15 @@ export default function JobWorkspace() {
                     : null;
                   const model = displayVersion ? displayVersion.tailoring_model : job.tailoring_model;
                   const versionNum = displayVersion ? displayVersion.version_number : job.resume_version;
+                  // Two URLs, not one. The API signs the preview URL with
+                  // Content-Disposition: inline and the download URL with
+                  // attachment — a browser will not RENDER an attachment, so
+                  // pointing the <iframe> at the download URL produces a blank
+                  // pane. Falls back to the preview URL for responses cached
+                  // from before the download URL existed.
                   const pdfUrl = displayVersion?.resume_s3_url ?? job.resume_s3_url;
+                  const pdfDownloadUrl =
+                    displayVersion?.resume_s3_download_url ?? job.resume_s3_download_url ?? pdfUrl;
                   return (
                     <>
                       <div className="flex items-center justify-between mb-4">
@@ -1293,7 +1301,7 @@ export default function JobWorkspace() {
                             {regenLoading === 'resume' ? 'Regenerating...' : 'Regenerate'}
                           </Button>
                           {pdfUrl && (
-                            <a href={pdfUrl} target="_blank" rel="noopener noreferrer">
+                            <a href={pdfDownloadUrl} target="_blank" rel="noopener noreferrer">
                               <Button variant="primary" size="sm">Download PDF</Button>
                             </a>
                           )}
@@ -1353,7 +1361,10 @@ export default function JobWorkspace() {
                   >
                     {regenLoading === 'cover' ? 'Regenerating...' : 'Regenerate'}
                   </Button>
-                  <a href={job.cover_letter_s3_url} target="_blank" rel="noopener noreferrer">
+                  {/* download URL carries Content-Disposition: attachment; the
+                      iframe below must use the inline one or it renders nothing */}
+                  <a href={job.cover_letter_s3_download_url ?? job.cover_letter_s3_url}
+                     target="_blank" rel="noopener noreferrer">
                     <Button variant="primary" size="sm">Download PDF</Button>
                   </a>
                 </div>

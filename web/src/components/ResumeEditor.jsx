@@ -208,7 +208,7 @@ export default function ResumeEditor({ job, onGenerateResume, generating }) {
             <div>
               <input
                 type="file"
-                accept="application/pdf"
+                accept=".tex,.latex,application/pdf"
                 ref={fileInputRef}
                 onChange={handleUploadPdf}
                 className="hidden"
