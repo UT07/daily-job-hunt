@@ -117,8 +117,9 @@ RESIDUE_FILLER = frozenset({
 # "no gate at all", for the same reason merge_dedup keeps
 # LEGACY_REMOTE_ONLY_REGIONS: a scraper with no location gate stores every
 # posting on every configured board. Measured on the live boards
-# (2026-09-28): Greenhouse alone returns 3,089 postings per run against the
-# 622 today's filter admits, and jobs_raw already holds 13,677 rows.
+# (2026-09-28, the board lists actually in SSM): Greenhouse alone returns
+# 3,725 postings per run against the 966 today's filter admits, and jobs_raw
+# already holds 13,677 rows.
 #
 # Scoped as tightly as it can be. It is a DEFAULT LOCATION LIST fed through
 # the identical code path, not a second matching algorithm and not an
