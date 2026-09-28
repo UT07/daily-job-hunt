@@ -76,6 +76,8 @@ export class MockApi {
     /** Paths the app asked for that this fake has no handler for. */
     this.unhandled = [];
     this.scoreResponse = null;
+    /** Overrides GET /api/pipeline/status/{name} — set to make a run FAIL. */
+    this.pipelineResult = null;
     /** Set false to simulate Supabase itself being unreachable. */
     this.supabaseAuthReachable = true;
   }
@@ -333,6 +335,23 @@ export class MockApi {
         return json({ last_run: null, status: 'idle', jobs_found: 0, jobs_matched: 0 });
       }
       if (path === '/api/search-config') return json({ queries: [], locations: [] });
+
+      // Step Functions: POST returns a pollUrl, the GET below reports the
+      // execution. `pipelineResult` lets a spec make it fail.
+      if (path === '/api/pipeline/run-single' && request.method() === 'POST') {
+        return json({ executionName: 'e2e-exec', pollUrl: '/api/pipeline/status/e2e-exec' });
+      }
+      if (path.startsWith('/api/pipeline/status/')) {
+        return json(this.pipelineResult ?? {
+          executionName: 'e2e-exec',
+          status: 'SUCCEEDED',
+          output: {
+            job_id: 'manual-pipeline-job',
+            ats_score: 91, hiring_manager_score: 89, tech_recruiter_score: 90,
+            pdf_url: 'https://example.invalid/tailored.pdf',
+          },
+        });
+      }
 
       // --- score: the Save & Score seam ----------------------------------
       if (path === '/api/score' && request.method() === 'POST') {

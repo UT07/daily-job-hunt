@@ -42,6 +42,11 @@ export class Dashboard {
     this.resultCount = page.locator('p', { hasText: /^\d+ jobs?/ }).first();
 
     this.pastShelf = page.getByRole('button', { name: /Past \/ Outdated/ });
+    // The shelf's own rows. Scoped to the <section> because a stale job can
+    // also appear in the main table, and an unscoped text match would find the
+    // (display:none) mobile card of that row first.
+    this.pastShelfSection = page.locator('section').filter({ has: this.pastShelf });
+    this.pastShelfRows = this.pastShelfSection.locator('ul > li');
     this.emptyState = page.getByText('No jobs match your current filters');
     this.firstRunEmptyState = page.getByText('No jobs yet.');
     this.errorBanner = page.locator('div.border-error');
