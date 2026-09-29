@@ -1,5 +1,6 @@
 """YC Jobs scraper — fetches from WorkAtAStartup via Inertia protocol."""
 import logging
+from shared.scrape_budget import cache_ttl_hours as _ttl
 import re
 import json
 from datetime import datetime, timedelta
@@ -56,7 +57,7 @@ def _fetch_jobs_page(version, query=""):
 def handler(event, context):
     queries = event.get("queries", ["software engineer"])
     query_hash = event.get("query_hash", "")
-    cache_ttl_hours = event.get("cache_ttl_hours", 48)
+    cache_ttl_hours = event.get("cache_ttl_hours", _ttl(48))
 
     db = get_supabase()
 

@@ -117,5 +117,11 @@ def test_the_guard_lives_in_one_place():
     import pathlib as _p
     for name in ("scrape_indeed", "scrape_linkedin", "scrape_glassdoor"):
         src = _p.Path(f"lambdas/scrapers/{name}.py").read_text()
-        assert "from shared.scrape_budget import enrichment_budget_left" in src
+        # Matched loosely: the same import line also carries cache_ttl_hours,
+        # and an exact-string assertion here breaks whenever a second helper
+        # is added to the module — which it did.
+        import re as _re
+        assert _re.search(
+            r"from shared\.scrape_budget import [^\n]*enrichment_budget_left", src
+        ), f"{name} does not import the shared guard"
         assert "def enrichment_budget_left" not in src, f"{name} redefines the helper"

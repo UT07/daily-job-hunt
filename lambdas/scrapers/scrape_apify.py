@@ -1,5 +1,6 @@
 """Generic Apify scraper Lambda. Called with actor_id and run_input as params."""
 import logging
+from shared.scrape_budget import cache_ttl_hours as _ttl
 import os
 from datetime import datetime, timedelta
 
@@ -71,7 +72,7 @@ def handler(event, context):
     source = event["source"]
     normalizer_name = event.get("normalizer", source)
     query_hash = event.get("query_hash", "")
-    cache_ttl_hours = event.get("cache_ttl_hours", 24)
+    cache_ttl_hours = event.get("cache_ttl_hours", _ttl(24))
 
     db = get_supabase()
 
