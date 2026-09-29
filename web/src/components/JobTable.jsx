@@ -461,6 +461,15 @@ export default function JobTable({ jobs, onStatusChange, onDelete, sortBy = 'fir
                       ))}
                     </div>
                   )}
+                  {/* The cell itself navigates to the workspace, so this must
+                      stop propagation or the row's handler wins the click. */}
+                  <button
+                    type="button"
+                    className="mt-1 text-[10px] font-mono uppercase tracking-wider text-stone-400 hover:text-black underline"
+                    onClick={(e) => { e.stopPropagation(); navigate(`/jobs/${job.job_id}/studio`); }}
+                  >
+                    Studio
+                  </button>
                 </td>
 
                 {/* Company */}

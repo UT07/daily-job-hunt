@@ -11,6 +11,7 @@ const Dashboard = lazy(() => import('./pages/Dashboard'));
 const AddJob = lazy(() => import('./pages/AddJob'));
 const Artifacts = lazy(() => import('./pages/Artifacts'));
 const JobWorkspace = lazy(() => import('./pages/JobWorkspace'));
+const ResumeStudio = lazy(() => import('./pages/ResumeStudio'));
 const Settings = lazy(() => import('./pages/Settings'));
 const Onboarding = lazy(() => import('./pages/Onboarding'));
 const Privacy = lazy(() => import('./pages/Privacy'));
@@ -62,6 +63,7 @@ export default function App() {
               <Route element={<AppLayout />}>
                 <Route index element={<Dashboard />} />
                 <Route path="/jobs/:jobId" element={<JobWorkspace />} />
+                <Route path="/jobs/:jobId/studio" element={<ResumeStudio />} />
                 <Route path="/add-job" element={<AddJob />} />
                 <Route path="/artifacts" element={<Artifacts />} />
                 {/* Redundant stub — real resume upload/management lives at /settings */}
