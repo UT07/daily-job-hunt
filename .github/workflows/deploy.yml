@@ -154,18 +154,32 @@ jobs:
       # visible here rather than the next morning on the dashboard.
       - name: Post-deploy smoke test
         env:
+          # The API base URL is NOT a secret — it is committed in
+          # web/.env.production and travels in every browser request. It was
+          # wired to secrets.API_BASE_URL, that secret was never set, and the
+          # step fell through to --quick with a ::warning:: that does not fail
+          # a build. The 2026-09-29 17:29 deploy therefore printed
+          # "5/5 passed" while api-alive never ran at all.
+          #
+          # Read it from the committed file instead, so the check cannot be
+          # skipped by a missing secret. secrets.API_BASE_URL still wins if
+          # someone sets it, for a staging run against a different host.
           SMOKE_API_URL: ${{ secrets.API_BASE_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           AWS_REGION: eu-west-1
           S3_BUCKET: utkarsh-job-hunt
         run: |
+          set -euo pipefail
           python -m pip install --quiet -r requirements.txt
-          # --quick when no API URL is configured: the infrastructure checks
-          # still run, rather than skipping verification altogether.
-          if [ -n "$SMOKE_API_URL" ]; then
-            python scripts/smoke_prod.py
-          else
-            echo "::warning::API_BASE_URL secret not set — running infrastructure checks only"
-            python scripts/smoke_prod.py --quick
+          if [ -z "${SMOKE_API_URL:-}" ]; then
+            SMOKE_API_URL=$(grep -hoE '^VITE_API_URL=.+' web/.env.production | cut -d= -f2-)
+            echo "Using API URL from web/.env.production: $SMOKE_API_URL"
           fi
+          if [ -z "$SMOKE_API_URL" ]; then
+            echo "::error::No API URL available — refusing to report a partial"
+            echo "::error::smoke run as a pass. Set secrets.API_BASE_URL or"
+            echo "::error::VITE_API_URL in web/.env.production."
+            exit 1
+          fi
+          SMOKE_API_URL="$SMOKE_API_URL" python scripts/smoke_prod.py
