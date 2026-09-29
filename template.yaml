@@ -1499,8 +1499,14 @@ Resources:
                 "doc_type": "resume"
               },
               "ResultPath": "$.compile_result",
-              "Next": "GenerateCoverLetter",
+              "Next": "CheckArtifactScope",
               "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "JobFailed"}]
+            },
+            "CheckArtifactScope": {
+              "Comment": "Regenerating a resume used to run GenerateCoverLetter, CompileCoverLetter and FindContacts too — 176s of a 631s run, measured 2026-09-29 — and overwrote a cover letter the user may have edited. resume_only skips all three. Default is the full pipeline so the daily run is unchanged.",
+              "Type": "Choice",
+              "Choices": [{"Variable": "$.resume_only", "BooleanEquals": true, "Next": "SaveJobComplete"}],
+              "Default": "GenerateCoverLetter"
             },
             "GenerateCoverLetter": {
               "Type": "Task",
@@ -1902,6 +1908,35 @@ Resources:
       TreatMissingData: breaching
       AlarmActions: [!Ref PipelineAlarmTopicArn]
 
+  DailyPipelinePartialArtifactFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-daily-pipeline-resume-compile-failures-24h
+      AlarmDescription: |
+        Matched jobs that got no resume, in a run that reported SUCCEEDED.
+
+        The other pipeline alarms catch TOTAL absence (ArtifactsCompiled < 1,
+        JobsMatched < 1). Nothing caught a PARTIAL loss: on 2026-09-29 the run
+        matched 10, compiled 8, reported SUCCEEDED, and the two that failed
+        were the day's highest scoring.
+
+        ExecutionsFailed stays 0 because compile_latex RETURNS
+        {"error": "compilation_failed"} rather than raising, so Step Functions
+        sees a successful Task and no Catch fires. This alarm watches the
+        outcome, not the control flow.
+
+        notBreaching, unlike the alarms above: a day with no run is already
+        covered by no-jobs-matched.
+      Namespace: Naukribaba/Pipeline
+      MetricName: ResumeCompileFailures
+      Statistic: Sum
+      Period: 86400  # 24h
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref PipelineAlarmTopicArn]
+
   # --- Phase B.6: single CloudWatch dashboard for pipeline + API health ---
   # The "is everything OK?" page. Grouped: pipeline funnel (top), Step
   # Function execution counts, Lambda errors across the pipeline tier, then
@@ -2050,7 +2085,13 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: naukribaba-tailor-resume-DurationP99
-      AlarmDescription: Trips canary if p99 duration exceeds 30s over 5min - catches death spiral
+      AlarmDescription: >-
+        p99 duration above 480s, which is 80% of this function's 600s
+        timeout. Relative to the timeout rather than a flat 30s: this function
+        legitimately runs for minutes (AI failover plus a LaTeX compile), so 30s
+        could never reach OK while the pipeline ran. It is also a CodeDeploy
+        canary, so a permanently-breaching alarm can roll back a healthy deploy.
+        Above 80% of timeout means invocations are about to start timing out.
       Namespace: AWS/Lambda
       MetricName: Duration
       Dimensions:
@@ -2061,7 +2102,7 @@ Resources:
       ExtendedStatistic: p99
       Period: 300
       EvaluationPeriods: 1
-      Threshold: 30000
+      Threshold: 480000
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
 
@@ -2107,7 +2148,13 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: naukribaba-compile-latex-DurationP99
-      AlarmDescription: Trips canary if p99 duration exceeds 30s over 5min - catches death spiral
+      AlarmDescription: >-
+        p99 duration above 120s, which is 80% of this function's 150s
+        timeout. Relative to the timeout rather than a flat 30s: this function
+        legitimately runs for minutes (AI failover plus a LaTeX compile), so 30s
+        could never reach OK while the pipeline ran. It is also a CodeDeploy
+        canary, so a permanently-breaching alarm can roll back a healthy deploy.
+        Above 80% of timeout means invocations are about to start timing out.
       Namespace: AWS/Lambda
       MetricName: Duration
       Dimensions:
@@ -2118,7 +2165,7 @@ Resources:
       ExtendedStatistic: p99
       Period: 300
       EvaluationPeriods: 1
-      Threshold: 30000
+      Threshold: 120000
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
 
@@ -2164,7 +2211,13 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: naukribaba-generate-cover-letter-DurationP99
-      AlarmDescription: Trips canary if p99 duration exceeds 30s over 5min - catches death spiral
+      AlarmDescription: >-
+        p99 duration above 480s, which is 80% of this function's 600s
+        timeout. Relative to the timeout rather than a flat 30s: this function
+        legitimately runs for minutes (AI failover plus a LaTeX compile), so 30s
+        could never reach OK while the pipeline ran. It is also a CodeDeploy
+        canary, so a permanently-breaching alarm can roll back a healthy deploy.
+        Above 80% of timeout means invocations are about to start timing out.
       Namespace: AWS/Lambda
       MetricName: Duration
       Dimensions:
@@ -2175,7 +2228,7 @@ Resources:
       ExtendedStatistic: p99
       Period: 300
       EvaluationPeriods: 1
-      Threshold: 30000
+      Threshold: 480000
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
 
@@ -2221,7 +2274,13 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: naukribaba-save-job-DurationP99
-      AlarmDescription: Trips canary if p99 duration exceeds 30s over 5min - catches death spiral
+      AlarmDescription: >-
+        p99 duration above 240s, which is 80% of this function's 300s
+        timeout. Relative to the timeout rather than a flat 30s: this function
+        legitimately runs for minutes (AI failover plus a LaTeX compile), so 30s
+        could never reach OK while the pipeline ran. It is also a CodeDeploy
+        canary, so a permanently-breaching alarm can roll back a healthy deploy.
+        Above 80% of timeout means invocations are about to start timing out.
       Namespace: AWS/Lambda
       MetricName: Duration
       Dimensions:
@@ -2232,7 +2291,7 @@ Resources:
       ExtendedStatistic: p99
       Period: 300
       EvaluationPeriods: 1
-      Threshold: 30000
+      Threshold: 240000
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
 

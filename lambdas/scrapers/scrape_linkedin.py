@@ -15,6 +15,7 @@ import boto3
 import httpx
 
 from shared.location_policy import build_location_policy
+from shared.scrape_budget import enrichment_budget_left
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -167,6 +168,7 @@ def handler(event, context):
 
     from normalizers import normalize_job
     all_jobs = []
+    budget_warned = False
 
     for query in queries:
         url = f"https://www.linkedin.com/jobs/search?keywords={query}&location={location}&start=0"
@@ -180,8 +182,18 @@ def handler(event, context):
             logger.info(f"[linkedin] Query '{query}': {len(cards)} cards found")
 
             for card in cards[:max_jobs - len(all_jobs)]:
-                # Fetch full description
-                full_desc = _fetch_job_detail(card["job_id"], proxy_url)
+                # Fetch full description, while there is time. The upsert runs
+                # after this loop, so overrunning the Lambda budget here throws
+                # away every card already collected — see shared/scrape_budget.
+                full_desc = None
+                if enrichment_budget_left(context):
+                    full_desc = _fetch_job_detail(card["job_id"], proxy_url)
+                elif not budget_warned:
+                    budget_warned = True
+                    logger.warning(
+                        "[linkedin] out of time for detail fetches — keeping "
+                        "snippets for the rest. %d jobs collected so far will "
+                        "still be saved.", len(all_jobs))
                 desc_quality = "full" if full_desc else "snippet"
                 description = full_desc or card.get("title", "")  # fallback to title
 

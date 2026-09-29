@@ -116,3 +116,36 @@ jobs:
               "CouncilEngine=langgraph" \
               "SemanticDedup=on" \
               "BulletRag=on"
+
+      # Post-deploy verification against the REAL deployed system.
+      #
+      # On 2026-09-29 this repository had 1,686 passing tests and five live
+      # production defects, every one of which the suite was structurally
+      # unable to see because it mocked the boundary that was broken: S3, the
+      # api.js helpers, the resume parser, the database. A mock encodes the
+      # author's belief about a boundary, so a test built on one can only
+      # confirm that belief.
+      #
+      # These checks touch the live bucket, the deployed API and the real
+      # rows. Each was verified to FAIL against the incident it names before
+      # being added — a check nobody has seen fail proves nothing.
+      #
+      # It runs after the deploy and fails the job, so a broken deploy is
+      # visible here rather than the next morning on the dashboard.
+      - name: Post-deploy smoke test
+        env:
+          SMOKE_API_URL: ${{ secrets.API_BASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          AWS_REGION: eu-west-1
+          S3_BUCKET: utkarsh-job-hunt
+        run: |
+          python -m pip install --quiet -r requirements.txt
+          # --quick when no API URL is configured: the infrastructure checks
+          # still run, rather than skipping verification altogether.
+          if [ -n "$SMOKE_API_URL" ]; then
+            python scripts/smoke_prod.py
+          else
+            echo "::warning::API_BASE_URL secret not set — running infrastructure checks only"
+            python scripts/smoke_prod.py --quick
+          fi

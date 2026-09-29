@@ -14,6 +14,7 @@ import boto3
 import httpx
 
 from shared.location_policy import build_location_policy
+from shared.scrape_budget import enrichment_budget_left
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -288,7 +289,9 @@ def handler(event, context):
             for card in cards[:max_jobs - len(all_jobs)]:
                 # Fetch full description from detail page
                 full_desc = None
-                if card.get("detail_url"):
+                # Same deadline guard as the other card scrapers: the upsert is
+                # after this loop, so running out of time here loses the lot.
+                if card.get("detail_url") and enrichment_budget_left(context):
                     full_desc = _fetch_job_detail(card["detail_url"], proxy_url)
 
                     # Stop scraping if login wall is hit on detail pages
