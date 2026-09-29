@@ -229,3 +229,81 @@ def test_cover_letter_compile_failure_does_not_fail_job():
     assert "application_status" not in update_payload  # user's column, not the pipeline's
     assert "cover_letter_s3_url" not in update_payload
     assert "failure_reason" not in update_payload or update_payload["failure_reason"] is None
+
+
+# ---------------------------------------------------------------------------
+# Cover-letter URLs could never be re-signed
+# ---------------------------------------------------------------------------
+
+def test_cover_letter_key_is_persisted_like_the_resume_key():
+    """Without the key, a cover-letter link dies after 7 days and stays dead.
+
+    save_job wrote resume_s3_url AND resume_s3_key, but for cover letters only
+    the URL. _refresh_s3_urls re-signs from `cover_letter_s3_key`, which was
+    therefore always None — measured 2026-09-29: 400 jobs had a
+    cover_letter_s3_url and the column did not exist at all. The presigned URL
+    expires and nothing can ever mint a new one, so the dashboard shows a cover
+    letter button that 403s.
+    """
+    event = {
+        **BASE_EVENT,
+        "compile_result": {"pdf_s3_key": "resumes/hash-abc.pdf"},
+        "cover_compile_result": {"pdf_s3_key": "covers/hash-abc.pdf"},
+    }
+    s3 = _make_s3_mock()
+    db = _make_supabase()
+
+    with patch("save_job.boto3", _make_boto3_mock(s3)), \
+         patch("save_job.get_supabase", return_value=db):
+        import save_job
+        save_job.handler(event, None)
+
+    payload = db.table.return_value.update.call_args_list[0][0][0]
+    assert payload["cover_letter_s3_key"] == "covers/hash-abc.pdf", (
+        "the cover-letter S3 key is still not persisted, so its URL can never "
+        "be re-signed"
+    )
+    assert payload["resume_s3_key"] == "resumes/hash-abc.pdf"
+
+
+def test_a_missing_cover_letter_key_column_does_not_lose_the_whole_row():
+    """Deploy order must not matter.
+
+    The column is added by a migration that is applied by hand — no workflow
+    runs it. If code ships first, a plain UPDATE naming an absent column fails
+    outright and the row keeps NOTHING, which is the PGRST204 shape that cost a
+    full run on 2026-09-28. Drop the one column and write the rest.
+    """
+    event = {
+        **BASE_EVENT,
+        "compile_result": {"pdf_s3_key": "resumes/hash-abc.pdf"},
+        "cover_compile_result": {"pdf_s3_key": "covers/hash-abc.pdf"},
+    }
+    s3 = _make_s3_mock()
+    db = MagicMock()
+    chain = MagicMock()
+    chain.update.return_value = chain
+    chain.eq.return_value = chain
+    calls = {"n": 0}
+
+    def execute():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise Exception(
+                "{'message': \"Could not find the 'cover_letter_s3_key' column "
+                "of 'jobs' in the schema cache\", 'code': 'PGRST204'}"
+            )
+        return MagicMock()
+
+    chain.execute.side_effect = execute
+    db.table.return_value = chain
+
+    with patch("save_job.boto3", _make_boto3_mock(s3)), \
+         patch("save_job.get_supabase", return_value=db):
+        import save_job
+        result = save_job.handler(event, None)
+
+    assert result["saved"] is True, "the whole row was lost over one missing column"
+    second = chain.update.call_args_list[-1][0][0]
+    assert "cover_letter_s3_key" not in second
+    assert second["resume_s3_url"], "the resume URL must still be written"
