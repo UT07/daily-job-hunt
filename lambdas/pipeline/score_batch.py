@@ -7,7 +7,22 @@ import uuid
 from datetime import datetime
 
 
-from ai_helper import ai_complete_cached, get_supabase
+# Import resolution mirrors lambdas/pipeline/retrieval/embeddings.py. This
+# module lives inside the pipeline Lambdas' CodeUri (template.yaml:
+# CodeUri: lambdas/pipeline/), which SAM flattens into /var/task, making
+# `ai_helper` a flat sibling there — the same shape tests/conftest.py creates.
+# The container-image Lambda (Dockerfile.lambda) instead ships the whole
+# lambdas/ tree, where only the qualified import resolves. Try flat first since
+# it covers both pytest and the zip Lambda; fall back for the container shape.
+#
+# This was not merely tidiness: app.py (the API container) now imports this
+# module, and with the bare import alone it raised
+# "ModuleNotFoundError: No module named 'ai_helper'" at container start —
+# invisible locally, because conftest puts lambdas/pipeline on sys.path.
+try:
+    from ai_helper import ai_complete_cached, get_supabase
+except ImportError:  # container-image shape only
+    from lambdas.pipeline.ai_helper import ai_complete_cached, get_supabase
 from shared.apply_platform import classify_apply_platform, extract_platform_ids
 from shared.work_auth import apply_geo_score_cap
 from shared.tex_utils import tex_to_plaintext

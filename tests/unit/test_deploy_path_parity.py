@@ -589,3 +589,42 @@ def test_functions_importing_shared_attach_the_shared_layer():
         "deploy succeeds and every invocation ModuleNotFoundErrors:\n  "
         + "\n  ".join(offenders)
     )
+
+
+# ---------------------------------------------------------------------------
+# app.py must import in the CONTAINER shape, not just under pytest
+# ---------------------------------------------------------------------------
+
+def test_app_imports_without_lambdas_pipeline_on_sys_path():
+    """The API container's sys.path does not include lambdas/pipeline.
+
+    tests/conftest.py puts it there, so a module that bare-imports a pipeline
+    sibling (``from ai_helper import ...``) imports cleanly under pytest and
+    raises ModuleNotFoundError at container start. Caught 2026-09-29 when app.py
+    began importing score_batch for Studio scoring: every test passed and the
+    API image would not have booted.
+
+    Run in a subprocess because import resolution cannot be faked in-process —
+    app and its dependencies are already in sys.modules by the time this runs.
+    """
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys;"
+        "sys.path = [p for p in sys.path if 'lambdas' not in p];"
+        "import app"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=str(REPO), capture_output=True, text=True, timeout=180,
+        env={"PATH": __import__("os").environ.get("PATH", ""),
+             "HOME": __import__("os").environ.get("HOME", "")},
+    )
+    assert proc.returncode == 0, (
+        "app.py does not import with lambdas/pipeline off sys.path — the API "
+        "container would fail to boot.\n"
+        "Fix the offending module to try the flat import and fall back to the "
+        "qualified one, as lambdas/pipeline/retrieval/embeddings.py documents.\n\n"
+        + proc.stderr[-1500:]
+    )
