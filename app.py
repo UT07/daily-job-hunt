@@ -81,6 +81,7 @@ from ai_client import AIClient
 from contact_finder import find_contacts
 from cover_letter import generate_cover_letter
 from latex_compiler import compile_tex_to_pdf
+from lambdas.pipeline.score_batch import score_single_job_deterministic
 from s3_uploader import upload_file as s3_upload_file
 from matcher import match_jobs
 from mcp_server.http_auth import RequireSupabaseJWT
@@ -1014,6 +1015,78 @@ def _do_contacts(job):
     return {"contacts": result or []}
 
 
+def _job_for_scoring(job_id: str, user_id: str) -> dict | None:
+    """The job fields score_single_job needs, or None when there is nothing to score.
+
+    Returns the whole dict rather than just the description because title,
+    company and location all feed the scoring prompt — passing empty strings
+    would quietly produce a worse score than the batch pipeline gets for the
+    same job. title and company are hard subscripts in score_single_job, so
+    they must be present, not merely gettable.
+
+    Its own function so the scoring step is testable without standing up S3,
+    tempfiles and tectonic, and so a lookup failure degrades to "no score"
+    rather than failing a compile that otherwise succeeded.
+    """
+    if _db is None:
+        return None
+    try:
+        row = (
+            _db.client.table("jobs")
+            .select("description, title, company, location, remote")
+            .eq("job_id", job_id).eq("user_id", user_id)
+            .maybe_single().execute()
+        )
+        data = (row.data if row else None) or {}
+        if not (data.get("description") or "").strip():
+            return None
+        return {
+            "job_hash": job_id,
+            "title": data.get("title") or "",
+            "company": data.get("company") or "",
+            "description": data["description"],
+            "location": data.get("location") or "",
+            "remote": data.get("remote"),
+        }
+    except Exception as e:
+        logger.warning("[rebuild] could not load job %s for scoring: %s", job_id, e)
+        return None
+
+
+def _score_rebuilt_resume(job_id: str, user_id: str, new_tex: str) -> dict | None:
+    """Score the just-rebuilt resume against its JD. None when unavailable.
+
+    Three independent uncached calls: the median dampens provider variance and
+    the spread is what lets the UI show a band instead of claiming a precision
+    the measurement does not have. Studio path only — the batch pipeline still
+    makes one cached call, because it scores ~58 jobs a run against an 8k
+    tokens/minute ceiling that is already the bottleneck.
+
+    Nothing here may raise. By the time this runs the compile has succeeded and
+    both S3 objects are already written; the PDF is the deliverable and a
+    missing score is a missing number, not a reason to fail the rebuild.
+    """
+    job = _job_for_scoring(job_id, user_id)
+    if not job:
+        return None
+    try:
+        scored = score_single_job_deterministic(
+            job, new_tex, num_calls=3, skip_cache=True,
+        )
+    except Exception as e:
+        logger.warning("[rebuild] scoring failed for %s (compile still OK): %s", job_id, e)
+        return None
+    if not scored:
+        return None
+    return {
+        "ats_score": scored.get("ats_score"),
+        "hiring_manager_score": scored.get("hiring_manager_score"),
+        "tech_recruiter_score": scored.get("tech_recruiter_score"),
+        "match_score": scored.get("match_score"),
+        "score_spread": scored.get("score_spread"),
+    }
+
+
 def _do_rebuild_sections(job_id: str, sections: dict, user_id: str) -> dict:
     """Rebuild a .tex from edited sections, compile to PDF, upload both to S3.
 
@@ -1077,11 +1150,17 @@ def _do_rebuild_sections(job_id: str, sections: dict, user_id: str) -> dict:
     # Update job row in Supabase
     _update_job_artifacts(job_id, {"resume_s3_url": pdf_url})
 
+    # Score the document we just produced, so the Studio's number describes
+    # what is on screen rather than the resume as it was before the edit.
+    # Returns None on any failure — see _score_rebuilt_resume.
+    scores = _score_rebuilt_resume(job_id, user_id, new_tex)
+
     return {
         "job_id": job_id,
         "tex_s3_key": tex_s3_key,
         "pdf_s3_key": pdf_s3_key,
         "pdf_url": pdf_url,
+        "scores": scores,
     }
 
 

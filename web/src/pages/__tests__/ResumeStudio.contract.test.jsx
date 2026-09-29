@@ -73,6 +73,10 @@ beforeEach(() => {
           tex_s3_key: 'users/u/resumes/j1_tailored.tex',
           pdf_s3_key: 'users/u/resumes/j1_tailored.pdf',
           pdf_url: 'https://s3/after.pdf',
+          scores: {
+            ats_score: 90, hiring_manager_score: 88, tech_recruiter_score: 92,
+            match_score: 90.0, score_spread: { ats: [88, 92], match: [89, 91], n: 3 },
+          },
         },
       });
     }
@@ -156,13 +160,29 @@ describe('never destroy a resume with an empty rebuild', () => {
 });
 
 describe('scores never claim to describe an edited document', () => {
-  it('stays marked stale after a successful recompile', async () => {
-    // The scores come from the jobs row and describe the ORIGINAL tailored
-    // resume. Phase 1 does not re-score (that is Phase 2), so once the user
-    // edits, they never again describe what is on screen. Tying `stale` to
-    // pendingChanges alone un-greyed them the moment the compile finished,
-    // presenting pre-edit numbers as a verdict on the new document — worse
-    // than showing nothing, because the user would act on them.
+  it('goes stale when the compile could not score the new document', async () => {
+    // Phase 2 normally re-scores on every compile, so the strip is fresh. But
+    // _score_rebuilt_resume returns None on any failure — no description, a
+    // Supabase blip, every scoring call exhausted — and the compile still
+    // succeeds. In that case the only scores available are the stored row's,
+    // which describe the resume BEFORE the edit. Presenting those as a verdict
+    // on the new document is exactly what this guard exists to prevent.
+    globalThis.fetch = vi.fn(async (url, opts = {}) => {
+      calls.push({ url: String(url), method: opts.method || 'GET', body: opts.body });
+      const u = String(url);
+      if (u.endsWith('/sections') && opts.method === 'POST') {
+        return jsonRes({ task_id: 't1', poll_url: '/api/tasks/t1' });
+      }
+      if (u.includes('/api/tasks/')) {
+        return jsonRes({
+          status: 'done',
+          result: { job_id: 'j1', pdf_url: 'https://s3/after.pdf', scores: null },
+        });
+      }
+      if (u.endsWith('/sections')) return jsonRes({ sections: SECTIONS, jd_analysis: {} });
+      return jsonRes(JOB);
+    });
+
     renderStudio();
     await waitFor(() => expect(screen.getByLabelText(/summary/i)).toBeInTheDocument());
     expect(screen.getByTestId('score-strip')).toHaveAttribute('data-stale', 'false');
@@ -176,8 +196,30 @@ describe('scores never claim to describe an edited document', () => {
       { timeout: 10000 },
     );
 
-    // Compile succeeded, PDF is current — and the scores are still not.
+    // PDF is current; the scores are not, and the strip says so.
     expect(screen.getByTestId('score-strip')).toHaveAttribute('data-stale', 'true');
     expect(screen.getByTestId('score-strip')).toHaveTextContent(/before your edits/i);
+  });
+});
+
+describe('the score updates from the compile', () => {
+  it('shows the freshly measured band and stops being stale', async () => {
+    renderStudio();
+    await waitFor(() => expect(screen.getByLabelText(/summary/i)).toBeInTheDocument());
+    // Before the edit: the band comes from the stored row's three perspectives.
+    expect(screen.getByTestId('score-band')).toHaveTextContent('84–90');
+
+    const summary = screen.getByLabelText(/summary/i);
+    fireEvent.change(summary, { target: { value: 'Edited summary.' } });
+    fireEvent.blur(summary);
+
+    // After: the band is min/max across three repeat calls on the NEW document.
+    await waitFor(
+      () => expect(screen.getByTestId('score-band')).toHaveTextContent('89–91'),
+      { timeout: 10000 },
+    );
+    expect(screen.getByTestId('score-strip')).toHaveTextContent(/3 calls/i);
+    // Freshly scored against what is on screen, so no longer stale.
+    expect(screen.getByTestId('score-strip')).toHaveAttribute('data-stale', 'false');
   });
 });

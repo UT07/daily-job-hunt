@@ -56,3 +56,35 @@ describe('ScoreStrip', () => {
     expect(screen.queryByTestId('score-hm')).not.toBeInTheDocument();
   });
 });
+
+describe('a measured band beats the perspective range', () => {
+  it('prefers the band from repeat calls when one is supplied', () => {
+    // Phase 1's band was min/max across ATS/HM/TR — whether the three LENSES
+    // disagree about the same document. This one is min/max across three
+    // repeat calls — whether the MODEL disagrees with itself. Only the second
+    // is the reliability claim, and they are not interchangeable.
+    render(<ScoreStrip ats={86} hiringManager={84} techRecruiter={90} band={[85, 87]} calls={3} />);
+    expect(screen.getByTestId('score-band')).toHaveTextContent('85–87');
+  });
+
+  it('says how many calls produced the band', () => {
+    render(<ScoreStrip ats={86} hiringManager={84} techRecruiter={90} band={[85, 87]} calls={3} />);
+    expect(screen.getByTestId('score-strip')).toHaveTextContent(/3 calls/i);
+  });
+
+  it('does not imply agreement when only one call was made', () => {
+    // A [86, 86] band from ONE sample looks identical to three calls agreeing.
+    // They are very different claims.
+    render(<ScoreStrip ats={86} hiringManager={84} techRecruiter={90} band={[86, 86]} calls={1} />);
+    const strip = screen.getByTestId('score-strip');
+    // textContent concatenates sibling elements with no separator, so the
+    // caption reads "...1 callATS 86..." — \b finds no boundary before "ATS".
+    expect(strip).toHaveTextContent(/1 call/i);
+    expect(strip).not.toHaveTextContent(/1 calls/i);
+  });
+
+  it('falls back to the perspective range when no band is supplied', () => {
+    render(<ScoreStrip ats={86} hiringManager={84} techRecruiter={90} />);
+    expect(screen.getByTestId('score-band')).toHaveTextContent('84–90');
+  });
+})

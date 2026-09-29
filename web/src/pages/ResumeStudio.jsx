@@ -72,17 +72,25 @@ export default function ResumeStudio() {
     // 404'd on `<API_BASE>undefined` AFTER the server had already replaced the
     // file, so the PDF never updated and the error was a lie about what
     // happened.
-    const result = await apiCall(
+    const res = await apiCall(
       `/api/dashboard/jobs/${jobId}/sections`, { sections: next },
     );
-    const url = result?.pdf_url;
+    const url = res?.pdf_url;
     if (!url) throw new Error('Compile finished without a PDF');
-    return url;
+    // The scores ride back with the PDF: they were measured against this exact
+    // rebuilt .tex inside the same task, so they cannot drift from it.
+    return { pdfUrl: url, scores: res?.scores || null };
   }, [jobId]);
 
   const {
-    pdfUrl, compiling, error: compileError, pendingChanges, requestCompile,
+    pdfUrl, result: compileResult, compiling, error: compileError,
+    pendingChanges, requestCompile,
   } = useHashedCompile(sections || {}, compileSections, { renderedHashSeed });
+
+  // Prefer scores measured against the document currently on screen over the
+  // stored row's, which describe the resume as it was before any edit.
+  const liveScores = compileResult?.scores || null;
+  const spread = liveScores?.score_spread || null;
 
   return (
     <div className="p-4">
@@ -103,13 +111,16 @@ export default function ResumeStudio() {
             document matters more than the panel. order-* does the reordering. */}
         <div className="space-y-4 order-2 lg:order-1">
           <ScoreStrip
-            ats={job?.ats_score}
-            hiringManager={job?.hiring_manager_score}
-            techRecruiter={job?.tech_recruiter_score}
-            // Not pendingChanges: that clears the moment the compile lands,
-            // which un-greyed pre-edit scores as though they described the new
-            // document. Any edit invalidates them until Phase 2 re-scores.
-            stale={hasEdited || pendingChanges > 0}
+            ats={liveScores?.ats_score ?? job?.ats_score}
+            hiringManager={liveScores?.hiring_manager_score ?? job?.hiring_manager_score}
+            techRecruiter={liveScores?.tech_recruiter_score ?? job?.tech_recruiter_score}
+            band={spread?.match || spread?.ats || null}
+            calls={spread?.n ?? null}
+            // Stale means "these numbers describe a document that is not the
+            // one on screen". A live score was measured against the current
+            // rebuild, so it is never stale; the stored row's scores go stale
+            // the moment anything is edited.
+            stale={!liveScores && (hasEdited || pendingChanges > 0)}
           />
           <CoveragePanel
             keyMatches={job?.key_matches || []}

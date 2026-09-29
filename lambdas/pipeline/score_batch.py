@@ -7,7 +7,22 @@ import uuid
 from datetime import datetime
 
 
-from ai_helper import ai_complete_cached, get_supabase
+# Import resolution mirrors lambdas/pipeline/retrieval/embeddings.py. This
+# module lives inside the pipeline Lambdas' CodeUri (template.yaml:
+# CodeUri: lambdas/pipeline/), which SAM flattens into /var/task, making
+# `ai_helper` a flat sibling there — the same shape tests/conftest.py creates.
+# The container-image Lambda (Dockerfile.lambda) instead ships the whole
+# lambdas/ tree, where only the qualified import resolves. Try flat first since
+# it covers both pytest and the zip Lambda; fall back for the container shape.
+#
+# This was not merely tidiness: app.py (the API container) now imports this
+# module, and with the bare import alone it raised
+# "ModuleNotFoundError: No module named 'ai_helper'" at container start —
+# invisible locally, because conftest puts lambdas/pipeline on sys.path.
+try:
+    from ai_helper import ai_complete_cached, get_supabase
+except ImportError:  # container-image shape only
+    from lambdas.pipeline.ai_helper import ai_complete_cached, get_supabase
 from shared.apply_platform import classify_apply_platform, extract_platform_ids
 from shared.work_auth import apply_geo_score_cap
 from shared.tex_utils import tex_to_plaintext
@@ -466,7 +481,8 @@ def _salvage_scores(text: str) -> dict | None:
     return out
 
 
-def score_single_job(job: dict, resume_tex: str, temperature: float = 0) -> dict | None:
+def score_single_job(job: dict, resume_tex: str, temperature: float = 0,
+                     skip_cache: bool = False) -> dict | None:
     """Score a single job against the user's resume using 3-perspective AI scoring.
     Uses the same prompt template as matcher.py for consistency.
 
@@ -496,7 +512,7 @@ Resume: {resume_text}"""
     try:
         response_dict = ai_complete_cached(
             prompt, system=SCORE_SYSTEM_PROMPT, temperature=temperature,
-            max_tokens=SCORE_MAX_TOKENS,
+            max_tokens=SCORE_MAX_TOKENS, skip_cache=skip_cache,
         )
         text = response_dict["content"].strip()
         if text.startswith("```"):
@@ -546,45 +562,68 @@ Resume: {resume_text}"""
 
 
 def score_single_job_deterministic(
-    job: dict, resume_tex: str, num_calls: int = 1
+    job: dict, resume_tex: str, num_calls: int = 1, skip_cache: bool = False
 ) -> dict | None:
-    """Score a job multiple times with temp=0 and take the median of each perspective.
+    """Score a job `num_calls` times at temperature=0; return medians and the spread.
 
-    This dampens remaining provider variance by making ``num_calls`` independent
-    scoring calls and returning the median of each score dimension. The result is
-    *not* cached itself — individual ``score_single_job`` calls hit the cache as
-    usual, so callers should bust the cache (or use ``skip_cache``) if they want
-    truly independent calls.
+    The median dampens provider variance. The SPREAD is what makes the result
+    honest: measured 2026-09-28, one model given one identical prompt at
+    temperature=0 returned three different answers to three consecutive calls,
+    because temperature controls sampling and not mixture-of-experts routing or
+    request batching. Reporting a single integer claims a precision the
+    measurement does not have, so callers can render a band instead.
 
-    Returns None only when *all* calls fail.
+    skip_cache must be True for num_calls > 1 to mean anything — otherwise every
+    call after the first returns the same cached response and the median of
+    three is the median of one. The default (one call, cache on) is what the
+    batch pipeline uses and is deliberately unchanged: it scores ~58 jobs a run
+    against an 8k tokens/minute Groq ceiling that is already the bottleneck.
+
+    The returned dict keeps score_single_job's shape and adds::
+
+        score_spread = {"ats": [lo, hi], "hiring_manager": [lo, hi],
+                        "tech_recruiter": [lo, hi], "match": [lo, hi],
+                        "n": <calls that actually succeeded>}
+
+    `n` is reported so a caller can tell one sample from three agreeing ones.
+
+    Returns None only when every call fails.
     """
     all_scores: list[dict] = []
     for _ in range(num_calls):
-        result = score_single_job(job, resume_tex, temperature=0)
+        result = score_single_job(job, resume_tex, temperature=0, skip_cache=skip_cache)
         if result is not None:
             all_scores.append(result)
 
     if not all_scores:
         return None
-    if len(all_scores) == 1:
-        return all_scores[0]
 
-    # Use first result as base for non-numeric fields (reasoning, key_matches,
-    # gaps, provider, model), then overwrite numeric fields with medians so the
-    # result dict keeps the same shape as ``score_single_job``.
+    _FIELDS = {
+        "ats": "ats_score",
+        "hiring_manager": "hiring_manager_score",
+        "tech_recruiter": "tech_recruiter_score",
+        "match": "match_score",
+    }
+
+    def _vals(key):
+        return [s[key] for s in all_scores if isinstance(s.get(key), (int, float))]
+
+    spread: dict = {"n": len(all_scores)}
+    for short, key in _FIELDS.items():
+        vals = _vals(key)
+        spread[short] = [min(vals), max(vals)] if vals else None
+
+    # Non-numeric fields (reasoning, key_matches, gaps, provider, model) come
+    # from the first result, so the dict keeps score_single_job's shape and
+    # existing callers keep working.
     merged = dict(all_scores[0])
-    merged.update({
-        "ats_score": int(statistics.median([s["ats_score"] for s in all_scores])),
-        "hiring_manager_score": int(
-            statistics.median([s["hiring_manager_score"] for s in all_scores])
-        ),
-        "tech_recruiter_score": int(
-            statistics.median([s["tech_recruiter_score"] for s in all_scores])
-        ),
-        "match_score": round(
-            statistics.median([s.get("match_score", 0) for s in all_scores]), 1
-        ),
-    })
+    for short, key in _FIELDS.items():
+        vals = _vals(key)
+        if not vals:
+            continue
+        merged[key] = (round(statistics.median(vals), 1) if key == "match_score"
+                       else int(statistics.median(vals)))
+    merged["score_spread"] = spread
     return merged
 
 
