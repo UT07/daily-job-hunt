@@ -929,8 +929,8 @@ export default function JobWorkspace() {
         >
           <ArrowLeft size={20} />
         </button>
-        <div className="flex-1">
-          <h1 className="text-xl font-heading font-bold text-black tracking-tight">
+        <div className="flex-1 min-w-0">
+          <h1 className="text-xl font-heading font-bold text-black tracking-tight truncate">
             {decodeHtml(job.title)}
           </h1>
           <p className="text-sm text-stone-500">

@@ -37,7 +37,13 @@ export default function AppLayout() {
   return (
     <div className="flex min-h-screen bg-cream">
       <Sidebar />
-      <div className="flex-1 flex flex-col">
+      {/* min-w-0 is load-bearing. A flex item defaults to min-width:auto,
+          so it refuses to shrink below its content's intrinsic width — and an
+          overflow-x-auto inside it is then handed unlimited width and never
+          scrolls. Measured in a 1024px viewport with the job table present:
+          this child rendered 1388px without min-w-0 and 800px with it, which
+          is the whole "the app doesn't fit the screen" bug. */}
+      <div className="flex-1 flex flex-col min-w-0">
         {!profileComplete && <FinishSetupBanner />}
         <main className="flex-1 p-6 pb-20 md:pb-6 overflow-auto">
           <Outlet />
