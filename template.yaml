@@ -1441,10 +1441,13 @@ Resources:
               "Default": "ScoreSingleJob"
             },
             "SkipToTailor": {
+              "Comment": "A Pass with Parameters and no ResultPath REPLACES the whole state. Anything not listed here is gone for the rest of the run. resume_only and job_id were not listed, so CheckArtifactScope three states later failed with 'Invalid path $.resume_only' on every Regenerate after #126 shipped. Both callers in app.py always send resume_only, so the .$ reference always resolves.",
               "Type": "Pass",
               "Parameters": {
                 "job_hash.$": "$.job_hash",
                 "user_id.$": "$.user_id",
+                "job_id.$": "$.job_id",
+                "resume_only.$": "$.resume_only",
                 "light_touch": false,
                 "tailoring_depth": "moderate"
               },
@@ -1474,10 +1477,13 @@ Resources:
               "Default": "JobFailed"
             },
             "ExtractMatchedJob": {
+              "Comment": "Replaces the state for the same reason as SkipToTailor — see its comment.",
               "Type": "Pass",
               "Parameters": {
                 "job_hash.$": "$.job_hash",
                 "user_id.$": "$.user_id",
+                "job_id.$": "$.job_id",
+                "resume_only.$": "$.resume_only",
                 "light_touch.$": "$.score_result.matched_items[0].light_touch"
               },
               "Next": "TailorResume"
@@ -1505,7 +1511,13 @@ Resources:
             "CheckArtifactScope": {
               "Comment": "Regenerating a resume used to run GenerateCoverLetter, CompileCoverLetter and FindContacts too — 176s of a 631s run, measured 2026-09-29 — and overwrote a cover letter the user may have edited. resume_only skips all three. Default is the full pipeline so the daily run is unchanged.",
               "Type": "Choice",
-              "Choices": [{"Variable": "$.resume_only", "BooleanEquals": true, "Next": "SaveJobComplete"}],
+              "Choices": [{
+                "And": [
+                  {"Variable": "$.resume_only", "IsPresent": true},
+                  {"Variable": "$.resume_only", "BooleanEquals": true}
+                ],
+                "Next": "SaveJobComplete"
+              }],
               "Default": "GenerateCoverLetter"
             },
             "GenerateCoverLetter": {

@@ -2554,6 +2554,9 @@ def re_tailor_jobs(req: RetailorRequest, user: AuthUser = Depends(get_current_us
                     "job_hash": job["job_hash"],
                     "job_id": job["job_id"],
                     "skip_scoring": True,
+                    # SkipToTailor references $.resume_only with .$, so it must
+                    # always be present or the Pass state itself fails.
+                    "resume_only": False,
                 }),
             )
             queued += 1
