@@ -355,6 +355,41 @@ def safe_evidence_block(user_id: str, jd_text: str, k: int = 8) -> str:
         return ""
 
 
+def escape_body_specials(tex: str) -> str:
+    r"""Escape LaTeX specials in the document BODY, never the preamble.
+
+    The preamble uses #1, #2 as macro parameters and `{%` as a line
+    continuation; escaping either breaks every macro in the file. That is not
+    hypothetical — escaping # across the whole document is what broke all of
+    them on 2026-04-09.
+
+    `%` is the one that matters most and was missing until 2026-09-29. It does
+    not fail where it occurs: it comments out the REST OF THE LINE, so the
+    brace closing an enclosing \textbf{...} is eaten and LaTeX runs on into
+    whatever follows. Production that morning:
+
+        ! File ended while scanning use of \textbf .
+        Runaway argument?
+        {MTTR by 35\section *{Technical Skills} ...
+
+    Two of ten resumes were lost to a single "35%". Brace counting cannot catch
+    it — the } is in the file; LaTeX simply never sees it. # and & fail loudly
+    at the offending token, which is why they were noticed years earlier.
+
+    One function because the escaping had been copy-pasted at two call sites
+    (the initial splice and the quality-retry re-splice) and both were missing
+    the same character.
+    """
+    body_start = tex.find(r"\begin{document}")
+    if body_start <= 0:
+        return tex
+    preamble, body = tex[:body_start], tex[body_start:]
+    body = re.sub(r"(?<!\\)#", r"\\#", body)            # C#, F#
+    body = re.sub(r"(?<!\\)&(?!\\)", r"\\&", body)      # R&D, AT&T
+    body = re.sub(r"(?<!\\)%", r"\\%", body)            # 35% -> 35\%
+    return preamble + body
+
+
 def handler(event, context):
     job_hash = event["job_hash"]
     user_id = event["user_id"]
@@ -553,13 +588,7 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
     # scoping rules, which broke as soon as this function gained an earlier
     # module-level `re.search` call above -- see the base_skills_text block
     # near the top of this function. Removed rather than worked around.)
-    body_start = tailored_tex.find(r"\begin{document}")
-    if body_start > 0:
-        preamble_part = tailored_tex[:body_start]
-        body_part = tailored_tex[body_start:]
-        body_part = re.sub(r'(?<!\\)#', r'\\#', body_part)  # C#, F# in body
-        body_part = re.sub(r'(?<!\\)&(?!\\)', r'\\&', body_part)  # R&D, AT&T in body
-        tailored_tex = preamble_part + body_part
+    tailored_tex = escape_body_specials(tailored_tex)
 
     # Page length check: estimate body word count
     body_text = re.sub(r"\\[a-zA-Z]+\*?(\{[^}]*\})*", " ", ai_body)
@@ -620,14 +649,7 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
                     ai_body = retry_body
                     response_dict = retry_dict
                     tailored_tex = _splice_tex(base_preamble, ai_body)
-                    # Re-escape body
-                    body_start = tailored_tex.find(r"\begin{document}")
-                    if body_start > 0:
-                        preamble_part = tailored_tex[:body_start]
-                        body_part = tailored_tex[body_start:]
-                        body_part = re.sub(r'(?<!\\)#', r'\\#', body_part)
-                        body_part = re.sub(r'(?<!\\)&(?!\\)', r'\\&', body_part)
-                        tailored_tex = preamble_part + body_part
+                    tailored_tex = escape_body_specials(tailored_tex)
                 else:
                     logger.info("[tailor] Retry did not improve quality, keeping original")
             except RuntimeError:
