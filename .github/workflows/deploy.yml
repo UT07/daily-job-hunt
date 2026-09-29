@@ -15,6 +15,26 @@ on:
       - ".github/workflows/test.yml"
       - ".github/workflows/deploy-frontend.yml"
 
+# Deploys must not race. CloudFormation allows one change set to execute at a
+# time against a stack: the second deploy creates its change set, the first
+# executes and supersedes it, and the second dies with
+#
+#     InvalidChangeSetStatus ... cannot be executed in its current execution
+#     status of [OBSOLETE]
+#
+# which is what happened twice on 2026-09-29, on pairs of PRs merged 5 and 7
+# seconds apart (#123/#124 at 13:34, #125/#126 at 14:14). Both times the LATER
+# commit is the one that failed, so main moved ahead of production silently and
+# every subsequent "merged and deployed" claim was wrong until someone read the
+# Actions tab.
+#
+# cancel-in-progress stays FALSE deliberately. Cancelling mid-flight would kill
+# a deploy part-way through a CloudFormation update, which is strictly worse
+# than waiting: the queued run picks up the newer commit anyway.
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
