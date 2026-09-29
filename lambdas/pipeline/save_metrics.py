@@ -35,6 +35,10 @@ _METRICS_NAMESPACE = "Naukribaba/Pipeline"
 _METRIC_ARTIFACTS_COMPILED = "ArtifactsCompiled"
 _METRIC_JOBS_MATCHED = "JobsMatched"
 _METRIC_PIPELINE_RUN = "PipelineRun"
+# Counts matched jobs whose resume did NOT compile. The existing alarms only
+# catch TOTAL absence (ArtifactsCompiled < 1), so a run that loses 2 of 10 —
+# as 2026-09-29 did, both of them top-tier — looked identical to a clean one.
+_METRIC_RESUME_FAILURES = "ResumeCompileFailures"
 
 
 def get_param(name):
@@ -73,18 +77,28 @@ def _count_compiled_artifacts(processed_jobs):
     something like `has_cover_letter`, which is out of scope for this change.
     """
     if not processed_jobs:
-        return {"resumes": 0, "cover_letters": 0}
+        # Nothing matched means nothing to compile. That is the
+        # no-jobs-matched alarm's business, not a compile failure.
+        return {"resumes": 0, "cover_letters": 0, "resume_failures": 0}
     resumes = 0
     cover_letters = 0
+    resume_failures = 0
     for job in processed_jobs:
         if not isinstance(job, dict):
             continue
         if job.get("has_resume") and not job.get("failed"):
             resumes += 1
+        else:
+            # A matched job that reached SaveJob without a resume. Either the
+            # compile raised (failed=True) or it returned an error dict, which
+            # Step Functions treats as a successful Task — the reason the run
+            # reports SUCCEEDED either way.
+            resume_failures += 1
         cover_compile = job.get("cover_compile_result") or {}
         if cover_compile.get("pdf_s3_key"):
             cover_letters += 1
-    return {"resumes": resumes, "cover_letters": cover_letters}
+    return {"resumes": resumes, "cover_letters": cover_letters,
+            "resume_failures": resume_failures}
 
 
 def _emit_cloudwatch_metrics(counts, matched_count):
@@ -116,6 +130,14 @@ def _emit_cloudwatch_metrics(counts, matched_count):
                     "Value": counts["cover_letters"],
                     "Unit": "Count",
                     "Dimensions": [{"Name": "DocType", "Value": "cover_letter"}],
+                },
+                {
+                    # Emitted every run, including 0 — a metric that only
+                    # appears on failure leaves the alarm stuck, because
+                    # CloudWatch needs a datapoint at 0 to return to OK.
+                    "MetricName": _METRIC_RESUME_FAILURES,
+                    "Value": counts.get("resume_failures", 0),
+                    "Unit": "Count",
                 },
             ],
         )

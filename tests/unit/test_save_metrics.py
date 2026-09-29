@@ -43,11 +43,13 @@ def _make_supabase():
 class TestCountCompiledArtifacts:
     def test_empty_list_returns_zero(self):
         from save_metrics import _count_compiled_artifacts
-        assert _count_compiled_artifacts([]) == {"resumes": 0, "cover_letters": 0}
+        assert _count_compiled_artifacts([]) == {
+            "resumes": 0, "cover_letters": 0, "resume_failures": 0}
 
     def test_none_returns_zero(self):
         from save_metrics import _count_compiled_artifacts
-        assert _count_compiled_artifacts(None) == {"resumes": 0, "cover_letters": 0}
+        assert _count_compiled_artifacts(None) == {
+            "resumes": 0, "cover_letters": 0, "resume_failures": 0}
 
     def test_resume_compiled_counts(self):
         """Realistic shape: each entry is save_job.py's actual return."""
