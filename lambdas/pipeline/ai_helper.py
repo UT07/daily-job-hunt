@@ -464,6 +464,86 @@ def _select_diverse_providers(
 
 
 # ---------------------------------------------------------------------------
+# Output budget
+# ---------------------------------------------------------------------------
+# Every council generator call used to pass a hardcoded max_tokens=4096,
+# regardless of how much output the task actually asked for. That is fine for
+# a scoring call (a small JSON object) and wrong for resume tailoring, whose
+# prompt ends with "Return ONLY the tailored body" against a base body of
+# 11,000-17,000 characters of LaTeX -- the model is being asked to re-emit a
+# whole document, not to write a paragraph.
+#
+# Measured on the two base resumes in resumes/ (2026-09-28): an 11,643-char
+# body needs AT LEAST 2,430 tokens to emit, counted by applying the
+# cl100k/o200k pre-tokenizer split, which BPE merges never cross -- so that
+# figure is a hard floor, not an estimate, and the real count is higher
+# because LaTeX control sequences (\section*{, \textbf{, \item) split further.
+# A 4096 cap therefore leaves little or no margin on a body that size, and
+# none at all on a larger one.
+#
+# Reasoning models make it worse in a way character counts do not show. The
+# model registry records `min_output_tokens: 3000` for groq/gpt-oss-120b and
+# groq/gpt-oss-20b, and agents/model_registry.json's own _TOKENS note explains
+# why: "Reasoning models consume the budget internally before emitting." A
+# model that spends 2,000 tokens thinking has ~2,000 left to write with, which
+# runs out around the end of Technical Skills -- exactly where the AI Eval
+# Gate's two failing tailor cases stop.
+_CHARS_PER_TOKEN_LATEX = 3.0
+
+# Headroom for a model that reasons before it writes. Same figure the registry
+# records as the min_output_tokens floor for the two gpt-oss entries.
+_REASONING_HEADROOM_TOKENS = 3000
+
+# Nothing in the pool is known to reject 8192, and several free endpoints do
+# reject much more. A document that needs more than this still truncates --
+# but `_call_provider` now says so out loud instead of returning the fragment
+# as a finished answer, which is the part that was actually silent.
+MAX_OUTPUT_TOKENS_CAP = 8192
+
+
+def rewrite_budget(text: str, *, reasoning_headroom: int = _REASONING_HEADROOM_TOKENS) -> int:
+    """Output-token budget for a task whose answer re-emits `text`.
+
+    Deliberately generous: over-provisioning max_tokens costs nothing on a
+    provider that bills actual usage, while under-provisioning silently
+    truncates the document.
+
+    Groq is the one provider where a bigger budget is not free -- it bills
+    prompt_tokens + max_tokens against an 8k/minute free-tier allowance (see
+    score_batch.SCORE_MAX_TOKENS's note). A tailoring prompt already carries
+    the whole base resume, so it is close to that ceiling before max_tokens
+    is added at all; in the 2026-09-28 eval run every Groq entry returned 429
+    and Gemini served the run. Widening the budget makes an already-failing
+    hop fail the same way, and Groq's own failover moves on in milliseconds.
+
+    Never returns less than the historical 4096 default, so this can only
+    widen a budget, never narrow one.
+    """
+    needed = int(len(text or "") / _CHARS_PER_TOKEN_LATEX) + reasoning_headroom
+    return max(4096, min(needed, MAX_OUTPUT_TOKENS_CAP))
+
+
+def prefer_complete(candidates: list[dict]) -> list[dict]:
+    """Drop candidates the provider cut off, unless that leaves nothing.
+
+    A truncated candidate is a partial document. Handing it to the critic
+    alongside a complete one lets a fragment win on style points -- the critic
+    scores prose quality and has no idea the answer stops mid-section. When
+    EVERY candidate is truncated the list is returned unchanged: a partial
+    answer is still better than no answer, and the caller's own validation
+    (tailor_resume's required-sections gate, the eval harness's check_output)
+    is what decides whether to ship it.
+    """
+    complete = [c for c in candidates if c and not c.get("truncated")]
+    if complete and len(complete) != len(candidates):
+        logger.warning(
+            "[council] Discarded %d truncated candidate(s) of %d before critique",
+            len(candidates) - len(complete), len(candidates),
+        )
+    return complete or candidates
+
+
+# ---------------------------------------------------------------------------
 # Single-provider call
 # ---------------------------------------------------------------------------
 
@@ -500,12 +580,13 @@ def _call_provider(
             choice = resp.json()["choices"][0]
             message = choice.get("message", {})
             content = message.get("content")
+            finish_reason = choice.get("finish_reason")
             if not content:
                 # A reasoning model that ran out of budget looks identical to a
                 # broken provider unless we say so explicitly. finish_reason
                 # 'length' plus a populated `reasoning` field means the model
                 # worked fine and max_tokens was simply too low.
-                if choice.get("finish_reason") == "length" and message.get("reasoning"):
+                if finish_reason == "length" and message.get("reasoning"):
                     logger.warning(
                         "[ai] %s returned only reasoning tokens — max_tokens=%s too low "
                         "for a reasoning model, raise the budget",
@@ -515,7 +596,29 @@ def _call_provider(
                     logger.warning(f"[ai] {provider['name']} returned empty content")
                 return None
             note_provider_success(provider)
-            return {"content": content, "provider": provider["name"], "model": provider["model"]}
+            # finish_reason is carried out, not dropped. The empty-content
+            # branch above was the ONLY place it was ever consulted, so a
+            # response cut off mid-document -- non-empty content, finish_reason
+            # 'length' -- came back indistinguishable from a complete one and
+            # every caller treated it as a finished answer. That is how a
+            # tailored resume body that stops in the middle of Technical
+            # Skills reaches the output guards as "the model dropped four
+            # sections" instead of "the model was cut off": see
+            # `rewrite_budget` above, and tests/unit/test_ai_truncation.py.
+            truncated = finish_reason == "length"
+            if truncated:
+                logger.warning(
+                    "[ai] %s hit max_tokens=%s mid-response (finish_reason=length, "
+                    "%d chars returned) — the answer is incomplete",
+                    provider["name"], max_tokens, len(content),
+                )
+            return {
+                "content": content,
+                "provider": provider["name"],
+                "model": provider["model"],
+                "finish_reason": finish_reason,
+                "truncated": truncated,
+            }
         elif resp.status_code == 429:
             logger.warning(f"[ai] {provider['name']} rate limited")
             note_provider_failure(provider, 429, resp.text)
@@ -653,8 +756,15 @@ def council_complete(
     base_skills: str = "",
     base_body: str = "",
     header_markers: list[str] | None = None,
+    max_tokens: int = 4096,
 ) -> dict:
     """Generate candidates from diverse models, pick the best by critic score.
+
+    `max_tokens` is the per-generator output budget. It defaults to the 4096
+    that used to be hardcoded in both engines, so every existing caller keeps
+    its old behaviour; callers whose answer is a whole document (tailoring)
+    pass `rewrite_budget(base_body)` instead. The critic is NOT sized by this
+    -- it returns a short numeric verdict and keeps CRITIC_MAX_TOKENS.
 
     `task` selects the guardrail policy (guardrails/policy.py) that the
     LangGraph engine's guard_input_node/guard_output_node apply -- "tailor",
@@ -680,7 +790,7 @@ def council_complete(
         return council_complete_langgraph(
             prompt, system, task_description, n_generators, temperature,
             task=task, base_skills=base_skills, base_body=base_body,
-            header_markers=header_markers,
+            header_markers=header_markers, max_tokens=max_tokens,
         )
     # Legacy has no guard nodes at all -- _council_complete_legacy below never
     # imports guardrails, so `task`/`base_skills`/`base_body`/`header_markers`
@@ -688,8 +798,16 @@ def council_complete(
     # forgotten: legacy is frozen pre-guardrail behaviour, kept only as the
     # COUNCIL_ENGINE=legacy escape hatch and the parity test's baseline, and
     # is not a candidate for picking up guard-policy awareness of its own.
+    #
+    # max_tokens IS forwarded, unlike the guard-context arguments above: it is
+    # not guard-policy awareness, it is the size of the answer the caller
+    # asked for. Legacy is also the engine that actually runs today --
+    # template.yaml's CouncilEngine parameter defaults to "legacy" and the CI
+    # ai-eval job sets no COUNCIL_ENGINE at all -- so a fix that skipped this
+    # path would fix nothing in production or in the gate that measured it.
     return _council_complete_legacy(
-        prompt, system, task_description, n_generators, temperature
+        prompt, system, task_description, n_generators, temperature,
+        max_tokens=max_tokens,
     )
 
 
@@ -699,6 +817,7 @@ def _council_complete_legacy(
     task_description: str = "",
     n_generators: int = 2,
     temperature: float = 0.3,
+    max_tokens: int = 4096,
 ) -> dict:
     """Generate multiple AI responses from diverse models, score with numeric critic.
 
@@ -725,7 +844,7 @@ def _council_complete_legacy(
     candidates = []
     used_families = set()
     for gen in generators:
-        result = _call_provider(gen, prompt, system, temperature, max_tokens=4096)
+        result = _call_provider(gen, prompt, system, temperature, max_tokens=max_tokens)
         if result and result.get("content"):
             candidates.append(result)
             used_families.add(_model_family(gen["model"]))
@@ -735,7 +854,7 @@ def _council_complete_legacy(
                 fb_fam = _model_family(fallback["model"])
                 if fb_fam in used_families or fb_fam == _model_family(gen["model"]):
                     continue
-                result = _call_provider(fallback, prompt, system, temperature, max_tokens=4096)
+                result = _call_provider(fallback, prompt, system, temperature, max_tokens=max_tokens)
                 if result and result.get("content"):
                     candidates.append(result)
                     used_families.add(fb_fam)
@@ -744,6 +863,7 @@ def _council_complete_legacy(
 
     if not candidates:
         raise RuntimeError("Council: all generators failed")
+    candidates = prefer_complete(candidates)
     if len(candidates) == 1:
         logger.info("[council] Only 1 candidate — returning without critique")
         return candidates[0]
@@ -830,6 +950,24 @@ def ai_complete_cached(
             }
 
     result = ai_complete(prompt, system, temperature=temperature, max_tokens=max_tokens)
+
+    if result.get("truncated"):
+        # A cut-off answer must never become the answer for the next 72
+        # hours. The cache is a cost optimisation; persisting a fragment
+        # turns one provider hiccup into three days of identical failures
+        # that no re-run can shake off, and `cache_key` is md5(system|prompt)
+        # so every caller with the same prompt inherits it.
+        #
+        # Checked ahead of `skip_cache` rather than folded into it: the two
+        # suppress the same write for unrelated reasons (skip_cache is the
+        # determinism-sampling caller opting out; this is the answer being
+        # unfit to store), and only this one is worth a log line.
+        logger.warning(
+            "[ai] not caching a truncated response for cache_key=%s "
+            "(max_tokens=%s) — a fragment must not be replayed for %sh",
+            cache_key, max_tokens, cache_hours,
+        )
+        return result
 
     if not skip_cache:
         db.table("ai_cache").upsert({

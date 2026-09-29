@@ -56,6 +56,7 @@ _call_provider = ai_helper._call_provider
 _model_family = ai_helper._model_family
 _select_diverse_providers = ai_helper._select_diverse_providers
 _parse_critic_scores = ai_helper._parse_critic_scores
+prefer_complete = ai_helper.prefer_complete
 build_critique_prompt = ai_helper.build_critique_prompt
 CRITIQUE_SYSTEM = ai_helper.CRITIQUE_SYSTEM
 CRITIC_MAX_TOKENS = ai_helper.CRITIC_MAX_TOKENS

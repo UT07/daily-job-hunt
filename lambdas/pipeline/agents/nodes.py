@@ -13,6 +13,7 @@ from agents._ai_helper import (
     CRITIQUE_SYSTEM,
     _parse_critic_scores,
     build_critique_prompt,
+    prefer_complete,
 )
 from agents.providers import all_providers, call_one, family_of, select_critic, select_generators
 from guardrails.input_guards import INSTRUCTION_HIERARCHY, check_input, fence, maybe_scrub_pii
@@ -82,8 +83,11 @@ def generate_node(payload: dict) -> dict:
     prompt = payload["prompt"]
     system = payload.get("system", "")
     temperature = payload.get("temperature", 0.3)
+    # Sized by the caller (ai_helper.rewrite_budget) for tasks whose answer is
+    # a whole document; 4096 is the historical default for everything else.
+    max_tokens = payload.get("max_tokens", 4096)
 
-    result = call_one(provider, prompt, system, temperature, max_tokens=4096)
+    result = call_one(provider, prompt, system, temperature, max_tokens=max_tokens)
     if not result:
         # Primary provider failed — retry through the rest of the pool before
         # giving up on this slot, same as legacy ai_helper.council_complete's
@@ -104,7 +108,7 @@ def generate_node(payload: dict) -> dict:
         for fallback in all_providers():
             if family_of(fallback) == own_family:
                 continue
-            result = call_one(fallback, prompt, system, temperature, max_tokens=4096)
+            result = call_one(fallback, prompt, system, temperature, max_tokens=max_tokens)
             if result:
                 logger.info("[council] Generator fallback: %s succeeded", fallback["name"])
                 break
@@ -118,6 +122,10 @@ def critique_node(state: dict) -> dict:
     candidates = state.get("candidates") or []
     if not candidates:
         raise RuntimeError("Council: all generators failed")
+    # A candidate the provider cut off is a partial document. It must not be
+    # allowed to out-score a complete one on prose quality, which is all the
+    # critic can see. Same rule the legacy council applies.
+    candidates = prefer_complete(candidates)
     if len(candidates) == 1:
         logger.info("[council] Only 1 candidate — skipping critique")
         return {"winner": candidates[0], "scores": []}

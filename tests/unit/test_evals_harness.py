@@ -203,6 +203,65 @@ class TestRunTailorCase:
         assert result["fabricated"] is True
 
 
+class TestTailorCaseRecordsWhyItFailed:
+    """A required_sections violation has two completely different causes:
+    the model ignored the instruction, or the provider stopped it
+    mid-document. CI run 36481897936 recorded four missing sections across
+    two cases and nothing at all about which had happened, because the
+    harness threw away the one field that says — the response's
+    finish_reason. Without it the only way to tell is to re-run the golden
+    set by hand against live providers.
+    """
+
+    def _run(self, council_result):
+        case = _case(task="tailor", must_contain=["Python"],
+                     must_pass_guards=True, no_fabrication=True)
+        guard_result = MagicMock(passed=True, violations=[])
+        with patch("evals.harness.council_complete", return_value=council_result), \
+             patch("evals.harness.check_output", return_value=guard_result):
+            return harness._run_tailor_case(case, resume_tex=BASE_RESUME)
+
+    def test_a_cut_off_body_is_recorded_as_truncated(self):
+        result = self._run({"content": "Python", "provider": "p", "model": "m",
+                            "truncated": True, "finish_reason": "length"})
+        assert result["truncated"] is True
+        assert result["finish_reason"] == "length"
+
+    def test_a_complete_body_is_not(self):
+        result = self._run({"content": "Python", "provider": "p", "model": "m",
+                            "truncated": False, "finish_reason": "stop"})
+        assert result["truncated"] is False
+
+    def test_body_length_is_recorded_against_the_base_it_should_match(self):
+        # How far through the document it got — the number that makes
+        # "missing section: experience" legible without a re-run.
+        result = self._run({"content": "Python", "provider": "p", "model": "m"})
+        _, base_body = harness._split_tex(BASE_RESUME)
+        assert result["body_chars"] == len("Python")
+        assert result["base_body_chars"] == len(base_body)
+
+    def test_the_serving_provider_is_recorded_for_tailor_cases_too(self):
+        # families_served only ever covered score cases, so a tailor failure
+        # could not be attributed to a provider at all.
+        result = self._run({"content": "Python", "provider": "gemini/x", "model": "m"})
+        assert result["served_by"] == ["gemini/x"]
+
+
+class TestTailorCaseBudget:
+    def test_the_output_budget_is_sized_from_the_base_resume_body(self):
+        from lambdas.pipeline import ai_helper
+        case = _case(task="tailor", must_contain=["Python"],
+                     must_pass_guards=True, no_fabrication=True)
+        guard_result = MagicMock(passed=True, violations=[])
+        with patch("evals.harness.council_complete",
+                   return_value={"content": "Python", "provider": "p", "model": "m"}) as council, \
+             patch("evals.harness.check_output", return_value=guard_result):
+            harness._run_tailor_case(case, resume_tex=BASE_RESUME)
+
+        _, base_body = harness._split_tex(BASE_RESUME)
+        assert council.call_args.kwargs["max_tokens"] == ai_helper.rewrite_budget(base_body)
+
+
 class TestRunGoldenResumability:
     def _patch_common(self, monkeypatch, tmp_path, cases):
         monkeypatch.setattr(harness, "CHECKPOINT", tmp_path / "checkpoint.json")

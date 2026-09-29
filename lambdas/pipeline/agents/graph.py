@@ -49,6 +49,7 @@ def _fan_out(state: dict) -> list[Send]:
             "prompt": state["prompt"],
             "system": state.get("system", ""),
             "temperature": state.get("temperature", 0.3),
+            "max_tokens": state.get("max_tokens", 4096),
         })
         for provider in state["generators"]
     ]
@@ -353,6 +354,7 @@ def council_complete_langgraph(
     base_skills: str = "",
     base_body: str = "",
     header_markers: list[str] | None = None,
+    max_tokens: int = 4096,
 ) -> dict:
     """Drop-in replacement for council_complete. Returns a Candidate dict
     plus `trace_id` -- the id used as this run's LangGraph thread_id (and,
@@ -378,6 +380,7 @@ def council_complete_langgraph(
             "task_description": task_description,
             "n_generators": n_generators,
             "temperature": temperature,
+            "max_tokens": max_tokens,
             "base_skills": base_skills,
             "base_body": base_body,
             "header_markers": header_markers or [],

@@ -4,9 +4,15 @@ from agents.state import Candidate, CouncilState, add_candidates
 
 
 def test_candidate_matches_call_provider_return_shape():
-    # _call_provider returns {"content", "provider", "model"} — Candidate must
-    # mirror it exactly so nodes can pass results through untranslated.
-    assert set(get_type_hints(Candidate)) == {"content", "provider", "model"}
+    # _call_provider returns {"content", "provider", "model", "finish_reason",
+    # "truncated"} — Candidate must mirror it exactly so nodes can pass
+    # results through untranslated. finish_reason/truncated joined the shape
+    # when the provider layer stopped discarding them: a response cut off at
+    # max_tokens used to reach the critic indistinguishable from a complete
+    # one (see ai_helper.prefer_complete).
+    assert set(get_type_hints(Candidate)) == {
+        "content", "provider", "model", "finish_reason", "truncated",
+    }
 
 
 def test_add_candidates_concatenates():
