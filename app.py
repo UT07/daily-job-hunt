@@ -1015,6 +1015,42 @@ def _do_contacts(job):
     return {"contacts": result or []}
 
 
+def _tailored_tex_key(user_id: str, job_id: str) -> str:
+    """S3 key of a job's tailored .tex.
+
+    Keyed by job_hash, NOT job_id. Both sections endpoints used to build this
+    from job_id — a UUID — and measuring the live bucket on 2026-09-29 showed
+    what that cost, over 1,000 jobs and 1,794 objects:
+
+        users/.../{job_id}_tailored.tex    (what the code built)      0   0.0%
+        users/.../{job_hash}_tailored.tex                           721  72.1%
+
+    Zero percent. GET /sections 404'd for every job, so the Resume Studio could
+    not open a single real one. Two rounds of unit tests and an adversarial
+    review missed it because all of them mocked S3.
+
+    One helper rather than the convention spelled at each call site: the two
+    endpoints had already drifted into hard-coding the same wrong string, so
+    fixing one would have left the other broken.
+
+    Falls back to job_id when the hash cannot be read — a wrong key yields the
+    404 callers already handle, which is a better failure than None raising
+    somewhere less obvious.
+    """
+    job_hash = None
+    if _db is not None:
+        try:
+            row = (
+                _db.client.table("jobs").select("job_hash")
+                .eq("job_id", job_id).eq("user_id", user_id)
+                .maybe_single().execute()
+            )
+            job_hash = ((row.data if row else None) or {}).get("job_hash")
+        except Exception as e:
+            logger.warning("[s3] could not read job_hash for %s: %s", job_id, e)
+    return f"users/{user_id}/resumes/{job_hash or job_id}_tailored.tex"
+
+
 def _job_for_scoring(job_id: str, user_id: str) -> dict | None:
     """The job fields score_single_job needs, or None when there is nothing to score.
 
@@ -1102,7 +1138,7 @@ def _do_rebuild_sections(job_id: str, sections: dict, user_id: str) -> dict:
     from lambdas.pipeline.parse_sections import rebuild_tex_from_sections
 
     bucket = os.environ.get("S3_BUCKET", os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt"))
-    tex_s3_key = f"users/{user_id}/resumes/{job_id}_tailored.tex"
+    tex_s3_key = _tailored_tex_key(user_id, job_id)
 
     s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
 
@@ -2188,9 +2224,9 @@ def get_job_sections(
     job_row = result.data
     jd = job_row.get("description", "") or ""
 
-    # Derive tex S3 key from convention: users/{user_id}/resumes/{job_id}_tailored.tex
+    # Keyed by job_hash, not job_id — see _tailored_tex_key.
     bucket = os.environ.get("S3_BUCKET", os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt"))
-    tex_s3_key = f"users/{user.id}/resumes/{job_id}_tailored.tex"
+    tex_s3_key = _tailored_tex_key(user.id, job_id)
 
     # Fetch .tex from S3
     s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
