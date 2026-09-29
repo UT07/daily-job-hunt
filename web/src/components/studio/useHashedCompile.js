@@ -25,7 +25,7 @@ export function hashSections(sections) {
  * Compile `sections` to a PDF — at most one at a time, latest content wins.
  *
  * @param sections   the structured content to compile
- * @param compileFn  (sections) => Promise<pdfUrl>
+ * @param compileFn  (sections) => Promise<pdfUrl | {pdfUrl, ...extra}>
  * @param options.renderedHashSeed
  *   hashSections(...) of content the caller is ALREADY displaying a PDF for.
  *   The Studio has one: GET .../sections parses the same _tailored.tex the
@@ -50,6 +50,7 @@ export function hashSections(sections) {
  */
 export function useHashedCompile(sections, compileFn, { renderedHashSeed = null } = {}) {
   const [pdfUrl, setPdfUrl] = useState(null);
+  const [result, setResult] = useState(null);
   const [compiling, setCompiling] = useState(false);
   const [error, setError] = useState(null);
   const [renderedHash, setRenderedHash] = useState(null);
@@ -98,12 +99,19 @@ export function useHashedCompile(sections, compileFn, { renderedHashSeed = null 
     setError(null);
 
     Promise.resolve(compileFnRef.current(payload))
-      .then((url) => {
+      .then((res) => {
         if (!mounted.current) return;
         // Content moved on while this ran, so this PDF is already out of date.
         // Showing it would be an invisibly stale pane.
         if (hash !== currentHashRef.current) return;
+        // compileFn may resolve a bare url, or an object carrying the url plus
+        // whatever else the call produced (the Studio's comes back with freshly
+        // measured scores). Both shapes are supported so a simpler caller need
+        // not build an envelope it has no use for.
+        const url = typeof res === 'string' ? res : res && res.pdfUrl;
+        if (!url) { setError('Compile finished without a PDF'); return; }
         setPdfUrl(url);
+        setResult(typeof res === 'string' ? null : res);
         setRenderedHash(hash);
       })
       .catch((e) => {
@@ -135,6 +143,7 @@ export function useHashedCompile(sections, compileFn, { renderedHashSeed = null 
 
   return {
     pdfUrl,
+    result,
     compiling,
     error,
     pendingChanges:
