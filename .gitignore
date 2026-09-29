@@ -38,6 +38,13 @@ texput.*
 
 # Environment and secrets
 .env
+# Backups and variants — a stale .env copy is still a live secret, and this
+# repository is public. `.env` alone did not cover .env.bak-160145, which an
+# editor left in the working tree on 2026-09-29.
+.env.*
+!.env.example
+*.bak
+*.bak-*
 *.env
 !.env.example
 samconfig.toml

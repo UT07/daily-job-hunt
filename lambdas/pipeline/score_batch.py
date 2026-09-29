@@ -179,7 +179,13 @@ def handler(event, context):
 
     resume_row = resume_result.data[0]
     resume_tex = resume_row.get("tex_content", "")
-    resume_type = resume_row.get("resume_type", "")
+    # user_resumes has no resume_type column — it is resume_key. The wrong name
+    # returned "" through .get()'s default rather than raising, so every job the
+    # current pipeline scored recorded matched_resume as empty and the
+    # dashboard's RESUME TYPE column read "--" for all of them. Rows older than
+    # the multi-resume table still hold sre_devops/fullstack from the legacy
+    # config path, which made it look abandoned rather than broken.
+    resume_type = resume_row.get("resume_key", "")
     if not resume_tex:
         logger.warning(f"[score_batch] Resume tex_content is empty for user {user_id}")
         return {"matched_items": [], "matched_count": 0, "error": "no_resume"}

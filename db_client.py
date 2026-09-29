@@ -44,6 +44,39 @@ def _missing_optional_column(exc: Exception) -> Optional[str]:
     return None
 
 
+# Columns the dashboard list actually needs — everything on `jobs` EXCEPT
+# `embedding`.
+#
+# `embedding` is the 768-dimension pgvector column used for semantic dedup and
+# bullet retrieval. It is server-side data; nothing in web/src references it.
+# select("*") was sending it across Supabase -> Lambda -> API Gateway -> browser
+# on every page load, and the browser parsed it as JSON. Measured against
+# production on 2026-09-29, 100 rows:
+#
+#     select("*")          0.423s   1987 KB   (embedding = 931 KB, 46.8%)
+#     this list            0.162s    183 KB
+#
+# Spelled out rather than "all except" because PostgREST has no exclusion
+# syntax. The cost is that a genuinely new column must be added here to reach
+# the dashboard; test_dashboard_payload_weight pins the fields the UI reads so
+# a removal breaks a test rather than a page.
+JOB_LIST_COLUMNS = (
+    "application_status,apply_board_token,apply_platform,apply_posting_id,"
+    "apply_url,archetype,ats_score,base_ats_score,base_hm_score,"
+    "base_tr_score,canonical_hash,company,company_research,"
+    "cover_letter_model,cover_letter_pdf_path,cover_letter_s3_url,"
+    "description,easy_apply_eligible,failure_reason,final_score,"
+    "first_seen,gaps,hiring_manager_score,interview_prep,is_expired,"
+    "job_hash,job_id,key_matches,last_seen,level_fit,linkedin_contacts,"
+    "location,match_reasoning,match_score,matched_resume,posted_date,"
+    "remote,requirement_map,resume_doc_url,resume_s3_key,resume_s3_url,"
+    "resume_version,score_status,score_tier,score_version,scored_at,"
+    "seniority,source,tailored_ats_score,tailored_hm_score,"
+    "tailored_pdf_path,tailored_tr_score,tailoring_model,"
+    "tech_recruiter_score,title,trace_id,user_id,writing_quality_score"
+)
+
+
 class SupabaseClient:
     """Supabase client for the job automation multi-tenant database.
 
@@ -246,7 +279,7 @@ class SupabaseClient:
         """
         query = (
             self.client.table("jobs")
-            .select("*", count="exact")
+            .select(JOB_LIST_COLUMNS, count="exact")
             .eq("user_id", user_id)
         )
 
