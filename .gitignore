@@ -9,20 +9,23 @@ dist/
 build/
 *.whl
 
-# Output artifacts (generated per run — not source code)
-output/*/resumes/
-output/*/cover_letters/
-output/*/run_metadata.json
-output/.ai_cache.db
-output/.ai_cache.db-journal
-output/.ai_cache*.db
-output/ai_quality_log.jsonl
-output/improvement_report.json
-output/preferred_models.json
-output/pipeline.log
-output/test_stripe*/
-output/final_stripe*/
-output/final_redhat*/
+# Output artifacts (generated per run — not source code).
+#
+# This was a list of specific paths, and every one of them was already TRACKED
+# before the pattern was added. .gitignore does not apply to tracked files, so
+# output/.ai_cache.db was simultaneously ignored and committed, and the list
+# grew a new line each time someone noticed another leak instead of fixing the
+# cause.
+#
+# Ignore the whole directory. Audited 2026-09-29: 16 files, 3.9MB, in a PUBLIC
+# repository — seven compiled resumes carrying a real phone number and email
+# address, a dump of the user_resumes table including a user_id, the AI
+# response cache, and scraped job data. None of it is source; all of it is
+# reproducible by running the pipeline.
+#
+# Untracking does not unpublish what is already in history. That would need a
+# history rewrite, which is a separate decision.
+output/
 
 # LaTeX build artifacts
 *.aux
