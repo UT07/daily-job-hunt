@@ -317,8 +317,16 @@ def _model_family(model: str) -> str:
 #           daily quota across every model on it, so a 429 on gemma means glm
 #           is equally unavailable. Groq's is a per-minute token budget, so it
 #           recovers in a minute; OpenRouter's is daily, so it does not.
-#   404  -> cool the MODEL, for a long time. Free model ids are withdrawn
-#           without notice (minimax-m3, glm-5.2); the account is fine.
+#   404
+#   410  -> cool the MODEL, for a long time. Free model ids are withdrawn
+#           without notice (minimax-m3, glm-5.2) and hosted ones are retired on
+#           a published date; the account is fine either way. 410 was missing
+#           here until 2026-09-29, so an end-of-lifed model fell to the
+#           transient branch and was retried every two minutes forever —
+#           precisely what this cooldown table exists to prevent. Measured:
+#           NVIDIA's meta/llama-3.3-70b-instruct returns
+#           410 "has reached its end of life", and it had produced 125 of the
+#           last 500 tailorings before it died.
 #   5xx / timeout -> cool the MODEL briefly; probably transient.
 #
 # State is module-level, so it survives across invocations while a Lambda
@@ -401,9 +409,12 @@ def note_provider_failure(provider: dict, status: int | None, detail: str = "") 
         secs = _rate_limit_cooldown_seconds(account, detail)
         _cool_down(f"account:{account}", secs)
         logger.info(f"[ai] cooling account '{account}' for {secs}s after 429")
-    elif status == 404:
+    elif status in (404, 410):
         _cool_down(f"model:{provider['name']}", _MODEL_GONE_COOLDOWN_S)
-        logger.info(f"[ai] cooling model '{provider['name']}' — 404, id likely withdrawn")
+        logger.info(
+            f"[ai] cooling model '{provider['name']}' — {status}, "
+            f"id {'withdrawn' if status == 404 else 'retired (end of life)'}"
+        )
     else:
         _cool_down(f"model:{provider['name']}", _TRANSIENT_COOLDOWN_S)
 

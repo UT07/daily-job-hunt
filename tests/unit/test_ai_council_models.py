@@ -97,3 +97,65 @@ def test_critic_token_budget_is_reasoning_safe():
         f"CRITIC_MAX_TOKENS={ai_helper.CRITIC_MAX_TOKENS} is too small for a "
         "reasoning model; it will return empty content and fail the critic."
     )
+
+
+# ---------------------------------------------------------------------------
+# The same guard, for the OTHER client.
+#
+# Everything above checks ai_helper._build_provider_list() — the pipeline
+# council. Nothing checked ai_client.py, the client main.py and the local
+# dry-run path use, and that is how NvidiaNIMProvider kept defaulting to
+# meta/llama-3.3-70b-instruct after it went end-of-life. The model id was
+# already in RETIRED_MODEL_IDS above, documented as "nvidia 410 Gone", and the
+# default sat there for a month because no test looked at this file.
+# ---------------------------------------------------------------------------
+
+def _ai_client_default_models():
+    """Default `model=` on every AIProvider subclass in ai_client.py."""
+    import inspect
+
+    import ai_client
+
+    defaults = {}
+    for name, obj in vars(ai_client).items():
+        if not inspect.isclass(obj) or not issubclass(obj, ai_client.AIProvider):
+            continue
+        if obj is ai_client.AIProvider:
+            continue
+        param = inspect.signature(obj.__init__).parameters.get("model")
+        if param is not None and param.default is not inspect.Parameter.empty:
+            defaults[name] = param.default
+    return defaults
+
+
+def test_ai_client_defaults_find_some_providers():
+    """Guard the guard: a broken scan must not pass silently."""
+    assert len(_ai_client_default_models()) >= 3, _ai_client_default_models()
+
+
+def test_no_ai_client_provider_defaults_to_a_retired_model():
+    dead = {n: m for n, m in _ai_client_default_models().items() if m in RETIRED_MODEL_IDS}
+    assert not dead, (
+        f"ai_client provider(s) default to a model confirmed dead: {dead}. "
+        "These return 404/410 on every call."
+    )
+
+
+def test_410_is_treated_as_permanent_in_both_clients():
+    """A model retired on a published date never comes back.
+
+    Without this, 410 fell to the transient branch and the model was retried
+    every two minutes forever — the exact waste the cooldown table exists to
+    prevent.
+    """
+    import ai_client
+
+    assert 410 in ai_client.AIClient._DEAD_CODES
+
+    import inspect
+
+    src = inspect.getsource(ai_helper.note_provider_failure)
+    assert "410" in src, (
+        "ai_helper.note_provider_failure does not mention 410; an end-of-lifed "
+        "model gets the short transient cooldown instead of the long one"
+    )

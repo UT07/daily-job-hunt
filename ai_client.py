@@ -286,9 +286,15 @@ class GeminiProvider(AIProvider):
 
 
 class GroqProvider(AIProvider):
-    """Groq cloud inference (Llama 3.3 70B and others). OpenAI-compatible API."""
+    """Groq cloud inference. OpenAI-compatible API."""
 
-    def __init__(self, api_key: str, model: str = "llama-3.3-70b-versatile", **kwargs):
+    # Default was llama-3.3-70b-versatile, which Groq retired — it returns
+    # 404 "does not exist" and has been listed in this repo's own
+    # RETIRED_MODEL_IDS since 2026-08-31. Found on 2026-09-29 by the first test
+    # that ever looked at this file's defaults rather than the pipeline
+    # council's. openai/gpt-oss-120b is the production council's primary Groq
+    # entry, measured at ~800ms on a scoring-shaped prompt.
+    def __init__(self, api_key: str, model: str = "openai/gpt-oss-120b", **kwargs):
         super().__init__(
             name="groq",
             model=model,
@@ -377,7 +383,13 @@ class OpenRouterProvider(AIProvider):
 class NvidiaNIMProvider(AIProvider):
     """NVIDIA NIM — free API access to top open models. OpenAI-compatible."""
 
-    def __init__(self, api_key: str, model: str = "meta/llama-3.3-70b-instruct", **kwargs):
+    # Default was meta/llama-3.3-70b-instruct until 2026-09-29. Probed live
+    # that day: GET /models returns 200 with 81 models (the key is fine — an
+    # older note in this repo claiming it 403s is stale), but that model
+    # answers 410 "has reached its end of life on 2026-08-2x".
+    # nvidia/nemotron-3-super-120b-a12b answered 200 in 0.9s on the same key
+    # and is already in the production council's pool.
+    def __init__(self, api_key: str, model: str = "nvidia/nemotron-3-super-120b-a12b", **kwargs):
         super().__init__(
             name="nvidia",
             model=model,
@@ -503,8 +515,12 @@ class AIClient:
         response = client.complete("Analyze this job posting...", system="You are a job matcher.")
     """
 
-    # Permanent error codes — provider is broken, don't retry this session
-    _DEAD_CODES = {401, 402, 403, 404}
+    # Permanent error codes — provider is broken, don't retry this session.
+    # 410 Gone is as permanent as 404: a hosted model retired on a published
+    # date never comes back. It was missing until 2026-09-29, when NVIDIA's
+    # meta/llama-3.3-70b-instruct started returning
+    # 410 "has reached its end of life" and every call kept retrying it.
+    _DEAD_CODES = {401, 402, 403, 404, 410}
 
     def __init__(self, providers: List[AIProvider], cache: Optional[ResponseCache] = None):
         self.providers = providers
