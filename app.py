@@ -691,6 +691,50 @@ def _sections_to_tex(user_id: str, sections: dict) -> str:
         return ""
 
 
+def _version_key(live_key: str, version: int) -> str:
+    """Archive path for a live artifact key at a given version.
+
+        users/{uid}/resumes/{hash}_tailored.pdf
+     -> users/{uid}/resumes/versions/{hash}_v3_tailored.pdf
+
+    A subdirectory rather than a sibling, so anything listing the resumes/
+    prefix does not start seeing every historical copy.
+    """
+    head, _, name = live_key.rpartition("/")
+    stem, dot, ext = name.rpartition(".")
+    return f"{head}/versions/{stem}_v{version}{dot}{ext}" if head else name
+
+
+def _archive_job_artifacts(job: dict, version: int) -> dict:
+    """Copy a job's live artifacts aside so a version can be restored later.
+
+    Artifacts are keyed by job_hash with no version component and the bucket
+    has versioning disabled, so a regenerate overwrites them in place. Without
+    this copy a version row describes bytes that no longer exist — which is why
+    restore used to hand back the current document relabelled as an older one.
+
+    Best-effort by design: a failed copy must not block the regenerate the user
+    asked for. It returns only the keys it actually wrote, and a version row
+    with no keys is reported as unrestorable rather than silently restored.
+    """
+    bucket = os.environ.get("S3_BUCKET", os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt"))
+    s3 = _get_s3()
+    archived = {}
+    for live_field, archive_field in (("resume_s3_key", "resume_s3_key"),
+                                      ("cover_letter_s3_key", "cover_letter_s3_key")):
+        live_key = job.get(live_field)
+        if not live_key:
+            continue
+        dest = _version_key(live_key, version)
+        try:
+            s3.copy_object(Bucket=bucket, Key=dest,
+                           CopySource={"Bucket": bucket, "Key": live_key})
+            archived[archive_field] = dest
+        except Exception as exc:
+            logger.warning("Could not archive %s to %s: %s", live_key, dest, exc)
+    return archived
+
+
 def _refresh_s3_urls(jobs: list) -> list:
     """Regenerate presigned URLs from stored S3 keys so they never expire."""
     bucket = os.environ.get("S3_BUCKET", os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt"))
@@ -2140,7 +2184,8 @@ def restore_resume_version(
     # Verify the job belongs to this user.
     job_check = (
         _db.client.table("jobs")
-        .select("job_id, resume_s3_url, cover_letter_s3_url, tailoring_model, resume_version")
+        .select("job_id, job_hash, resume_s3_url, cover_letter_s3_url, "
+                "resume_s3_key, cover_letter_s3_key, tailoring_model, resume_version")
         .eq("job_id", job_id)
         .eq("user_id", user.id)
         .maybe_single()
@@ -2164,31 +2209,75 @@ def restore_resume_version(
         raise HTTPException(404, "Version not found")
     version = ver_check.data
 
-    # Save the current live URLs as a new snapshot before overwriting.
+    # A version written before 2026-09-29 recorded only a presigned URL. The
+    # object it named has since been overwritten in place, so "restoring" it
+    # would copy a stale URL back and serve the CURRENT document under an older
+    # version number. Refuse instead of lying about it.
+    if not version.get("resume_s3_key") and not version.get("cover_letter_s3_key"):
+        raise HTTPException(
+            409,
+            f"Version {version_number} has no archived artifacts. It predates "
+            "artifact versioning, and its files were overwritten by a later "
+            "regenerate, so there is nothing to restore.",
+        )
+
+    # Archive what is live now, so restoring is itself undoable.
     current_version = job.get("resume_version") or 1
     if job.get("resume_s3_url") or job.get("cover_letter_s3_url"):
-        _db.client.table("resume_versions").insert({
+        snapshot = {
             "user_id": user.id,
             "job_id": job_id,
             "version_number": current_version,
             "resume_s3_url": job.get("resume_s3_url"),
             "cover_letter_s3_url": job.get("cover_letter_s3_url"),
             "tailoring_model": job.get("tailoring_model"),
-        }).execute()
+        }
+        snapshot.update(_archive_job_artifacts(job, current_version))
+        _db.client.table("resume_versions").insert(snapshot).execute()
+
+    # Copy the archived bytes back over the live key. Restoring a URL is what
+    # made this a no-op: the live key is what every reader resolves, so the
+    # object under it has to change.
+    bucket = os.environ.get("S3_BUCKET", os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt"))
+    s3 = _get_s3()
+    restored = []
+    for archived_field, live_field in (("resume_s3_key", "resume_s3_key"),
+                                       ("cover_letter_s3_key", "cover_letter_s3_key")):
+        src, dest = version.get(archived_field), job.get(live_field)
+        if not src or not dest:
+            continue
+        try:
+            s3.copy_object(Bucket=bucket, Key=dest,
+                           CopySource={"Bucket": bucket, "Key": src})
+            restored.append(live_field)
+        except Exception as exc:
+            logger.error("Restore failed copying %s -> %s: %s", src, dest, exc)
+            raise HTTPException(502, f"Could not restore {archived_field}: {exc}") from exc
 
     next_version = current_version + 1
     _db.client.table("jobs").update({
-        "resume_s3_url": version.get("resume_s3_url"),
-        "cover_letter_s3_url": version.get("cover_letter_s3_url"),
         "tailoring_model": version.get("tailoring_model"),
         "resume_version": next_version,
     }).eq("job_id", job_id).eq("user_id", user.id).execute()
+    logger.info("Restored %s for job %s from v%s", restored, job_id, version_number)
 
+    # Sign the LIVE keys, which now hold the restored bytes. Returning the
+    # version row's own URLs would hand back links that are up to 7 days old
+    # and, before this change, pointed at an object that had been overwritten.
+    fresh = {
+        "job_id": job_id,
+        "company": job.get("company"),
+        "title": job.get("title"),
+        "resume_s3_key": job.get("resume_s3_key"),
+        "cover_letter_s3_key": job.get("cover_letter_s3_key"),
+    }
+    _refresh_s3_urls([fresh])
     return {
-        "resume_s3_url": version.get("resume_s3_url"),
-        "cover_letter_s3_url": version.get("cover_letter_s3_url"),
+        "resume_s3_url": fresh.get("resume_s3_url"),
+        "cover_letter_s3_url": fresh.get("cover_letter_s3_url"),
         "tailoring_model": version.get("tailoring_model"),
         "resume_version": next_version,
+        "restored_from_version": version_number,
     }
 
 
@@ -2760,14 +2849,19 @@ def re_tailor_job(
     current_version = job.get("resume_version") or 1
     if job.get("resume_s3_url") or job.get("cover_letter_s3_url"):
         try:
-            _db.client.table("resume_versions").insert({
+            # Copy the artifacts aside FIRST. The regenerate below overwrites
+            # them at the same key, and the bucket has no versioning, so a row
+            # written without this archives nothing.
+            snapshot = {
                 "user_id": user.id,
                 "job_id": job_id,
                 "version_number": current_version,
                 "resume_s3_url": job.get("resume_s3_url"),
                 "cover_letter_s3_url": job.get("cover_letter_s3_url"),
                 "tailoring_model": job.get("tailoring_model"),
-            }).execute()
+            }
+            snapshot.update(_archive_job_artifacts(job, current_version))
+            _db.client.table("resume_versions").insert(snapshot).execute()
         except Exception as e:
             logger.warning("Failed to save version snapshot for %s: %s", job_id, e)
 
