@@ -7,6 +7,7 @@ import Input, { Textarea, Select } from '../components/ui/Input'
 import Button from '../components/ui/Button'
 import { NoticePeriodPicker } from '../components/ui/NoticePeriodPicker'
 import useApiMutation from '../hooks/useApiMutation'
+import { isAcceptedResumeFile, resumeRejectionMessage } from '../lib/resumeUploadFile'
 
 // ─── Step Indicator ─────────────────────────────────────────────
 function StepIndicator({ current, steps }) {
@@ -109,14 +110,24 @@ function StepWelcome() {
 function StepResume({ resumeFile, setResumeFile, uploadStatus, setUploadStatus, onExtracted }) {
   const fileRef = useRef(null)
   const [dragOver, setDragOver] = useState(false)
+  // Separate from uploadStatus: a rejected file never reached the server, so
+  // the uploadStatus === 'error' branch ("Upload failed") would be a lie.
+  const [rejectMessage, setRejectMessage] = useState(null)
   // useApiMutation surfaces the upload error message instead of just toggling
   // uploadStatus to 'error' with no detail — users couldn't tell *why*.
   const upload = useApiMutation((file) => apiUpload('/api/resumes/upload', file))
 
   function handleFile(file) {
-    if (file && file.type === 'application/pdf') {
+    // Extension, not MIME — see lib/resumeUploadFile. A .tex reports
+    // text/x-tex, application/x-tex, text/plain or "", so the old
+    // `file.type === 'application/pdf'` gate silently discarded the one
+    // format the backend stores verbatim, with no message at all.
+    if (isAcceptedResumeFile(file)) {
       setResumeFile(file)
+      setRejectMessage(null)
       setUploadStatus('ready')
+    } else if (file) {
+      setRejectMessage(resumeRejectionMessage())
     }
   }
   function handleDrop(e) {
@@ -149,7 +160,7 @@ function StepResume({ resumeFile, setResumeFile, uploadStatus, setUploadStatus, 
   return (
     <div className="space-y-6">
       <h2 className="text-2xl font-heading font-bold">Upload Your Resume</h2>
-      <p className="text-stone-500">Upload a PDF resume and we'll extract your details automatically.</p>
+      <p className="text-stone-500">Upload a .tex, .latex or .pdf resume and we'll extract your details automatically.</p>
 
       <div
         className={`border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-colors
@@ -159,12 +170,13 @@ function StepResume({ resumeFile, setResumeFile, uploadStatus, setUploadStatus, 
         onDragOver={e => { e.preventDefault(); setDragOver(true) }}
         onDragLeave={() => setDragOver(false)}
       >
-        <input ref={fileRef} type="file" accept=".pdf" className="hidden"
+        <input ref={fileRef} type="file" accept=".tex,.latex,.pdf" className="hidden"
           onChange={e => handleFile(e.target.files[0])} />
-        <p className="text-lg font-bold">{resumeFile ? resumeFile.name : 'Drop PDF here or click to browse'}</p>
+        <p className="text-lg font-bold">{resumeFile ? resumeFile.name : 'Drop .tex or .pdf here, or click to browse'}</p>
         {resumeFile && <p className="text-sm text-stone-500 mt-1">{(resumeFile.size / 1024).toFixed(0)} KB</p>}
       </div>
 
+      {rejectMessage && <p className="text-red-600">{rejectMessage}</p>}
       {resumeFile && uploadStatus !== 'done' && (
         <Button onClick={handleUpload} loading={uploadStatus === 'uploading'}>
           {uploadStatus === 'uploading' ? 'Parsing...' : 'Upload & Parse'}

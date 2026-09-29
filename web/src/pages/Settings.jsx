@@ -6,6 +6,7 @@ import Input from '../components/ui/Input'
 import { NoticePeriodPicker } from '../components/ui/NoticePeriodPicker'
 import Button from '../components/ui/Button'
 import LoginPage from './LoginPage'
+import { isAcceptedResumeFile, resumeRejectionMessage } from '../lib/resumeUploadFile'
 
 function TagInput({ value, onChange, placeholder }) {
   const [input, setInput] = useState('')
@@ -363,11 +364,15 @@ export function ResumeSection() {
   }
 
   function handleFile(file) {
-    if (file && file.type === 'application/pdf') {
+    // Gate on the extension. This used to require MIME application/pdf while
+    // the input advertised .tex/.latex/.pdf, and browsers report a .tex as
+    // text/x-tex, application/x-tex, text/plain or "" — so selecting the one
+    // format the backend stores VERBATIM did nothing at all.
+    if (isAcceptedResumeFile(file)) {
       setResumeFile(file)
       setUploadStatus(null)
     } else if (file) {
-      setUploadStatus({ type: 'error', message: 'Please upload a PDF file.' })
+      setUploadStatus({ type: 'error', message: resumeRejectionMessage(file) })
     }
   }
 
