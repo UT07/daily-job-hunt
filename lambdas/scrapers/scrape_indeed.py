@@ -15,6 +15,7 @@ import boto3
 import httpx
 
 from shared.location_policy import build_location_policy
+from shared.scrape_budget import enrichment_budget_left
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -251,6 +252,7 @@ def handler(event, context):
 
     from normalizers import normalize_job
     all_jobs = []
+    budget_warned = False
 
     for query in queries:
         encoded_query = quote_plus(query)
@@ -275,10 +277,21 @@ def handler(event, context):
             logger.info(f"[indeed] Query '{query}': {len(cards)} cards via {extraction_method}")
 
             for card in cards[:max_jobs - len(all_jobs)]:
-                # Fetch full description if we only have a snippet
+                # Fetch full description if we only have a snippet — but only
+                # while there is time. Past the reserve the cards collected so
+                # far still need to be deduped and written, and that write is
+                # the only thing that makes the run count for anything.
                 full_desc = None
                 if card.get("job_key") and len(card.get("description", "")) < 200:
-                    full_desc = _fetch_job_detail(card["job_key"], proxy_url)
+                    if enrichment_budget_left(context):
+                        full_desc = _fetch_job_detail(card["job_key"], proxy_url)
+                    elif not budget_warned:
+                        budget_warned = True
+                        logger.warning(
+                            "[indeed] out of time for detail fetches — keeping card "
+                            "snippets for the rest. %d jobs collected so far will "
+                            "still be saved.", len(all_jobs),
+                        )
 
                 desc_quality = "full" if full_desc or len(card.get("description", "")) > 500 else "snippet"
                 description = full_desc or card.get("description", "")
