@@ -917,20 +917,37 @@ def ai_complete_cached(
     cache_hours: int = 72,
     temperature: float = 0.3,
     max_tokens: int = 4096,
+    skip_cache: bool = False,
 ) -> dict:
-    """AI complete with Supabase cache. Returns dict with content, provider, model."""
+    """AI complete with Supabase cache. Returns dict with content, provider, model.
+
+    skip_cache=True neither reads nor writes the cache. It exists for repeat
+    sampling: score_single_job_deterministic takes the median of num_calls
+    independent calls, and a cache hit makes those calls identical, so the
+    median of three becomes the median of one answer returned three times —
+    the variance the median exists to dampen is invisible to it.
+
+    The WRITE is skipped too, not just the read. Otherwise call 1 would
+    populate the key that calls 2 and 3 then read, rebuilding the collapse this
+    avoids, and leaving one arbitrary sample in the shared cache for the batch
+    pipeline to pick up afterwards.
+
+    Default stays False: the batch pipeline scores ~58 jobs a run against an 8k
+    tokens/minute Groq ceiling that is already the bottleneck.
+    """
     cache_key = hashlib.md5(f"{system}|{prompt}".encode()).hexdigest()
     db = get_supabase()
 
-    cached = db.table("ai_cache").select("response, provider, model") \
-        .eq("cache_key", cache_key) \
-        .gte("expires_at", datetime.utcnow().isoformat()).execute()
-    if cached.data:
-        return {
-            "content": cached.data[0]["response"],
-            "provider": cached.data[0].get("provider", "cache"),
-            "model": cached.data[0].get("model", "cache"),
-        }
+    if not skip_cache:
+        cached = db.table("ai_cache").select("response, provider, model") \
+            .eq("cache_key", cache_key) \
+            .gte("expires_at", datetime.utcnow().isoformat()).execute()
+        if cached.data:
+            return {
+                "content": cached.data[0]["response"],
+                "provider": cached.data[0].get("provider", "cache"),
+                "model": cached.data[0].get("model", "cache"),
+            }
 
     result = ai_complete(prompt, system, temperature=temperature, max_tokens=max_tokens)
 
@@ -940,6 +957,11 @@ def ai_complete_cached(
         # turns one provider hiccup into three days of identical failures
         # that no re-run can shake off, and `cache_key` is md5(system|prompt)
         # so every caller with the same prompt inherits it.
+        #
+        # Checked ahead of `skip_cache` rather than folded into it: the two
+        # suppress the same write for unrelated reasons (skip_cache is the
+        # determinism-sampling caller opting out; this is the answer being
+        # unfit to store), and only this one is worth a log line.
         logger.warning(
             "[ai] not caching a truncated response for cache_key=%s "
             "(max_tokens=%s) — a fragment must not be replayed for %sh",
@@ -947,12 +969,13 @@ def ai_complete_cached(
         )
         return result
 
-    db.table("ai_cache").upsert({
-        "cache_key": cache_key,
-        "response": result["content"],
-        "provider": result["provider"],
-        "model": result["model"],
-        "expires_at": (datetime.utcnow() + timedelta(hours=cache_hours)).isoformat(),
-    }, on_conflict="cache_key").execute()
+    if not skip_cache:
+        db.table("ai_cache").upsert({
+            "cache_key": cache_key,
+            "response": result["content"],
+            "provider": result["provider"],
+            "model": result["model"],
+            "expires_at": (datetime.utcnow() + timedelta(hours=cache_hours)).isoformat(),
+        }, on_conflict="cache_key").execute()
 
     return result

@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 
 import boto3
 
@@ -14,6 +15,22 @@ _LOCAL_DEV_ERROR = "tectonic_not_available"
 
 # Truncate stored failure_reason so noisy stderr can't blow up the row.
 _FAILURE_REASON_MAX = 500
+
+
+def _missing_column_name(exc) -> str | None:
+    """The column a PostgREST/Postgres 'no such column' error names, if any.
+
+    Same two wordings score_batch handles: PostgREST answers PGRST204 with
+    "Could not find the 'x' column ... in the schema cache", while raw Postgres
+    says column "x" does not exist. Matching only one of them is what let a
+    missing column take down a whole run before.
+    """
+    text = str(exc)
+    m = re.search(r"Could not find the '([^']+)' column", text)
+    if m:
+        return m.group(1)
+    m = re.search(r'column "([^"]+)"(?: of relation "[^"]+")? does not exist', text)
+    return m.group(1) if m else None
 
 
 def _compile_failure_reason(compile_result):
@@ -76,6 +93,13 @@ def handler(event, context):
             ExpiresIn=2592000,
         )
         update["cover_letter_s3_url"] = cl_url
+        # Persist the KEY too, exactly as the resume branch above does.
+        # _refresh_s3_urls re-signs from cover_letter_s3_key; without it the
+        # presigned URL simply expires after 7 days and nothing can ever mint a
+        # new one, so the dashboard keeps showing a cover-letter button that
+        # 403s. Measured 2026-09-29: 400 jobs had a cover_letter_s3_url and the
+        # key column did not exist at all.
+        update["cover_letter_s3_key"] = cover_letter_pdf_key
 
     # application_status is the USER's column — what they did with the job
     # (New / Applied / Interview / ...). This function used to write "failed",
@@ -118,7 +142,25 @@ def handler(event, context):
             "failed": False,
         }
 
-    db.table("jobs").update(update).eq("user_id", user_id).eq("job_hash", job_hash).execute()
+    try:
+        db.table("jobs").update(update).eq("user_id", user_id).eq("job_hash", job_hash).execute()
+    except Exception as e:
+        # The cover_letter_s3_key column arrives via a migration applied BY HAND
+        # — no workflow runs migrations. If this code ships first, a plain
+        # UPDATE naming an absent column fails outright and the row keeps
+        # NOTHING: the same PGRST204 shape that cost a whole run's writes on
+        # 2026-09-28. Drop the one column the error names and write the rest,
+        # rather than losing a compiled resume over a column that only affects
+        # link refresh.
+        col = _missing_column_name(e)
+        if not col or col not in update:
+            raise
+        update.pop(col)
+        logger.warning(
+            "[save_job] %s: column %r is absent — writing without it. "
+            "Apply the migration that adds it.", job_hash, col,
+        )
+        db.table("jobs").update(update).eq("user_id", user_id).eq("job_hash", job_hash).execute()
 
     logger.info(f"[save_job] Updated {job_hash} with {len(update)} fields: {sorted(update)}")
     return {
