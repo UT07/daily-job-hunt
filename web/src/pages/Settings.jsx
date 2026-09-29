@@ -339,7 +339,7 @@ function PasswordSection() {
   )
 }
 
-function ResumeSection() {
+export function ResumeSection() {
   const fileInputRef = useRef(null)
   const [resumeFile, setResumeFile] = useState(null)
   const [uploadStatus, setUploadStatus] = useState(null)
@@ -382,8 +382,27 @@ function ResumeSection() {
     setUploading(true)
     setUploadStatus(null)
     try {
-      await apiUpload('/api/resumes/upload', resumeFile)
-      setUploadStatus({ type: 'success', message: 'Resume uploaded and parsed successfully.' })
+      const result = await apiUpload('/api/resumes/upload', resumeFile)
+      // The API tells us when an upload cannot be tailored from —
+      // tailorable=false plus a tailoring_warning explaining why. Both fields
+      // were added "so the UI can show it, rather than letting the user find
+      // out from 'Regenerate failed: Pipeline failed'", and then nothing read
+      // them: this reported plain success unconditionally. A PDF uploaded on
+      // 2026-09-28 was stored as plain text, the pipeline silently fell back to
+      // a 2026-04-05 template, and every resume for a day was built from the
+      // wrong base while this box said "successfully".
+      //
+      // `=== false` rather than `!result.tailorable`, so an older API response
+      // without the field is still treated as success.
+      if (result && result.tailorable === false) {
+        setUploadStatus({
+          type: 'info',
+          message: result.tailoring_warning
+            || 'Saved, but this file cannot be tailored from — tailoring will keep using your most recent LaTeX resume.',
+        })
+      } else {
+        setUploadStatus({ type: 'success', message: 'Resume uploaded and parsed successfully.' })
+      }
       setResumeFile(null)
       const data = await apiGet('/api/resumes').catch(() => null)
       if (data) setResumes(Array.isArray(data) ? data : data.resumes || [])
