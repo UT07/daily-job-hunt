@@ -82,6 +82,12 @@ from contact_finder import find_contacts
 from cover_letter import generate_cover_letter
 from latex_compiler import compile_tex_to_pdf
 from lambdas.pipeline.score_batch import score_single_job_deterministic
+# Imported at module scope, not inside the handler: a lazy import of a module
+# the deploy forgot to ship fails on the first user click instead of at
+# container start, which is how a missing package reached production once
+# already (see tests/unit/test_deploy_path_parity.py). The module itself is
+# bound rather than the function so the seam stays patchable in tests.
+from lambdas.pipeline import suggest_sections
 from s3_uploader import upload_file as s3_upload_file
 from matcher import match_jobs
 from mcp_server.http_auth import RequireSupabaseJWT
@@ -945,6 +951,8 @@ def _dispatch_task(task_type: str, payload: dict, user_id: str = "") -> dict:
     elif task_type == "rebuild_sections":
         result = _do_rebuild_sections(payload.get("job_id", ""), payload.get("sections", {}), user_id)
         return result
+    elif task_type == "suggest_sections":
+        return _do_suggest_sections(payload.get("job_id", ""), payload.get("sections", {}), user_id)
     else:
         raise ValueError(f"Unknown task_type: {task_type}")
 
@@ -1174,6 +1182,40 @@ def _score_rebuilt_resume(job_id: str, user_id: str, new_tex: str) -> dict | Non
         "match_score": scored.get("match_score"),
         "score_spread": scored.get("score_spread"),
     }
+
+
+def _do_suggest_sections(job_id: str, sections: dict, user_id: str) -> dict:
+    """Per-section suggestions for the sections the client currently has open.
+
+    The SECTIONS come from the client and the JD comes from the server, and
+    both directions matter:
+
+    - The Studio compiles on blur, so its editor routinely holds text that the
+      stored .tex does not. Anchoring a suggestion to S3 would produce advice
+      about a line the user has already rewritten — stale on arrival.
+    - The JD is read from the job row. A client-supplied one would be an open
+      prompt channel into the account's AI providers.
+
+    Never raises. A missing suggestion list is a missing panel; it must not
+    fail a task the user will see as an error.
+    """
+    jd = ""
+    try:
+        if _db is not None:
+            row = (
+                _db.client.table("jobs").select("description")
+                .eq("job_id", job_id).eq("user_id", user_id)
+                .maybe_single().execute()
+            )
+            jd = ((row.data if row else None) or {}).get("description") or ""
+    except Exception as e:
+        logger.warning("[suggest] could not load JD for %s: %s", job_id, e)
+        return {"job_id": job_id, "suggestions": []}
+
+    if not jd.strip():
+        return {"job_id": job_id, "suggestions": []}
+
+    return {"job_id": job_id, "suggestions": suggest_sections.generate_suggestions(sections, jd)}
 
 
 def _do_rebuild_sections(job_id: str, sections: dict, user_id: str) -> dict:
@@ -2388,6 +2430,51 @@ def update_job_sections(
         "sections": body.sections,
     }
     _enqueue_task(task_id, user.id, "rebuild_sections", payload)
+    return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
+
+
+class SectionSuggestionsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sections: dict
+
+
+@app.post("/api/dashboard/jobs/{job_id}/suggestions", status_code=202)
+def suggest_job_sections(
+    job_id: str,
+    body: SectionSuggestionsRequest,
+    user: AuthUser = Depends(get_current_user),
+):
+    """Propose per-section improvements for the sections the client has open.
+
+    The client sends its live sections — the Studio compiles on blur, so what
+    is in the editor is routinely ahead of the stored .tex, and a suggestion
+    anchored to S3 would describe text the user has already changed. The JD is
+    read server-side from the job row; it is not the client's to supply.
+
+    Returns a task_id to poll via GET /api/tasks/{task_id}.
+    """
+    if _db is None:
+        raise HTTPException(503, "Database not configured")
+
+    if not body.sections:
+        raise HTTPException(400, "No sections to suggest against")
+
+    job_check = (
+        _db.client.table("jobs")
+        .select("job_id")
+        .eq("job_id", job_id)
+        .eq("user_id", user.id)
+        .maybe_single()
+        .execute()
+    )
+    if not job_check or not job_check.data:
+        raise HTTPException(404, "Job not found")
+
+    task_id = str(uuid.uuid4())
+    _enqueue_task(task_id, user.id, "suggest_sections", {
+        "job_id": job_id,
+        "sections": body.sections,
+    })
     return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
 
 
