@@ -3025,6 +3025,52 @@ async def upload_resume(
                 "storing extracted text and leaving tailoring on the previous resume",
                 user.id,
             )
+
+        # sections_have_content only catches TOTAL loss — it passes when any one
+        # of five sections is non-empty, so a conversion that dropped two of
+        # three employers and every project sails through. Measured 2026-09-29:
+        # 8,490 chars of PDF became 772 chars of content, 9.1%, with every
+        # structural gate green.
+        #
+        # So compare the words. And because upsert_resume conflicts on
+        # (user_id, resume_key) and no frontend caller ever sets resume_key —
+        # it is a FastAPI query parameter and api.js sends only FormData —
+        # every upload lands on (user_id, 'default') and OVERWRITES it. A bad
+        # conversion does not merely go unused; it replaces the working master
+        # and becomes what production tailors from, because
+        # pick_latest_tailorable takes the newest valid-LaTeX row.
+        if converted:
+            from shared.resume_verify import conversion_is_faithful
+
+            faithful, reason = conversion_is_faithful(text, converted)
+            if not faithful:
+                existing = _db.client.table("user_resumes").select("tex_content") \
+                    .eq("user_id", user.id).eq("resume_key", resume_key) \
+                    .maybe_single().execute()
+                had_good_resume = bool(
+                    existing and existing.data
+                    and is_latex_document((existing.data or {}).get("tex_content"))
+                )
+                if had_good_resume:
+                    logger.error(
+                        "Refusing to overwrite a working resume for user %s: %s",
+                        user.id, reason,
+                    )
+                    raise HTTPException(422, {
+                        "error": "conversion_lost_content",
+                        "message": (
+                            "This upload did not convert cleanly, so your existing "
+                            f"resume has been kept. {reason}"
+                        ),
+                        "detail": reason,
+                    })
+                # Nothing to protect: store it and say so, rather than leaving
+                # the user with no resume at all.
+                logger.warning("Storing an imperfect conversion for user %s "
+                               "(no existing resume to protect): %s", user.id, reason)
+            else:
+                logger.info("Conversion verified for user %s: %s", user.id, reason)
+
         # A failed conversion must not lose the upload — fall back to the
         # extracted text, which is exactly the previous behaviour.
         tex_content = converted or text
