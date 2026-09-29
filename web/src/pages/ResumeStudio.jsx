@@ -109,7 +109,7 @@ export default function ResumeStudio() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Below the lg breakpoint the columns stack, PDF first: on a phone the
             document matters more than the panel. order-* does the reordering. */}
-        <div className="space-y-4 order-2 lg:order-1">
+        <div className="space-y-4 order-2 lg:order-1 min-w-0">
           <ScoreStrip
             ats={liveScores?.ats_score ?? job?.ats_score}
             hiringManager={liveScores?.hiring_manager_score ?? job?.hiring_manager_score}
@@ -133,7 +133,7 @@ export default function ResumeStudio() {
             onSectionBlur={requestCompile}
           />
         </div>
-        <div className="order-1 lg:order-2">
+        <div className="order-1 lg:order-2 min-w-0">
           <PdfPane
             pdfUrl={pdfUrl || job?.resume_s3_url || null}
             compiling={compiling}
