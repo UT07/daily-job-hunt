@@ -171,6 +171,19 @@ jobs:
       # scope; needing no AWS access here at all is the simpler fix.
       - name: Run golden set
         env:
+          # Measure the engine we deploy. Nothing here used to set
+          # COUNCIL_ENGINE, so the harness ran at ai_helper.py:746's "legacy"
+          # default — the frozen serial engine with no guard nodes and no
+          # repair loop — while the deployed tailor-resume and
+          # generate-cover-letter functions both run langgraph. The gate was
+          # measuring code that is not in production, and every guard_pass_rate
+          # it has ever reported describes the wrong engine.
+          #
+          # Hardcoded rather than read from a CFN parameter because the
+          # workflow cannot see samconfig.toml (it is gitignored). If the stack
+          # moves off langgraph this has to move with it, which
+          # test_council_engine_parity.py asserts.
+          COUNCIL_ENGINE: langgraph
           # Loading the base resume (evals/harness.py:_load_base_resume) and
           # building the golden set both use the direct-env Supabase client
           # (db_client.py), not ai_helper.get_supabase() — same split every

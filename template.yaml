@@ -626,6 +626,20 @@ Resources:
       DeploymentPreference:
         Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
+      # Without this block COUNCIL_ENGINE is unset and ai_helper.py:746 falls to
+      # its "legacy" default — the frozen serial engine, which never imports
+      # guardrails. post_score.py:129 passes task="score" precisely to get
+      # injection detection and PII scrubbing, and post_score.py:108-114 is the
+      # one handler that pipes raw third-party job-description text into a
+      # prompt. So the handler that most needs the guards was the only council
+      # caller running without them. Verified 2026-09-29: this function
+      # returned COUNCIL_ENGINE=None while tailor-resume and
+      # generate-cover-letter both returned langgraph.
+      Environment:
+        Variables:
+          COUNCIL_ENGINE: !Ref CouncilEngine
+          LANGCHAIN_TRACING_V2: "true"
+          LANGCHAIN_PROJECT: naukribaba-council
       Policies:
         - SSMParameterReadPolicy:
             ParameterName: naukribaba/*
