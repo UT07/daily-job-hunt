@@ -221,6 +221,43 @@ describe('undo', () => {
   });
 });
 
+describe('a second analysis is a fresh panel', () => {
+  // Ids are the target's position in the document ("s4" is the fourth
+  // suggestible line), so they REPEAT across analyses — a second run of the
+  // same resume produces another "s4" about different text. Carrying the
+  // applied and dismissed sets over would mark that new suggestion as already
+  // handled, and would leave an undo record pointing at text from the previous
+  // batch.
+  const second = { ...SUGGESTION, anchor_text: 'Maintained CI pipelines', path: ['experience', 0, 'bullets', 0], replacement: 'Kept CI green at a 98% pass rate' };
+
+  it('does not inherit "applied" from the previous batch', () => {
+    const { rerender } = render(
+      <SuggestionsPanel sections={baseSections()} suggestions={[SUGGESTION]} onApplySections={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /^apply$/i }));
+    expect(screen.getByTestId('suggestion-s4')).toHaveAttribute('data-status', 'applied');
+
+    rerender(
+      <SuggestionsPanel sections={baseSections()} suggestions={[second]} onApplySections={() => {}} />,
+    );
+    expect(screen.getByTestId('suggestion-s4')).toHaveAttribute('data-status', 'exact');
+    expect(screen.getByTestId('suggestion-s4')).toHaveTextContent('Kept CI green');
+  });
+
+  it('does not inherit "dismissed" from the previous batch', () => {
+    const { rerender } = render(
+      <SuggestionsPanel sections={baseSections()} suggestions={[SUGGESTION]} onApplySections={() => {}} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /dismiss/i }));
+    expect(screen.queryByTestId('suggestion-s4')).not.toBeInTheDocument();
+
+    rerender(
+      <SuggestionsPanel sections={baseSections()} suggestions={[second]} onApplySections={() => {}} />,
+    );
+    expect(screen.getByTestId('suggestion-s4')).toBeInTheDocument();
+  });
+});
+
 describe('the panel is not an editor', () => {
   it('exposes no LaTeX and no storage keys', () => {
     const { container } = renderPanel({ suggestions: [SUGGESTION] });

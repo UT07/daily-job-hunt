@@ -4,6 +4,9 @@ import { applySuggestion, resolveAnchor } from './suggestions';
 
 const LABEL = 'text-[10px] font-bold text-stone-400 uppercase tracking-wider';
 
+// Shared and never mutated: dismiss/apply always build a new Set or object.
+const FRESH_BATCH = { dismissed: new Set(), undos: {} };
+
 const STATUS_STYLE = {
   exact: 'border-stone-200 bg-white',
   moved: 'border-stone-200 bg-white',
@@ -38,32 +41,45 @@ export default function SuggestionsPanel({
   onRequest = () => {},
   onApplySections = () => {},
 }) {
-  const [dismissed, setDismissed] = useState(() => new Set());
-  // id -> the inverse edit. Held here, not in the page: it is interaction
-  // state about one panel session, and it dies with the panel.
-  const [undos, setUndos] = useState({});
+  // A second analysis is a fresh panel. Ids are the target's position in the
+  // document ("s4" is the fourth suggestible line), so they REPEAT across
+  // analyses: re-analysing produces another "s4" about different text. Carrying
+  // the applied and dismissed sets over would mark that new suggestion as
+  // already handled and leave an undo record pointing at the previous batch.
+  //
+  // The reset is a DERIVATION, not an effect: what has been handled is stamped
+  // with the batch it belongs to, and a stamp from another batch simply does
+  // not apply. No setState-in-effect, no cascading render.
+  //
+  // Keyed on the CONTENT of the list, not the array's identity — a parent that
+  // rebuilds an equivalent array on re-render must not wipe this under the user.
+  const batchKey = JSON.stringify((suggestions || []).map((s) => [s.id, s.anchor_text, s.replacement]));
+
+  // `undos` maps id -> the inverse edit. Held here, not in the page: it is
+  // interaction state about one panel session, and it dies with the panel.
+  const [handled, setHandled] = useState(() => ({ key: batchKey, ...FRESH_BATCH }));
+  const { dismissed, undos } = handled.key === batchKey ? handled : FRESH_BATCH;
+  const remember = (patch) => setHandled({ key: batchKey, dismissed, undos, ...patch });
 
   const visible = (suggestions || []).filter((s) => !dismissed.has(s.id));
 
   const apply = (suggestion) => {
     const applied = applySuggestion(sections, suggestion);
     if (!applied) return; // stale: the button is disabled, this is the belt
-    setUndos((prev) => ({ ...prev, [suggestion.id]: applied.undo }));
+    remember({ undos: { ...undos, [suggestion.id]: applied.undo } });
     onApplySections(applied.sections);
   };
 
   const revert = (id) => {
     const reverted = applySuggestion(sections, undos[id]);
     if (!reverted) return;
-    setUndos((prev) => {
-      const next = { ...prev };
-      delete next[id];
-      return next;
-    });
+    const next = { ...undos };
+    delete next[id];
+    remember({ undos: next });
     onApplySections(reverted.sections);
   };
 
-  const dismiss = (id) => setDismissed((prev) => new Set(prev).add(id));
+  const dismiss = (id) => remember({ dismissed: new Set(dismissed).add(id) });
 
   const actionLabel = loading
     ? 'Analysing…'
