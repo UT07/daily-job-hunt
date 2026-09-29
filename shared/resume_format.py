@@ -86,3 +86,105 @@ def sections_have_content(sections: dict | None) -> bool:
         if isinstance(value, (list, tuple, dict)) and len(value) > 0:
             return True
     return False
+
+
+def adapt_parsed_resume_sections(parsed: dict) -> dict:
+    r"""Reshape resume_parser output into what rebuild_tex_from_sections wants.
+
+    Two different parsers feed the same renderer and they disagree on shape:
+
+        resume_parser (PDF text -> AI)      parse_sections (LaTeX -> dict)
+        ----------------------------       ------------------------------
+        name/title_line/email/phone        header: {name, title, contact}
+        skills: ["Cloud: AWS, GCP"]        skills: [{category, items}]
+        experience[].role                  experience[].title
+        experience[].bullets: "• a\n• b"   experience[].bullets: ["a", "b"]
+        certifications: ["AWS SA Pro"]     certifications: [{name, date}]
+        education: [{school,degree,dates}] education: [{school,degree,dates}]
+
+    Only `education` already lined up. Everything else raised on render — in
+    practice ``'str' object has no attribute 'get'`` — which _sections_to_tex
+    caught and turned into "", so the upload silently stored extracted plain
+    text instead of LaTeX. That text is not tailorable, so the pipeline skipped
+    it and kept using an older resume. Measured 2026-09-29: a master uploaded
+    on 2026-09-28 was stored as 16,953 chars of plain text and every resume
+    generated afterwards came from a 2026-04-05 template.
+
+    Idempotent: given parse_sections-shaped input it returns it unchanged, so
+    it is safe to apply on either path.
+    """
+    if "header" in parsed:
+        return parsed  # already the renderer's shape
+
+    contact = " | ".join(
+        str(parsed.get(k) or "").strip()
+        for k in ("email", "phone", "location")
+        if str(parsed.get(k) or "").strip()
+    )
+
+    skills = []
+    for entry in parsed.get("skills") or []:
+        if isinstance(entry, dict):
+            skills.append(entry)
+            continue
+        text = str(entry)
+        # "Cloud: AWS, GCP" -> category/items. A line with no colon keeps its
+        # text as items rather than being dropped, which would silently delete
+        # a row from the rendered resume.
+        category, sep, items = text.partition(":")
+        skills.append({"category": category.strip(), "items": items.strip()}
+                      if sep else {"category": "", "items": text.strip()})
+
+    def _bullets(value):
+        if isinstance(value, list):
+            return [str(b).strip() for b in value if str(b).strip()]
+        out = []
+        for line in str(value or "").replace("•", "\n").splitlines():
+            line = line.strip().lstrip("-*–— ").strip()
+            if line:
+                out.append(line)
+        return out
+
+    experience = []
+    for entry in parsed.get("experience") or []:
+        if not isinstance(entry, dict):
+            continue
+        experience.append({
+            "company": entry.get("company", ""),
+            # resume_parser calls it `role`; accept `title` too so this stays
+            # correct if that parser is ever aligned.
+            "title": entry.get("title") or entry.get("role", ""),
+            "dates": entry.get("dates", ""),
+            "bullets": _bullets(entry.get("bullets")),
+        })
+
+    projects = []
+    for entry in parsed.get("projects") or []:
+        if not isinstance(entry, dict):
+            continue
+        projects.append({
+            "name": entry.get("name") or entry.get("title", ""),
+            "dates": entry.get("dates", ""),
+            "bullets": _bullets(entry.get("bullets")),
+        })
+
+    certifications = []
+    for entry in parsed.get("certifications") or []:
+        if isinstance(entry, dict):
+            certifications.append(entry)
+        elif str(entry).strip():
+            certifications.append({"name": str(entry).strip(), "date": ""})
+
+    return {
+        "header": {
+            "name": parsed.get("name", ""),
+            "title": parsed.get("title_line") or parsed.get("title", ""),
+            "contact": contact,
+        },
+        "summary": parsed.get("summary", ""),
+        "skills": skills,
+        "experience": experience,
+        "projects": projects,
+        "education": [e for e in (parsed.get("education") or []) if isinstance(e, dict)],
+        "certifications": certifications,
+    }
