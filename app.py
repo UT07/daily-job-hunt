@@ -675,8 +675,17 @@ def _sections_to_tex(user_id: str, sections: dict) -> str:
     except ImportError:
         from lambdas.pipeline.parse_sections import rebuild_tex_from_sections
 
+    # resume_parser (PDF text -> AI) and parse_sections (LaTeX -> dict) produce
+    # DIFFERENT shapes, and rebuild_tex_from_sections was written for the
+    # second. Passing the first raised "'str' object has no attribute 'get'",
+    # which the except below swallowed into "" — so every PDF upload silently
+    # stored extracted plain text instead of LaTeX, and the pipeline then
+    # skipped that row and kept tailoring an older resume. The adapter is
+    # idempotent, so it is safe on either path.
+    from shared.resume_format import adapt_parsed_resume_sections
+
     try:
-        return rebuild_tex_from_sections(sections, base_tex)
+        return rebuild_tex_from_sections(adapt_parsed_resume_sections(sections), base_tex)
     except Exception as e:
         logger.error("PDF -> LaTeX conversion failed, storing extracted text: %s", e)
         return ""
