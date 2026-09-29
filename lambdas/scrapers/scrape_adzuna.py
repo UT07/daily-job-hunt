@@ -1,5 +1,6 @@
 """Adzuna REST API scraper."""
 import json
+from shared.scrape_budget import cache_ttl_hours as _ttl
 import logging
 import re
 from datetime import datetime, timedelta
@@ -81,7 +82,7 @@ def _fetch_full_description(job_id: str, country: str) -> str | None:
 def handler(event, context):
     queries = event.get("queries", ["software engineer"])
     query_hash = event.get("query_hash", "")
-    cache_ttl_hours = event.get("cache_ttl_hours", 24)
+    cache_ttl_hours = event.get("cache_ttl_hours", _ttl(24))
 
     db = get_supabase()
 

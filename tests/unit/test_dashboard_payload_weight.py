@@ -66,3 +66,18 @@ def test_every_field_the_list_views_render_is_still_selected():
     }
     missing = sorted(needed - listed)
     assert not missing, f"the list view reads these but they are no longer selected: {missing}"
+
+
+def test_both_s3_key_columns_are_selected():
+    """_refresh_s3_urls re-signs from resume_s3_key AND cover_letter_s3_key.
+
+    A column the list omits is a column _refresh_s3_urls sees as None, so the
+    URL is never re-signed and the link dies after 7 days. This regressed
+    immediately: the explicit column list was introduced before
+    cover_letter_s3_key existed, and adding the column later did not add it
+    here — so the re-signing fix never reached the dashboard at all.
+    """
+    cols = re.search(r"JOB_LIST_COLUMNS\s*=\s*\(([^)]*)\)", SRC, re.S)
+    listed = {c.strip() for c in cols.group(1).replace('"', "").replace("\n", "").split(",") if c.strip()}
+    for key in ("resume_s3_key", "cover_letter_s3_key"):
+        assert key in listed, f"{key} is not selected; _refresh_s3_urls cannot re-sign it"

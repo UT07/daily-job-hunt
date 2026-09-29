@@ -18,6 +18,7 @@ import boto3
 import httpx
 
 from shared.location_policy import build_location_policy, location_verdict
+from shared.scrape_budget import cache_ttl_hours as _ttl
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -68,9 +69,7 @@ def _posting_location(job: dict) -> str:
 
 def handler(event, context):
     query_hash = event.get("query_hash", "")
-    cache_ttl_hours = event.get("cache_ttl_hours", 24)
-
-    # Which locations this user actually asked for. Threaded from
+    cache_ttl_hours = event.get("cache_ttl_hours", _ttl(24))
     # load_config through the state machine ("locations.$": "$.locations");
     # before 2026-09-28 this scraper carried its own hardcoded
     # LOCATION_KEYWORDS = {"ireland", "dublin", "remote", "emea", "europe",

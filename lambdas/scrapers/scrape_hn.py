@@ -4,6 +4,7 @@ Uses search_by_date (not search) so we always get the most recent monthly
 thread, and paginates comments to capture the full thread.
 """
 import logging
+from shared.scrape_budget import cache_ttl_hours as _ttl
 import re
 import time
 from datetime import datetime, timedelta
@@ -227,7 +228,7 @@ def _fetch_all_comments(thread_id: str) -> list[dict]:
 
 def handler(event, context):
     query_hash = event.get("query_hash", "")
-    cache_ttl_hours = event.get("cache_ttl_hours", 168)  # 1 week for HN
+    cache_ttl_hours = event.get("cache_ttl_hours", _ttl(168))
 
     db = get_supabase()
 

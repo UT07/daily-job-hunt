@@ -15,7 +15,7 @@ import boto3
 import httpx
 
 from shared.location_policy import build_location_policy
-from shared.scrape_budget import enrichment_budget_left
+from shared.scrape_budget import cache_ttl_hours as _ttl, enrichment_budget_left
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -147,7 +147,7 @@ def handler(event, context):
     policy = build_location_policy(event.get("locations") or event.get("location"))
     location = policy.search_term
     query_hash = event.get("query_hash", "")
-    cache_ttl_hours = event.get("cache_ttl_hours", 24)
+    cache_ttl_hours = event.get("cache_ttl_hours", _ttl(24))
     max_jobs = event.get("max_jobs", 50)
 
     logger.info(
