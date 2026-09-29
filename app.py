@@ -2738,7 +2738,11 @@ def pipeline_execution_status(execution_name: str, user: AuthUser = Depends(get_
 
 
 @app.post("/api/pipeline/re-tailor/{job_id}", status_code=202)
-def re_tailor_job(job_id: str, user: AuthUser = Depends(get_current_user)):
+def re_tailor_job(
+    job_id: str,
+    body: Optional[dict] = None,
+    user: AuthUser = Depends(get_current_user),
+):
     """Re-tailor a job with the latest resume version via Step Functions (or local fallback)."""
     if _db is None:
         raise HTTPException(503, "Database not configured")
@@ -2780,6 +2784,13 @@ def re_tailor_job(job_id: str, user: AuthUser = Depends(get_current_user)):
                 "job_hash": job.get("job_hash"),
                 "skip_scoring": True,
                 "job_id": job_id,
+                # scope="resume" skips GenerateCoverLetter, CompileCoverLetter
+                # and FindContacts — 176s of a measured 631s run, and it stops
+                # a cover letter the user may have edited being overwritten by
+                # a request that only asked for a resume. Absent or any other
+                # value runs the full pipeline, so older clients and the daily
+                # run are unaffected.
+                "resume_only": (body or {}).get("scope") == "resume",
             }),
         )
         return {

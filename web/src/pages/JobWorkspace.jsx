@@ -780,7 +780,10 @@ export default function JobWorkspace() {
     setRegenLoading(type);
     setRegenError(null);
     try {
-      const data = await apiCall(`/api/pipeline/re-tailor/${job.job_id}`, {});
+      // handleRegen already knows which artifact was asked for; it used to
+      // use `type` only for the spinner and POST an empty body, so the
+      // backend ran the whole pipeline every time.
+      const data = await apiCall(`/api/pipeline/re-tailor/${job.job_id}`, { scope: type });
       const execName = data.pollUrl?.split('/').pop();
       if (!execName) throw new Error('No execution ID returned');
 
