@@ -43,7 +43,30 @@ import sys
 import time
 import traceback
 
+# Load credentials explicitly.
+#
+# Until 2026-09-29 the suite had none of its own: the FIRST check that ran did
+# `import app`, app.py loads .env at import time, and every later check's _db()
+# worked off that side effect. Nothing said so. Reordering the checks, skipping
+# the importing one, or rewriting it — which is exactly what happened — broke
+# every subsequent check with `KeyError: 'SUPABASE_URL'`, an error that reads
+# like a missing secret rather than a missing import.
+#
+# A verification suite whose credentials depend on the order of its own checks
+# is not a suite you can trust to tell you the truth about a deploy.
+_REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(_REPO, ".env"))
+except ImportError:
+    pass  # CI passes real environment variables; there is no .env there.
+
 RESULTS: list[tuple[str, bool, str]] = []
+
+# Checks that cannot run without a deployed API URL. Named here rather than
+# hardcoded in main() so adding one cannot silently leave it running against
+# nothing.
+_NEEDS_API = {"api_alive"}
 
 
 def check(name: str, incident: str):
@@ -94,32 +117,57 @@ def api_alive():
 
 @check("tex-key-resolves", "the .tex S3 key built from job_id, 0% hit rate")
 def tex_key_resolves():
-    """The key the code builds must find real objects in the real bucket."""
-    sys.path.insert(0, ".")
-    import app
-    from supabase import create_client
+    """The key the code builds must find real objects in the real bucket.
 
-    class _DB:
-        client = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"])
-    app._db = _DB()
+    Scoped to jobs that SHOULD have a tailored .tex. The first version of this
+    check sampled any row with a resume_s3_key and required a 50% hit rate,
+    which meant it reported "10/20 keys resolve (50%)" as a PASS. Half those
+    misses were correct behaviour:
 
-    rows = (_DB.client.table("jobs").select("job_id,user_id")
-            .not_.is_("resume_s3_url", "null").limit(20).execute().data)
-    assert rows, "no jobs with a resume to check against"
-    s3, bucket, hits = _s3(), _bucket(), 0
-    for r in rows:
+      - C-tier jobs point at default_base.pdf and are never tailored, per the
+        B=resume-only / A,S=full artifact policy
+      - legacy rows carry human-named keys from before the job_hash convention
+      - one row has job_hash = NULL
+
+    Measuring a population that is not expected to pass, then setting the bar
+    low enough that it does, is a check that can only ever report noise. Scope
+    it to rows whose resume_s3_key follows the {job_hash}_tailored convention —
+    those are exactly the ones a tailoring run produced — and then require
+    nearly all of them.
+    """
+    db, s3 = _db(), _s3()
+    rows = (
+        db.table("jobs")
+        .select("job_hash,user_id,resume_s3_key")
+        .not_.is_("resume_s3_key", "null")
+        .not_.is_("job_hash", "null")
+        .limit(200)
+        .execute()
+        .data
+    )
+    tailored = [r for r in rows
+                if r.get("job_hash") and f"{r['job_hash']}_tailored" in (r.get("resume_s3_key") or "")]
+    assert tailored, (
+        "no rows follow the {job_hash}_tailored key convention — either "
+        "nothing has been tailored, or the convention changed and this check "
+        "is now measuring nothing"
+    )
+    hits = 0
+    misses = []
+    for r in tailored:
+        key = f"users/{r['user_id']}/resumes/{r['job_hash']}_tailored.tex"
         try:
-            s3.head_object(Bucket=bucket, Key=app._tailored_tex_key(r["user_id"], r["job_id"]))
+            s3.head_object(Bucket=_bucket(), Key=key)
             hits += 1
         except Exception:
-            pass
-    rate = hits / len(rows)
-    assert rate >= 0.5, (
-        f"only {hits}/{len(rows)} ({rate:.0%}) of generated .tex keys exist in S3. "
-        "The convention the code builds has drifted from what the bucket holds — "
-        "this was 0% when the key used job_id instead of job_hash."
+            misses.append(r["job_hash"][:12])
+    rate = hits / len(tailored)
+    assert rate >= 0.95, (
+        f"only {hits}/{len(tailored)} tailored .tex keys resolve ({rate:.0%}). "
+        f"The Studio cannot open a job whose .tex is missing. "
+        f"Missing: {', '.join(misses[:8])}"
     )
-    return f"{hits}/{len(rows)} keys resolve ({rate:.0%})"
+    return f"{hits}/{len(tailored)} tailored .tex keys resolve ({rate:.0%})"
 
 
 @check("base-resume-tailorable", "a PDF upload stored as plain text, silently unusable")
@@ -207,8 +255,12 @@ def main() -> int:
     logging.disable(logging.INFO)
 
     print("post-deploy smoke test — real infrastructure, no mocks\n")
+    skipped = []
     for fn in CHECKS:
-        if args.quick and fn.__name__ == "api_alive":
+        if args.quick and fn.__name__ in _NEEDS_API:
+            skipped.append(fn.__name__)
+            print(f"  SKIP  {fn.__name__:30s}    --quick, no API URL configured")
+            print(f"        NOT CHECKED: {fn._incident}")
             continue
         t0 = time.time()
         fn()
@@ -218,7 +270,19 @@ def main() -> int:
             print(f"        would have caught: {fn._incident}")
 
     failed = [r for r in RESULTS if not r[1]]
-    print(f"\n  {len(RESULTS) - len(failed)}/{len(RESULTS)} passed")
+    # A skipped check is NOT a passed check. The old summary printed
+    # "5/5 passed" for a run where api-alive never executed, which is the same
+    # shape as the Step Function reporting SUCCEEDED on a no-op: a status that
+    # cannot distinguish "did the work" from "did not do the work".
+    total = len(CHECKS)
+    line = f"\n  {len(RESULTS) - len(failed)} passed"
+    if failed:
+        line += f", {len(failed)} FAILED"
+    if skipped:
+        line += f", {len(skipped)} SKIPPED ({', '.join(skipped)})"
+    print(f"{line}  — of {total} checks")
+    if skipped:
+        print("  Skipped checks verified NOTHING. Set SMOKE_API_URL to run them.")
     return 1 if failed else 0
 
 

@@ -1845,6 +1845,32 @@ Resources:
             Action: s3:GetObject
             Resource: !Sub "${FrontendBucket.Arn}/*"
 
+  ApiGateway5xxAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: naukribaba-api-5xx
+      AlarmDescription: >-
+        The API returned 5xx to a user. Nothing watched this until 2026-09-29,
+        when two 503s at 17:32 UTC broke Add Job and the only signal was the
+        user reporting it. Lambda Errors and Throttles were both 0, so an
+        alarm on the function alone would not have fired either; this is at
+        the gateway. NOTE the metric name: an HTTP API publishes lowercase
+        5xx, not the REST API's 5XXError. Alarming on the wrong one produces
+        a permanently green alarm on a metric that never reports, which is
+        how the dashboard widget beside it charted an empty line for weeks.
+      Namespace: AWS/ApiGateway
+      MetricName: 5xx
+      Dimensions:
+        - Name: ApiId
+          Value: !Ref HttpApi
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref PipelineAlarmTopicArn]
+
   DailyPipelineExecutionsFailedAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -2041,8 +2067,8 @@ Resources:
                 "title": "API Gateway 5xx + 4xx",
                 "view": "timeSeries", "stacked": false, "region": "${AWS::Region}",
                 "metrics": [
-                  ["AWS/ApiGateway", "5XXError", "ApiId", "${HttpApi}", {"stat": "Sum"}],
-                  [".", "4XXError", ".", ".", {"stat": "Sum"}],
+                  ["AWS/ApiGateway", "5xx", "ApiId", "${HttpApi}", {"stat": "Sum"}],
+                  [".", "4xx", ".", ".", {"stat": "Sum"}],
                   [".", "Count", ".", ".", {"stat": "Sum", "label": "Requests"}]
                 ],
                 "period": 300, "yAxis": {"left": {"min": 0}}
