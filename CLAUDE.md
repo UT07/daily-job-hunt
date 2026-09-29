@@ -13,6 +13,125 @@ tailored LaTeX resumes and cover letters, uploads PDFs to Google Drive, and
 sends email summaries. A React landing page lets users paste any JD and get
 tailored resumes on demand.
 
+## Verification rules
+
+Every rule below is here because it was broken, on 2026-09-29, at a cost. Each
+names the incident so it can be checked rather than believed. Read this before
+reporting that anything works.
+
+### 1. Green CI and a successful deploy are not evidence the feature works
+
+Every single failure that day passed CI and deployed cleanly. Regenerate was
+broken by the PR that "fixed" it; Add Job failed for six weeks of cold starts;
+the résumé pipeline stored 9% of an uploaded document. All green.
+
+**Do:** exercise one real user action against the deployed system and read the
+result before saying it works. `scripts/smoke_prod.py` exists for this and
+`deploy.yml` runs it. Running the flow as the user takes two minutes:
+
+```bash
+SMOKE_API_URL=$(grep -hoE '^VITE_API_URL=.+' web/.env.production | cut -d= -f2-)   .venv/bin/python scripts/smoke_prod.py
+```
+
+**Never:** report "merged and deployed" as though it meant "working".
+
+### 2. A status that cannot distinguish "did the work" from "did nothing" is a lie
+
+Three instances the same day:
+
+- the daily Step Function ended in `Succeed` after catching an error, so
+  `ExecutionsFailed` could never tick — green alarms over a dead pipeline
+- `scripts/smoke_prod.py` printed **"5/5 passed"** for a run where one check
+  never executed
+- `sections_have_content()` passed a conversion that kept 772 of 8,490
+  characters, because it only needs ONE of five sections to be non-empty
+
+**Do:** ask of any success signal — *what would this report on a no-op run?*
+If the answer is "success", it is not a status.
+
+### 3. Confirm the metric exists before reading zero as good news
+
+API Gateway v2 publishes `5xx`; the REST API publishes `5XXError`. Querying the
+wrong one returns no datapoints, which reads exactly like no errors. It hid two
+user-facing 503s, and `PipelineHealthDashboard` had charted an empty line for
+weeks for the same reason.
+
+**Do:** `aws cloudwatch list-metrics` first, or check a known-nonzero metric
+(`Count`) in the same call, before concluding a metric is zero.
+
+### 4. A prompt-level constraint is a request; only a check is a guarantee
+
+`tailor_resume.py` said "EXACTLY 3 PROJECTS. No more, no less." and nothing
+counted `\projectentry`. It still says the résumé must be two pages and nothing
+measures the compiled PDF.
+
+**Do:** if a rule is countable, count it after generation (see
+`shared/composition_policy.check_output`). Feed the real numbers into any
+repair retry — "you emitted 5 projects, the limit is 3" is actionable; repeating
+the rule at a model that already ignored it is not.
+
+### 5. A mock can only confirm what its author already believed
+
+The Studio's S3 key had a **0% hit rate** in production — 0 of 1,794 objects —
+after two rounds of green unit tests and a six-lens review, because every one of
+them mocked S3. Only listing the real bucket found it.
+
+**Do:** for anything crossing a boundary (S3, Postgres, a provider, API
+Gateway), verify once against the real thing.
+
+### 6. A test double that fails the way the bug fails is worse than no test
+
+The council double was wrong four times in a row — no `rate_limiter`, no
+`complete_with_retry`, a keyword-only signature, and a bare `MagicMock` cache
+whose `get_with_info` returned a truthy mock (a phantom cache hit). Every one
+presented as *"the healthy provider was never tried"*: the exact production
+symptom.
+
+**Do:** when a test fails with the symptom you are hunting, prove the double is
+sound before concluding anything about the code.
+
+### 7. Scope a check to the population it is meant to judge
+
+`tex-key-resolves` sampled any row with a `resume_s3_key`, found 50%, and
+passed — because the bar had been set low enough to accommodate rows that were
+never supposed to have a tailored `.tex` (C-tier jobs use `default_base.pdf`).
+Scoped correctly the real figure is 145/145.
+
+**Do:** if a check needs a low threshold to pass, the population is probably
+wrong. Fix the population, then raise the bar.
+
+### 8. Configuration must be explicit, never an import side effect
+
+`smoke_prod.py` had no credentials of its own: the first check ran
+`import app`, which loads `.env`, and every later check lived off that.
+Rewriting that one check broke the rest with `KeyError: 'SUPABASE_URL'` — an
+error that reads like a missing secret.
+
+### 9. A presigned URL is a key plus a signature; only the signature expires
+
+Three separate defects came from treating one as the other, including a
+migration that declared 672 rows unbackfillable while the recovery data sat in
+the column beside it. All 673 were recovered from the URL path.
+
+### 10. Search the whole repo for a guard before trusting it
+
+`RETIRED_MODEL_IDS` had listed `meta/llama-3.3-70b-instruct` as "410 Gone" since
+August, and the test only ever checked `ai_helper`. `ai_client.py` defaulted two
+providers to retired models the whole time. The guard existed, the data existed,
+and they never met.
+
+### 11. Deploys must serialise
+
+CloudFormation executes one change set per stack. Two merges seconds apart make
+the later deploy die with `ChangeSet ... OBSOLETE`, and `main` silently moves
+ahead of production. `deploy.yml` now has a `concurrency` group — do not remove
+it.
+
+### 12. Fix the instrument before trusting the reading
+
+Half of that day was spent chasing a symptom the tooling was misreporting. When
+a measurement is surprising, check the measurement first.
+
 ## Architecture
 
 - **Pipeline**: AWS Step Functions state machines (`DailyPipelineStateMachine`,
