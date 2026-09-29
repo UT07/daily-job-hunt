@@ -1499,8 +1499,14 @@ Resources:
                 "doc_type": "resume"
               },
               "ResultPath": "$.compile_result",
-              "Next": "GenerateCoverLetter",
+              "Next": "CheckArtifactScope",
               "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "JobFailed"}]
+            },
+            "CheckArtifactScope": {
+              "Comment": "Regenerating a resume used to run GenerateCoverLetter, CompileCoverLetter and FindContacts too — 176s of a 631s run, measured 2026-09-29 — and overwrote a cover letter the user may have edited. resume_only skips all three. Default is the full pipeline so the daily run is unchanged.",
+              "Type": "Choice",
+              "Choices": [{"Variable": "$.resume_only", "BooleanEquals": true, "Next": "SaveJobComplete"}],
+              "Default": "GenerateCoverLetter"
             },
             "GenerateCoverLetter": {
               "Type": "Task",
