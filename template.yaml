@@ -2079,7 +2079,13 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: naukribaba-tailor-resume-DurationP99
-      AlarmDescription: Trips canary if p99 duration exceeds 30s over 5min - catches death spiral
+      AlarmDescription: >-
+        p99 duration above 480s, which is 80% of this function's 600s
+        timeout. Relative to the timeout rather than a flat 30s: this function
+        legitimately runs for minutes (AI failover plus a LaTeX compile), so 30s
+        could never reach OK while the pipeline ran. It is also a CodeDeploy
+        canary, so a permanently-breaching alarm can roll back a healthy deploy.
+        Above 80% of timeout means invocations are about to start timing out.
       Namespace: AWS/Lambda
       MetricName: Duration
       Dimensions:
@@ -2090,7 +2096,7 @@ Resources:
       ExtendedStatistic: p99
       Period: 300
       EvaluationPeriods: 1
-      Threshold: 30000
+      Threshold: 480000
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
 
@@ -2136,7 +2142,13 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: naukribaba-compile-latex-DurationP99
-      AlarmDescription: Trips canary if p99 duration exceeds 30s over 5min - catches death spiral
+      AlarmDescription: >-
+        p99 duration above 120s, which is 80% of this function's 150s
+        timeout. Relative to the timeout rather than a flat 30s: this function
+        legitimately runs for minutes (AI failover plus a LaTeX compile), so 30s
+        could never reach OK while the pipeline ran. It is also a CodeDeploy
+        canary, so a permanently-breaching alarm can roll back a healthy deploy.
+        Above 80% of timeout means invocations are about to start timing out.
       Namespace: AWS/Lambda
       MetricName: Duration
       Dimensions:
@@ -2147,7 +2159,7 @@ Resources:
       ExtendedStatistic: p99
       Period: 300
       EvaluationPeriods: 1
-      Threshold: 30000
+      Threshold: 120000
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
 
@@ -2193,7 +2205,13 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: naukribaba-generate-cover-letter-DurationP99
-      AlarmDescription: Trips canary if p99 duration exceeds 30s over 5min - catches death spiral
+      AlarmDescription: >-
+        p99 duration above 480s, which is 80% of this function's 600s
+        timeout. Relative to the timeout rather than a flat 30s: this function
+        legitimately runs for minutes (AI failover plus a LaTeX compile), so 30s
+        could never reach OK while the pipeline ran. It is also a CodeDeploy
+        canary, so a permanently-breaching alarm can roll back a healthy deploy.
+        Above 80% of timeout means invocations are about to start timing out.
       Namespace: AWS/Lambda
       MetricName: Duration
       Dimensions:
@@ -2204,7 +2222,7 @@ Resources:
       ExtendedStatistic: p99
       Period: 300
       EvaluationPeriods: 1
-      Threshold: 30000
+      Threshold: 480000
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
 
@@ -2250,7 +2268,13 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: naukribaba-save-job-DurationP99
-      AlarmDescription: Trips canary if p99 duration exceeds 30s over 5min - catches death spiral
+      AlarmDescription: >-
+        p99 duration above 240s, which is 80% of this function's 300s
+        timeout. Relative to the timeout rather than a flat 30s: this function
+        legitimately runs for minutes (AI failover plus a LaTeX compile), so 30s
+        could never reach OK while the pipeline ran. It is also a CodeDeploy
+        canary, so a permanently-breaching alarm can roll back a healthy deploy.
+        Above 80% of timeout means invocations are about to start timing out.
       Namespace: AWS/Lambda
       MetricName: Duration
       Dimensions:
@@ -2261,7 +2285,7 @@ Resources:
       ExtendedStatistic: p99
       Period: 300
       EvaluationPeriods: 1
-      Threshold: 30000
+      Threshold: 240000
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
 
