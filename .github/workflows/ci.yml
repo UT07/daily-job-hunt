@@ -101,7 +101,24 @@ jobs:
           git diff --name-only "$BASE_SHA" "$HEAD_SHA" > changed_files.txt
           echo "Changed files in this PR:"
           cat changed_files.txt
-          if grep -qE '^(lambdas/pipeline/agents/|lambdas/pipeline/guardrails/|lambdas/pipeline/retrieval/|evals/)' changed_files.txt; then
+          # Everything that changes WHAT THE MODEL IS ASKED, or WHAT IT IS
+          # ASKED ABOUT. The original filter listed only the three agent
+          # packages and evals/, which left the scoring path itself outside the
+          # gate: score_batch.py, ai_helper.py, tailor_resume.py and post_score.py
+          # all sit directly under lambdas/pipeline/, not in a watched subdir.
+          #
+          # Measured 2026-09-29 against baseline commit f0a3648: 16 commits had
+          # landed since the baseline was frozen; 2 touched a watched path and
+          # 4 changed scoring through an unwatched one. #116 "Phase 2 — reliable
+          # scoring" rewrote 97 lines of score_batch.py and 52 of ai_helper.py
+          # without the gate running once. The next PR to touch a watched path
+          # is then charged for every unmeasured commit before it, which is
+          # exactly what happened to #114 (tier_accuracy 0.85 -> 0.75).
+          #
+          # resume_parser.py and shared/resume_format.py are included because
+          # they decide what the resume IS before it is scored — a parse change
+          # moves every score without touching a prompt.
+          if grep -qE '^(lambdas/pipeline/(agents|guardrails|retrieval)/|lambdas/pipeline/(score_batch|ai_helper|tailor_resume|post_score|generate_cover_letter)\.py|shared/(work_auth|resume_format)\.py|resume_parser\.py|evals/)' changed_files.txt; then
             echo "AI-relevant path changed — ai-eval will run."
             echo "ai_relevant=true" >> "$GITHUB_OUTPUT"
           else

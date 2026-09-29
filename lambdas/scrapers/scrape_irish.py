@@ -6,6 +6,7 @@ Detail pages on IrishJobs return 403 without proxy — routed through
 Bright Data Web Unlocker as fallback.
 """
 import html
+from shared.scrape_budget import cache_ttl_hours as _ttl, enrichment_budget_left
 import logging
 import re
 from datetime import datetime, timedelta, timezone
@@ -137,7 +138,7 @@ def _fetch_detail_page(link, search_url, proxy_url=None):
     return "", "none"
 
 
-def _scrape_stepstone_site(site_key, base_url, queries, client, proxy_url=None):
+def _scrape_stepstone_site(site_key, base_url, queries, client, proxy_url=None, context=None):
     """Scrape Jobs.ie or IrishJobs (StepStone platform). Returns list of job dicts."""
     jobs = []
     detail_stats = {"full": 0, "none": 0}
@@ -145,7 +146,28 @@ def _scrape_stepstone_site(site_key, base_url, queries, client, proxy_url=None):
         slug = query.lower().replace(" ", "-")
         search_url = f"{base_url}/jobs/{slug}"
         try:
-            resp = client.get(search_url, headers=HEADERS, timeout=20, follow_redirects=True)
+            # Route the SEARCH page through the proxy, not just the detail
+            # pages. This one line is why jobs_ie and irishjobs returned zero
+            # for 179 days: proxy_url was accepted here and threaded only into
+            # _fetch_detail_page, so every search request went out unproxied
+            # and both StepStone hosts blackholed it from Lambda egress —
+            # "The read operation timed out", 4 queries x 2 sites, every run.
+            #
+            # Measured 2026-09-29 with the same headers the Lambda sends:
+            #   unproxied jobs.ie      200 in 0.8s from a residential IP,
+            #                          times out from Lambda
+            #   unproxied irishjobs.ie 403 in 0.2s
+            #   via proxy jobs.ie      200 in 5.2s, 9 cards parse
+            #   via proxy irishjobs.ie 200 in 6.4s, 25 cards parse
+            #
+            # Proxy FIRST rather than direct-then-fallback: direct is known to
+            # hang from the deploy environment, and paying a 20s timeout per
+            # query before falling back would cost 160s of a 300s budget.
+            resp = client.get(
+                search_url, headers=HEADERS, timeout=30, follow_redirects=True,
+                **({"proxy": proxy_url} if proxy_url else {}),
+            ) if proxy_url else client.get(
+                search_url, headers=HEADERS, timeout=20, follow_redirects=True)
             if resp.status_code != 200:
                 logger.warning(f"[{site_key}] HTTP {resp.status_code} for {query}")
                 continue
@@ -173,7 +195,14 @@ def _scrape_stepstone_site(site_key, base_url, queries, client, proxy_url=None):
                     continue
 
                 # Fetch detail page for description (direct first, proxy fallback)
-                description, desc_quality = _fetch_detail_page(link, search_url, proxy_url)
+                # With the search finally working, this loop sees far more
+                # cards than it ever has. The writes happen after every site
+                # finishes, so overrunning the budget here would lose
+                # gradireland's jobs too — the one Irish source that worked.
+                if enrichment_budget_left(context):
+                    description, desc_quality = _fetch_detail_page(link, search_url, proxy_url)
+                else:
+                    description, desc_quality = "", "none"
                 detail_stats[desc_quality] = detail_stats.get(desc_quality, 0) + 1
 
                 jobs.append({
@@ -317,7 +346,7 @@ def _scrape_gradireland(queries, client):
 def handler(event, context):
     queries = event.get("queries", ["software engineer"])
     query_hash = event.get("query_hash", "")
-    cache_ttl_hours = event.get("cache_ttl_hours", 24)
+    cache_ttl_hours = event.get("cache_ttl_hours", _ttl(24))
 
     db = get_supabase()
 
@@ -341,8 +370,8 @@ def handler(event, context):
     client = httpx.Client()
 
     # Jobs.ie and IrishJobs use the same StepStone platform
-    all_jobs.extend(_scrape_stepstone_site("jobs_ie", "https://www.jobs.ie", queries, client, proxy_url))
-    all_jobs.extend(_scrape_stepstone_site("irishjobs", "https://www.irishjobs.ie", queries, client, proxy_url))
+    all_jobs.extend(_scrape_stepstone_site("jobs_ie", "https://www.jobs.ie", queries, client, proxy_url, context))
+    all_jobs.extend(_scrape_stepstone_site("irishjobs", "https://www.irishjobs.ie", queries, client, proxy_url, context))
     all_jobs.extend(_scrape_gradireland(queries, client))
 
     client.close()

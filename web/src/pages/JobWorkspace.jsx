@@ -70,6 +70,7 @@ import Input from '../components/ui/Input';
 import { ScoreBadge } from '../components/ui/Badge';
 import Badge from '../components/ui/Badge';
 import ResumeEditor from '../components/ResumeEditor';
+import { pollRegeneration } from './regenPoll';
 
 // ---- Contacts tab ----
 function ContactItem({ contact }) {
@@ -727,6 +728,7 @@ export default function JobWorkspace() {
   const [saveStatus, setSaveStatus] = useState(null);
   const [regenLoading, setRegenLoading] = useState(null); // 'resume' | 'cover' | null
   const [regenError, setRegenError] = useState(null);
+  const [regenNotice, setRegenNotice] = useState(null);
 
   // Version history state
   const [versions, setVersions] = useState([]);
@@ -787,33 +789,29 @@ export default function JobWorkspace() {
       const execName = data.pollUrl?.split('/').pop();
       if (!execName) throw new Error('No execution ID returned');
 
-      // Poll until done
-      const poll = setInterval(async () => {
-        try {
-          const result = await apiGet(`/api/pipeline/status/${execName}`);
-          if (result.status !== 'RUNNING') {
-            clearInterval(poll);
-            setRegenLoading(null);
-            if (result.status === 'FAILED' || result.status === 'TIMED_OUT' || result.status === 'ABORTED') {
-              setRegenError(result.error || result.cause || `Pipeline ${result.status.toLowerCase()}`);
-              return;
-            }
-            // Refresh job data to get new PDF URLs
-            const updated = await apiGet(`/api/dashboard/jobs/${job.job_id}`);
-            if (updated) setJob(updated);
-            // Reset to current live version and refresh version list
-            setSelectedVersionId(null);
-            const versionData = await apiGet(`/api/dashboard/jobs/${job.job_id}/versions`);
-            setVersions(Array.isArray(versionData) ? versionData : []);
-          }
-        } catch (err) {
-          // Surface poll errors instead of silently swallowing — user has been
-          // staring at a spinner and deserves to know it's not coming back.
-          clearInterval(poll);
-          setRegenLoading(null);
-          setRegenError(`Polling failed: ${err.message}`);
-        }
-      }, 5000);
+      // pollRegeneration distinguishes a failed pipeline from a flaky poll and
+      // from a failed refresh. The loop this replaced treated all three as
+      // "Regenerate failed": a single transient 502 out of ~80 requests ended
+      // the wait, and a failure in either post-success refresh call reported
+      // the regeneration as failed when it had in fact succeeded.
+      const outcome = await pollRegeneration({
+        getStatus: () => apiGet(`/api/pipeline/status/${execName}`),
+        refresh: async () => {
+          const updated = await apiGet(`/api/dashboard/jobs/${job.job_id}`);
+          if (updated) setJob(updated);
+          setSelectedVersionId(null);
+          const versionData = await apiGet(`/api/dashboard/jobs/${job.job_id}/versions`);
+          setVersions(Array.isArray(versionData) ? versionData : []);
+        },
+      });
+      setRegenLoading(null);
+      if (outcome.outcome === 'succeeded') {
+        // A warning means the artifact IS regenerated and only the view is
+        // stale, so it must not read as a failure.
+        if (outcome.warning) setRegenNotice(outcome.warning);
+      } else {
+        setRegenError(outcome.message);
+      }
     } catch (err) {
       setRegenLoading(null);
       setRegenError(err.message || 'Regenerate failed');
@@ -931,8 +929,8 @@ export default function JobWorkspace() {
         >
           <ArrowLeft size={20} />
         </button>
-        <div className="flex-1">
-          <h1 className="text-xl font-heading font-bold text-black tracking-tight">
+        <div className="flex-1 min-w-0">
+          <h1 className="text-xl font-heading font-bold text-black tracking-tight truncate">
             {decodeHtml(job.title)}
           </h1>
           <p className="text-sm text-stone-500">
@@ -1194,6 +1192,7 @@ export default function JobWorkspace() {
             {(regenError || restoreError) && (
               <div className="mb-4 p-3 border-2 border-error bg-error-light text-xs font-bold text-error font-mono">
                 {regenError && <div>Regenerate failed: {regenError}</div>}
+                  {regenNotice && <div className="text-yellow-dark">{regenNotice}</div>}
                 {restoreError && <div>Restore failed: {restoreError}</div>}
               </div>
             )}
