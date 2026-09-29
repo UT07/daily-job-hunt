@@ -801,10 +801,21 @@ def council_complete(
     #
     # max_tokens IS forwarded, unlike the guard-context arguments above: it is
     # not guard-policy awareness, it is the size of the answer the caller
-    # asked for. Legacy is also the engine that actually runs today --
-    # template.yaml's CouncilEngine parameter defaults to "legacy" and the CI
-    # ai-eval job sets no COUNCIL_ENGINE at all -- so a fix that skipped this
-    # path would fix nothing in production or in the gate that measured it.
+    # asked for.
+    #
+    # CORRECTED 2026-09-29. This comment used to say legacy was "the engine
+    # that actually runs today", reasoning from template.yaml's CouncilEngine
+    # default of "legacy". That default is overridden in samconfig.toml, so it
+    # describes the template and not the stack. Measured against the deployed
+    # functions:
+    #
+    #   naukribaba-tailor-resume          langgraph
+    #   naukribaba-generate-cover-letter  langgraph
+    #   naukribaba-score-batch            langgraph (never calls the council)
+    #   naukribaba-post-score             None -> fell through to legacy
+    #
+    # Production runs the graph. Legacy is the escape hatch and the parity
+    # test's baseline, nothing more. Read the stack, not the default.
     return _council_complete_legacy(
         prompt, system, task_description, n_generators, temperature,
         max_tokens=max_tokens,
