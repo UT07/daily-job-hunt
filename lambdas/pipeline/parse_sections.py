@@ -425,13 +425,74 @@ def parse_resume_sections(tex_content: str) -> dict:
 # Rebuild helpers
 # ---------------------------------------------------------------------------
 
+# LaTeX has ten special characters. This escaped three.
+#
+# Measured 2026-09-29 by compiling real editor input through this exact rebuild
+# path with tectonic — things a person plausibly types into a resume:
+#
+#   "Cut cloud spend by $2,400"      FAILS  \end{itemize} invalid (math mode
+#                                           opened by $ swallowed the block)
+#   "the user_profile service"       FAILS  Missing $ inserted
+#   "reduced O(n^2) to O(n)"         FAILS  Missing $ inserted
+#   "across CI\\CD pipelines"         FAILS  Undefined control sequence
+#   "handled ~500 requests"          compiles, renders a non-breaking space —
+#                                    silently wrong, which is worse
+#   "AT&T", "35%"                    already handled
+#
+# Section-editor content reaches the compiler through here with no other guard,
+# so four of those took the whole document down. Suggestions were hardened
+# separately in #143; typing was not.
+#
+# IDEMPOTENT ON PURPOSE. Parsing does NOT unescape: \& survives out of
+# parse_resume_sections into what the editor receives, verified against the
+# real resume. A plain escape-everything pass would turn a round-tripped
+# "R\&D" into "R\textbackslash{}\&D". So an existing escape is left alone and
+# only unescaped specials are escaped, which makes parse -> edit -> rebuild
+# safe however many times it runs.
+#
+# No URL reaches this function: \href{url}{text} is reduced to its display text
+# at parse time (see _strip_latex) and _rebuild_projects emits the 3-argument
+# \projectentry, which carries no URL. The old "callers handle URLs separately"
+# caveat described a case this path cannot produce.
+_TEX_ESCAPES = {
+    "\\": r"\textbackslash{}",
+    "{": r"\{",
+    "}": r"\}",
+    "$": r"\$",
+    "&": r"\&",
+    "#": r"\#",
+    "_": r"\_",
+    "%": r"\%",
+    "~": r"\textasciitilde{}",
+    "^": r"\textasciicircum{}",
+}
+
+# Either an escape that is already correct — leave it — or a bare special
+# character to escape. One pass, so a replacement's own braces
+# (\textbackslash{}) are never re-escaped by a later rule.
+# The multi-character replacements must be recognised too, or a second pass
+# turns \textasciicircum{} into \textbackslash{}textasciicircum\{\}. Caught by
+# the idempotency test, not by reading the code.
+_TEX_ESCAPE_RE = re.compile(
+    r"(\\(?:textbackslash|textasciitilde|textasciicircum)\{\}|\\[&%#$_{}])"
+    r"|([\\{}$&#_%~^])"
+)
+
+
 def _escape_tex(text: str) -> str:
-    """Escape characters that are special in LaTeX (ampersand, percent, hash, etc.)."""
-    text = text.replace("&", r"\&")
-    text = text.replace("%", r"\%")
-    text = text.replace("#", r"\#")
-    # Do not escape underscores in URLs — callers handle that separately
-    return text
+    """Escape LaTeX special characters in plain text, without double-escaping.
+
+    Input is prose the user typed or the parser recovered — never markup. A
+    literal backslash becomes \textbackslash{}, so someone typing \textbf{x}
+    gets those characters on the page rather than bold text, which is the right
+    behaviour for a plain-text field.
+    """
+    if not text:
+        return text
+    return _TEX_ESCAPE_RE.sub(
+        lambda m: m.group(1) if m.group(1) else _TEX_ESCAPES[m.group(2)],
+        text,
+    )
 
 
 def _bullets_to_itemize(bullets: list[str]) -> str:
@@ -448,13 +509,19 @@ def _rebuild_header(header: dict) -> str:
     contact_raw = header.get("contact", "")
 
     # Split contact on " | " to get individual parts
-    contact_parts = [p.strip() for p in contact_raw.split(" | ") if p.strip()]
+    # Escape each part BEFORE joining: the separator below is LaTeX and must
+    # survive, the parts are plain text and must not. An email is the common
+    # case that breaks this — first_last@example.com has an unescaped
+    # underscore, which is "Missing $ inserted" and takes the whole document
+    # down. Same class as the section-editor hole this function sat beside.
+    contact_parts = [_escape_tex(p.strip()) for p in contact_raw.split(" | ") if p.strip()]
     # Re-join with LaTeX separator
     contact_line = r" \textbar\ ".join(contact_parts)
 
     return (
         r"\begin{center}" + "\n"
-        r"{" r"\Large \textbf{" + name + r"}}" + r"\\[0.04em]" + "\n"
+        # The name was the one field on this path with no escaping at all.
+        r"{" r"\Large \textbf{" + _escape_tex(name) + r"}}" + r"\\[0.04em]" + "\n"
         r"{\normalsize " + _escape_tex(title) + r"}\\[0.08em]" + "\n"
         + contact_line + "\n"
         r"\end{center}" + "\n"
