@@ -209,6 +209,14 @@ jobs:
           # credentials" for every gemini entry, because get_param falls
           # through to SSM and this job has no AWS credentials.
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          # Cerebras — a fifth independent quota, and the largest per-minute
+          # token budget in the pool (5 RPM / 30k TPM / 1M TPD free, per its
+          # published limits). Same env-var-first path as the keys above: this
+          # job has no AWS credentials, so without the plain secret get_param
+          # falls through to SSM, fails, and the gate measures a pool with no
+          # Cerebras in it. An unset secret is an empty string, which
+          # _call_provider treats as "no key" and skips.
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
         # repeats=1: the CI default. See evals/harness.py's module docstring
         # for why repeats>1 (meaningful score_variance) costs real provider
         # quota and is a local/manual-run knob, not a CI one.
