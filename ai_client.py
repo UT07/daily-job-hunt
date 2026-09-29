@@ -784,6 +784,13 @@ class AIClient:
             resp = provider.complete_with_retry(prompt, system=system, temperature=temperature)
             return {"response": resp, "provider": provider.name, "model": provider.model}
 
+        # Which (name, model) pairs have been attempted, and why each failed.
+        # "All generators failed" used to be logged with no reason at all: 11
+        # providers, six seconds, nothing recorded. Diagnosing it needed a
+        # local reproduction against live keys.
+        tried: set[tuple[str, str]] = {(g.name, g.model) for g in generators}
+        failures: list[str] = []
+
         # Run generators concurrently with a 60-second hard timeout per provider
         with concurrent.futures.ThreadPoolExecutor(max_workers=len(generators)) as executor:
             future_to_provider = {
@@ -802,8 +809,12 @@ class AIClient:
                                     f"{len(result['response'])} chars")
                     except concurrent.futures.TimeoutError:
                         logger.warning(f"[Council] {provider.name}:{provider.model} timed out (60s)")
+                        tried.add((provider.name, provider.model))
+                        failures.append(f"{provider.name}:{provider.model} timed out")
                     except Exception as e:
                         logger.warning(f"[Council] {provider.name}:{provider.model} failed: {e}")
+                        tried.add((provider.name, provider.model))
+                        failures.append(f"{provider.name}:{provider.model} {type(e).__name__}: {e}")
                         # Mark permanently dead providers (402, 403, etc.)
                         if isinstance(e, _req.HTTPError):
                             status = e.response.status_code if hasattr(e, "response") and e.response else 0
@@ -819,17 +830,39 @@ class AIClient:
                 logger.warning(f"[Council] Overall timeout (120s) — collected {len(results)} of {len(generators)} results")
 
         if not results:
-            # All generators failed. If any got marked dead this round, retry
-            # once with fresh selection (now excluding the dead ones).
-            if self._dead_providers:
-                retry_generators = self._select_providers(n_generators)
-                if retry_generators and any(
-                    (p.name, p.model) not in {(g.name, g.model) for g in generators}
-                    for p in retry_generators
-                ):
-                    logger.info(f"[Council] Retrying with fresh providers after "
-                                f"{len(self._dead_providers)} marked dead: "
-                                f"{', '.join(f'{p.name}:{p.model}' for p in retry_generators)}")
+            # Retry whenever EVERY generator failed and something untried is
+            # available — not only when one was marked dead.
+            #
+            # The old condition was `if self._dead_providers:`. Only 401/402/
+            # 403/404/410 mark a provider dead; a 429 is transient and marks
+            # nothing. So when selection picked two OpenRouter free models and
+            # both returned 429 — which is their steady state once the shared
+            # daily quota is spent — nothing was marked dead, the retry never
+            # ran, and the council gave up.
+            #
+            # Measured 2026-09-29 against the live keys: 7 of 11 providers
+            # answered a full 13,879-char tailoring prompt (Groq x3, NVIDIA,
+            # Qwen x3). Only OpenRouter's four failed, two 404 and two 429.
+            # The council still returned "All generators failed" and the user
+            # got "Tailoring failed — AI returned empty result", with seven
+            # working providers idle.
+            #
+            # On a cold Lambda _dead_providers starts empty, so whether a
+            # request succeeded depended on which two families selection
+            # happened to draw first. That is why it failed intermittently.
+            untried = [p for p in self.providers
+                       if (p.name, p.model) not in tried
+                       and (p.name, p.model) not in self._dead_providers]
+            if untried:
+                retry_generators = self._select_providers(
+                    n_generators, exclude=tried
+                ) or untried[:n_generators]
+                if retry_generators:
+                    logger.warning(
+                        "[Council] all %d generators failed (%s) — retrying with %s",
+                        len(generators), "; ".join(failures) or "no reason recorded",
+                        ", ".join(f"{p.name}:{p.model}" for p in retry_generators),
+                    )
                     with concurrent.futures.ThreadPoolExecutor(max_workers=len(retry_generators)) as executor:
                         future_to_provider = {executor.submit(_generate_one, p): p for p in retry_generators}
                         try:
