@@ -25,6 +25,23 @@ from guardrails.output_guards import check_fabrication as _check_fabrication
 from guardrails.output_guards import check_header_present as _check_header_present
 from guardrails.output_guards import check_textbf_preservation as _check_textbf_preservation
 
+# The user's resume-composition rules (how many experience entries, how many
+# projects, how many pages) and the counting that enforces them. `shared` is a
+# repo-root package that reaches zip Lambdas via /opt/python (layer/build.sh
+# FIRST_PARTY) and the container image via Dockerfile.lambda's `COPY shared/`,
+# so the qualified `shared.*` spelling resolves in every deploy path — same as
+# score_batch.py's `from shared.work_auth import ...`. `check_output` is
+# aliased because guardrails/output_guards.py exports a different function of
+# the same name.
+from shared.composition_policy import check_output as _check_composition
+from shared.composition_policy import describe_violations, render_for_prompt
+
+# Every column the tailor needs from the user's row. composition_policy was
+# added by supabase/migrations/20260929200000_users_composition_policy.sql.
+_USER_COLUMNS = "name, first_name, last_name, email, composition_policy"
+_USER_COLUMNS_PRE_MIGRATION = "name, first_name, last_name, email"
+_COMPOSITION_MIGRATION = "supabase/migrations/20260929200000_users_composition_policy.sql"
+
 
 class TailorError(Exception):
     """Raised when tailoring cannot produce a resume for this job.
@@ -163,6 +180,109 @@ def _derive_header_markers(profile: dict | None) -> list[str]:
     return markers
 
 
+def _fetch_user_profile(db, user_id: str) -> dict | None:
+    """The user's row, tolerating a database that predates composition_policy.
+
+    PostgREST fails the WHOLE request when a selected column is unknown to it,
+    and this select gates every tailor — it supplies the header markers the
+    hard gate below validates against. So deploying this code ahead of the
+    migration would not degrade one feature to its defaults; it would take
+    tailoring down for every job, in every user's run.
+
+    Retry without the column instead, and name the migration in the log so the
+    fix is one line away rather than a debugging session. NULL and "column
+    absent" mean the same thing here: use the defaults.
+    """
+    try:
+        resp = db.table("users").select(_USER_COLUMNS).eq("id", user_id).limit(1).execute()
+    except Exception as exc:
+        logger.warning(
+            "[tailor] could not read users.composition_policy (%s) — using the "
+            "default composition rules. Apply %s.", exc, _COMPOSITION_MIGRATION,
+        )
+        resp = db.table("users").select(_USER_COLUMNS_PRE_MIGRATION) \
+            .eq("id", user_id).limit(1).execute()
+    return resp.data[0] if resp.data else None
+
+
+def _enforce_composition(
+    *,
+    ai_body: str,
+    policy: dict | None,
+    user_prompt: str,
+    system_prompt: str,
+    max_tokens: int,
+    job_hash: str,
+) -> str:
+    r"""Count the composition rules in the generated body; repair once if broken.
+
+    This is the half that was missing. `_validate_macro_arities` checks that
+    each `\jobentry` call has four arguments; nothing counted how many
+    `\jobentry` calls the model emitted, so "EXACTLY 3 PROJECTS" was a request
+    the model could decline in silence.
+
+    Returns the body to ship: the repaired one if the repair landed, otherwise
+    the original. A repair is accepted ONLY when it is structurally intact AND
+    fully compliant. Swapping in a body that still breaks the rules would cost
+    the quality-retry work already done on the original for no compliance gain,
+    and a body that complied by being truncated is not a repair at all — the
+    same "structure before style" rule the quality retry applies.
+
+    The caller re-counts whatever ends up being shipped, so the returned body
+    is never assumed compliant.
+    """
+    violations = _check_composition(ai_body, policy)
+    if not violations:
+        return ai_body
+
+    logger.warning(
+        "[tailor] composition rules broken for %s (%s) — repairing once",
+        job_hash, "; ".join(violations),
+    )
+    repair_prompt = f"{user_prompt}\n\n{describe_violations(violations)}"
+    try:
+        repair = ai_complete(
+            repair_prompt, system=system_prompt, temperature=0.3, max_tokens=max_tokens,
+        )
+    except RuntimeError as exc:
+        logger.error(
+            "[tailor] composition repair call failed for %s (%s); shipping a "
+            "document that breaks: %s", job_hash, exc, "; ".join(violations),
+        )
+        return ai_body
+
+    repaired = (repair.get("content") or "").strip()
+    if "\\begin{document}" in repaired:
+        _ignored, repaired = _split_tex(repaired)
+    repaired = repaired.removesuffix("\\end{document}").strip()
+
+    rejected = ""
+    if repair.get("truncated"):
+        rejected = "cut off at max_tokens"
+    elif not repaired:
+        rejected = "empty body"
+    elif not _check_brace_balance(repaired):
+        rejected = "brace imbalance"
+    elif arity_issues := _validate_macro_arities(repaired):
+        rejected = f"arity: {'; '.join(arity_issues[:3])}"
+    elif missing := _check_required_sections(repaired):
+        rejected = f"missing sections {missing}"
+    elif remaining := _check_composition(repaired, policy):
+        rejected = f"still breaks {'; '.join(remaining)}"
+
+    if rejected:
+        logger.error(
+            "[tailor] composition repair did not land for %s (%s); shipping a "
+            "document that breaks: %s", job_hash, rejected, "; ".join(violations),
+        )
+        return ai_body
+
+    logger.info(
+        "[tailor] composition repair fixed %s (was: %s)", job_hash, "; ".join(violations),
+    )
+    return repaired
+
+
 # ---------------------------------------------------------------------------
 # Archetype detection (career-ops methodology)
 # ---------------------------------------------------------------------------
@@ -230,13 +350,15 @@ REQUIRED SECTION HEADERS (your body output MUST contain ALL six, each on its own
   \section*{Education}
   \section*{Certifications}
 
-CUSTOM MACROS (already defined — use with EXACT argument counts):
+CUSTOM MACROS (already defined — use with EXACT argument counts). The examples
+show the ARGUMENT SHAPE only; take every real value from the base resume body
+you are given, never from these placeholders:
 - \jobentry{company}{location}{dates}{title}       — 4 args
-  Example: \jobentry{Clover IT Services}{New York, NY (Remote)}{Jun 2022 -- Jul 2024}{\textbf{\textit{Software Engineer}}}
+  Example: \jobentry{Example Corp}{Dublin, Ireland (Remote)}{Jun 2022 -- Jul 2024}{\textbf{\textit{Software Engineer}}}
 - \projectentry{name}{dates}{tech}                 — 3 args (no URL)
-  Example: \projectentry{WhatsTheCraic}{Apr 2025 -- Jul 2025}{Node.js, React, FastAPI, MySQL, Docker, AWS}
+  Example: \projectentry{Example Project}{Apr 2025 -- Jul 2025}{Node.js, React, FastAPI, MySQL, Docker, AWS}
 - \projectentryurl{name}{dates}{url}{url-text}{tech} — 5 args (with clickable URL)
-  Example: \projectentryurl{Purrrfect Keys}{Jan 2026 -- Present}{https://expo.dev/accounts/ut254/projects/purrrfect-keys}{expo.dev/accounts/ut254/projects/purrrfect-keys}{React Native, TypeScript, Firebase}
+  Example: \projectentryurl{Example Project}{Jan 2026 -- Present}{https://example.com/project}{example.com/project}{React Native, TypeScript, Firebase}
 
 Each macro call MUST be followed by a \begin{itemize}...\end{itemize} block with \item bullets. Do NOT put \begin{itemize} inside the macro call.
 
@@ -247,30 +369,24 @@ RULES:
    - Summary: adjust emphasis for this role
    - Skills: reorder CATEGORIES to put the most relevant first. PRESERVE ALL 8 CATEGORIES from the base resume — do NOT merge or drop any. Keep the parenthetical details (e.g., "AWS (EC2, ECS/Fargate, EKS, Lambda, RDS, S3, API Gateway, SQS/SNS, CloudFront, Route 53)"). You may reorder items within a category to front-load JD-relevant technologies
    - Experience bullets: reorder within each job; tweak wording to match the job listing's terminology
-   - Projects: EXACTLY 3 PROJECTS. No more, no less.
-     * ALWAYS KEEP BOTH "Purrrfect Keys" AND "NaukriBaba" — these two are
-       the candidate's largest, most extensive projects and cover every
-       domain (mobile/AI/Firebase + Python/AWS/SaaS). Tailoring strategy:
-       reword bullets to emphasize the JD-relevant aspects, never remove.
-     * SELECT 1 more from: WhatsTheCraic, Genomic Benchmarking, UTWorld —
-       pick the single most relevant to the JD.
-     * COMPLETELY DELETE the other unselected projects. Remove their
-       \projectentry/\projectentryurl AND their \begin{itemize}...\end{itemize}
-       blocks entirely. Do NOT leave empty project shells.
-     * If you output 4 or 5 projects, the resume will overflow to 3 pages
-       and be REJECTED.
-     * Rewrite ALL 3 project descriptions to emphasize aspects matching
-       the JD; the two pinned projects (Purrrfect Keys, NaukriBaba) get
-       JD-tailored bullets but their identity, dates, and tech stack
-       headers stay intact.
+   - Projects: SELECT from the candidate's projects, within the limit given
+     in the COMPOSITION RULES below. Pick the ones most relevant to this job.
+     * COMPLETELY DELETE every project you do not select. Remove its
+       \projectentry/\projectentryurl AND its \begin{itemize}...\end{itemize}
+       block entirely. Do NOT leave empty project shells.
+     * Rewrite the selected projects' bullets to emphasize the aspects that
+       match the JD. Their names, dates and tech-stack headers stay intact.
 4. The resume must remain truthful.
 5. PAGE LAYOUT (CRITICAL):
-   - The resume MUST be exactly TWO PAGES. No more, no less.
-   - Page 1: Header, Summary, Technical Skills, Clover IT Services (7 bullets), and Seattle Kraken (3 bullets).
-   - Page 2: 3 selected Projects (Purrrfect Keys + NaukriBaba pinned + 1 other), Education, Certifications.
-   - The base template inserts \clearpage before \section*{Featured Projects} so the section header always lands on page 2 — DO NOT remove that \clearpage from the body you return.
-   - If content overflows to page 3, CUT bullet points (trim Clover to 6, Kraken to 2).
-   - Do NOT add extra bullets to any section. Keep Clover at 7, Kraken at 3.
+   - The page count is given in the COMPOSITION RULES below.
+   - Page 1 carries the header, Summary, Technical Skills and the selected
+     experience entries. Page 2 carries the selected projects, Education and
+     Certifications.
+   - If the base body contains \clearpage before \section*{Featured Projects},
+     keep it — the template uses it to land that section on page 2. Do not add
+     one if it is absent.
+   - If content overflows, CUT bullet points from the least relevant entries
+     rather than dropping a whole section.
 6. Prominently place technologies the candidate has used that the job mentions.
 
 WRITING STYLE (CRITICAL):
@@ -448,10 +564,14 @@ def handler(event, context):
     # Multi-tenant fix: previously failed for any other user; now per-user.
     # Schema note: prod `users` table has `name` (and `first_name`/`last_name`)
     # but no `full_name` column; _derive_header_markers falls back to `name`.
-    user_profile_resp = db.table("users").select("name, first_name, last_name, email") \
-        .eq("id", user_id).limit(1).execute()
-    user_profile = user_profile_resp.data[0] if user_profile_resp.data else None
+    #
+    # The same row carries composition_policy: the user's rules for composing
+    # a resume FROM their corpus (entry caps, page count). NULL means the
+    # defaults in shared/composition_policy.py, so an un-configured user keeps
+    # today's behaviour.
+    user_profile = _fetch_user_profile(db, user_id)
     header_markers = _derive_header_markers(user_profile)
+    composition_policy = (user_profile or {}).get("composition_policy")
 
     base_preamble, base_body = _split_tex(base_tex)
     if not base_preamble:
@@ -489,7 +609,16 @@ def handler(event, context):
         "moderate": _MODERATE_NOTE,
         "heavy": _FULL_REWRITE_NOTE,
     }.get(tailoring_depth, _MODERATE_NOTE)
-    system_prompt = f"{depth_note}\n\n{_SYSTEM_PROMPT.replace('{archetype_framing}', archetype_framing)}{keyword_section}"
+    # The candidate's own composition rules, rendered from their profile
+    # rather than compiled into the prompt. Everything countable in here is
+    # ALSO counted after generation — see _enforce_composition below. A rule
+    # only stated in a prompt is a request.
+    policy_block = render_for_prompt(composition_policy)
+    system_prompt = (
+        f"{depth_note}\n\n"
+        f"{_SYSTEM_PROMPT.replace('{archetype_framing}', archetype_framing)}"
+        f"{keyword_section}\n\n{policy_block}"
+    )
 
     user_prompt = f"""Tailor this resume body for the following job.
 
@@ -712,6 +841,38 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
             except RuntimeError:
                 logger.warning("[tailor] Quality retry failed, keeping original")
 
+    # Composition enforcement — the rules above are COUNTED, not just asked
+    # for. Runs last so it has the final word on whichever body the quality
+    # retry settled on, and only when a generated document is what ships:
+    # `tailored_tex is base_tex` means an earlier fallback (short body, or a
+    # failed hard gate) already chose the corpus, and re-splicing a repaired
+    # body over that deliberate fallback would undo it.
+    if tailored_tex is not base_tex:
+        repaired_body = _enforce_composition(
+            ai_body=ai_body,
+            policy=composition_policy,
+            user_prompt=user_prompt,
+            system_prompt=system_prompt,
+            max_tokens=tailor_max_tokens,
+            job_hash=job_hash,
+        )
+        if repaired_body != ai_body:
+            ai_body = repaired_body
+            tailored_tex = escape_body_specials(_splice_tex(base_preamble, ai_body))
+
+    # Count the document that is ACTUALLY being shipped, whichever branch
+    # produced it. An empty list on the return value is therefore a claim that
+    # the .tex written below was measured and complies — not that a repair was
+    # attempted. A base-resume fallback normally lands here non-empty, because
+    # the base resume is the corpus and a corpus exceeds the caps by
+    # definition; that is worth reporting rather than papering over.
+    composition_violations = _check_composition(tailored_tex, composition_policy)
+    if composition_violations and tailored_tex is base_tex:
+        logger.warning(
+            "[tailor] base-resume fallback for %s does not meet the composition "
+            "rules: %s", job_hash, "; ".join(composition_violations),
+        )
+
     # Write to S3
     tex_key = f"users/{user_id}/resumes/{job_hash}_tailored.tex"
     s3.put_object(Bucket=bucket, Key=tex_key, Body=tailored_tex.encode("utf-8"))
@@ -731,4 +892,8 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         "tex_s3_key": tex_key,
         "user_id": user_id,
         "used_fallback": bool(validation_errors),
+        # Empty means the shipped .tex was counted against this user's
+        # composition rules and complies. Non-empty means it does not, and the
+        # repair above did not fix it — surfaced rather than swallowed.
+        "composition_violations": composition_violations,
     }
