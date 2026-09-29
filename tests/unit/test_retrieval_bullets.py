@@ -108,10 +108,16 @@ def test_retrieve_evidence_passes_k_through():
 
 
 def test_index_bullets_returns_count_indexed():
+    # _delete_user_bullets MUST be patched. index_bullets clears the user's
+    # corpus before re-indexing, and without this patch that DELETE reaches the
+    # real Supabase project — it only failed loudly here because "u1" is not a
+    # valid uuid. A test that talks to production is a test that can damage it.
     with patch.object(bullets, "embed_batch", return_value=[[0.1] * 768] * 3), \
+         patch.object(bullets, "_delete_user_bullets") as dele, \
          patch.object(bullets, "_insert_bullets") as ins:
         assert bullets.index_bullets("u1", TEX, "r1") == 3
     assert len(ins.call_args[0][0]) == 3
+    assert dele.called, "the previous corpus was not cleared before re-indexing"
 
 
 def test_index_bullets_skips_embedding_call_when_resume_has_no_bullets():
