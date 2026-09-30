@@ -228,13 +228,24 @@ class TestOnlyARecordedFallbackCanShipTheCorpus:
         the set is now empty. It stays as a set so a reintroduction anywhere
         fails CI, not only one in `lambdas/`.
         """
+        # Scoped to TRACKED files, via git, not to a directory walk with an
+        # exclusion list. The walk version scanned .aws-sam/build/**,
+        # .claude/worktrees/** and .worktrees/** -- SAM build output and
+        # worktree checkouts of OTHER branches -- and reported 55 "reintroduced"
+        # gates on a developer machine while passing in CI, whose checkout has
+        # none of those directories. A test that fails only where someone has
+        # run `sam build` is a test people learn to ignore (CLAUDE.md rule 7:
+        # scope a check to the population it is meant to judge).
+        import subprocess
+
+        tracked = subprocess.run(
+            ["git", "ls-files", "-z", "*.py"],
+            cwd=REPO, capture_output=True, text=True, check=True,
+        ).stdout.split("\0")
         known: set[str] = set()
         found = {
-            str(p.relative_to(REPO))
-            for p in REPO.rglob("*.py")
-            if not any(part in {".venv", "node_modules", ".git", "output"}
-                       for part in p.parts)
-            and _word_gates_in(p)
+            rel for rel in tracked
+            if rel and _word_gates_in(REPO / rel)
         }
         assert found == known, (
             f"short-body word gate(s) back in: {sorted(found - known)}. The "
