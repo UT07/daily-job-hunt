@@ -475,13 +475,15 @@ _BASE_BODY = (
     r"\section*{Experience}" "\n"
     r"\jobentry{Clover IT Services}{Dublin}{2023 -- 2026}{Engineer}" "\n"
     "Shipped 8 microservices; 99.9% uptime; cut MTTR 35%. "
-    # 90, not 60: at 60 this body is 497 words and handler()'s
-    # `word_count < 500` branch swaps in the base resume WITHOUT recording a
-    # validation error, so `used_fallback` came back False for a run that
-    # fell back. That branch is a pre-existing defect (CLAUDE.md rule 2) and
-    # out of scope here; the fixture is sized past it so these cases measure
-    # the gates they are about.
-    + "Delivered weekly releases for the payments team. " * 90 + "\n"
+    # 60 puts this body at 499 words by the old `word_count < 500` regex,
+    # which is deliberate. It used to be 90 to clear that gate: below 500 the
+    # branch swapped in the base resume WITHOUT recording a validation error,
+    # so `used_fallback` came back False for a run that had fallen back and
+    # every case in this file measured the wrong thing. That branch is gone
+    # (see tailor_resume.py and test_tailor_fallback_is_recorded.py), so the
+    # fixture no longer has to dodge it — and sitting one word under the old
+    # floor means these cases would go red again if it ever came back.
+    + "Delivered weekly releases for the payments team. " * 60 + "\n"
     r"\section*{Featured Projects}" "\n"
     r"\projectentry{Purrrfect Match}{2025}{React Native}" "\n"
     r"\section*{Education}" "\nMSc Cloud Computing, Arlington, 2022.\n"
