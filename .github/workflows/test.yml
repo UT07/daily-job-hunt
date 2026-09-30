@@ -216,7 +216,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt -r tests/requirements-test.txt
-      - run: pytest tests/quality/test_score_determinism.py -v --tb=short || true
+      - run: pytest tests/quality/test_score_determinism.py -v --tb=short
 
   ai-quality-golden:
     name: "AI Quality Golden Dataset (REPORT)"
@@ -230,7 +230,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt -r tests/requirements-test.txt
-      - run: pytest tests/quality/test_scoring_quality.py -v --tb=short || true
+      - run: pytest tests/quality/test_scoring_quality.py -v --tb=short
 
   conflict-detection:
     name: "Conflict Detection (REPORT)"
@@ -244,7 +244,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt -r tests/requirements-test.txt
-      - run: pytest tests/quality/test_self_improvement.py::TestConflictDetection -v --tb=short || true
+      - run: pytest tests/quality/test_self_improvement.py::TestConflictDetection -v --tb=short
 
   # Smart Apply Phase 1 quality gates (per spec §6.3 Layers A + B).
   # REPORT-only: both layers skip on PRs without staging secrets, and the
@@ -273,7 +273,7 @@ jobs:
         run: |
           pytest tests/quality/test_answer_quality_floor.py \
                  tests/quality/test_answer_quality_golden.py \
-                 -v --tb=short || true
+                 -v --tb=short
       - name: Quality gate status summary
         if: always()
         run: |
@@ -285,10 +285,23 @@ jobs:
             echo ":white_check_mark: **Gate is live** — Layer A + B ran with configured secrets." >> $GITHUB_STEP_SUMMARY
           fi
 
+  # Browser E2E. This job used to run
+  #   npx playwright test --config=tests/e2e/playwright.config.ts || true
+  # against a config file that did not exist, so it reported success on every
+  # run and uploaded an empty test-results/ — a gate that could not fail
+  # (CLAUDE.md § Verification rules 2). The tests it was pretending to run were
+  # 32 empty stubs, all blanket-skipped.
+  #
+  # It is now a real gate: `pytest` runs tests/e2e/test_critical_journeys.py
+  # against a production `vite build` of web/ served locally, driven by
+  # Chromium with every HTTP call stubbed in the browser. No `|| true`, so a
+  # failure fails the job, and a run that collects nothing exits 5 and fails
+  # too. The floor check below covers the remaining hole: a suite that is
+  # re-skipped wholesale would otherwise report green with 0 assertions.
   e2e-tests:
+    name: "Browser E2E"
     runs-on: ubuntu-latest
-    timeout-minutes: 10
-    if: github.event_name == 'pull_request'
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -298,11 +311,65 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - working-directory: web
         run: npm ci
-      - run: npx playwright install chromium --with-deps
-      - run: npx playwright test --config=tests/e2e/playwright.config.ts || true
-      - uses: actions/upload-artifact@v4
-        if: always()
+      - uses: actions/setup-python@v5
         with:
-          name: playwright-report
+          python-version: "3.11"
+          cache: pip
+      # Only the test requirements: nothing in tests/e2e/ imports app.py or a
+      # lambda, so requirements.txt (and its ~5 minutes of AI/AWS SDKs) is not
+      # needed to drive a browser.
+      - run: pip install -r tests/requirements-test.txt
+      - name: Cache Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/requirements-test.txt') }}
+      - run: python -m playwright install --with-deps chromium
+      - name: Run browser E2E
+        run: |
+          pytest tests/e2e/test_critical_journeys.py \
+                 --tb=short \
+                 --junitxml=test-results/e2e-junit.xml \
+                 --screenshot=only-on-failure \
+                 --video=retain-on-failure \
+                 --output=test-results/artifacts
+      # A suite that is skipped wholesale still exits 0. This asserts the run
+      # actually executed tests, so re-introducing a blanket skip fails here
+      # instead of reading as a pass. Raise the floor when tests are added;
+      # lowering it is a deliberate statement that coverage was removed.
+      - name: Assert the suite actually ran
+        if: always()
+        run: |
+          python - <<'PY'
+          import pathlib
+          import sys
+          import xml.etree.ElementTree as ET
+
+          FLOOR = 40
+          report = pathlib.Path("test-results/e2e-junit.xml")
+          if not report.is_file():
+              # pytest died before writing a report -- usually the vite build or
+              # the static server in tests/e2e/conftest.py raised. The previous
+              # step already failed; say why this one cannot judge and stop,
+              # rather than burying that failure under a traceback here.
+              print(f"::error::{report} was never written, so this run proved nothing.")
+              sys.exit(1)
+          suite = ET.parse(report).getroot().find("testsuite")
+          total = int(suite.get("tests"))
+          skipped = int(suite.get("skipped"))
+          failures = int(suite.get("failures")) + int(suite.get("errors"))
+          executed = total - skipped - failures
+          print(f"collected={total} executed={executed} skipped={skipped} failed={failures}")
+          if executed < FLOOR:
+              print(
+                  f"::error::only {executed} browser E2E tests passed, floor is {FLOOR}. "
+                  "A suite that skips itself is not a gate.",
+              )
+              sys.exit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-e2e-artifacts
           path: test-results/
           retention-days: 7
