@@ -8,6 +8,10 @@ lambdas/pipeline/score_batch.py SCORE_SYSTEM_PROMPT and the JSON-parsing
 branch right after it) uses `match_score` and `reasoning`. `final_score` and
 `score_status` on the `jobs` table are dead columns nothing reliably writes
 or reads.
+
+`score_job`'s agreement with the pipeline's cap and the REST path's shape
+lives in test_mcp_score_parity.py; the wasted-embedding behaviour of
+`search_jobs` lives in test_mcp_search_jobs.py.
 """
 from unittest.mock import MagicMock, patch
 
@@ -16,31 +20,44 @@ import pytest
 from mcp_server import server
 
 
+@pytest.fixture(autouse=True)
+def _forget_the_rpc_probe():
+    """The semantic-RPC verdict is cached per process; reset it per test."""
+    server.reset_semantic_probe()
+    yield
+    server.reset_semantic_probe()
+
+
 # ---------------------------------------------------------------------------
 # score_job
 # ---------------------------------------------------------------------------
 
 
+def _work_auth_db(work_auth=None):
+    db = MagicMock()
+    db.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value.data = {
+        "work_authorizations": work_auth or {},
+        "location": "Dublin, Ireland",
+    }
+    return db
+
+
 @pytest.mark.asyncio
-async def test_score_job_returns_tier_and_score_from_match_score():
+async def test_score_job_returns_tier_from_match_score():
     with patch.object(
         server,
-        "score_single_job",
+        "score_single_job_deterministic",
         return_value={"match_score": 88.0, "ats_score": 91.0, "reasoning": "strong"},
-    ):
-        out = await server.score_job("Backend engineer, Python, AWS.", resume_tex="dummy resume text")
-    assert out["score"] == 88.0
+    ), patch.object(server, "_db", return_value=_work_auth_db()):
+        out = await server.score_job(
+            "Backend engineer, Python, AWS.",
+            location="Dublin, Ireland",
+            resume_tex="dummy resume text",
+        )
+    assert out["match_score"] == 88.0
     assert out["tier"] == "A"  # score_to_tier: S=90+, A=80-89, B=70-79, C=60-69, D<60
     assert out["ats_score"] == 91.0
     assert out["reasoning"] == "strong"
-
-
-@pytest.mark.asyncio
-async def test_score_job_defaults_missing_score_to_d_tier():
-    with patch.object(server, "score_single_job", return_value=None):
-        out = await server.score_job("garbled JD", resume_tex="dummy resume text")
-    assert out["score"] == 0.0
-    assert out["tier"] == "D"
 
 
 @pytest.mark.asyncio
@@ -50,13 +67,13 @@ async def test_score_job_loads_base_resume_when_not_supplied():
     real base resume instead of defaulting to an empty string.
     """
     with patch.object(server, "_load_base_resume", return_value="a real base resume") as load, patch.object(
-        server, "score_single_job", return_value={"match_score": 70.0}
-    ) as scorer:
-        await server.score_job("Some JD")
+        server, "score_single_job_deterministic", return_value={"match_score": 70.0}
+    ) as scorer, patch.object(server, "_db", return_value=_work_auth_db()):
+        await server.score_job("Some JD", location="Dublin, Ireland")
 
     load.assert_called_once_with(server.DEFAULT_USER_ID)
-    assert scorer.call_args.kwargs["resume_tex"] == "a real base resume"
-    assert scorer.call_args.kwargs["resume_tex"] != ""
+    assert scorer.call_args.args[1] == "a real base resume"
+    assert scorer.call_args.args[1] != ""
 
 
 def test_load_base_resume_raises_rather_than_returning_empty_string():
@@ -88,9 +105,12 @@ async def test_search_jobs_returns_ranked_titles():
 
 @pytest.mark.asyncio
 async def test_search_jobs_falls_back_to_keyword_search_when_rpc_missing():
-    """The match_jobs_semantic migration this task adds is written but not
-    applied yet (db push is blocked; see the migration file). search_jobs
-    must still return real results against the live `jobs` table today.
+    """The match_jobs_semantic migration is written but not applied.
+
+    Confirmed live 2026-09-30 against the production database: the RPC returns
+    PGRST202 ("no matches were found in the schema cache") while its sibling
+    match_jobs_in_company resolves. search_jobs must still return real results
+    against the live `jobs` table today.
     """
     db = MagicMock()
     db.rpc.return_value.execute.side_effect = Exception(
