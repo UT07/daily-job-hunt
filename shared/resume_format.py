@@ -203,9 +203,15 @@ def adapt_parsed_resume_sections(parsed: dict) -> dict:
     if "header" in parsed:
         return parsed  # already the renderer's shape
 
+    # github/linkedin/website are joined here, not dropped. Measured on a real
+    # master PDF 2026-09-30: segment_sections captures both links in the
+    # `_header` block (99.6% of the document is segmented), the parser now asks
+    # for them, and this join is the last place they could be lost. A resume
+    # without the candidate's GitHub is materially worse -- it is how a reviewer
+    # verifies the projects listed two sections below.
     contact = " | ".join(
         str(parsed.get(k) or "").strip()
-        for k in ("email", "phone", "location")
+        for k in ("email", "phone", "location", "github", "linkedin", "website")
         if str(parsed.get(k) or "").strip()
     )
 
@@ -252,6 +258,12 @@ def adapt_parsed_resume_sections(parsed: dict) -> dict:
         projects.append({
             "name": entry.get("name") or entry.get("title", ""),
             "dates": entry.get("dates", ""),
+            # Carried so the renderer can emit \projectentryurl instead of the
+            # 3-arg \projectentry. parse_sections._parse_projects has always
+            # been able to READ a 5-arg entry; nothing ever produced one from a
+            # PDF, so every project link was dropped on upload.
+            "url": str(entry.get("url") or "").strip(),
+            "tech": entry.get("tech", ""),
             "bullets": _bullets(entry.get("bullets")),
         })
 
@@ -261,6 +273,19 @@ def adapt_parsed_resume_sections(parsed: dict) -> dict:
             certifications.append(entry)
         elif str(entry).strip():
             certifications.append({"name": str(entry).strip(), "date": ""})
+
+    # Lines that sit beside the certifications without being certifications:
+    # spoken languages, work authorisation, availability. Real resumes park
+    # them under an "Additional" heading in the same block, and segmentation
+    # puts them in `certifications` -- so before this they reached the parser
+    # and were discarded by a prompt that only asked for certification names.
+    # On the measured master that silently dropped three languages AND
+    # "Right to work: Stamp 1G", which is the single most load-bearing fact on
+    # the document for an Irish job search.
+    additional = [
+        str(line).strip() for line in (parsed.get("additional") or [])
+        if str(line).strip()
+    ]
 
     return {
         "header": {
@@ -272,6 +297,14 @@ def adapt_parsed_resume_sections(parsed: dict) -> dict:
         "skills": skills,
         "experience": experience,
         "projects": projects,
+        # Passed through whole, so `coursework` reaches the renderer. That field
+        # is why a real master PDF was REFUSED before: the education section
+        # lists named modules ("Cloud Architectures, Cloud DevOpsSec, Scalable
+        # Cloud Programming, ...") that the schema never captured, so
+        # section_recall measured education at 74% against an 88% floor and
+        # conversion_is_faithful rejected the upload -- leaving the user's old
+        # resume in place with no visible reason.
         "education": [e for e in (parsed.get("education") or []) if isinstance(e, dict)],
+        "additional": additional,
         "certifications": certifications,
     }

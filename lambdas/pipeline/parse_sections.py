@@ -570,8 +570,22 @@ def _rebuild_projects(projects: list[dict]) -> str:
         tech = _escape_tex(entry.get("tech", ""))
         bullets = entry.get("bullets", [])
 
-        # Use projectentry (3-arg, no URL) since we don't preserve the URL in parsed form
-        macro = f"\\projectentry{{{name}}}{{{dates}}}{{{tech}}}"
+        # 5-arg \projectentryurl when the entry has a link, 3-arg otherwise.
+        # _parse_projects above has always been able to READ both; nothing ever
+        # WROTE the 5-arg form, so a PDF upload dropped every project link --
+        # measured on a real master, all four repository URLs lost. The template
+        # defines \projectentryurl[5]{name}{dates}{url}{url_text}{tech}.
+        #
+        # url_text is the url with its scheme stripped, because that is what the
+        # template typesets in \texttt{} and a printed "https://" wastes a third
+        # of the line. The href keeps the full url so the link still resolves.
+        url = str(entry.get("url") or "").strip()
+        if url:
+            shown = re.sub(r"^https?://(www\.)?", "", url).rstrip("/")
+            macro = (f"\\projectentryurl{{{name}}}{{{dates}}}"
+                     f"{{{_escape_tex(url)}}}{{{_escape_tex(shown)}}}{{{tech}}}")
+        else:
+            macro = f"\\projectentry{{{name}}}{{{dates}}}{{{tech}}}"
         block = macro + "\n" + _bullets_to_itemize(bullets)
         if idx > 0:
             block = "\\vspace{0.10em}\n" + block
@@ -585,10 +599,19 @@ def _rebuild_education(education: list[dict]) -> str:
         school = _escape_tex(entry.get("school", ""))
         degree = _escape_tex(entry.get("degree", ""))
         dates = _escape_tex(entry.get("dates", ""))
+        # Coursework rendered as the template's own itemize shape (see
+        # resumes/sre_devops.tex's Education section). Dropping it is what made
+        # conversion_is_faithful refuse a real master upload: the named modules
+        # are 26% of that section's anchors.
+        coursework = _escape_tex(str(entry.get("coursework") or "").strip())
         block = (
             f"\\textbf{{{school}}} \\hfill \\textit{{{dates}}}\\\\[-0.15em]\n"
             f"\\textbf{{\\textit{{{degree}}}}}\\\\[-0.25em]"
         )
+        if coursework:
+            block += ("\n\\begin{itemize}\n"
+                      f"  \\item {coursework}\n"
+                      "\\end{itemize}")
         if idx > 0:
             block = "\\vspace{0.12em}\n" + block
         parts.append(block)
@@ -608,6 +631,24 @@ def _rebuild_certifications(certifications: list[dict]) -> str:
             lines.append(f"  \\item \\textbf{{\\textit{{{name}}}}}")
     items_block = "\n".join(lines)
     return f"\\begin{{itemize}}\n{items_block}\n\\end{{itemize}}"
+
+
+def _rebuild_additional(additional: list[str]) -> str:
+    """Languages, work authorisation and anything else beside the certifications.
+
+    Emitted under its own \\textbf label rather than a \\section*, because these
+    lines live inside the certifications block on real resumes and a seventh
+    section header would change the document's shape. The tailoring prompt
+    requires exactly six \\section* headers and check_required_sections counts
+    them, so adding one here would fail a structural guard to preserve content.
+    """
+    lines = [str(x).strip() for x in (additional or []) if str(x).strip()]
+    if not lines:
+        return ""
+    items = "\n".join(f"  \\item {_escape_tex(ln)}" for ln in lines)
+    return (r"\vspace{0.10em}" + "\n"
+            + r"\textbf{Additional}\\[-0.25em]" + "\n"
+            + f"\\begin{{itemize}}\n{items}\n\\end{{itemize}}")
 
 
 # ---------------------------------------------------------------------------
@@ -647,6 +688,7 @@ def rebuild_tex_from_sections(sections: dict, base_tex: str) -> str:
     projects = sections.get("projects", [])
     education = sections.get("education", [])
     certifications = sections.get("certifications", [])
+    additional = sections.get("additional", [])
 
     body_parts = [
         "%==================== HEADER ====================",
@@ -675,6 +717,7 @@ def rebuild_tex_from_sections(sections: dict, base_tex: str) -> str:
         "%==================== CERTIFICATIONS ====================",
         r"\section*{Certifications}",
         _rebuild_certifications(certifications),
+        _rebuild_additional(additional),
     ]
 
     body = "\n".join(body_parts)
