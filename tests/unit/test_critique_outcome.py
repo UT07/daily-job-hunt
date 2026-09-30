@@ -34,6 +34,12 @@ def _cand(model, text="body"):
 TWO = [_cand("groq/gpt-oss-120b", "first"), _cand("gemini/flash", "second")]
 
 
+# Three critics from distinct families, which is what select_critics returns.
+C1 = {"name": "nvidia/nemotron-3-super-120b-a12b", "model": "nvidia/nemotron"}
+C2 = {"name": "groq/gpt-oss-20b", "model": "groq/gpt-oss"}
+C3 = {"name": "gemini/gemini-3.6-flash", "model": "gemini/flash"}
+
+
 def test_every_outcome_is_named():
     assert set(CRITIQUE_OUTCOMES) == {
         "adjudicated", "single_candidate", "no_critic_family",
@@ -42,7 +48,7 @@ def test_every_outcome_is_named():
 
 
 def test_a_real_verdict_is_marked_adjudicated():
-    with patch.object(nodes, "select_critic", return_value={"name": "c", "model": "m/x"}), \
+    with patch.object(nodes, "select_critics", return_value=[C1]), \
          patch.object(nodes, "call_one", return_value={"content": "1: 10\n2: 90"}), \
          patch.object(nodes, "_parse_critic_scores", return_value=[10, 90]):
         out = critique_node({"candidates": TWO})
@@ -61,7 +67,7 @@ def test_no_available_critic_is_named_and_logged(caplog):
     at all, in a system whose only view of the council was its log lines."""
     import logging
     with caplog.at_level(logging.WARNING), \
-         patch.object(nodes, "select_critic", return_value=None):
+         patch.object(nodes, "select_critics", return_value=[]):
         out = critique_node({"candidates": TWO})
     assert out["critique_outcome"] == "no_critic_family"
     assert any("no_critic_family" in r.getMessage() for r in caplog.records), \
@@ -69,7 +75,7 @@ def test_no_available_critic_is_named_and_logged(caplog):
 
 
 def test_a_failed_critic_call_is_named():
-    with patch.object(nodes, "select_critic", return_value={"name": "c", "model": "m/x"}), \
+    with patch.object(nodes, "select_critics", return_value=[C1]), \
          patch.object(nodes, "call_one", return_value=None):
         out = critique_node({"candidates": TWO})
     assert out["critique_outcome"] == "critic_call_failed"
@@ -80,7 +86,7 @@ def test_unparseable_output_is_named_and_the_raw_text_is_logged(caplog):
     something anyone can act on."""
     import logging
     with caplog.at_level(logging.WARNING), \
-         patch.object(nodes, "select_critic", return_value={"name": "c", "model": "m/x"}), \
+         patch.object(nodes, "select_critics", return_value=[C1]), \
          patch.object(nodes, "call_one", return_value={"content": "I prefer the first one."}), \
          patch.object(nodes, "_parse_critic_scores", return_value=[]):
         out = critique_node({"candidates": TWO})
@@ -93,7 +99,7 @@ def test_every_non_adjudicated_outcome_returns_candidate_one():
     """Documents the fallback honestly: the winner really is just the first
     candidate in all four cases."""
     cases = [
-        (lambda: patch.object(nodes, "select_critic", return_value=None), "no_critic_family"),
+        (lambda: patch.object(nodes, "select_critics", return_value=[]), "no_critic_family"),
     ]
     for ctx, expected in cases:
         with ctx():
@@ -131,3 +137,103 @@ def test_tailoring_records_it():
         "the update must tolerate the column being absent; PostgREST fails the "
         "WHOLE update on an unknown column and tailoring_model would be lost too"
     )
+
+
+# ---------------------------------------------------------------------------
+# One critic was a single point of failure
+#
+# Measured in production 2026-09-30 across one real batch: every adjudication
+# that did not happen came from this slot, never from generation.
+#
+#   [council] outcome=critic_call_failed — critic nvidia/nemotron-3-super-120b-a12b
+#             returned nothing; returning candidate 1 unadjudicated
+#   [council] outcome=critic_call_failed — critic nvidia/nemotron-3-ultra-550b-a55b
+#             returned nothing
+#   [council] outcome=critic_unparseable — ... Raw: 'We need to evaluate two
+#             candidates based on criteria: ACCURACY, COMPLETENESS...'
+#
+# The last one is the model narrating its plan instead of emitting the JSON.
+# The council gave up on the first failure every time and shipped candidate 1
+# unreviewed, which is the whole point of having a council.
+# ---------------------------------------------------------------------------
+
+def test_a_second_critic_is_tried_when_the_first_returns_nothing():
+    calls = []
+
+    def _call(critic, *a, **kw):
+        calls.append(critic["name"])
+        return None if critic is C1 else {"content": "1: 10\n2: 90"}
+
+    with patch.object(nodes, "select_critics", return_value=[C1, C2, C3]), \
+         patch.object(nodes, "call_one", side_effect=_call), \
+         patch.object(nodes, "_parse_critic_scores", return_value=[10, 90]):
+        out = critique_node({"candidates": TWO})
+
+    assert out["critique_outcome"] == "adjudicated"
+    assert out["winner"]["content"] == "second"
+    assert calls == [C1["name"], C2["name"]], "did not stop at the first success"
+
+
+def test_an_unparseable_first_critic_does_not_stop_the_second():
+    """The production failure: NVIDIA answers with prose, and that was fatal."""
+    def _scores(content, n):
+        return [] if content.startswith("We need to evaluate") else [90, 10]
+
+    with patch.object(nodes, "select_critics", return_value=[C1, C2]), \
+         patch.object(nodes, "call_one", side_effect=[
+             {"content": "We need to evaluate two candidates based on criteria"},
+             {"content": "1: 90\n2: 10"}]), \
+         patch.object(nodes, "_parse_critic_scores", side_effect=_scores):
+        out = critique_node({"candidates": TWO})
+
+    assert out["critique_outcome"] == "adjudicated"
+    assert out["winner"]["content"] == "first"
+
+
+def test_all_critics_failing_says_how_many_were_tried(caplog):
+    """An outcome that cannot distinguish "one critic was unlucky" from "every
+    family refused" is the shape rule 2 warns about. The vocabulary is
+    unchanged -- it is recorded in jobs.critique_outcome and old rows must stay
+    comparable -- so the count lives in the log."""
+    import logging
+    with caplog.at_level(logging.WARNING), \
+         patch.object(nodes, "select_critics", return_value=[C1, C2, C3]), \
+         patch.object(nodes, "call_one", return_value=None):
+        out = critique_node({"candidates": TWO})
+
+    assert out["critique_outcome"] == "critic_call_failed"
+    assert out["winner"] is TWO[0]
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "all 3 critic(s) failed" in text, text
+    for critic in (C1, C2, C3):
+        assert critic["name"] in text, f"{critic['name']} missing from {text}"
+
+
+def test_unparseable_wins_the_outcome_when_any_critic_was_unreadable():
+    """Two ways to fail; the outcome must name the one that actually happened.
+    Reporting "returned nothing" for a critic that answered would send the next
+    reader after the wrong provider."""
+    with patch.object(nodes, "select_critics", return_value=[C1, C2]), \
+         patch.object(nodes, "call_one", side_effect=[
+             {"content": "prose, not JSON"}, None]), \
+         patch.object(nodes, "_parse_critic_scores", return_value=[]):
+        out = critique_node({"candidates": TWO})
+    assert out["critique_outcome"] == "critic_unparseable"
+
+
+def test_critics_are_requested_from_families_that_did_not_generate():
+    """Families, not models: a second NVIDIA entry fails the same way."""
+    seen = {}
+
+    def _select(exclude_families, n=1):
+        seen["exclude"] = set(exclude_families)
+        seen["n"] = n
+        return [C2]
+
+    with patch.object(nodes, "select_critics", side_effect=_select), \
+         patch.object(nodes, "call_one", return_value={"content": "x"}), \
+         patch.object(nodes, "_parse_critic_scores", return_value=[1, 2]):
+        critique_node({"candidates": TWO})
+
+    assert seen["n"] == nodes.CRITIC_ATTEMPTS > 1, "only one critic was requested"
+    assert seen["exclude"], "the generators' families were not excluded"

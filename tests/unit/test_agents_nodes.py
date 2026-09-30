@@ -61,7 +61,7 @@ def test_generate_node_contributes_empty_list_when_all_fallbacks_fail():
 
 
 def test_critique_node_scores_and_picks_winner():
-    with patch.object(nodes, "select_critic", return_value=PROV), \
+    with patch.object(nodes, "select_critics", return_value=[PROV]), \
          patch.object(nodes, "call_one", return_value={"content": "[40, 91]", "provider": "c", "model": "m"}):
         out = nodes.critique_node({"candidates": [CAND_A, CAND_B], "task_description": "t"})
     assert out["scores"] == [40, 91]
@@ -76,7 +76,7 @@ def test_critique_node_short_circuits_on_single_candidate():
 
 
 def test_critique_node_falls_back_to_first_when_critic_unparseable():
-    with patch.object(nodes, "select_critic", return_value=PROV), \
+    with patch.object(nodes, "select_critics", return_value=[PROV]), \
          patch.object(nodes, "call_one", return_value={"content": "not json", "provider": "c", "model": "m"}):
         out = nodes.critique_node({"candidates": [CAND_A, CAND_B], "task_description": "t"})
     assert out["winner"] == CAND_A
