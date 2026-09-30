@@ -65,6 +65,12 @@ class TestDefaults:
             "bullets_per_entry",
             "prefer",
             "rename",
+            # Judgement keys, added 2026-09-30. `writing` carries the quality bar
+            # ("impact measured rather than looking like a list of tools") and is
+            # in DEFAULTS because it is not user-specific. `emphasise` is
+            # conditional on the target role, like `rename`, and is empty here.
+            "writing",
+            "emphasise",
         }
 
     def test_defaults_name_nobody(self):
