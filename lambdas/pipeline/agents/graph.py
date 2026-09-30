@@ -21,6 +21,7 @@ import logging
 import os
 import uuid
 from collections import OrderedDict
+from typing import NamedTuple
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -42,7 +43,12 @@ logger = logging.getLogger()
 
 
 def _fan_out(state: dict) -> list[Send]:
-    """Dispatch one generate branch per selected provider."""
+    """Dispatch one generate branch per selected provider.
+
+    `trace_id` rides along because a Send payload REPLACES the state for the
+    node it targets -- generate_node never sees CouncilState, so without this
+    its log lines could not name the run they belong to.
+    """
     return [
         Send("generate", {
             "provider": provider,
@@ -50,6 +56,7 @@ def _fan_out(state: dict) -> list[Send]:
             "system": state.get("system", ""),
             "temperature": state.get("temperature", 0.3),
             "max_tokens": state.get("max_tokens", 4096),
+            "trace_id": state.get("trace_id", ""),
         })
         for provider in state["generators"]
     ]
@@ -249,7 +256,80 @@ def build_council_graph(checkpointer=None):
     return builder.compile(checkpointer=checkpointer or MemorySaver())
 
 
-def _configure_langsmith_tracing() -> None:
+# ---------------------------------------------------------------------------
+# LangSmith tracing
+# ---------------------------------------------------------------------------
+#
+# Measured against the live system on 2026-09-30:
+#
+#   * There is no `/naukribaba/LANGSMITH_API_KEY`. The parameter this code
+#     reads, and the one that exists, is LANGSMITH_KEY_PARAM below.
+#   * It holds a well-formed `lsv2_sk_` key that api.smith.langchain.com and
+#     eu.api.smith.langchain.com both answer 403 to, on every authenticated
+#     endpoint. A fabricated key gets the same 403; sending NO key gets 401.
+#     So the stored credential is in the "not recognised" class -- revoked,
+#     deleted, or belonging to a workspace that no longer grants access --
+#     not "wrong region" and not "malformed".
+#   * The wiring around it works: naukribaba-tailor-resume's log group carries
+#     20+ `Failed to POST .../runs/multipart ... 403` warnings from the
+#     langsmith SDK on 2026-09-28, which only happens if LANGCHAIN_TRACING_V2
+#     and LANGCHAIN_API_KEY reached the exporter. Tracing starts working the
+#     moment that one parameter holds a live key. Nothing else is missing.
+#
+# What was missing on OUR side is the status. A 403 disabled tracing and
+# returned; a function that never got LANGCHAIN_TRACING_V2 returned; a healthy
+# container returned. All three logged the same thing about whether traces
+# exist, which is nothing. See CLAUDE.md rule 2.
+
+LANGSMITH_KEY_PARAM = "/naukribaba/LANGCHAIN_API_KEY"
+LANGSMITH_DEFAULT_ENDPOINT = "https://api.smith.langchain.com"
+
+# Logged verbatim so `filter-log-events --filter-pattern` can select one
+# outcome. Grep for LANGSMITH_LOG_MARKER to find the line in any log group.
+LANGSMITH_LOG_MARKER = "[council] langsmith"
+
+LANGSMITH_UNRESOLVED = "unresolved"          # _configure has not run yet
+LANGSMITH_OFF = "off_not_requested"          # LANGCHAIN_TRACING_V2 is not "true"
+LANGSMITH_ON = "on"                          # key fetched from SSM and accepted
+LANGSMITH_ON_KEY_PRESET = "on_key_preset"    # key already in env, not probed
+LANGSMITH_OFF_SSM_ERROR = "off_ssm_error"    # SSM lookup raised
+LANGSMITH_OFF_KEY_ABSENT = "off_key_absent"  # parameter present but empty
+LANGSMITH_OFF_KEY_REJECTED = "off_key_rejected"  # LangSmith answered 401/403
+
+# Only these two mean a trace will actually be exported.
+LANGSMITH_EXPORTING = (LANGSMITH_ON, LANGSMITH_ON_KEY_PRESET)
+
+_LANGSMITH_STATUS: str | None = None
+
+
+def langsmith_status() -> str:
+    """The outcome _configure_langsmith_tracing settled on for this container.
+
+    Read per run (council_complete_langgraph logs it next to the trace_id) so
+    a reader can tell, for a specific trace_id, whether looking for it in
+    LangSmith is worth the trip.
+    """
+    return _LANGSMITH_STATUS or LANGSMITH_UNRESOLVED
+
+
+def _langsmith_endpoint() -> str:
+    return os.environ.get("LANGCHAIN_ENDPOINT", LANGSMITH_DEFAULT_ENDPOINT)
+
+
+class LangSmithProbe(NamedTuple):
+    """Probe verdict plus the reason, which is the actionable half.
+
+    `detail` names the HTTP status and the host that produced it. The previous
+    log said "(401/403)" -- true, unactionable, and unable to distinguish a
+    revoked key from a key that is fine but on the other region's host.
+    Never contains the key.
+    """
+
+    accepted: bool
+    detail: str
+
+
+def _configure_langsmith_tracing(force: bool = False) -> str:
     """Populate LANGCHAIN_API_KEY from SSM when tracing is on but the key
     isn't already in the environment.
 
@@ -267,70 +347,134 @@ def _configure_langsmith_tracing() -> None:
 
     So the key reaches this process the same way every other secret in this
     codebase already does -- get_param() at runtime, gated by the
-    SSMParameterReadPolicy IAM grant the three council-using functions
+    SSMParameterReadPolicy IAM grant the four council-using functions
     already carry -- set into the environment once per warm container, which
     is where langsmith reads it from on every traced call after that.
 
     Never allowed to raise: a failed SSM lookup means no tracing for this
     run, never a failure to generate.
+
+    Returns the status token it settled on, and logs exactly one line naming
+    it. Every outcome that means "no traces will be exported" logs at WARNING,
+    so it reaches CloudWatch whatever the root logger level; the two that mean
+    traces WILL be exported log at INFO, which the council-running handlers
+    raise the root level to admit (guarded by
+    test_every_council_handler_lets_info_records_out).
+
+    Decided once per container. A second call would read the key it exported
+    on the first and report `on_key_preset` (unprobed) in place of the `on` it
+    had already established -- a worse answer plus a duplicate line. `force`
+    re-asks deliberately.
+    """
+    global _LANGSMITH_STATUS
+    if _LANGSMITH_STATUS is not None and not force:
+        return _LANGSMITH_STATUS
+    status, detail = _resolve_langsmith_tracing()
+    _LANGSMITH_STATUS = status
+    emit = logger.info if status in (*LANGSMITH_EXPORTING, LANGSMITH_OFF) else logger.warning
+    emit(
+        "%s status=%s project=%s endpoint=%s — %s",
+        LANGSMITH_LOG_MARKER,
+        status,
+        os.environ.get("LANGCHAIN_PROJECT") or "(unset)",
+        _langsmith_endpoint(),
+        detail,
+    )
+    return status
+
+
+def _resolve_langsmith_tracing() -> tuple[str, str]:
+    """Do the work; report (status, human-readable reason). Never logs.
+
+    Split out from the logging so each outcome is one return statement that a
+    test can reach directly, rather than a branch distinguishable only by
+    which string got logged.
     """
     if os.environ.get("LANGCHAIN_TRACING_V2", "").strip().lower() != "true":
-        return
+        return LANGSMITH_OFF, (
+            'LANGCHAIN_TRACING_V2 is not "true" here, so nothing about this '
+            "container's council runs will appear in LangSmith"
+        )
     if os.environ.get("LANGCHAIN_API_KEY"):
-        return
+        return LANGSMITH_ON_KEY_PRESET, (
+            "LANGCHAIN_API_KEY was already in the environment; exporting with "
+            "it unprobed"
+        )
+
     try:
         from ai_helper import get_param  # flat import — pytest / zip Lambda
     except ImportError:
         from lambdas.pipeline.ai_helper import get_param  # container image
     try:
-        key = get_param("/naukribaba/LANGCHAIN_API_KEY")
-    except Exception:
-        logger.warning(
-            "[council] LangSmith tracing requested (LANGCHAIN_TRACING_V2=true) but "
-            "LANGCHAIN_API_KEY could not be fetched from SSM — continuing without tracing"
-        )
+        key = get_param(LANGSMITH_KEY_PARAM)
+    except Exception as exc:
         os.environ["LANGCHAIN_TRACING_V2"] = "false"
-        return
+        return LANGSMITH_OFF_SSM_ERROR, (
+            f"could not read {LANGSMITH_KEY_PARAM} from SSM "
+            f"({exc.__class__.__name__}: {exc}) — check the function's "
+            "SSMParameterReadPolicy grant"
+        )
 
-    if not _langsmith_key_accepted(key):
-        # Fetching a key is not the same as having a working one. On
-        # 2026-09-28 every traced call logged "Failed to POST
-        # .../runs/multipart ... 403 Forbidden" — one warning per LLM call,
-        # drowning the log that the pipeline's real diagnostics live in, and
-        # costing a doomed network round trip each time. A rejected key is a
-        # permanent condition for this process, so treat it like the
-        # _dead_providers quarantine: decide once, not per call.
-        logger.warning(
-            "[council] LangSmith rejected the API key (401/403) — tracing disabled for "
-            "this container. Rotate /naukribaba/LANGCHAIN_API_KEY to restore it."
-        )
+    if not key:
+        # Distinct from a rejection on purpose. Folding an empty parameter into
+        # "LangSmith rejected the key" sends the reader off to rotate a
+        # credential that is not there to rotate.
         os.environ["LANGCHAIN_TRACING_V2"] = "false"
-        return
+        return LANGSMITH_OFF_KEY_ABSENT, (
+            f"{LANGSMITH_KEY_PARAM} resolved to an empty value — put a "
+            "LangSmith key in it (SecureString) to start exporting"
+        )
+
+    probe = _langsmith_probe(key)
+    if not probe.accepted:
+        # Fetching a key is not the same as having a working one. On 2026-09-28
+        # every traced call logged "Failed to POST .../runs/multipart ... 403
+        # Forbidden" — one warning per LLM call, drowning the log that the
+        # pipeline's real diagnostics live in, and costing a doomed network
+        # round trip each time. A rejected key is a permanent condition for
+        # this process, so treat it like the _dead_providers quarantine:
+        # decide once, not per call.
+        os.environ["LANGCHAIN_TRACING_V2"] = "false"
+        return LANGSMITH_OFF_KEY_REJECTED, (
+            f"LangSmith refused the key held in {LANGSMITH_KEY_PARAM} "
+            f"({probe.detail}); tracing is off for this container. Rotate that "
+            "parameter with a live LangSmith key to restore it"
+        )
 
     os.environ["LANGCHAIN_API_KEY"] = key
+    return LANGSMITH_ON, f"key from {LANGSMITH_KEY_PARAM} accepted ({probe.detail})"
 
 
-def _langsmith_key_accepted(key: str) -> bool:
+def _langsmith_probe(key: str) -> LangSmithProbe:
     """One cheap auth probe, so a dead key is discovered once per container.
 
     Fails OPEN on anything that is not an explicit rejection: a network blip
     or an endpoint change must not silently disable working tracing. Only a
     401 or 403 — the server actively refusing this credential — turns it off.
+
+    `/api/v1/sessions` is the right endpoint to ask: it requires auth, so it
+    separates a bad credential (403) from no credential (401), both of which
+    were confirmed against the live API on 2026-09-30. `/info` is NOT usable
+    for this — it answers 200 for a fabricated key.
+
+    `detail` carries the status code and host, never the key.
     """
+    url = f"{_langsmith_endpoint()}/api/v1/sessions?limit=1"
     if not key:
-        return False
+        return LangSmithProbe(False, "no key to probe")
     try:
         import httpx
 
-        resp = httpx.get(
-            f"{os.environ.get('LANGCHAIN_ENDPOINT', 'https://api.smith.langchain.com')}"
-            "/api/v1/sessions?limit=1",
-            headers={"x-api-key": key},
-            timeout=6,
+        resp = httpx.get(url, headers={"x-api-key": key}, timeout=6)
+    except Exception as exc:
+        return LangSmithProbe(
+            True,
+            f"probe inconclusive — {exc.__class__.__name__}: {exc} from {url}; "
+            "leaving tracing on rather than guessing",
         )
-        return resp.status_code not in (401, 403)
-    except Exception:
-        return True  # can't tell — leave tracing on rather than guess
+    if resp.status_code in (401, 403):
+        return LangSmithProbe(False, f"HTTP {resp.status_code} from {url}")
+    return LangSmithProbe(True, f"HTTP {resp.status_code} from {url}")
 
 
 _GRAPH = None
@@ -372,7 +516,18 @@ def council_complete_langgraph(
     rather than storing `None` in a `list[str]` field.
     """
     trace_id = str(uuid.uuid4())
-    final = _get_graph().invoke(
+    compiled = _get_graph()  # resolves langsmith_status() on the first call
+    # The join key. One line per run, naming the trace_id every downstream
+    # [council] line also carries AND whether a trace for it exists at all --
+    # so "I cannot find this trace_id in LangSmith" resolves to a cause
+    # instead of a search.
+    logger.info(
+        "[council] run trace_id=%s task=%s langsmith=%s",
+        trace_id,
+        task,
+        langsmith_status(),
+    )
+    final = compiled.invoke(
         {
             "task": task,
             "prompt": prompt,
@@ -388,7 +543,17 @@ def council_complete_langgraph(
             "repair_attempts": 0,
             "trace_id": trace_id,
         },
-        config={"configurable": {"thread_id": trace_id}},
+        config={
+            "configurable": {"thread_id": trace_id},
+            # LangGraph does copy thread_id into run metadata, which is how
+            # LangSmith's Threads view groups runs -- but that is somebody
+            # else's implementation detail and the CloudWatch line promises
+            # this id is findable. Set it explicitly under our own key so the
+            # promise holds even if that behaviour changes, and so a metadata
+            # search on trace_id works without knowing LangGraph's conventions.
+            "metadata": {"trace_id": trace_id, "council_task": task},
+            "run_name": f"council:{task}",
+        },
     )
     winner = final.get("winner")
     if not winner:

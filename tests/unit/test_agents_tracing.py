@@ -17,10 +17,22 @@ real LangSmith UI.
 import os
 from unittest.mock import patch
 
+import pytest
+
 from agents import graph as graph_mod
 
 CAND = {"content": "x", "provider": "p", "model": "m"}
 P1 = {"name": "groq/a", "model": "openai/gpt-oss-120b"}
+
+
+@pytest.fixture(autouse=True)
+def _unresolved_tracing_status(monkeypatch):
+    """_configure_langsmith_tracing decides once per container and caches the
+    answer. Each test here wants it to actually decide, so clear the cache --
+    otherwise a test inherits whichever status ran first in the session.
+    """
+    monkeypatch.setattr(graph_mod, "_LANGSMITH_STATUS", None, raising=False)
+    yield
 
 
 def test_invoke_returns_trace_id_alongside_winner():
@@ -95,7 +107,8 @@ def test_configure_langsmith_tracing_fetches_key_when_tracing_enabled(monkeypatc
     # this test is about the SSM fetch path, and without the stub it would
     # make a real network call to LangSmith with a fake key.
     with patch("ai_helper.get_param", return_value="sk-test-key") as mk, \
-         patch.object(graph_mod, "_langsmith_key_accepted", return_value=True):
+         patch.object(graph_mod, "_langsmith_probe",
+                      return_value=graph_mod.LangSmithProbe(True, "HTTP 200")):
         graph_mod._configure_langsmith_tracing()
         # Assert inside the patch context, before LANGCHAIN_API_KEY is
         # cleaned up below and before monkeypatch unwinds LANGCHAIN_TRACING_V2.
