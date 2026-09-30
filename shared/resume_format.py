@@ -14,6 +14,7 @@ later as "Regenerate failed: Pipeline failed".
 Selection is newest-wins, so an upload that cannot be tailored silently
 disables tailoring entirely.
 """
+from typing import NamedTuple
 
 # Both markers, because either alone is ambiguous: a body fragment can carry
 # \begin{document} with no class, and a preamble-only file has a class with no
@@ -55,6 +56,75 @@ def pick_latest_tailorable(rows: list[dict]) -> tuple[dict | None, int]:
             return row, skipped
         skipped += 1
     return None, skipped
+
+
+class BaseResume(NamedTuple):
+    """What every generator must agree on, plus enough to explain a refusal."""
+
+    row: dict | None
+    skipped: int
+    newest_tex: str | None
+    n_rows: int = 0
+
+    @property
+    def tex(self) -> str:
+        """Empty string, never None -- callers concatenate this into prompts."""
+        return (self.row or {}).get("tex_content", "") or ""
+
+    def why_unusable(self, user_id: str = "") -> str:
+        """Message for the person who uploaded it, when `row` is None.
+
+        `n_rows` is carried rather than inferred from `newest_tex`, because
+        "no resume has ever been uploaded" and "the newest upload produced no
+        text" are two different operator situations with two different
+        remedies, and describe_why_not_latex(None) answers the second for
+        both -- it returns "the file produced no text", which is actively
+        misleading when there is no file. A test caught this: the truthy
+        string meant the no-rows branch could never be reached.
+        """
+        if self.n_rows == 0:
+            return f"no resume found for user {user_id}" if user_id else "no resume found"
+        return describe_why_not_latex(self.newest_tex) or "it is not a LaTeX document"
+
+
+def fetch_tailorable_resume(db, user_id: str, *, limit: int = 10) -> BaseResume:
+    """The base resume every generator must agree on. One rule, one place.
+
+    `pick_latest_tailorable` was added after the 2026-09-28 incident above and
+    wired into tailor_resume.py only. score_batch.py and
+    generate_cover_letter.py kept their own read -- `.limit(1)` with no
+    validity check at all -- so the repository held THREE different rules for
+    "which resume is the user's":
+
+        tailor_resume.py:543           limit(10) + pick_latest_tailorable
+        score_batch.py:203             limit(1),  no check
+        generate_cover_letter.py:217   limit(1),  no check
+
+    They agree today only because both of this user's two rows happen to be
+    valid LaTeX. The failure is not really about LaTeX though -- it is
+    DIVERGENCE. One non-LaTeX upload becomes the newest row, and from that
+    moment tailoring uses the older LaTeX document while scoring and the cover
+    letter use the newer extracted text. The system then scores, and writes a
+    letter about, a different document than the one it sends to the employer,
+    and every layer reports success. That is CLAUDE.md rule 2, and rule 10: the
+    guard existed, the data existed, and they met in one place out of three.
+
+    So all three read through here. If nothing is tailorable the caller gets
+    `row=None` and fails the way it already fails for "no resume" -- loud and
+    consistent -- rather than quietly generating from a document the tailorer
+    refuses. `skipped` is returned so every caller can log that a newer resume
+    was passed over; "why is it using my old one?" should have an answer in the
+    logs at any of the three, not only one. `newest_tex` is carried so a
+    refusal can say WHAT was wrong with the upload rather than just that
+    something was.
+    """
+    rows = (
+        db.table("user_resumes").select("*").eq("user_id", user_id)
+        .order("created_at", desc=True).limit(limit).execute().data
+    ) or []
+    row, skipped = pick_latest_tailorable(rows)
+    newest_tex = rows[0].get("tex_content") if rows else None
+    return BaseResume(row=row, skipped=skipped, newest_tex=newest_tex, n_rows=len(rows))
 
 
 # --- Did a conversion actually carry the content across? ---------------------

@@ -214,9 +214,18 @@ def handler(event, context):
         return {"error": f"Job {job_hash} not found"}
     job = job_row.data[0]
 
-    resume = db.table("user_resumes").select("*").eq("user_id", user_id) \
-        .order("created_at", desc=True).limit(1).execute()
-    resume_tex = resume.data[0].get("tex_content", "") if resume.data else ""
+    # Same shared accessor as tailor_resume and score_batch. A local limit(1)
+    # here meant the letter could describe achievements from a document the
+    # tailorer had rejected -- see shared.resume_format.fetch_tailorable_resume.
+    from shared.resume_format import fetch_tailorable_resume
+
+    base = fetch_tailorable_resume(db, user_id)
+    if base.skipped:
+        logger.warning(
+            "[cover_letter] skipped %d newer resume(s) that are not LaTeX — writing "
+            "from the same row the tailorer will use", base.skipped,
+        )
+    resume_tex = base.tex
 
     description = job.get("description", "") or ""
 

@@ -540,24 +540,17 @@ def handler(event, context):
     # upload silently replaced a working LaTeX base resume and every tailoring
     # attempt failed with "base resume has no \begin{document}", surfacing in
     # the UI as "Regenerate failed: Pipeline failed".
-    resumes = db.table("user_resumes").select("*").eq("user_id", user_id) \
-        .order("created_at", desc=True).limit(10).execute()
-    from shared.resume_format import describe_why_not_latex, pick_latest_tailorable
+    from shared.resume_format import describe_why_not_latex, fetch_tailorable_resume
 
-    row, skipped = pick_latest_tailorable(resumes.data or [])
-    if skipped:
+    base = fetch_tailorable_resume(db, user_id)
+    if base.skipped:
         logger.warning(
             "[tailor] skipped %d newer resume(s) that are not LaTeX — %s",
-            skipped, describe_why_not_latex((resumes.data or [{}])[0].get("tex_content")),
+            base.skipped, describe_why_not_latex(base.newest_tex),
         )
-    if row is None:
-        newest = (resumes.data or [{}])[0].get("tex_content")
-        raise TailorError(
-            "No tailorable base resume: " + (describe_why_not_latex(newest) or
-            f"no resume found for user {user_id}")
-        )
-    resume = type("R", (), {"data": [row]})()
-    base_tex = resume.data[0].get("tex_content", "")
+    if base.row is None:
+        raise TailorError("No tailorable base resume: " + base.why_unusable(user_id))
+    base_tex = base.tex
 
     # Read user profile so the header-marker validation uses THIS user's
     # name + email, not hardcoded "Utkarsh Singh / 254utkarsh@gmail.com".
