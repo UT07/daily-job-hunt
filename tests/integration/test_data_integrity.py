@@ -617,6 +617,9 @@ class TestScoreBatchJobRecords:
                     None,
                 )
 
+    # This decorator was missing until 2026-09-30, so CI's `pytest -m
+    # integration` deselected this test and 23 of 24 ran with nothing saying so.
+    @pytest.mark.integration
     def test_partial_db_insert_failure_still_degrades_quietly(self):
         """One bad row must not fail the whole chunk -- only a total loss does."""
         mock_db = MagicMock()
