@@ -26,7 +26,17 @@ COUNTABLE — the model is told, and the output is counted:
 
 JUDGEMENT — prompt text only, because there is nothing to count:
 
-    prefer, rename
+    prefer, rename, writing, emphasise
+
+`writing` and `emphasise` are judgement by necessity, not by choice. "Every
+bullet states an outcome and a number" is checkable in principle -- count the
+digits -- but a count cannot tell a real metric from an invented one, and the
+cure for a resume that reads as a tool inventory must not be a resume that
+invents percentages. So they are stated and not enforced, and the fabrication
+guard in lambdas/pipeline/guardrails/output_guards.py remains the thing that
+stops a number the base resume never contained. Named here so the split stays
+honest: these two are requests, and this file's own docstring says what that
+means.
 
 Page count is a third case: countable, but only against a compiled PDF, not
 against LaTeX source. It is carried here and checked by whoever holds the PDF;
@@ -57,6 +67,30 @@ DEFAULTS: dict[str, Any] = {
     "bullets_per_entry": {"min": 3, "max": 7},
     "prefer": [],
     "rename": [],
+    # Writing quality. In DEFAULTS rather than the user row because it is not
+    # user-specific -- every resume is better for quantified impact than for a
+    # tool inventory -- and because nothing in the prompt said it. The user's
+    # 2026-09-30 report: "the writing should be of very high quality with impact
+    # measured rather than looking like a list of tools".
+    "writing": [
+        "Every bullet states an OUTCOME and, wherever the base resume supports "
+        "one, a NUMBER: latency, cost, uptime, throughput, error rate, time "
+        "saved, scale, headcount. A bullet with no measurable result is a weak "
+        "bullet.",
+        "Lead each bullet with a concrete action, not a technology. "
+        '"Cut p99 checkout latency 40% by sharding the session store" beats '
+        '"Worked with Redis, Kubernetes and Terraform".',
+        "Technologies appear where they earned the result, not as a list. If a "
+        "bullet is mostly comma-separated tool names it is a Skills entry in "
+        "the wrong place -- rewrite it or drop it.",
+        "Never invent or inflate a number. Use only figures the base resume "
+        "already states; if it gives none for an achievement, describe the "
+        "outcome qualitatively instead.",
+    ],
+    # Conditional emphasis, keyed on the target role like `rename`. Empty by
+    # default: which axis to foreground depends on the roles a given candidate
+    # is pursuing.
+    "emphasise": [],
 }
 
 _COUNTABLE = ("max_experience_entries", "max_projects")
@@ -122,6 +156,19 @@ def render_for_prompt(policy: dict[str, Any]) -> str:
         lines.append("")
         lines.append("PREFERENCES when choosing between entries:")
         lines += [f"- {rule}" for rule in p["prefer"]]
+    if p["writing"]:
+        lines.append("")
+        lines.append("WRITING QUALITY (this is the difference between a resume "
+                     "that reads as achievements and one that reads as an "
+                     "inventory):")
+        lines += [f"- {rule}" for rule in p["writing"]]
+    if p["emphasise"]:
+        lines.append("")
+        lines.append("EMPHASIS, when the target role matches:")
+        for rule in p["emphasise"]:
+            when = rule.get("when") if isinstance(rule, dict) else None
+            what = rule.get("what") if isinstance(rule, dict) else str(rule)
+            lines.append(f"- {what}" + (f" — when the target role involves {when}." if when else ""))
     if p["rename"]:
         lines.append("")
         lines.append("TITLE ADJUSTMENTS (same role, wording suited to the target):")
