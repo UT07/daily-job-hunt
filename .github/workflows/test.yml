@@ -147,10 +147,35 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
 
+  # This job could not fail until 2026-09-30. Its one step ended in `|| true`
+  # and, unlike the four REPORT jobs below (whose `|| true` went in PR #154
+  # because they already carried `continue-on-error: true`), it had no
+  # continue-on-error — so `|| true` was the only thing between a failing
+  # integration suite and a red build. It was the last such step in the repo.
+  #
+  # It is now a real, blocking gate. Measured before deciding, which is the
+  # whole point: 24 tests collect, all 24 execute, none skip, all pass, in
+  # 0.04s. They need no credentials and touch no network — tests/integration/
+  # test_data_integrity.py mocks every Supabase call, and the suite passes with
+  # SUPABASE_URL and SUPABASE_SERVICE_KEY unset entirely. So the usual reason to
+  # keep a suite non-blocking (it needs secrets CI may not have) does not apply,
+  # and `continue-on-error: true` would be marking a healthy suite optional
+  # rather than being honest about a sick one.
+  #
+  # Two other things went with the `|| true`:
+  #   * `-m integration` is gone. The marker filter silently dropped
+  #     test_partial_db_insert_failure_still_degrades_quietly, which never got
+  #     the decorator — 23 of 24 tests ran and nothing said so (rule 7: scope a
+  #     check to the population it is meant to judge). The directory is now the
+  #     population, so forgetting a marker cannot shrink the gate again. The
+  #     missing marker was added too, so `-m integration` is accurate locally.
+  #   * The two Supabase secrets are gone. Handing live production credentials
+  #     to a suite that mocks every call buys nothing and means one missed patch
+  #     target writes to production — which has already happened here once.
   integration-tests:
+    name: "Integration (data integrity)"
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -158,11 +183,21 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt -r tests/requirements-test.txt
-      - run: pytest tests/integration/ -v --tb=short -m integration || true
+      - name: Run integration suite
+        run: |
+          pytest tests/integration/ -v --tb=short \
+                 --junitxml=test-results/integration-junit.xml
         env:
           AWS_DEFAULT_REGION: eu-west-1
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+      # Exiting 0 is not the same as having run. A blanket skip, a deleted file
+      # or a marker filter that matches nothing all exit 0 with no coverage, so
+      # the floor asserts the count. Raise it when tests are added; lowering it
+      # is a deliberate statement that coverage was removed.
+      - name: Assert the suite actually ran
+        if: always()
+        run: >-
+          python scripts/assert_suite_ran.py
+          test-results/integration-junit.xml 24 "integration tests"
 
   # === Quality Pipeline: MUST PASS jobs ===
   data-quality-tests:
@@ -305,36 +340,17 @@ jobs:
       # actually executed tests, so re-introducing a blanket skip fails here
       # instead of reading as a pass. Raise the floor when tests are added;
       # lowering it is a deliberate statement that coverage was removed.
+      #
+      # The check moved out of an inline heredoc into
+      # scripts/assert_suite_ran.py, so this job and the integration job cannot
+      # drift and the floor logic is itself under test
+      # (tests/unit/test_assert_suite_ran.py). Semantics are unchanged: a
+      # missing report fails, and fewer than 40 passing tests fails.
       - name: Assert the suite actually ran
         if: always()
-        run: |
-          python - <<'PY'
-          import pathlib
-          import sys
-          import xml.etree.ElementTree as ET
-
-          FLOOR = 40
-          report = pathlib.Path("test-results/e2e-junit.xml")
-          if not report.is_file():
-              # pytest died before writing a report -- usually the vite build or
-              # the static server in tests/e2e/conftest.py raised. The previous
-              # step already failed; say why this one cannot judge and stop,
-              # rather than burying that failure under a traceback here.
-              print(f"::error::{report} was never written, so this run proved nothing.")
-              sys.exit(1)
-          suite = ET.parse(report).getroot().find("testsuite")
-          total = int(suite.get("tests"))
-          skipped = int(suite.get("skipped"))
-          failures = int(suite.get("failures")) + int(suite.get("errors"))
-          executed = total - skipped - failures
-          print(f"collected={total} executed={executed} skipped={skipped} failed={failures}")
-          if executed < FLOOR:
-              print(
-                  f"::error::only {executed} browser E2E tests passed, floor is {FLOOR}. "
-                  "A suite that skips itself is not a gate.",
-              )
-              sys.exit(1)
-          PY
+        run: >-
+          python scripts/assert_suite_ran.py
+          test-results/e2e-junit.xml 40 "browser E2E tests"
       - uses: actions/upload-artifact@v4
         if: failure()
         with:

@@ -107,3 +107,8 @@ layer/python/
 layer-tectonic/bin/
 .playwright-mcp/
 AGENTS.md
+
+# junit reports + screenshots/videos written by --junitxml / --output. CI feeds
+# them to scripts/assert_suite_ran.py and uploads them as build artifacts; a
+# local run of the same command should not leave them staged.
+test-results/
