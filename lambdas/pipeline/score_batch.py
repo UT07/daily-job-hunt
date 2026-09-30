@@ -199,14 +199,25 @@ def handler(event, context):
     jobs_result = db.table("jobs_raw").select("*").in_("job_hash", job_hashes).execute()
     jobs = jobs_result.data or []
 
-    # Get latest resume (no is_active column; use most recently created)
-    resume_result = db.table("user_resumes").select("*").eq("user_id", user_id) \
-        .order("created_at", desc=True).limit(1).execute()
-    if not resume_result.data:
-        logger.warning(f"[score_batch] No resume found for user {user_id}")
+    # Read through the ONE shared accessor, not a local limit(1). This used to
+    # take the newest row of ANY kind while tailor_resume.py took the newest
+    # TAILORABLE one, so a single non-LaTeX upload made this function score a
+    # different document than the pipeline actually sends out. See
+    # shared.resume_format.fetch_tailorable_resume for the incident.
+    from shared.resume_format import fetch_tailorable_resume
+
+    base = fetch_tailorable_resume(db, user_id)
+    if base.skipped:
+        logger.warning(
+            "[score_batch] skipped %d newer resume(s) that are not LaTeX — scoring "
+            "the same row the tailorer will use", base.skipped,
+        )
+    if base.row is None:
+        logger.warning("[score_batch] no tailorable resume for user %s: %s",
+                       user_id, base.why_unusable(user_id))
         return {"matched_items": [], "matched_count": 0, "error": "no_resume"}
 
-    resume_row = resume_result.data[0]
+    resume_row = base.row
     resume_tex = resume_row.get("tex_content", "")
     # user_resumes has no resume_type column — it is resume_key. The wrong name
     # returned "" through .get()'s default rather than raising, so every job the
