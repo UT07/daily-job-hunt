@@ -624,10 +624,28 @@ class TestTailorerStillStopsANearEmptyDocument:
 
     def test_the_log_names_the_anchor_count_not_a_word_count(
             self, tmp_path, caplog):
+        """The count must be IN the message and must be below the floor. The
+        value is deliberately not pinned.
+
+        It was, at 3, and CI caught it at 4: the base branch picked up #167,
+        which drops `extract_anchors`' capital-letter requirement, so
+        `gmail.com` in this fixture's header became an anchor. The newer
+        instrument is right and the assertion was wrong — an exact count here
+        measures `extract_anchors`, not the code under test, which is the
+        trap `realistic_resume_body.assert_realistic()` was written to avoid
+        and that this test walked into anyway. What this case is actually
+        about is that the message is ACTIONABLE: a repair told "N anchors,
+        the floor is 40" can act; "body too short (12 words)" on a document
+        whose words a regex ate cannot.
+        """
+        from guardrails.output_guards import NEAR_EMPTY_ANCHOR_FLOOR
+
         with caplog.at_level(logging.WARNING):
             _tailor(_TAILORER_SKELETON, tmp_path)
-        assert "near_empty: only 3 identity anchors" in caplog.text, (
-            "a repair told '3 anchors, the floor is 40' can act; 'body too "
-            "short (12 words)' on a document whose words a regex ate cannot"
-        )
+        match = re.search(r"near_empty: only (\d+) identity anchors", caplog.text)
+        assert match, (
+            f"the fallback did not report an anchor count: {caplog.text!r}")
+        assert int(match.group(1)) < NEAR_EMPTY_ANCHOR_FLOOR
+        assert str(NEAR_EMPTY_ANCHOR_FLOOR) in caplog.text, (
+            "the message gives a count with nothing to compare it against")
         assert "body too short" not in caplog.text
