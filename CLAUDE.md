@@ -35,6 +35,13 @@ SMOKE_API_URL=$(grep -hoE '^VITE_API_URL=.+' web/.env.production | cut -d= -f2-)
 
 **Never:** report "merged and deployed" as though it meant "working".
 
+`sam build` is not `sam deploy`. On 2026-09-30 six consecutive deploys failed on
+a CloudFormation circular dependency while `sam build` and the whole Deploy
+Readiness job stayed green, because no changeset is created at build time. Plain
+`sam validate` does not check dependency cycles either; `sam validate --lint`
+does (cfn-lint E3004) and now runs in CI. Do not remove `--lint`, and do not add
+`E3004` to `.cfnlintrc.yaml`.
+
 ### 2. A status that cannot distinguish "did the work" from "did nothing" is a lie
 
 Three instances the same day:
@@ -120,6 +127,14 @@ August, and the test only ever checked `ai_helper`. `ai_client.py` defaulted two
 providers to retired models the whole time. The guard existed, the data existed,
 and they never met.
 
+Two more instances, both 2026-09-30. `pick_latest_tailorable` was added after a
+PDF upload broke tailoring, and wired into one of the three modules that read
+`user_resumes` — the other two kept `.limit(1)` with no validity check.
+`test_council_engine_parity.py` asserted every council caller sets
+`COUNCIL_ENGINE`, and silently skipped the API container because it is
+`PackageType: Image` and has no `Handler`; three assertions passed about the
+wrong set.
+
 ### 11. Deploys must serialise
 
 CloudFormation executes one change set per stack. Two merges seconds apart make
@@ -131,6 +146,69 @@ it.
 
 Half of that day was spent chasing a symptom the tooling was misreporting. When
 a measurement is surprising, check the measurement first.
+
+### 13. A guard's severity is part of its implementation
+
+`check_fabrication` correctly detected a resume claiming Rust that the base
+resume has none of. It shipped anyway: the violation carried severity `"warn"`,
+`GuardResult.passed` is `not any(severity == "block")`, and the repair loop built
+for exactly this was armed, correctly wired, and never told. One string literal
+disarmed the whole mechanism.
+
+**Do:** when adding a check, say what happens when it fires and test that, not
+just that it fires. A test asserting the detector returns a violation passes
+identically whether the violation stops anything.
+
+### 14. When a comparison decides whether to accept output, both sides must count the same things
+
+`tailor_resume`'s quality retry was accepted when
+`len(retry_quality) < len(quality_warnings)`. The first list counted banned
+phrases, `\textbf` preservation and fabrication; the second omitted fabrication.
+So a retry that kept every fabricated skill scored as an improvement whenever it
+dropped one banned phrase, and the fabrication shipped.
+
+**Do:** if two expressions are compared, assert they are built from the same
+set of checks — structurally, so the next omission fails CI instead of review.
+
+### 15. Vary the baseline, not just the rule
+
+Substring matching let the corpus's "TypeScript/JavaScript" whitelist a
+standalone "Java" claim permanently — 482 of 707 real outputs, none flaggable.
+The obvious fix, word-boundary matching, measured 97 of 140 resumes flagged
+versus 23, so it was documented as a deliberate known miss. That was wrong. The
+97 were Java, which is in the candidate's April resume row and missing only from
+the degraded September row being compared against. Word boundaries against the
+UNION of all rows: 23 of 140, same as substring, with the hole closed.
+
+**Do:** when a fix looks too expensive, check whether you varied one input and
+held the other fixed. A comparison has two sides.
+
+### 16. Measure a detector's false-positive rate before shipping it, not after
+
+A whole-document fabrication detector was the obvious next step once fabrication
+became blocking. Measured against 707 real resumes first: it fires on 533
+(75.4%) after every safe normalisation, with a hand-adjudicated ~52%
+false-positive rate, and its most frequent finding is the candidate's own
+degree. It would have blocked three of four resumes and spent two repair rounds
+on each. It was not built.
+
+Also measured, and each must stay refused: substring containment as an
+exoneration (clears "scala" via "scalable"), common-English-word suppression
+(69% of real fabrications ARE dictionary words), and "the claim is in the job
+description" — 92% of real fabrications are, because lifting the JD's
+requirement IS the failure mode. A wrong exculpation produces a miss, and a miss
+is the outcome these checks exist to prevent.
+
+### 17. Two bugs stack, and the first one hides the second
+
+The 2026-09-30 deploy outage was an unset `CEREBRAS_API_KEY` making `sam deploy`
+reject its own `--parameter-overrides` at CLI parse. Fixing it did not fix the
+deploy — it revealed a CloudFormation circular dependency introduced by a
+different PR, which had never deployed once because the parse error killed every
+run before CloudFormation was called.
+
+**Do:** after a fix lands, verify the outcome you actually wanted, not that the
+error you understood is gone.
 
 ## Architecture
 
