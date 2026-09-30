@@ -111,27 +111,128 @@ def check_textbf_preservation(base_body: str, tailored_body: str) -> list[str]:
     return []
 
 
+_KNOWN_FABRICATIONS = {
+    "java", "vue.js", "angular", "ruby", "php", "scala", "rust",
+    "kotlin", "swift", "dart", "flutter", "spring", "hibernate",
+    "django", "rails", "laravel", "spring boot",
+}
+
+# The header subtitle: the {\normalsize ...} line directly under the candidate's
+# name, which this template fills with a parenthesised technology list --
+#     {\normalsize Software Engineer (SRE, Data Platform, Mobile, Rust/TypeScript, AWS K8s)}
+# Measured on 120 real production resumes, 19 of 26 unsupported technology claims
+# live on THIS line, and the Skills-section regex below cannot reach it: it spans
+# \section*{Technical Skills} to the next \section*{, and the header sits before
+# the first section. The deployed guard caught 7 of 21 affected resumes; the
+# other 14 were all here. It is also the most prominent line on the page -- the
+# first thing a recruiter reads after the name.
+_HEADER_SUBTITLE_RE = re.compile(r"\{\\normalsize\s+(.*?)\}\s*\\\\", re.DOTALL)
+
+_SKILLS_SECTION_RE = re.compile(
+    r"\\section\*\{(?:Technical )?Skills\}(.*?)\\section\*\{", re.DOTALL
+)
+
+
+def _claims(text: str) -> set[str]:
+    """Blocklisted technologies asserted in `text`."""
+    return {
+        item.strip().lower() for item in re.split(r"[,&/()\n]+", text)
+    } & _KNOWN_FABRICATIONS
+
+
+def _supported_by_base(skill: str, base_lower: str) -> bool:
+    """Is `skill` present in the base resume? Substring containment, knowingly.
+
+    This has one documented miss and it is deliberate. The corpus Skills section
+    reads "TypeScript/JavaScript (React, ...)", and "java" is a substring of
+    "javascript", so a resume claiming standalone Java is exonerated and can
+    never be flagged. That is the ONLY such collision in this corpus, and it is
+    the worst one available -- Java is the most-fabricated token in the list.
+
+    Word-boundary matching fixes it and must not ship yet. Measured over 140 real
+    production resumes:
+
+        substring       23/140 flagged (16.4%),  27 violations
+        word boundary   97/140 flagged (69.3%), 115 violations, java alone 88
+
+    Those 88 are not fabrications. Java IS in the candidate's April corpus row;
+    it is missing only from the Skills section of the degraded 2026-09-28 row
+    production currently tailors from. So word boundaries turn this guard into a
+    corpus-drift alarm that blocks 69% of resumes and spends two repair rounds on
+    each, for content the candidate actually has. An independent measurement over
+    707 resumes put 95.5% of all precision-direction signal down to exactly that
+    drift.
+
+    REVERSAL CONDITION, so this is a decision and not an oversight: switch to the
+    word-boundary form once the corpus production reads contains the candidate's
+    full profile (the Sep-28 row dropped 5 of 7 projects, the GitHub handle, the
+    university and every certification code). Re-run the 140-resume measurement
+    after that; if `java` stops dominating, word boundaries are correct and this
+    docstring is obsolete. The regex is kept below, unused, so the switch is one
+    line and the intent survives.
+
+    Baseline width was measured too and is NOT the variable that matters:
+    Skills-section-only and whole-corpus-body baselines give identical results
+    (23/140 both ways), so widening it would be churn.
+    """
+    # The word-boundary form this will become. Alphanumeric lookaround rather
+    # than \b, because "vue.js" and "spring boot" contain a dot and a space,
+    # while "Rust" must still match "Rust," and "(Rust/TypeScript)".
+    #   return re.search(rf"(?<![a-z0-9]){re.escape(skill)}(?![a-z0-9])", base_lower) is not None
+    return skill in base_lower
+
+
+def _plain(fragment: str) -> str:
+    """Strip one level of LaTeX macro wrapping, then stray delimiters."""
+    out = re.sub(r"\\[a-zA-Z]+\{([^}]*)\}", r"\1", fragment)
+    return re.sub(r"[{}\\]", "", out)
+
+
+def _fabrication_regions(tailored_tex: str) -> list[tuple[str, str]]:
+    """(region name, plain text) for every region this guard inspects.
+
+    Regions rather than one blob so a violation can say WHERE the claim is. A
+    repair round that is told "in the header subtitle" can fix the right line;
+    "somewhere in the document" invites the model to rewrite the whole thing.
+    """
+    regions = []
+    header = _HEADER_SUBTITLE_RE.search(tailored_tex)
+    if header:
+        regions.append(("header subtitle", _plain(header.group(1))))
+    skills = _SKILLS_SECTION_RE.search(tailored_tex)
+    if skills:
+        regions.append(("Skills section", _plain(skills.group(1))))
+    return regions
+
+
 def check_fabrication(base_skills_text: str, tailored_tex: str) -> list[str]:
-    """Check if tailored resume mentions skills not present in base."""
-    _KNOWN_FABRICATIONS = {
-        "java", "vue.js", "angular", "ruby", "php", "scala", "rust",
-        "kotlin", "swift", "dart", "flutter", "spring", "hibernate",
-        "django", "rails", "laravel", "spring boot",
-    }
+    """Blocklisted technologies claimed in the header or Skills but not in base.
+
+    `base_skills_text` is the comparison baseline and is named for the Skills
+    section it was originally extracted from; anything the caller passes is
+    compared against verbatim.
+
+    Deliberately NOT changed while extending the region: the blocklist stays a
+    fixed 17-token vocabulary rather than becoming "any capitalised token absent
+    from the corpus". Measured over 707 real resumes, that general form fires on
+    533 (75.4%) after every safe normalisation, with a hand-adjudicated ~52%
+    false-positive rate -- as a blocking check it would stop three of four
+    resumes, most often over the candidate's own degree. Three tempting
+    exculpations were also measured and must stay refused: substring containment
+    (suppresses 'scala' via 'scalable'), common-English-word suppression (69% of
+    real hits ARE dictionary words), and "it is in the job description" -- 92% of
+    real hits appear in the JD, because lifting the JD's requirement is the
+    failure mode, not an excuse for it.
+    """
     base_lower = base_skills_text.lower()
     errors = []
-    skills_match = re.search(
-        r"\\section\*\{(?:Technical )?Skills\}(.*?)\\section\*\{",
-        tailored_tex, re.DOTALL,
-    )
-    if not skills_match:
-        return []
-    clean = re.sub(r"\\[a-zA-Z]+\{([^}]*)\}", r"\1", skills_match.group(1))
-    clean = re.sub(r"[{}\\]", "", clean)
-    for item in re.split(r"[,&\n]+", clean):
-        skill = item.strip().lower()
-        if skill and skill in _KNOWN_FABRICATIONS and skill not in base_lower:
-            errors.append(f"fabrication: '{skill.title()}' not in base resume")
+    seen = set()
+    for region, text in _fabrication_regions(tailored_tex):
+        for skill in sorted(_claims(text)):
+            if skill in seen or _supported_by_base(skill, base_lower):
+                continue
+            seen.add(skill)
+            errors.append(f"fabrication: '{skill.title()}' not in base resume ({region})")
     return errors
 
 
