@@ -69,7 +69,7 @@ def test_package_in_layer_build_script(pkg):
 # contract: grow it whenever Lambda-runtime code gains a new import, or the
 # layer will build fine and ModuleNotFoundError in prod anyway — exactly
 # the 2026-09-22 COUNCIL_ENGINE=langgraph incident this file is named for.
-LAMBDA_RUNTIME_DEPS = ["langgraph", "langchain-core"]
+LAMBDA_RUNTIME_DEPS = ["langgraph", "langchain-core", "pdfplumber"]
 
 
 def _requirement_names(path):

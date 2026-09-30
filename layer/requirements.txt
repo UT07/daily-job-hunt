@@ -22,3 +22,12 @@ python-jose[cryptography]>=3.3.0
 # ModuleNotFoundError'd in prod despite working locally.
 langgraph>=0.2.0
 langchain-core>=0.3.0
+# Required by shared/page_check.py, which compile_latex.py calls on every
+# compiled PDF to measure page count and catch blank pages. Without it the
+# check reports "the page check could not run" on every invocation instead of
+# silently passing — which is what utils/pdf_validator.py does with its
+# never-installed `fitz` import, and the reason that module's page-count check
+# has never executed in production. Measured cost: +23 MB unzipped
+# (pdfminer.six 9.5, Pillow 13.4, pdfplumber 0.4) on a 122 MB layer, with a
+# 35 MB tectonic layer beside it — ~180 MB of the 250 MB unzipped limit.
+pdfplumber>=0.10.0
