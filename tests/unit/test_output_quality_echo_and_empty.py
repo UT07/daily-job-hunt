@@ -402,7 +402,21 @@ class TestTheCouncilIsActuallyTold:
         state.update(nodes.guard_output_node(state))
         return state, nodes.quality_gate(state)
 
-    def test_prompt_echo_routes_to_repair(self):
+    def test_prompt_echo_alone_routes_to_repair(self):
+        """Echo is the ONLY thing wrong with this winner.
+
+        The first version of this test used ECHO_PLANNING, whose leaked prose
+        replaces the document -- it is missing four required sections, which
+        block on their own. So it routed to "repair" under severity "warn" too,
+        and proved nothing about prompt_echo. That is the exact trap commit
+        55ebff2 recorded for the fabrication equivalent; mutation 1 (block ->
+        warn) now fails here, and did not before.
+        """
+        state, route = self._route(CLEAN_BODY + "\nWe must reorder the base resume.\n")
+        assert state["guard_report"]["passed"] is False
+        assert route == "repair"
+
+    def test_the_real_planning_prose_artifact_routes_to_repair(self):
         state, route = self._route(ECHO_PLANNING)
         assert state["guard_report"]["passed"] is False
         assert route == "repair"
@@ -422,7 +436,7 @@ class TestTheCouncilIsActuallyTold:
         assert route == "finalize"
 
     def test_the_repair_prompt_names_what_to_remove(self):
-        state, _ = self._route(ECHO_PLANNING)
+        state, _ = self._route(CLEAN_BODY + "\nWe must reorder the base resume.\n")
         state["prompt"] = "tailor this resume"
         repaired = nodes.repair_node(state)
         assert "prompt_echo" in repaired["prompt"]
