@@ -45,6 +45,23 @@ FIRST_PARTY="shared"
 # - FIRST_PARTY is passed in via -e and expanded inside the container (single-
 #   quoted bash -c body) rather than on the host, so the list lives in exactly
 #   one place above.
+# Two pip flags, both added 2026-09-30 after the layer build failed on
+# "ERROR: Failed building wheel for Pillow" when pdfplumber joined the layer.
+#
+#   --upgrade pip      the image ships an older pip, and Pillow 12.x publishes
+#                      its cp311 x86_64 wheels under compound PEP 600 tags
+#                      (manylinux2014_x86_64.manylinux_2_17_x86_64). A pip that
+#                      cannot match the tag silently falls back to the sdist and
+#                      tries to COMPILE Pillow, which fails in a container with
+#                      no image-library headers.
+#
+#   --only-binary=:all:  makes that fallback impossible. If no wheel matches,
+#                      the build fails immediately naming the package, instead
+#                      of emitting two hundred lines of compiler output for a
+#                      dependency nobody deliberately added. A layer build that
+#                      compiles from source is slow, non-reproducible, and a
+#                      sign something is wrong.
+#
 docker run --rm \
   -v "$(pwd)":/layer \
   -v "$(pwd)/..":/repo:ro \
@@ -52,7 +69,8 @@ docker run --rm \
   -e FIRST_PARTY="$FIRST_PARTY" \
   --platform linux/amd64 \
   public.ecr.aws/sam/build-python3.11:latest \
-  bash -c 'pip install -r requirements.txt -t python/ --quiet && \
+  bash -c 'pip install --quiet --upgrade pip && \
+           pip install -r requirements.txt -t python/ --quiet --only-binary=:all: && \
            for pkg in $FIRST_PARTY; do \
              cp -r "/repo/$pkg" "python/$pkg" && \
              find "python/$pkg" -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true; \
