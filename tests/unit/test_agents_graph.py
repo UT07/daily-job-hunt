@@ -13,10 +13,35 @@ def test_graph_compiles():
 
 
 def test_end_to_end_picks_highest_scoring_candidate():
-    calls = iter([CAND_A, CAND_B, {"content": "[10, 95]", "provider": "c", "model": "m3"}])
+    """The critic's top score wins, whichever slot that candidate landed in.
+
+    This used to feed call_one a fixed iterator and hand the critic positional
+    scores [10, 95], which asserts an ordering the graph does not promise: the
+    generate branches fan out via Send and run concurrently, so branch 1 is not
+    guaranteed to consume the first item. Measured at 12 order flips in 300 runs
+    on this commit and 4 in 300 on main -- a live ~1-4% CI flake, pre-existing.
+
+    Keying the generators off the provider and reading the candidate order out
+    of the critic's own prompt removes the assumption instead of the assertion.
+    """
+    generated = {P1["name"]: CAND_A, P2["name"]: CAND_B}
+
+    def _call_one(provider, prompt, *args, **kwargs):
+        if provider["name"] in generated:
+            return generated[provider["name"]]
+        # The critic. build_critique_prompt lays the candidates out in the
+        # order critique_node settled on, so the prompt is the ground truth
+        # for which position "beta" occupies.
+        beta_first = prompt.index("beta") < prompt.index("alpha")
+        return {
+            "content": "[95, 10]" if beta_first else "[10, 95]",
+            "provider": "c",
+            "model": "m3",
+        }
+
     with patch("agents.nodes.select_generators", return_value=[P1, P2]), \
          patch("agents.nodes.select_critic", return_value={"name": "c", "model": "meta/x"}), \
-         patch("agents.nodes.call_one", side_effect=lambda *a, **k: next(calls)):
+         patch("agents.nodes.call_one", side_effect=_call_one):
         out = graph_mod.council_complete_langgraph("p", "s", "desc", n_generators=2)
     assert out["content"] == "beta"
 

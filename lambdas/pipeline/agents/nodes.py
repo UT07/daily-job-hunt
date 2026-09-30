@@ -21,6 +21,20 @@ from guardrails.output_guards import check_output
 
 logger = logging.getLogger()
 
+
+def _tid(state: dict) -> str:
+    """This run's trace_id, for the log line, or "-" when there isn't one.
+
+    Every `[council]` line carries it so a CloudWatch line can be matched to
+    the LangSmith run (and the checkpointer thread) it came from --
+    council_complete_langgraph logs the same id once per run and returns it to
+    its caller, which persists it beside the result. "-" rather than a blank
+    keeps the field positionally readable when a caller invokes a node
+    directly, as the tests do.
+    """
+    return state.get("trace_id") or "-"
+
+
 # CRITIC_MAX_TOKENS, CRITIQUE_SYSTEM and build_critique_prompt are re-exported
 # (not just used) from this import — the legacy sequential council in
 # ai_helper.py owns the one copy of the scoring rubric, so both engines can't
@@ -73,7 +87,9 @@ def plan_node(state: dict) -> dict:
     generators = select_generators(n)
     if not generators:
         raise RuntimeError("Council: no providers available")
-    logger.info("[council] Generators: %s", [g["name"] for g in generators])
+    logger.info(
+        "[council] trace=%s Generators: %s", _tid(state), [g["name"] for g in generators]
+    )
     return {"generators": generators, "candidates": []}
 
 
@@ -110,7 +126,11 @@ def generate_node(payload: dict) -> dict:
                 continue
             result = call_one(fallback, prompt, system, temperature, max_tokens=max_tokens)
             if result:
-                logger.info("[council] Generator fallback: %s succeeded", fallback["name"])
+                logger.info(
+                    "[council] trace=%s Generator fallback: %s succeeded",
+                    _tid(payload),
+                    fallback["name"],
+                )
                 break
     # An empty list keeps the reducer total — a failed branch contributes
     # nothing rather than a None that would break concatenation.
@@ -231,7 +251,10 @@ def quality_gate(state: dict) -> str:
     if report.get("passed", True):
         return "finalize"
     if state.get("repair_attempts", 0) >= 2:
-        logger.warning("[council] Repair budget exhausted — finalizing best-effort")
+        logger.warning(
+            "[council] trace=%s Repair budget exhausted — finalizing best-effort",
+            _tid(state),
+        )
         return "finalize"
     return "repair"
 

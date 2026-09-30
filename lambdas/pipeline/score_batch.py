@@ -23,6 +23,35 @@ try:
     from ai_helper import ai_complete_cached, get_supabase
 except ImportError:  # container-image shape only
     from lambdas.pipeline.ai_helper import ai_complete_cached, get_supabase
+
+# Same two shapes, one extra wrinkle: guardrails/input_guards.py imports its
+# own siblings unqualified (`from guardrails.policy import policy_for`), so the
+# qualified spelling alone is NOT enough in the container — importing
+# lambdas.pipeline.guardrails.input_guards there raises ModuleNotFoundError
+# from inside that module. Registering the package under its flat name first
+# makes the sibling import resolve without putting lambdas/pipeline on
+# sys.path, which would shadow the repo-root `utils/` package that app.py
+# imports (lambdas/pipeline/utils/ mirrors it filename-for-filename). Same
+# trick, same reason, as mcp_server/server.py's ai_helper shim.
+try:
+    from guardrails.input_guards import (  # flat — pytest and the zip Lambdas
+        INSTRUCTION_HIERARCHY,
+        check_input,
+        fence,
+        maybe_scrub_pii,
+    )
+except ImportError:  # container-image shape only
+    import sys as _sys
+
+    from lambdas.pipeline import guardrails as _guardrails_pkg
+
+    _sys.modules.setdefault("guardrails", _guardrails_pkg)
+    from guardrails.input_guards import (
+        INSTRUCTION_HIERARCHY,
+        check_input,
+        fence,
+        maybe_scrub_pii,
+    )
 from shared.apply_platform import classify_apply_platform, extract_platform_ids
 from shared.work_auth import apply_geo_score_cap
 from shared.tex_utils import tex_to_plaintext
@@ -487,8 +516,43 @@ def _salvage_scores(text: str) -> dict | None:
     return out
 
 
+class UntrustedInputRejected(ValueError):
+    """A guarded scoring call was handed text the input guards blocked.
+
+    Raised, not returned as None: `score_single_job` returns None when the
+    model call or the JSON parse failed, and a caller cannot tell those apart
+    from "we refused to send this". An MCP tool call surfaces this to the
+    client as a tool error, which is the honest answer. Subclasses ValueError
+    so existing `except ValueError` handlers keep working.
+    """
+
+
+def _guard_untrusted_scoring_input(description: str, resume_text: str) -> tuple[str, str]:
+    """Run the three input-guard layers over client-supplied scoring text.
+
+    1. detect  — `check_input` against the "score" policy's injection patterns
+    2. scrub   — `maybe_scrub_pii`, which that same policy enables
+    3. fence   — delimiters the text cannot forge its way out of
+
+    The caller supplies the fourth layer by appending INSTRUCTION_HIERARCHY to
+    the system prompt; a fence with nothing declaring what it means is
+    decorative.
+    """
+    for label, text in (("job description", description), ("resume", resume_text)):
+        result = check_input(text, "score")
+        if not result.passed:
+            blocked = "; ".join(
+                f"{v.rule}: {v.detail}" for v in result.violations if v.severity == "block"
+            )
+            raise UntrustedInputRejected(f"{label} rejected by input guards ({blocked})")
+
+    description = maybe_scrub_pii(description, "score")
+    resume_text = maybe_scrub_pii(resume_text, "score")
+    return fence(description, "JOB_DESCRIPTION"), fence(resume_text, "RESUME")
+
+
 def score_single_job(job: dict, resume_tex: str, temperature: float = 0,
-                     skip_cache: bool = False) -> dict | None:
+                     skip_cache: bool = False, untrusted_input: bool = False) -> dict | None:
     """Score a single job against the user's resume using 3-perspective AI scoring.
     Uses the same prompt template as matcher.py for consistency.
 
@@ -496,6 +560,18 @@ def score_single_job(job: dict, resume_tex: str, temperature: float = 0,
     ----------
     temperature:
         Sampling temperature for the AI call. Default 0 for deterministic scoring.
+    untrusted_input:
+        When True, the description and resume are treated as third-party text:
+        injection-checked (raising `UntrustedInputRejected` rather than
+        scoring), PII-scrubbed, fenced, and accompanied by the instruction
+        hierarchy in the system prompt. Default False, which produces a
+        byte-identical prompt and system string to before this parameter
+        existed — deliberately, because `ai_complete_cached` keys its cache on
+        both, so guarding unconditionally would invalidate every scoring cache
+        entry and force a full re-score of the backlog (1,280 rows as of
+        2026-09-30). The pipeline's scraped descriptions are untrusted too and
+        should opt in once that cost is budgeted; `mcp_server.score_job`, whose
+        text comes from whatever client connects, opts in today.
     """
     location = job.get("location") or "Not specified"
     remote_value = job.get("remote")
@@ -505,6 +581,13 @@ def score_single_job(job: dict, resume_tex: str, temperature: float = 0,
     # the resume's tokens (12,500 -> 9,705 chars on the current base resume).
     resume_text = tex_to_plaintext(resume_tex)
     description = (job.get("description") or "")[:MAX_DESCRIPTION_CHARS]
+
+    system = SCORE_SYSTEM_PROMPT
+    if untrusted_input:
+        # Before the f-string below, and before the try: a rejection must
+        # propagate, not be swallowed by the model-failure handler.
+        description, resume_text = _guard_untrusted_scoring_input(description, resume_text)
+        system = f"{SCORE_SYSTEM_PROMPT}\n\n{INSTRUCTION_HIERARCHY}"
 
     prompt = f"""Score this job against the candidate's resume.
 
@@ -517,7 +600,7 @@ Resume: {resume_text}"""
 
     try:
         response_dict = ai_complete_cached(
-            prompt, system=SCORE_SYSTEM_PROMPT, temperature=temperature,
+            prompt, system=system, temperature=temperature,
             max_tokens=SCORE_MAX_TOKENS, skip_cache=skip_cache,
         )
         text = response_dict["content"].strip()
@@ -568,7 +651,8 @@ Resume: {resume_text}"""
 
 
 def score_single_job_deterministic(
-    job: dict, resume_tex: str, num_calls: int = 1, skip_cache: bool = False
+    job: dict, resume_tex: str, num_calls: int = 1, skip_cache: bool = False,
+    untrusted_input: bool = False,
 ) -> dict | None:
     """Score a job `num_calls` times at temperature=0; return medians and the spread.
 
@@ -597,7 +681,10 @@ def score_single_job_deterministic(
     """
     all_scores: list[dict] = []
     for _ in range(num_calls):
-        result = score_single_job(job, resume_tex, temperature=0, skip_cache=skip_cache)
+        result = score_single_job(
+            job, resume_tex, temperature=0, skip_cache=skip_cache,
+            untrusted_input=untrusted_input,
+        )
         if result is not None:
             all_scores.append(result)
 

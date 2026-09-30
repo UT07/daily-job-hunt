@@ -5,6 +5,10 @@ import tempfile
 
 import boto3
 
+from shared.composition_policy import resolve
+from shared.page_check import check_pdf, log_violations
+from utils.pdf_validator import check_file_size
+
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
@@ -67,19 +71,34 @@ def handler(event, context):
                 return {"error": "no_pdf_output", "tex_s3_key": tex_s3_key,
                         "job_hash": job_hash, "user_id": user_id, "doc_type": doc_type}
 
-            # Validate PDF before uploading
-            validation = {}
-            try:
-                from utils.pdf_validator import validate_pdf
-                expected_pages = 2 if doc_type == "resume" else 1
-                validation = validate_pdf(pdf_path, expected_pages=expected_pages,
-                                          check_sections=(doc_type == "resume"))
-                if validation.get("errors"):
-                    logger.warning(f"[compile] PDF validation issues for {job_hash}: {validation['errors']}")
-                if validation.get("warnings"):
-                    logger.info(f"[compile] PDF validation warnings for {job_hash}: {validation['warnings']}")
-            except Exception as e:
-                logger.warning(f"[compile] PDF validation skipped for {job_hash}: {e}")
+            # --- Page check: the rule that only the compiled PDF can answer ---
+            #
+            # This replaces a call to utils.pdf_validator.validate_pdf that had
+            # never run. It needs `fitz` (pymupdf), which is in no requirements
+            # file in this repo, so every invocation took the ImportError path,
+            # logged "PDF validation skipped" at warning level and returned
+            # valid=True. Its page-count check has therefore never once
+            # executed in production, which is why a resume with a blank page
+            # in the middle cleared this function.
+            #
+            # shared.page_check uses pdfplumber (requirements.txt,
+            # requirements-web.txt, and layer/requirements.txt so it is on this
+            # zip Lambda's path) and reports a violation when it cannot run,
+            # rather than reporting success.
+            #
+            # `pages` is not threaded through either state machine, so this
+            # falls back to composition_policy's default of 2 — which is what
+            # every user has today. Passing `pages` in the event overrides it
+            # for when a per-user policy does get threaded through.
+            expected_pages = event.get("pages")
+            if expected_pages is None and doc_type == "resume":
+                expected_pages = resolve(None)["pages"]
+            page_violations = check_pdf(pdf_path, expected_pages=expected_pages)
+            log_violations(page_violations, label=f"{doc_type} {job_hash}")
+
+            size_issue = check_file_size(os.path.getsize(pdf_path))
+            if size_issue:
+                logger.warning(f"[compile] PDF file size for {job_hash}: {size_issue}")
 
             # Upload PDF to S3
             pdf_key = tex_s3_key.replace(".tex", ".pdf")
@@ -87,8 +106,12 @@ def handler(event, context):
                 s3.put_object(Bucket=bucket, Key=pdf_key, Body=f.read(), ContentType="application/pdf")
 
             logger.info(f"[compile] {doc_type} PDF: {pdf_key}")
+            # page_violations is always present: an empty list is the claim that
+            # the PDF was measured and complies. A missing key would be
+            # indistinguishable from a check that never ran — the exact failure
+            # this block replaces.
             return {"job_hash": job_hash, "pdf_s3_key": pdf_key, "user_id": user_id,
-                    "doc_type": doc_type, "validation": validation}
+                    "doc_type": doc_type, "page_violations": page_violations}
 
         except FileNotFoundError:
             # tectonic binary not available in this runtime
