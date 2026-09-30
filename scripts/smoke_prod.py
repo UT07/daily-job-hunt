@@ -218,15 +218,35 @@ def artifact_completeness():
     db = _db()
     cut = (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
     rows = (db.table("jobs")
-            .select("score_tier,resume_s3_url,is_expired,first_seen")
+            .select("job_id,score_tier,resume_s3_url,is_expired,first_seen,description")
             .in_("score_tier", ["S", "A"]).eq("is_expired", False)
             .gte("first_seen", cut).limit(500).execute().data)
-    missing = [r for r in rows if not r.get("resume_s3_url")]
+
+    # A job with no description cannot be tailored — there is nothing to tailor
+    # AGAINST — so it can never acquire a resume and would fail this check on
+    # every deploy, forever, with no action that could clear it.
+    #
+    # Measured 2026-09-30: the one row failing this check was
+    # d1ad2affe913 (Viatel) — tier A, description length 0, score_status
+    # pending, left behind by an Add Job attempt that failed partway on
+    # 2026-09-29 when the council gave up (fixed in #141).
+    #
+    # Excluding them is not lowering the bar: it is scoping the check to the
+    # population it is meant to judge. They are counted and reported so the
+    # exclusion is visible rather than silent, and _find_or_create_job no
+    # longer creates them.
+    tailorable = [r for r in rows if (r.get("description") or "").strip()]
+    stubs = len(rows) - len(tailorable)
+
+    missing = [r for r in tailorable if not r.get("resume_s3_url")]
     assert not missing, (
-        f"{len(missing)} of {len(rows)} active S/A jobs have no resume. A partial "
-        "artifact loss looks identical to a clean run from the pipeline's status."
+        f"{len(missing)} of {len(tailorable)} tailorable active S/A jobs have no "
+        "resume. A partial artifact loss looks identical to a clean run from the "
+        f"pipeline's status. Missing: "
+        f"{', '.join(str(r.get('job_id'))[:12] for r in missing[:6])}"
     )
-    return f"{len(rows)} active S/A jobs, all have a resume"
+    note = f" ({stubs} descriptionless stub(s) excluded)" if stubs else ""
+    return f"{len(tailorable)} tailorable active S/A jobs, all have a resume{note}"
 
 
 @check("no-pipeline-states-in-user-column", "the pipeline writing into application_status")
