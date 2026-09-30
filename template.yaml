@@ -1780,6 +1780,14 @@ Resources:
           TASK_QUEUE_URL: !Ref TaskQueue
           DAILY_PIPELINE_ARN: !GetAtt DailyPipelineStateMachine.Arn
           SINGLE_JOB_PIPELINE_ARN: !GetAtt SingleJobPipelineStateMachine.Arn
+          # Hosts the mounted MCP transport will answer for. The MCP SDK's
+          # DNS-rebinding protection rejected every authenticated request to
+          # /mcp/sse with 421 "Invalid Host header" until this existed: FastMCP
+          # auto-enables that check for a loopback `host` (the default) and
+          # allows only localhost, so the API Gateway host had to be named.
+          # Taken from the HttpApi id rather than hardcoded, so it follows the
+          # stack. See mcp_server/server.py::_transport_security.
+          MCP_ALLOWED_HOSTS: !Sub "${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
       Events:
         ApiGateway:
           Type: HttpApi

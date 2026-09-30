@@ -27,7 +27,7 @@ import logging
 
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from auth import get_current_user
 
@@ -65,7 +65,46 @@ class RequireSupabaseJWT:
             await _send_json_error(send, 401, "Invalid or expired token")
             return
 
-        await self._app(scope, receive, send)
+        await self._app(scope, receive, _single_response(send))
+
+
+def _single_response(send: Send) -> Send:
+    """Forward one ASGI response and silently drop any that follows it.
+
+    mcp 1.30's SSE endpoint (`handle_sse` in mcp/server/fastmcp/server.py)
+    streams the whole session and then `return Response()`, so Starlette sends
+    a SECOND, empty `http.response.start` on a scope whose response is already
+    finished. Harmless on a bare app; fatal noise under a
+    `BaseHTTPMiddleware`, and app.py has one (`AuditMiddleware`) wrapping this
+    mount. Its `body_stream` asserts that everything after the first message is
+    an `http.response.body`, so every otherwise-successful MCP session over
+    /mcp/sse logged an "Exception in ASGI application / AssertionError:
+    Unexpected message" traceback — verified 2026-09-30 by running the real
+    client against `uvicorn app:app`.
+
+    Dropped here, at the one point in that path this repo owns, rather than by
+    removing the audit middleware or patching the SDK. Only a second RESPONSE
+    is suppressed: every streamed body chunk of the first response is
+    forwarded untouched, which is what makes SSE work at all.
+    """
+    started = False
+    finished = False
+
+    async def wrapped(message: Message) -> None:
+        nonlocal started, finished
+        if message["type"] == "http.response.start":
+            if started:
+                logger.debug("[mcp-auth] dropped a duplicate http.response.start")
+                return
+            started = True
+        elif message["type"] == "http.response.body":
+            if finished:
+                return
+            if not message.get("more_body"):
+                finished = True
+        await send(message)
+
+    return wrapped
 
 
 def _bearer_token(scope: Scope) -> str | None:

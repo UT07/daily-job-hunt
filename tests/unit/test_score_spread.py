@@ -68,7 +68,7 @@ def test_repeat_calls_bypass_the_cache():
     """Without this the three calls are one cached answer returned three times."""
     seen = []
 
-    def fake(job, resume_tex, temperature=0, skip_cache=False):
+    def fake(job, resume_tex, temperature=0, skip_cache=False, untrusted_input=False):
         seen.append(skip_cache)
         return _result(85, 85, 85)
 
@@ -82,13 +82,16 @@ def test_batch_default_is_unchanged():
     8k tokens/minute ceiling; 3x uncached would be a real regression."""
     seen = []
 
-    def fake(job, resume_tex, temperature=0, skip_cache=False):
-        seen.append(skip_cache)
+    def fake(job, resume_tex, temperature=0, skip_cache=False, untrusted_input=False):
+        seen.append((skip_cache, untrusted_input))
         return _result(85, 85, 85)
 
     with patch.object(score_batch, "score_single_job", side_effect=fake):
         score_batch.score_single_job_deterministic(JOB, RESUME)
-    assert seen == [False]
+    # (skip_cache, untrusted_input) — the guarded path fences the description,
+    # which changes the prompt and therefore the cache key, so the pipeline's
+    # default has to stay off here as well as cached.
+    assert seen == [(False, False)]
 
 
 def test_the_non_numeric_fields_still_come_through():
