@@ -42,8 +42,16 @@ from typing import Any
 
 # Defaults. max_projects is 3 on the user's instruction of 2026-09-29 — four
 # was judged too many for a two-page document.
+#
+# max_experience_entries is 4 on the user's instruction of 2026-09-30: "job
+# entry should be like 3 or 4 at max. Yuno, Clover, UTA IT, Seattle Kraken
+# that's all". It was 2, which is why the UT Arlington IT role was missing from
+# every generated resume -- the cap silently dropped it, and the corpus row
+# production reads holds only Yuno and Clover anyway. Raising this is necessary
+# but not sufficient: a corpus with two employers cannot produce four entries,
+# so the uploaded master has to carry them.
 DEFAULTS: dict[str, Any] = {
-    "max_experience_entries": 2,
+    "max_experience_entries": 4,
     "max_projects": 3,
     "pages": 2,
     "bullets_per_entry": {"min": 3, "max": 7},
@@ -100,6 +108,15 @@ def render_for_prompt(policy: dict[str, Any]) -> str:
         "These are limits, not targets: fewer, stronger entries beat padding to "
         "the cap. Selecting from the candidate's full history is the job — do "
         "not include everything.",
+        "",
+        # There was no ordering rule at all, and "choose the ones most relevant"
+        # invites a relevance sort. ATS parsers read employment history as a
+        # chronology and infer seniority from position, so a more relevant older
+        # role placed first reads as the candidate's current job.
+        "ORDER: keep experience entries in the SAME ORDER as the base resume — "
+        "most recent first. Relevance decides WHICH entries to include, never "
+        "where they sit. Do not move an older role above a newer one because it "
+        "matches the job description better.",
     ]
     if p["prefer"]:
         lines.append("")

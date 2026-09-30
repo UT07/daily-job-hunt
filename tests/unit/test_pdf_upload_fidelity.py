@@ -119,13 +119,26 @@ def test_every_project_keeps_its_own_url():
 # --- 3. the Additional block ------------------------------------------------
 
 
-def test_languages_and_work_authorisation_survive():
+def test_languages_and_similar_are_deliberately_not_carried():
+    """Dropped on the user's instruction of 2026-09-30: "language can be skipped
+    tbh I don't want that".
+
+    #171 added an "Additional" block that carried spoken languages and a work
+    authorisation line out of the certifications region. Languages are not
+    wanted on this resume, and work authorisation is already a first-class
+    profile field (users.visa_status, read by shared/work_auth.py), so nothing
+    is lost by dropping the block entirely rather than filtering one clause out
+    of a sentence that holds both.
+
+    Asserted rather than merely deleted: silently removing the test would let
+    the block reappear the next time the prompt is edited.
+    """
     tex = _render(_min_parsed(additional=[
         "Languages: English (fluent), Hindi (native), Spanish (basic).",
         "Right to work: Stamp 1G, full-time eligible.",
     ]))
-    assert "Hindi (native)" in tex
-    assert "Stamp 1G" in tex, "work authorisation is load-bearing for an IE job search"
+    assert "Hindi" not in tex
+    assert "Additional" not in tex.split(r"\begin{document}", 1)[1]
 
 
 def test_the_additional_block_does_not_add_a_seventh_section():
@@ -210,7 +223,7 @@ def test_the_parser_asks_for_every_field_the_renderer_can_use():
     # passed after the field was renamed out of the schema, because the prompt's
     # own prose explains what "coursework" means. A guard that its own
     # documentation satisfies is not a guard.
-    for field in ("github", "linkedin", "website", "url", "additional", "coursework"):
+    for field in ("github", "linkedin", "website", "url", "coursework"):
         declared = re.search(rf'"{field}":\s*(""|\[)', prompts)
         assert declared, (
             f'"{field}" is rendered but the prompt never declares it in a JSON '

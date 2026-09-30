@@ -220,13 +220,12 @@ _SECTION_PROMPTS = {
         'items". Never a single string, never an object.'
     ),
     "certifications": (
-        'Return {"certifications": ["", ""], "additional": ["", ""]} — '
-        '"certifications" is one string per certification. "additional" is every '
-        'OTHER line in this block, verbatim and one per line: spoken languages, '
-        'work authorisation or visa status, availability, anything else. Resumes '
-        'commonly park these under an "Additional" heading next to the '
-        'certifications, and they are content, not decoration. Use [] if there '
-        'are none.'
+        'Return {"certifications": ["", ""]} — one string per certification. '
+        'Ignore any other line in this block: spoken languages, availability and '
+        'similar do not belong on this resume (user instruction 2026-09-30). '
+        'Work authorisation is already a first-class profile field '
+        '(users.visa_status, read by shared/work_auth.py), so it is not needed '
+        'here either.'
     ),
 }
 

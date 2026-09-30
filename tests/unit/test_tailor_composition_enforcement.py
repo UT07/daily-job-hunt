@@ -243,7 +243,7 @@ class TestPolicyComesFromTheUserRow:
         _, council, _, _, _ = run_handler(council_body=body(projects=3), policy=None)
         prompt = system_prompt_of(council)
         assert "AT MOST 3 projects" in prompt
-        assert "AT MOST 2 experience entries" in prompt
+        assert "AT MOST 4 experience entries" in prompt
 
     def test_stored_policy_reaches_the_prompt(self):
         _, council, _, _, _ = run_handler(
@@ -339,11 +339,11 @@ class TestEnforcementByCounting:
 
     def test_experience_overflow_is_counted_too(self):
         result, _, repair, _, _ = run_handler(
-            council_body=body(projects=3, jobs=4),
-            repair={"content": body(projects=3, jobs=2)},
+            council_body=body(projects=3, jobs=5),
+            repair={"content": body(projects=3, jobs=4)},
         )
         assert repair.call_count == 1
-        assert "4 experience entries" in repair.call_args.args[0]
+        assert "5 experience entries" in repair.call_args.args[0]
         assert result["composition_violations"] == []
 
 

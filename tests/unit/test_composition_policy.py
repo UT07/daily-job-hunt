@@ -153,13 +153,13 @@ class TestCheckOutput:
         assert check_output(r"\projectentry{P}{2025}{Python}") == []
 
     def test_experience_overflow_is_reported(self):
-        tex = r"\jobentry{A}{B}{C}{D}" * 3
-        assert check_output(tex) == ["3 experience entries, limit is 2"]
+        tex = r"\jobentry{A}{B}{C}{D}" * 5
+        assert check_output(tex) == ["5 experience entries, limit is 4"]
 
     def test_both_kinds_reported_together(self):
-        tex = r"\jobentry{A}{B}{C}{D}" * 3 + r"\projectentry{P}{2025}{Py}" * 4
+        tex = r"\jobentry{A}{B}{C}{D}" * 5 + r"\projectentry{P}{2025}{Py}" * 4
         assert check_output(tex) == [
-            "3 experience entries, limit is 2",
+            "5 experience entries, limit is 4",
             "4 projects, limit is 3",
         ]
 
@@ -201,7 +201,7 @@ class TestRenderForPrompt:
 
     def test_states_the_default_caps(self):
         rendered = render_for_prompt(None)
-        assert "AT MOST 2 experience entries" in rendered
+        assert "AT MOST 4 experience entries" in rendered
         assert "AT MOST 3 projects" in rendered
         assert "exactly 2 pages" in rendered
 
