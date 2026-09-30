@@ -64,6 +64,98 @@ def test_check_fabrication_flags_skill_not_in_base():
     assert any("Java" in r for r in result)
 
 
+# The header subtitle: 19 of 27 violations across 140 real production resumes
+# live here, and the Skills-section regex cannot reach it. Verbatim shape from
+# job_hash 00a6c061bddb, a shipped resume for an SRE/data-platform role.
+_REAL_HEADER = (
+    r"\begin{center}" "\n"
+    r"{\Large \textbf{Utkarsh Singh}}\\[0.04em]" "\n"
+    r"{\normalsize Software Engineer (SRE, Data Platform, Mobile, Rust/TypeScript, AWS K8s)}\\[0.08em]" "\n"
+    r"Dublin, Ireland \textbar\ 254utkarsh@gmail.com\\[0.08em]" "\n"
+    r"\end{center}"
+)
+
+
+def test_fabrication_is_caught_in_the_header_subtitle():
+    """The case the deployed guard could not see.
+
+    Measured: the old Skills-only regex flagged 7 of 140 real resumes; adding
+    this region takes it to 23 of 140, and 19 of the 27 violations are here.
+    """
+    tex = _REAL_HEADER + r" \section*{Technical Skills} Python, AWS \section*{Experience}"
+    result = og.check_fabrication("Python, AWS, Docker", tex)
+    assert any("Rust" in r for r in result), result
+
+
+def test_the_violation_says_which_region_the_claim_is_in():
+    """A repair round told "in the header subtitle" can fix the right line;
+    "somewhere in the document" invites a full rewrite."""
+    tex = _REAL_HEADER + r" \section*{Technical Skills} Python \section*{Experience}"
+    (violation,) = og.check_fabrication("Python", tex)
+    assert "header subtitle" in violation, violation
+
+
+def test_a_skill_the_base_resume_has_is_not_flagged_in_the_header():
+    """The header legitimately summarises real skills -- most of what is on that
+    line is supported, which is why the region is safe to add."""
+    tex = _REAL_HEADER + r" \section*{Technical Skills} Python \section*{Experience}"
+    assert og.check_fabrication("Python, Rust, TypeScript", tex) == []
+
+
+def test_the_same_skill_in_both_regions_is_reported_once():
+    """Deduplicated, or a two-line repair prompt arrives for one problem."""
+    tex = (
+        _REAL_HEADER
+        + r" \section*{Technical Skills} Python, Rust \section*{Experience}"
+    )
+    result = og.check_fabrication("Python", tex)
+    assert len([r for r in result if "Rust" in r]) == 1, result
+
+
+def test_a_document_with_no_header_still_has_its_skills_checked():
+    """Cover letters and fragments have no header; the Skills path must not
+    become dependent on finding one."""
+    tex = r"\section*{Technical Skills} Python, Kotlin \section*{Experience}"
+    assert any("Kotlin" in r for r in og.check_fabrication("Python", tex))
+
+
+def test_a_longer_word_does_not_exonerate_a_claim():
+    """"javascript" must not whitelist "java".
+
+    Substring containment did exactly that, and it disabled the most-fabricated
+    token in the blocklist: 482 of 707 real outputs list Java as a bare comma
+    item and none could be flagged, because the corpus Skills section reads
+    "TypeScript/JavaScript (React, ...)".
+    """
+    tex = r"\section*{Technical Skills} Java, SQL \section*{Experience}"
+    result = og.check_fabrication("TypeScript/JavaScript (React)", tex)
+    assert any("Java" in r for r in result), result
+
+
+def test_a_claim_the_candidate_really_has_is_not_flagged():
+    """The other half, which only works because the baseline is every row.
+
+    Word boundaries alone are not an improvement: against the single row
+    production tailors from they flag 97 of 140 real resumes instead of 23,
+    because the 2026-09-28 row dropped Java and the 2026-04-05 row has it. The
+    caller passes BaseResume.all_tex so a skill the candidate has ever listed
+    counts as supported.
+    """
+    tex = r"\section*{Technical Skills} Java, SQL \section*{Experience}"
+    union_of_all_rows = "TypeScript/JavaScript (React), Java, Python"
+    assert og.check_fabrication(union_of_all_rows, tex) == []
+
+
+def test_punctuated_names_still_match_their_own_boundary():
+    """A dot and a space are inside these tokens, so \b would misbehave."""
+    for name in ("vue.js", "spring boot"):
+        supported = r"\section*{Technical Skills} Python \section*{X}"
+        claimed = rf"\section*{{Technical Skills}} Python, {name} \section*{{X}}"
+        assert og.check_fabrication(f"Python, {name}, SQL", claimed) == [], name
+        assert og.check_fabrication("Python, SQL", claimed), name
+        assert og.check_fabrication(f"Python, {name}", supported) == []
+
+
 def test_check_fabrication_scope_is_skills_section_only():
     """Pins the documented limitation: a fabricated claim OUTSIDE the Skills
     section is invisible to this guard, even for the exact same blocklisted

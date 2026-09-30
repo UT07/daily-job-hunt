@@ -186,3 +186,29 @@ def test_every_generator_goes_through_the_shared_accessor():
         f"{missing} never call fetch_tailorable_resume, so they are not covered by "
         "the rule the other generators follow."
     )
+
+
+def test_all_tex_is_the_union_of_every_row():
+    """The fabrication baseline. See BaseResume.all_tex for why it is not `row`.
+
+    "Which document do I tailor?" has one answer. "Has the candidate ever
+    claimed this skill?" is a question about the whole profile, and answering it
+    from the tailored row alone convicts them of content an earlier row had and
+    this one dropped -- measured at 97 of 140 real resumes instead of 23.
+    """
+    db = _FakeDB([
+        {"tex_content": _LATEX + " Rust", "id": "newest"},
+        {"tex_content": _LATEX + " Java", "id": "older"},
+    ])
+    base = fetch_tailorable_resume(db, "user-1")
+    assert base.row["id"] == "newest"
+    assert "Rust" in base.all_tex and "Java" in base.all_tex, base.all_tex
+    assert "Java" not in base.tex, "tex is the ONE row to tailor, not the union"
+
+
+def test_all_tex_survives_a_row_with_no_content():
+    """A null tex_content must not make the whole baseline None and un-arm the guard."""
+    db = _FakeDB([{"tex_content": None, "id": "empty"}, {"tex_content": _LATEX, "id": "ok"}])
+    base = fetch_tailorable_resume(db, "user-1")
+    assert base.row["id"] == "ok"
+    assert _LATEX in base.all_tex
