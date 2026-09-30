@@ -1,11 +1,20 @@
 """Full system E2E test — tests every API endpoint and critical user flow.
 
-Run with: python tests/e2e/test_full_system.py
+Run with:
+    SMOKE_JWT_SECRET=... SMOKE_USER_ID=... python tests/e2e/test_full_system.py
 
 Tests against the LIVE deployed API (not local). Reports all failures.
+
+The signing secret and user id used to be literals in this file. They are the
+production Supabase JWT secret and a real account, and this repository is
+public (see .gitignore's comments on why even `.env.bak-*` is excluded), so
+they are now read from the environment and the script refuses to run without
+them. They remain in this file's git history: rotating the Supabase JWT secret
+is an operator action that this change does not perform.
 """
 
 import json
+import os
 import sys
 from datetime import datetime, timedelta
 
@@ -13,10 +22,15 @@ import boto3
 import httpx
 
 # Config
-API = "https://paie9w92c1.execute-api.eu-west-1.amazonaws.com/prod"
-JWT_SECRET = "CYDI93+ZN8WFBDdTmtioU74bS92a6ynC0PHbQyZkDiexyoceSZeoe8cnbPeDu5fj6xZ+0W5fHgy5W3YaTDAStg=="
-USER_ID = "7b28f6d3-46c9-4c46-a3a8-d5d7b3480e39"
-REGION = "eu-west-1"
+API = os.environ.get("SMOKE_API_URL", "https://paie9w92c1.execute-api.eu-west-1.amazonaws.com/prod")
+REGION = os.environ.get("AWS_DEFAULT_REGION", "eu-west-1")
+JWT_SECRET = os.environ.get("SMOKE_JWT_SECRET") or os.environ.get("SUPABASE_JWT_SECRET", "")
+USER_ID = os.environ.get("SMOKE_USER_ID", "")
+if not JWT_SECRET or not USER_ID:
+    sys.exit(
+        "Set SMOKE_JWT_SECRET (or SUPABASE_JWT_SECRET) and SMOKE_USER_ID before running this script. "
+        "It signs a token for the live production API."
+    )
 
 # Generate auth token
 import jwt as pyjwt
