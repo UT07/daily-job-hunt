@@ -24,6 +24,18 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(_HERE)
 sys.path.insert(0, _ROOT)
 
+# Load .env explicitly, the same way scripts/smoke_prod.py does. Without this the
+# documented usage above fails with "SUPABASE_URL and SUPABASE_SERVICE_KEY env
+# required" -- true of every local run, which is the only way this script is
+# ever invoked. Explicit path and explicit call, not an import side effect
+# (CLAUDE.md rule 8); CI has no .env and passes real environment variables.
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv(os.path.join(_ROOT, ".env"))
+except ImportError:
+    pass
+
 from shared.work_auth import apply_geo_score_cap  # noqa: E402
 
 

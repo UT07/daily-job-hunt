@@ -46,13 +46,17 @@ WORK_AUTH = {"IE": "stamp1g", "US": "requires_sponsorship"}
 
 # What the production `users` row actually holds, read live 2026-09-30. The
 # onboarding form takes the country as free text (web/src/pages/Onboarding.jsx
-# WorkAuthRow), so the keys are country NAMES. `_detect_country` returns "US",
-# and `_requires_sponsorship` only tries `get("US")` / `get("us")` — so on real
-# data the sponsorship cap never fires and only the non-home-country cap does.
-# Pinned here because a fixture that used ISO keys for "production data" would
-# be a double that agreed with its author instead of with the database.
-# Fixing the lookup changes every non-IE score in the pipeline and needs
-# scripts/backfill_geo_score_cap.py re-run, so it is not this change.
+# WorkAuthRow), so the keys are country NAMES while `_detect_country` returns
+# codes. This fixture exists because one using ISO keys for "production data"
+# would be a double that agreed with its author instead of with the database --
+# and for months it agreed with the author, which is why the cap never fired.
+#
+# The lookup now normalises both ends (shared/work_auth._normalize_key), so this
+# fixture and WORK_AUTH above must reach the SAME cap. Keep both: the whole
+# point is that a name-keyed dict and a code-keyed dict are no longer two
+# different behaviours. Measured consequence of closing it: 126 of 1,313 scored
+# jobs change score and 92 demote A->B, so scripts/backfill_geo_score_cap.py
+# has to be re-run against production.
 PROD_WORK_AUTH = {
     "India": "citizen",
     "Germany": "requires_sponsorship",
@@ -123,26 +127,46 @@ async def test_us_job_needing_sponsorship_is_capped_to_b_tier(scorer):
 
 
 @pytest.mark.asyncio
-async def test_the_cap_that_fires_on_the_real_users_row_is_the_a_tier_one(scorer):
+async def test_the_real_users_row_reaches_the_same_cap_as_an_iso_keyed_one(scorer):
     """Parity with the pipeline means parity on the data the pipeline reads.
 
-    With the live `work_authorizations` (country names, not ISO codes) the
-    sponsorship branch cannot match, so a US role lands at 89 / A with a
-    `job_outside_ie` marker rather than at 70 / B. Confirmed end to end
-    2026-09-30 by calling score_job through a real MCP client: the US variant
-    came back with "job_outside_ie" in gaps and the Dublin one with no marker.
+    This test used to assert the opposite: that the live `work_authorizations`
+    (country names) landed a US role at 89 / A while the ISO-keyed fixture above
+    landed it at 70 / B. That divergence WAS the bug -- `_detect_country`
+    returned "US" and `_requires_sponsorship` only tried `get("US")`, so the
+    sponsorship cap had never fired in production on any country.
 
-    This test is the divergence's boundary: whoever fixes the ISO-vs-name
-    lookup in shared/work_auth.py will have to change it, and that is the
-    point — it should not be possible to fix that quietly.
+    It is now the regression test for the fix, asserting convergence rather
+    than divergence. If someone reintroduces a code-only lookup, this fails
+    while the ISO fixture above keeps passing -- which is exactly the asymmetry
+    that hid the bug for months.
     """
     with patch.object(server, "_db", return_value=_users_db(work_auth=PROD_WORK_AUTH)):
         out = await server.score_job(US_JD, location=US_LOCATION, resume_tex="resume")
 
-    assert out["match_score"] == 89
+    assert out["match_score"] == 70, "name-keyed work_authorizations must cap like ISO-keyed"
+    assert out["tier"] == "B"
+    assert "requires_us_visa_sponsorship" in out["gaps"]
+
+
+@pytest.mark.asyncio
+async def test_an_authorized_country_written_by_the_form_is_not_capped(scorer):
+    """The half of the fix that prevents it from being a downgrade.
+
+    The onboarding form writes `permanent_resident`, `stamp_1g` and `stamp_4`
+    with underscores; `_AUTHORIZED_TOKENS` spells them with spaces. Fixing only
+    the key lookup would have flipped a US permanent resident from under-capped
+    at 89 to capped at 70 as though they needed sponsorship -- hiding good jobs
+    instead of merely over-promoting bad ones. Worse than the original bug.
+    """
+    authorized = dict(PROD_WORK_AUTH, **{"United States": "permanent_resident"})
+    with patch.object(server, "_db", return_value=_users_db(work_auth=authorized)):
+        out = await server.score_job(US_JD, location=US_LOCATION, resume_tex="resume")
+
+    assert out["match_score"] == 89, "a permanent resident needs no sponsorship"
     assert out["tier"] == "A"
-    assert "job_outside_ie" in out["gaps"]
     assert "requires_us_visa_sponsorship" not in out["gaps"]
+    assert "job_outside_ie" in out["gaps"], "the non-home-country cap still applies"
 
 
 @pytest.mark.asyncio

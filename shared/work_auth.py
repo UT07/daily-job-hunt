@@ -156,19 +156,104 @@ _AUTHORIZED_TOKENS = (
 )
 
 
+# Country aliases -> the internal codes _detect_country emits. Needed because
+# nothing normalised the two ends of this lookup against each other: the
+# onboarding form (web/src/pages/Onboarding.jsx, WorkAuthRow) takes the country
+# as FREE TEXT, so `users.work_authorizations` is keyed by country NAMES, while
+# _detect_country returns codes. Read live on 2026-09-30:
+#
+#   {"India": "citizen", "Germany": "requires_sponsorship",
+#    "Ireland": "stamp_1g", "United States": "requires_sponsorship",
+#    "United Kingdom": "requires_sponsorship"}
+#
+# `get("US")` on that dict is None, so _requires_sponsorship returned False for
+# every country and SPONSOR_REQUIRED_CAP had never fired in production. A US
+# role needing sponsorship capped at NON_HOME_COUNTRY_CAP (89, A-tier) instead
+# of 70 (B-tier).
+#
+# Codes are the ones _detect_country already uses and are NOT strictly ISO
+# 3166-1: the United Kingdom is "UK" here, not "GB". Keeping them aligned with
+# _detect_country matters more than being standards-correct, because these two
+# functions only ever talk to each other. Real ISO codes are accepted as
+# aliases anyway, so data written either way resolves.
+_COUNTRY_ALIASES: dict[str, tuple[str, ...]] = {
+    "US": ("us", "usa", "u.s.", "u.s.a", "united states",
+           "united states of america", "america"),
+    "UK": ("uk", "gb", "gbr", "united kingdom", "great britain", "britain",
+           "england", "scotland", "wales", "northern ireland"),
+    "IE": ("ie", "irl", "ireland", "republic of ireland", "eire"),
+    "CA": ("ca", "can", "canada"),
+    "DE": ("de", "deu", "ger", "germany", "deutschland"),
+    "FR": ("fr", "fra", "france"),
+    "NL": ("nl", "nld", "netherlands", "the netherlands", "holland"),
+    "SG": ("sg", "sgp", "singapore"),
+    "AU": ("au", "aus", "australia"),
+    "IN": ("in", "ind", "india"),
+}
+
+_ALIAS_TO_CODE: dict[str, str] = {
+    alias: code for code, aliases in _COUNTRY_ALIASES.items() for alias in aliases
+}
+
+
+def _normalize_key(raw: object) -> Optional[str]:
+    """A country name, code or alias -> the internal code, or None.
+
+    Exact match after normalisation, never substring: "in" is a legitimate
+    alias for India as a whole key, and a disaster as a substring.
+    """
+    if not raw:
+        return None
+    flat = str(raw).strip().lower().replace("_", " ").replace("-", " ")
+    flat = " ".join(flat.split())
+    if flat in _ALIAS_TO_CODE:
+        return _ALIAS_TO_CODE[flat]
+    # "u.s." and "u.s.a" carry dots as aliases; strip them only as a fallback so
+    # a dotted alias still wins on its own terms.
+    return _ALIAS_TO_CODE.get(flat.replace(".", ""))
+
+
+def _auth_value_for(user_work_auth: dict, country: str) -> Optional[str]:
+    """The user's status for `country`, whatever shape the key was written in."""
+    target = _normalize_key(country) or str(country).strip().upper()
+    for key, val in user_work_auth.items():
+        if (_normalize_key(key) or str(key).strip().upper()) == target:
+            return val
+    return None
+
+
 def _requires_sponsorship(user_work_auth: Optional[dict], country: str) -> bool:
     """Return True if the user requires sponsorship for the given country code.
 
     Allow-list approach: any value containing one of the AUTHORIZED tokens
     means no sponsorship needed. Anything else (including 'requires_visa',
-    'requires_sponsorship', 'visa needed', empty string) → True.
+    'requires_sponsorship', 'visa needed') → True. An ABSENT country still
+    returns False, deliberately: silence about a country is not evidence the
+    candidate needs sponsorship there, and guessing would cap on no data.
+
+    Both ends of the comparison are normalised, and both halves matter:
+
+    * the KEY, because the stored dict is keyed by country names while
+      `country` is a code (see _COUNTRY_ALIASES);
+    * the VALUE, because the same form writes underscored statuses --
+      `permanent_resident`, `stamp_1g`, `stamp_4` -- and _AUTHORIZED_TOKENS
+      spells them with spaces. Three of the form's six options are AUTHORIZED
+      statuses that the token list could not recognise.
+
+    Fixing only the key would have been worse than leaving the bug: a US
+    permanent resident would go from under-capped at 89 to capped at 70 as
+    though they needed sponsorship, which hides good jobs instead of merely
+    over-promoting bad ones.
     """
     if not user_work_auth or not isinstance(user_work_auth, dict):
         return False
-    val = user_work_auth.get(country) or user_work_auth.get(country.lower())
+    val = _auth_value_for(user_work_auth, country)
     if not val:
         return False
-    val_lo = str(val).lower()
+    # Separators normalised so the form's `stamp_1g` matches the list's
+    # `stamp 1g`. Done here rather than by adding underscore spellings to
+    # _AUTHORIZED_TOKENS so the list stays a list of phrases, not of encodings.
+    val_lo = str(val).lower().replace("_", " ").replace("-", " ")
     if any(tok in val_lo for tok in _AUTHORIZED_TOKENS):
         return False
     return True
