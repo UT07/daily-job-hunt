@@ -1936,6 +1936,44 @@ def get_search_config(user: AuthUser = Depends(get_current_user)):
 
 _VALID_STATUSES = {"New", "Applied", "Phone Screen", "Interview", "Offer", "Rejected", "Withdrawn", "Accepted"}
 
+# Fields a user may change on their own job row via PATCH /api/dashboard/jobs/{id}.
+# Module-level so a test can assert the Overview edit form (EDITABLE_JOB_FIELDS in
+# web/src/pages/JobWorkspace.jsx) never offers a field this endpoint would refuse.
+#
+# `title` and `company` are deliberately absent, and the form renders them
+# read-only to match. They are not cosmetic strings: the stored `jobs.company`
+# + `jobs.title` ARE the cross-source dedup key. See
+# lambdas/pipeline/merge_dedup.py ~l.969, which reads them straight off the jobs
+# table to build `existing_dedup_keys`:
+#
+#     norm_co = normalize_company(j.get("company", ""))
+#     norm_ti = normalize_whitespace(j.get("title", "")).lower()
+#     existing_dedup_keys.add(f"{norm_co}|{norm_ti}")
+#
+# That key is the ONLY tier that catches the same posting scraped from two
+# boards, because the differing descriptions give the two copies different
+# `job_hash` values (canonical_hash hashes the description too). Renaming a row
+# here would make the next scrape of that posting miss the key and insert a
+# duplicate — reopening the Phase 2.7 Priority-1 defect the key was added to
+# close.
+#
+# Measured read-only against production 2026-09-30 rather than argued from the
+# code (CLAUDE.md rule 5). In `jobs_raw`, 13,707 rows / 7,568 distinct
+# company|title keys: 2,800 keys cover more than one distinct job_hash, and 76
+# of those span more than one source — the same posting from two boards, which
+# job_hash equality cannot catch by construction. In `jobs` (post-dedup, 1,313
+# rows) the cross-source figure is 0, so the key is what removed all 76. One of
+# them is 'treqs|backend software engineer', the very example named in the
+# Phase 2.7 backlog item. Renaming a row blinds that tier for that row.
+#
+# Both columns are also TEXT NOT NULL (db/schema.sql), so clearing either from
+# the form would be a 500.
+#
+# `job_hash` itself is safe either way: it is a stored column, and no production
+# path recomputes it from a jobs row (canonical_hash is only ever called on a
+# scrape or add-job payload), so S3 artifact keys would not move.
+_EDITABLE_FIELDS = frozenset({"application_status", "location", "apply_url"})
+
 
 @app.get("/api/dashboard/jobs")
 def get_dashboard_jobs(
@@ -2016,6 +2054,9 @@ def update_job(
 ):
     """Update a job's fields (status, location, apply_url).
 
+    Any other key in the body is a 400 naming it, not a silent no-op — see the
+    module-level `_EDITABLE_FIELDS` for why `title`/`company` are not editable.
+
     When `application_status` is included, also append a row to
     `application_timeline` so the dashboard funnel counts (Applied /
     Interviewing / Offers) survive subsequent status changes. Without
@@ -2025,8 +2066,21 @@ def update_job(
     if _db is None:
         raise HTTPException(503, "Database not configured")
 
-    _EDITABLE_FIELDS = {"application_status", "location", "apply_url"}
-    update_data = {k: v for k, v in body.items() if k in _EDITABLE_FIELDS and v is not None}
+    # Reject anything outside `_EDITABLE_FIELDS` instead of filtering it out. Silently
+    # dropping keys is what let the Overview form PATCH title+company, get a
+    # 200, merge them into local state and report "Job updated." while the row
+    # kept its old values — CLAUDE.md rule 2. A 400 that names the fields makes
+    # the next field added to the form fail loudly in dev instead of shipping
+    # the same lie.
+    unsupported = sorted(set(body) - _EDITABLE_FIELDS)
+    if unsupported:
+        raise HTTPException(
+            400,
+            f"Field(s) not editable: {unsupported}. "
+            f"Editable fields: {sorted(_EDITABLE_FIELDS)}",
+        )
+
+    update_data = {k: v for k, v in body.items() if v is not None}
 
     if not update_data:
         raise HTTPException(400, f"At least one editable field required: {sorted(_EDITABLE_FIELDS)}")

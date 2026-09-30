@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { apiGet, apiPatch, apiCall } from '../api';
+import { resolveSaveOutcome } from './jobSaveOutcome';
 import EmailComposer from '../components/EmailComposer';
 import useApiMutation from '../hooks/useApiMutation';
 
@@ -704,6 +705,32 @@ function ScoreFeedback({ jobId }) {
   );
 }
 
+/**
+ * The Job Details fields this form may edit, and the ONLY keys it sends.
+ *
+ * This list must stay a subset of `_EDITABLE_FIELDS` in app.py. It used to
+ * include title and company; the backend dropped both and answered 200, so the
+ * form reported "Job updated." for data that never persisted. The backend now
+ * rejects a non-editable key with a 400 naming it, which is what keeps this
+ * list honest: adding a field here without adding it there fails immediately
+ * and visibly rather than silently losing the user's typing.
+ *
+ * title/company stay read-only because merge_dedup.py builds its cross-source
+ * dedup key from the stored jobs.company + jobs.title — renaming a row would
+ * make the next scrape of the same posting insert a duplicate. See the comment
+ * on _EDITABLE_FIELDS in app.py.
+ */
+const EDITABLE_JOB_FIELDS = [
+  { name: 'location', label: 'Location', type: 'text' },
+  { name: 'apply_url', label: 'Apply URL', type: 'url', placeholder: 'https://...' },
+];
+
+/** Shown in the edit panel, but not sent and not editable. */
+const READONLY_JOB_FIELDS = [
+  { name: 'title', label: 'Title' },
+  { name: 'company', label: 'Company' },
+];
+
 const JOB_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'research', label: 'Research' },
@@ -743,12 +770,9 @@ export default function JobWorkspace() {
   const [currentStatus, setCurrentStatus] = useState(null); // tracks latest status from timeline
 
   function startEditing() {
-    setEditFields({
-      title: job.title || '',
-      company: job.company || '',
-      location: job.location || '',
-      apply_url: job.apply_url || '',
-    });
+    setEditFields(
+      Object.fromEntries(EDITABLE_JOB_FIELDS.map((f) => [f.name, job[f.name] || ''])),
+    );
     setEditing(true);
     setSaveStatus(null);
   }
@@ -763,10 +787,26 @@ export default function JobWorkspace() {
     setSaving(true);
     setSaveStatus(null);
     try {
-      await apiPatch(`/api/dashboard/jobs/${job.job_id}`, editFields);
-      setJob((prev) => ({ ...prev, ...editFields }));
-      setEditing(false);
-      setSaveStatus({ type: 'success', message: 'Job updated.' });
+      const stored = await apiPatch(`/api/dashboard/jobs/${job.job_id}`, editFields);
+      // Merge and report from the row the server returns, not from editFields.
+      // The optimistic `...editFields` merge this replaces showed title and
+      // company edits that app.py had dropped, over the top of a success
+      // message, and they reverted on the next reload.
+      const { persisted, notStored } = resolveSaveOutcome(editFields, stored);
+      setJob((prev) => ({ ...prev, ...persisted }));
+      const missing = Object.keys(notStored);
+      if (missing.length > 0) {
+        // Stay in edit mode: the values are still in the form to retry.
+        setSaveStatus({
+          type: 'error',
+          message: `Not saved: ${missing.join(', ')}. The server did not store ${
+            missing.length === 1 ? 'this field' : 'these fields'
+          }.`,
+        });
+      } else {
+        setEditing(false);
+        setSaveStatus({ type: 'success', message: 'Job updated.' });
+      }
     } catch (e) {
       setSaveStatus({ type: 'error', message: `Save failed: ${e.message}` });
     } finally {
@@ -1023,39 +1063,32 @@ export default function JobWorkspace() {
 
             {editing ? (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6 border-2 border-yellow bg-yellow-light p-4">
-                <div>
-                  <label className="block text-sm font-bold text-black mb-1">Title</label>
-                  <Input
-                    type="text"
-                    value={editFields.title}
-                    onChange={(e) => updateEditField('title', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-bold text-black mb-1">Company</label>
-                  <Input
-                    type="text"
-                    value={editFields.company}
-                    onChange={(e) => updateEditField('company', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-bold text-black mb-1">Location</label>
-                  <Input
-                    type="text"
-                    value={editFields.location}
-                    onChange={(e) => updateEditField('location', e.target.value)}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-bold text-black mb-1">Apply URL</label>
-                  <Input
-                    type="url"
-                    value={editFields.apply_url}
-                    onChange={(e) => updateEditField('apply_url', e.target.value)}
-                    placeholder="https://..."
-                  />
-                </div>
+                {READONLY_JOB_FIELDS.map(({ name, label }) => (
+                  <div key={name}>
+                    <label className="block text-sm font-bold text-black mb-1">{label}</label>
+                    <p
+                      data-testid={`job-readonly-${name}`}
+                      className="text-sm text-stone-600 border-2 border-stone-200 bg-stone-100 px-3 py-2 truncate"
+                    >
+                      {decodeHtml(job[name]) || '--'}
+                    </p>
+                    <p className="text-[11px] text-stone-500 mt-1">
+                      From the job posting — used to detect duplicates, so it is not editable.
+                    </p>
+                  </div>
+                ))}
+                {EDITABLE_JOB_FIELDS.map(({ name, label, type, placeholder }) => (
+                  <div key={name}>
+                    <label className="block text-sm font-bold text-black mb-1">{label}</label>
+                    <Input
+                      type={type}
+                      aria-label={label}
+                      value={editFields[name] ?? ''}
+                      onChange={(e) => updateEditField(name, e.target.value)}
+                      placeholder={placeholder}
+                    />
+                  </div>
+                ))}
               </div>
             ) : (
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
