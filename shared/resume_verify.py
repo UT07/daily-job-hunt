@@ -27,8 +27,10 @@ résumé bullet opens with ("Orchestrated", "Configured", "Skilled in"). Recall
 against what remains separates "rendered differently" from "lost", which is
 exactly the distinction every existing check misses.
 
-Two things about that set are easy to get wrong, and both were wrong here until
-2026-09-30 — each one making the instrument report LESS loss than had occurred:
+Three things about that set are easy to get wrong, and all three were wrong
+here until 2026-09-30. Every one of them is the same mistake — treating case or
+spelling as identity — and they do not all point the same way, which is why
+each needed measuring rather than reasoning about:
 
   * **Case is not identity.** The pattern required a capital initial, so a
     source that wrote "we use kubernetes daily" produced NO anchors at all and
@@ -40,6 +42,20 @@ Two things about that set are easy to get wrong, and both were wrong here until
     containing "typescript" and "javascript" could ever satisfy. Identical
     content, written two ways, measured as 0.0% recall. Membership is therefore
     tested per punctuation-part against the output TEXT, not by set difference.
+
+  * **A quantity's unit is not content either.** The first two fixes folded word
+    anchors and deliberately left quantities to the both-sides tokeniser, which
+    normalises them consistently — except that the fold was never applied to
+    them (``token.replace(" ", "")`` with no ``.lower()``) and the unit
+    alternation was written case-sensitively: ``[KMB]`` upper, ``x`` and ``ms``
+    lower. So a lowercase unit was not recognised as a unit at all and its
+    digits were kept without it — ``"$2.4m"`` extracted ``"$2.4"`` — and
+    ``anchor_recall("raised $2.4M", "raised $2.4m")`` read 0.5.
+
+    This one biases the instrument the OTHER way: it invents loss. The first
+    two cost missed degradations, silently; this cost a refused upload of a
+    good document, visibly, so the fix is governed by CLAUDE.md rule 16 and its
+    false-positive rate is measured below rather than argued for.
 
 Deliberately AI-free. The project has been burned repeatedly by asking a model
 to confirm its own output, and a lost employer is countable.
@@ -128,8 +144,16 @@ _PART_SPLIT = re.compile(r"[.\-/&+]")
 _SPLITTABLE = re.compile(r"^[a-z][a-z0-9]*(?:[.\-/&+][a-z0-9]+)*$")
 _ALNUM_RUN = re.compile(r"[A-Za-z0-9]+")
 _YEAR = re.compile(r"\b(?:19|20)\d{2}\b")
-# 43%  $2.4M  8,000+  99.9%  3x  120ms
-_QUANTITY = re.compile(r"(?<![\w.])(?:[$€£]\s?)?\d[\d,.]*\s?(?:%|[KMB]\b|x\b|ms\b|\+)?")
+# 43%  $2.4M  8,000+  99.9%  3x  120ms  500k  120MS
+#
+# The unit alternation is case-insensitive, and only over the unit letters: a
+# scoped (?i:...) rather than re.IGNORECASE on the whole pattern, so the flag
+# cannot drift onto anything else here later. The trailing \b is what keeps
+# [KMB] from becoming "any letter" -- the unit has to END the token, so
+# "$2.4 million", "43 kg" and "5 Mbps" keep the bare number and let the word
+# stand as its own anchor.
+_QUANTITY = re.compile(
+    r"(?<![\w.])(?:[$€£]\s?)?\d[\d,.]*\s?(?:%|(?i:ms|[KMB]|x)\b|\+)?")
 
 # LaTeX control sequences and their arguments' delimiters are formatting, not
 # content. Stripping them stops \textbf and \begin{itemize} counting as anchors
@@ -174,7 +198,11 @@ def extract_anchors(text: str, *, is_latex: bool = False) -> set[str]:
     """Tokens a faithful conversion should preserve verbatim.
 
     Case-folded, because a renderer may legitimately change capitalisation in a
-    heading. Single characters and pure stopwords are dropped.
+    heading — and that applies to a quantity's unit ("$2.4M" / "$2.4m") exactly
+    as it does to a word, so BOTH families fold here. They folded differently
+    until 2026-09-30, which made a recased unit read as lost content.
+
+    Single characters and pure stopwords are dropped.
     """
     if not text:
         return set()
@@ -192,7 +220,7 @@ def extract_anchors(text: str, *, is_latex: bool = False) -> set[str]:
         # A bare small integer is noise — bullet numbering, a page number. A
         # quantity with a unit or separator is a claim.
         if len(token) > 2 or token.endswith(("%", "+")):
-            anchors.add(token.replace(" ", ""))
+            anchors.add(token.replace(" ", "").lower())
     return anchors
 
 
@@ -206,6 +234,17 @@ def _display_forms(text: str) -> dict[str, str]:
 
     A capitalised occurrence wins over a lowercase one, because a token that
     appears both ways is a name the source happened to lowercase somewhere.
+
+    Quantities need the same treatment and did not get it while their anchors
+    kept the source's case by accident. Folding them (so "$2.4m" stops reading
+    as loss against "$2.4M") would otherwise have made the message say
+    "Missing: $2.4m, 500k" about a source that wrote "$2.4M, 500K" -- a report
+    that looks like a bug in the tool instead of naming what to check.
+
+    This is a folded -> display lookup, not a second opinion on what counts as
+    an anchor: it is only ever read through ``forms.get(anchor, anchor)``, so
+    keys that no anchor claims cost nothing and duplicating extract_anchors'
+    filters here would just give them somewhere to drift apart.
     """
     forms: dict[str, str] = {}
     for match in _ANCHOR_WORD.finditer(text or ""):
@@ -213,6 +252,16 @@ def _display_forms(text: str) -> dict[str, str]:
         folded = token.lower()
         if folded not in forms or (token[:1].isupper()
                                    and not forms[folded][:1].isupper()):
+            forms[folded] = token
+    # A quantity's identity is in its trailing unit, not its initial character
+    # ("$2.4M" starts with "$"), so "has a capital anywhere" is the analogue of
+    # the capital-initial rule above. Word keys start with a letter and quantity
+    # keys with a digit or a currency symbol, so the two cannot collide.
+    for match in _QUANTITY.finditer(text or ""):
+        token = match.group(0).strip().replace(" ", "")
+        folded = token.lower()
+        if folded not in forms or (any(c.isupper() for c in token)
+                                   and not any(c.isupper() for c in forms[folded])):
             forms[folded] = token
     return forms
 
@@ -349,50 +398,77 @@ def section_recall(source: str, output: str, *, output_is_latex: bool = True
     return out
 
 
-# Chosen from measurement, not taste — and RE-MEASURED on 2026-09-30 after the
-# two extractor fixes above, because both floors had been derived with the
-# biased instrument. The first derivation used ONE faithful pair (97.8% doc,
-# 95.8% worst section); one document cannot tell a floor from a coincidence, so
-# this one uses 27.
+# Chosen from measurement, not taste, and re-derived — not retained by default
+# — every time the extractor changed underneath them. The first derivation used
+# ONE faithful pair (97.8% doc, 95.8% worst section); one document cannot tell a
+# floor from a coincidence. The second used 27, after the capital-initial and
+# punctuation-splitting fixes. This one, 2026-09-30, adds the quantity-unit fold
+# and rebuilt the corpus from current production, which yielded 32.
 #
-# Population: 27 real (source, output) pairs where the source is the pdfplumber
+# Population: 32 real (source, output) pairs where the source is the pdfplumber
 # text of a compiled PDF and the output is the exact .tex it was compiled from —
 # the same shapes conversion_is_faithful is handed on the upload path. Two repo
-# résumés, the production corpus row, and 24 tailored .tex read out of S3.
-# Damage is applied to the output, never the source.
+# résumés, the production corpus row, and 29 tailored .tex read out of S3 (a
+# 30th was pulled and skipped: it does not compile). Damage is applied to the
+# output, never the source.
 #
 #                                  doc min  doc med   worst section min / med
-#     faithful                       0.990    0.996        0.972    0.990
-#     every bullet verb reworded     0.990    0.996        0.972    0.990
-#     verbs AND nouns reworded       0.959    0.974        0.918    0.946
-#     one employer deleted           0.672    0.914        0.392    0.739
-#     education deleted              0.879    0.922        0.308    0.368
-#     projects deleted               0.630    0.763        0.217    0.356
-#     gutted to the summary          0.104    0.187        0.033    0.091
+#     faithful                       0.990    0.996        0.972    0.988
+#     every bullet verb reworded     0.990    0.996        0.972    0.988
+#     every unit letter recased      0.990    0.996        0.972    0.988
+#     verbs AND nouns reworded       0.959    0.973        0.905    0.944
+#     one employer deleted           0.672    0.912        0.392    0.736
+#     education deleted              0.879    0.923        0.308    0.377
+#     projects deleted               0.630    0.765        0.217    0.355
+#     gutted to the summary          0.104    0.188        0.033    0.094
 #
-# The second and third rows are the false-positive measurement CLAUDE.md rule 16
-# asks for: every capitalised name, digit and macro left byte-identical and only
-# prose replaced by synonyms, so any recall drop there is the instrument
-# punishing a conversion that lost nothing. Verb rewording now costs exactly
-# nothing (it cost 6 points before — worst section 0.909). Rewording nouns as
-# well, which is heavier than a re-render has any reason to be, still clears
-# both floors.
+# Rows 2-4 are the false-positive measurement CLAUDE.md rule 16 asks for: every
+# capitalised name, digit and macro left byte-identical, and only prose replaced
+# by synonyms or a unit letter's case flipped, so any recall drop there is the
+# instrument punishing a conversion that lost nothing. Verb rewording costs
+# exactly nothing. Rewording nouns as well, which is heavier than a re-render
+# has any reason to be, still clears both floors.
 #
-# Neither floor moves. They were re-derived, not retained by default:
+# Recasing units now also costs exactly nothing — row 3 is identical to row 1 on
+# every statistic. It was NOT free before this fix: on the same 32 pairs the
+# instrument read 0.987 doc min / 0.991 doc med / 0.985 worst-section med for a
+# document that had lost nothing, and 31 of the 32 pairs improved with the fix
+# while none got worse.
 #
-#   * 0.90 still sits below every faithful and every reworded reading (min
+# That row also states this fix's real blast radius honestly, which is smaller
+# than the defect's shape suggests: the erosion was about half a percentage
+# point, so none of these 32 documents was ever actually refused by it. A
+# résumé carries a few hundred anchors and only a handful of unit-suffixed
+# quantities, which dilutes the error far below the floor. It is margin that was
+# being spent for nothing, not a live outage — the outright refusal the defect
+# can produce (69% survival on a short, quantity-dense document) needs a much
+# higher quantity density than a real résumé has.
+#
+# Note also that NO pre-existing case could see this fix. The corpus is built by
+# compiling a .tex and extracting the PDF's text, so source and output agree on
+# unit casing by construction, and the four damage functions delete rather than
+# rewrite. Run without row 3, all three revisions print byte-identical numbers —
+# a reading that cannot distinguish the fix from a no-op is not a measurement
+# (CLAUDE.md rules 2 and 12). Row 3 is what makes the population able to judge
+# the thing being judged (rule 7).
+#
+# Neither floor moves:
+#
+#   * 0.90 still sits below every faithful, reworded and recased reading (min
 #     0.959) and above every section-scale loss at the median. Raising it to
 #     0.93 or 0.95 catches nothing more on this population — the section floor
 #     is already firing on all of it — so it would spend margin for nothing.
-#   * 0.88 still sits between the worst faithful section (0.972, was 0.939) and
-#     the damaged ones. 0.90 is also clean; 0.92 starts blocking a faithful
-#     pair. The margin GREW with the fix, on both sides, which is the point:
-#     the same floor now means what its docstring says.
+#   * 0.88 still sits between the worst faithful section (0.972) and the damaged
+#     ones. 0.90 is also clean; 0.92 starts blocking must-pass documents (2 of
+#     128). The margin grew again with this fix, on both sides, which is the
+#     point: the same floor keeps meaning what its docstring says.
 #
-# Gate outcome on the same 108 damaged documents: 105 blocked, up from 102. The
-# three that pass are all the 8,121-byte production corpus row, where the
-# section being deleted was 81, 84 and 204 bytes — 1.0% to 2.5% of the document.
-# Nothing was lost that a floor should have caught.
+# Gate outcome on the 128 damaged documents: 125 blocked (122 before the two
+# fixes in the docstring above; this fix changes no damage row, by design — it
+# only stops inventing loss). The three that pass are all the 8,121-byte
+# production corpus row, where the section being deleted was 81, 84 and 204
+# bytes — 1.0% to 2.5% of the document. Nothing was lost that a floor should
+# have caught.
 DOC_RECALL_FLOOR = 0.90
 
 # Per section the bar is higher, because at ingest there is no composition
@@ -401,10 +477,11 @@ DOC_RECALL_FLOOR = 0.90
 # whole-document number at 0.914 in the median case, comfortably above 0.90,
 # while the section it was deleted from reads 0.739. Per section, faithful:
 #
-#     summary 1.000   skills 0.990   experience 0.979
+#     summary 1.000   skills 0.990   experience 0.976
 #     projects 0.972   education 1.000   certifications 1.000
 #
-# (minimums over the 27 pairs; medians are 1.000 for all but skills at 0.992).
+# (minimums over the 32 pairs; medians are 1.000 for all but skills at 0.992
+# and experience at 0.996).
 SECTION_FLOOR = 0.88
 
 
