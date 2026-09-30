@@ -30,8 +30,15 @@ jobs:
         run: pip install aws-sam-cli
       - name: Build shared-deps layer (catches Docker permission / shared/ packaging bugs)
         run: ./layer/build.sh
-      - name: SAM Validate (CFN template syntax + Ref / GetAtt resolution)
-        run: sam validate --region eu-west-1
+      # --lint matters, and its absence cost six consecutive failed deploys on
+      # 2026-09-30. Plain `sam validate` accepts a template CloudFormation will
+      # refuse: it does not detect circular dependencies. `--lint` runs cfn-lint,
+      # whose E3004 reported the JobHuntApi <-> HttpApi cycle in under a second.
+      # `sam build` cannot see it either, because no changeset is created — so
+      # this job was green on the PR that introduced it. Rule 12: fix the
+      # instrument. See .cfnlintrc.yaml for the one rule that is ignored and why.
+      - name: SAM Validate --lint (CFN syntax, Ref/GetAtt resolution, CIRCULAR DEPS)
+        run: sam validate --lint --region eu-west-1
       - name: SAM Build (catches missing CodeUri files, broken Dockerfile, wrong Handlers)
         env:
           DOCKER_BUILDKIT: "0"

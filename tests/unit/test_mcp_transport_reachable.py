@@ -113,7 +113,18 @@ def test_template_passes_the_deployed_host_to_the_api_lambda():
         "JobHuntApi must receive MCP_ALLOWED_HOSTS or the deployed transport "
         "keeps answering 421 Invalid Host header"
     )
-    assert "execute-api" in template.split("MCP_ALLOWED_HOSTS:")[1].splitlines()[0]
+    # This used to assert "execute-api" appeared on the same line, which pinned
+    # the value to !Sub "<HttpApi id>.execute-api...". That Sub is exactly what
+    # made the function reference the API and produced the circular dependency
+    # that blocked six deploys, so asserting it would now pin the bug in place.
+    # The chain is what matters: a parameter carries the host, and deploy.yml
+    # fills it. test_template_circular_dependency.py owns both halves.
+    wired = template.split("MCP_ALLOWED_HOSTS:")[1].splitlines()[0]
+    assert "McpAllowedHosts" in wired, wired
+    assert "HttpApi" not in wired, (
+        "referencing the HttpApi resource from the function's Environment "
+        "recreates the circular dependency"
+    )
 
 
 @pytest.mark.parametrize("path", ["/sse", "/messages"])

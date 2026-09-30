@@ -116,6 +116,28 @@ Parameters:
       to this address after deploy; the subscription stays PendingConfirmation
       (and silent) until it's clicked.
     Default: "254utkarsh@gmail.com"
+  McpAllowedHosts:
+    Type: String
+    Default: ""
+    Description: >-
+      Comma-separated Host values the MCP HTTP transport will answer for, on top
+      of localhost. Supplied by deploy.yml from web/.env.production's
+      VITE_API_URL, which is already the repo's source of truth for the deployed
+      API host (the post-deploy smoke step reads the same file).
+
+      A PARAMETER, not an Fn::Sub on the HttpApi id. That Sub made the JobHuntApi
+      function reference the HttpApi resource, while SAM's generated API body
+      already references the function's ARN -- a circular dependency that
+      CloudFormation refuses at changeset creation:
+
+        Circular dependency between resources: [ApiGateway5xxAlarm,
+        PipelineHealthDashboard, JobHuntApi, HttpApi,
+        JobHuntApiApiGatewayPermission, JobHuntApiTaskWorker, HttpApiprodStage]
+
+      `sam build` cannot see it because no changeset is created, so CI was
+      green and six consecutive deploys failed. Empty default fails closed to
+      localhost-only, which is the pre-existing behaviour rather than a
+      widening -- see mcp_server/server.py::_transport_security.
   CouncilEngine:
     Type: String
     Default: legacy
@@ -1797,9 +1819,11 @@ Resources:
           # /mcp/sse with 421 "Invalid Host header" until this existed: FastMCP
           # auto-enables that check for a loopback `host` (the default) and
           # allows only localhost, so the API Gateway host had to be named.
-          # Taken from the HttpApi id rather than hardcoded, so it follows the
-          # stack. See mcp_server/server.py::_transport_security.
-          MCP_ALLOWED_HOSTS: !Sub "${HttpApi}.execute-api.${AWS::Region}.amazonaws.com"
+          # Supplied as a stack PARAMETER, deliberately. Referencing
+          # ${HttpApi} here is what created the circular dependency that blocked
+          # every deploy from c15723b onwards -- see the McpAllowedHosts
+          # parameter for the full CloudFormation error.
+          MCP_ALLOWED_HOSTS: !Ref McpAllowedHosts
       Events:
         ApiGateway:
           Type: HttpApi
