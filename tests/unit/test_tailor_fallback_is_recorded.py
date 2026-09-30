@@ -144,13 +144,6 @@ def _word_gates_in(path: pathlib.Path) -> list[int]:
     return hits
 
 
-def _word_gates_under(root: pathlib.Path) -> list[str]:
-    return sorted(
-        f"{p.relative_to(REPO)}:{line}"
-        for p in root.rglob("*.py") for line in _word_gates_in(p)
-    )
-
-
 def _summary_log_call(fn: ast.FunctionDef) -> ast.Call:
     """The single end-of-run line: `[tailor] <Depth> tailor for <hash> (...)`."""
     matches = [
@@ -225,36 +218,17 @@ class TestOnlyARecordedFallbackCanShipTheCorpus:
             "it can report (ok) for a run that shipped the corpus"
         )
 
-    def test_the_short_body_word_gate_is_gone_from_the_pipeline(self):
+    def test_no_short_body_word_gate_survives_anywhere_in_the_repository(self):
         r"""CLAUDE.md rule 10: search the whole repo for a guard before
-        trusting it. Written as a text search first, which immediately proved
-        the point by finding a second copy nobody had mentioned — see
-        `test_the_one_remaining_copy_is_the_one_we_know_about`. Matched over
-        the AST rather than the source text so that prose ABOUT the removed
-        gate (this file, `output_guards.py`'s docstring, the comment in
-        `tailor_resume.py` recording why it went) does not read as the gate.
+        trusting it. Written as a text search first, and it paid immediately:
+        `tailorer.py:_check_page_length` was a second copy — same regex, same
+        floor, reached from `main.py` and from four backfill/regeneration
+        scripts that write real artifacts. It was pinned here as a known
+        remaining instance, this test failed the moment it was removed, and
+        the set is now empty. It stays as a set so a reintroduction anywhere
+        fails CI, not only one in `lambdas/`.
         """
-        assert _word_gates_under(REPO / "lambdas") == [], (
-            "a short-body word gate is back in the pipeline. It undercounts "
-            "LaTeX-dense bodies (see deleted_word_gate_count) and fired on 52 "
-            "of 740 real tailored resumes; check_near_empty is the instrument "
-            "for this question."
-        )
-
-    def test_the_one_remaining_copy_is_the_one_we_know_about(self):
-        r"""`tailorer.py:_check_page_length` is the same defect, same regex,
-        same floor, reached from `main.py` and from four backfill/regeneration
-        scripts. It is NOT fixed here, deliberately: it returns `base_tex` to
-        a caller that never claimed otherwise (`tailor_resume()` returns a
-        path, and no `used_fallback` contract exists on that path), so it is
-        the broken instrument without the false status. Removing it needs its
-        own measurement of the population those scripts write, which is not
-        this change's population (rule 7).
-
-        Pinned as a set rather than tolerated, so a THIRD copy fails CI and
-        this one cannot quietly become two.
-        """
-        known = {"tailorer.py"}
+        known: set[str] = set()
         found = {
             str(p.relative_to(REPO))
             for p in REPO.rglob("*.py")
@@ -262,12 +236,11 @@ class TestOnlyARecordedFallbackCanShipTheCorpus:
                        for part in p.parts)
             and _word_gates_in(p)
         }
-        assert found <= known, (
-            f"new short-body word gate(s): {sorted(found - known)}"
-        )
-        assert "tailorer.py" in found, (
-            "tailorer.py no longer carries the gate — good; delete it from "
-            "`known` so this test keeps meaning what it says"
+        assert found == known, (
+            f"short-body word gate(s) back in: {sorted(found - known)}. The "
+            "regex undercounts LaTeX-dense bodies (see "
+            "deleted_word_gate_count) and fired on 52 of 740 real tailored "
+            "resumes; check_near_empty is the instrument for this question."
         )
 
 
@@ -507,3 +480,154 @@ class TestNothingRunsOnABodyTheRunAlreadyThrewAway:
         assert out["used_fallback"] is True
         assert written == _BASE_TEX
         assert "A clean rewrite" not in written
+
+
+# ===========================================================================
+# 3. The second copy: tailorer.py, the legacy/scripts path.
+# ===========================================================================
+#
+# `tailorer.py:_check_page_length` was the same regex at the same floor,
+# reached from `main.py` and from scripts/backfill_artifacts.py,
+# scripts/backfill_all.py, scripts/batch_generate.py and
+# scripts/regenerate_tier_artifacts.py — all of which write real artifacts to
+# S3 and Supabase. Found by the repo-wide pin above, which is the whole
+# argument for having one (CLAUDE.md rule 10).
+#
+# Removing it there is NOT the same change as removing it in the pipeline,
+# and the difference is what these cases are about. `tailor_resume.handler()`
+# had `check_near_empty` two lines below the branch; `tailorer.py` had no
+# volume gate at all besides this one. So it was REPLACED, not deleted, with
+# the same function and the same floor rather than a second implementation.
+
+_TAILORER_PREAMBLE = (
+    "\\documentclass{article}\n"
+    "\\newcommand{\\jobentry}[4]{#1 #2 #3 #4}\n"
+    "\\newcommand{\\projectentry}[3]{#1 #2 #3}\n"
+)
+
+# All six headers, `\jobentry`, the hardcoded header markers `tailorer.py`
+# checks for, and balanced braces — so `_validate_latex_structure` passes it
+# completely. Three identity anchors. This is the document that isolates the
+# near-empty gate as the only thing standing between it and the user's inbox,
+# and the reason the word gate could not simply be deleted here.
+_TAILORER_SKELETON = (
+    r"\begin{center}{\Large \textbf{Utkarsh Singh}}\\ 254utkarsh@gmail.com"
+    r"\end{center}"
+    r"\section*{Summary}\section*{Technical Skills}\section*{Experience}"
+    r"\jobentry{}{}{}{}"
+    r"\section*{Featured Projects}\section*{Education}\section*{Certifications}"
+)
+
+
+def _tailorer_doc(body: str) -> str:
+    return f"{_TAILORER_PREAMBLE}\\begin{{document}}\n{body}\n\\end{{document}}\n"
+
+
+_TAILORER_BASE = _tailorer_doc(
+    realistic_body(summary="THE UNTAILORED CORPUS SUMMARY."))
+
+
+def _tailor(ai_body: str, tmp_path):
+    """Drive the real `tailorer.tailor_resume()`; return the .tex it wrote."""
+    import tailorer
+    from scrapers.base import Job
+
+    job = Job(title="SRE", company="Acme", location="Dublin",
+              apply_url="https://example.com", source="test",
+              description="Run Kubernetes at scale for a payments platform.")
+    ai = MagicMock()
+    ai.providers = []          # no council; take the single-call path
+    ai.complete_with_info.return_value = {
+        "response": ai_body, "provider": "test", "model": "test-model"}
+
+    with patch.object(tailorer, "extract_keywords", return_value=[]), \
+         patch.object(tailorer, "log_quality"), \
+         patch.object(tailorer, "_sanitize_latex", side_effect=lambda x: x):
+        path = tailorer.tailor_resume(job, _TAILORER_BASE, ai, tmp_path)
+    assert path, "tailor_resume() wrote nothing"
+    return pathlib.Path(path).read_text()
+
+
+class TestTailorerUsesOneInstrumentWithThePipeline:
+
+    def test_it_is_literally_the_same_function_not_a_second_copy(self):
+        """A reimplementation is how the two floors drift apart. They are the
+        same object, so `NEAR_EMPTY_ANCHOR_FLOOR` cannot be 40 in one path
+        and something else in the other.
+
+        Scope, measured by mutation rather than assumed: this catches a
+        MODULE-LEVEL fork (a second definition or a shadowing import in
+        `tailorer.py`). A rebinding local to `_check_not_near_empty` leaves
+        this identity intact and is caught by the behavioural cases below
+        instead — do not read a pass here as "no fork anywhere".
+        """
+        import tailorer
+        from guardrails import output_guards
+
+        assert tailorer.check_near_empty is output_guards.check_near_empty
+
+    def test_the_old_estimator_and_its_gate_are_both_gone(self):
+        import tailorer
+
+        assert not hasattr(tailorer, "_estimate_body_words")
+        assert not hasattr(tailorer, "_check_page_length")
+
+
+class TestTailorerNoLongerDiscardsRealResumes:
+
+    def test_the_old_gate_would_have_fallen_back_on_a_production_density_body(self):
+        """The premise. `_estimate_body_words` ran the same regex over the
+        spliced document, so this measures what it measured."""
+        body = realistic_body(summary="Kubernetes at scale for payments.")
+        doc = _tailorer_doc(body)
+        inner = doc.split("\\begin{document}", 1)[1].split("\\end{document}", 1)[0]
+        assert deleted_word_gate_count(inner) < 500
+
+    def test_that_body_now_reaches_the_written_tex(self, tmp_path):
+        written = _tailor(
+            realistic_body(summary="Kubernetes at scale for payments."), tmp_path)
+        assert "Kubernetes at scale for payments" in written
+        assert "THE UNTAILORED CORPUS SUMMARY" not in written, (
+            "the corpus was written to this job's .tex — the removed gate, or "
+            "something like it, is discarding production-density resumes again"
+        )
+
+    def test_the_corpus_itself_still_clears_the_new_gate(self):
+        """Over-correction guard, on the documents the whole path is built
+        around: both real base resumes must stay silent."""
+        import tailorer
+
+        for name in ("fullstack.tex", "sre_devops.tex"):
+            tex = (REPO / "resumes" / name).read_text()
+            assert tailorer.check_near_empty(tex) == [], name
+
+
+class TestTailorerStillStopsANearEmptyDocument:
+    """What deletion alone would have cost. `tailorer.py` has no compiled-PDF
+    gate in front of it and `latex_compiler.check_pdf` does not block, so this
+    is the last thing between a blank resume and the user's application.
+    """
+
+    def test_a_skeleton_that_clears_every_structural_check_is_still_rejected(
+            self, tmp_path):
+        import tailorer
+
+        # The premise: structure validation has no objection to this document.
+        assert tailorer._validate_latex_structure(
+            _tailorer_doc(_TAILORER_SKELETON), _TAILORER_BASE, "Acme"
+        ) is not _TAILORER_BASE, (
+            "the skeleton no longer passes _validate_latex_structure, so this "
+            "case has stopped isolating the near-empty gate"
+        )
+        written = _tailor(_TAILORER_SKELETON, tmp_path)
+        assert written == _TAILORER_BASE
+
+    def test_the_log_names_the_anchor_count_not_a_word_count(
+            self, tmp_path, caplog):
+        with caplog.at_level(logging.WARNING):
+            _tailor(_TAILORER_SKELETON, tmp_path)
+        assert "near_empty: only 3 identity anchors" in caplog.text, (
+            "a repair told '3 anchors, the floor is 40' can act; 'body too "
+            "short (12 words)' on a document whose words a regex ate cannot"
+        )
+        assert "body too short" not in caplog.text
