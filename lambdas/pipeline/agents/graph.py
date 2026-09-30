@@ -393,4 +393,13 @@ def council_complete_langgraph(
     winner = final.get("winner")
     if not winner:
         raise RuntimeError("Council: all generators failed")
-    return {**winner, "trace_id": trace_id}
+    # critique_outcome travels with the result so a caller can record WHETHER
+    # this was adjudicated, not just what was chosen. Without it the only
+    # evidence was a log line, and one of the four degradation paths did not
+    # even emit that.
+    return {
+        **winner,
+        "trace_id": trace_id,
+        "critique_outcome": final.get("critique_outcome", "unknown"),
+        "scores": final.get("scores") or [],
+    }

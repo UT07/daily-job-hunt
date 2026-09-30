@@ -887,8 +887,8 @@ def _council_complete_legacy(
         raise RuntimeError("Council: all generators failed")
     candidates = prefer_complete(candidates)
     if len(candidates) == 1:
-        logger.info("[council] Only 1 candidate — returning without critique")
-        return candidates[0]
+        logger.info("[council] outcome=single_candidate — returning without critique")
+        return {**candidates[0], "critique_outcome": "single_candidate"}
 
     # Step 3: Select critic from a different model family
     gen_families = {_model_family(g["model"]) for g in generators}
@@ -909,8 +909,10 @@ def _council_complete_legacy(
             temperature=0, max_tokens=CRITIC_MAX_TOKENS,
         )
         if not critique:
-            logger.warning("[council] Critic call failed, returning first candidate")
-            return candidates[0]
+            logger.warning("[council] outcome=critic_call_failed — critic %s "
+                           "returned nothing; candidate 1 unadjudicated",
+                           critic_provider["name"])
+            return {**candidates[0], "critique_outcome": "critic_call_failed"}
 
         scores = _parse_critic_scores(critique["content"], len(candidates))
         if scores:
@@ -920,13 +922,17 @@ def _council_complete_legacy(
                 f"[council] Scores: {scores}, Winner: candidate {best_idx + 1} "
                 f"({winner['provider']}:{winner['model']}) score={scores[best_idx]}"
             )
-            return winner
+            return {**winner, "critique_outcome": "adjudicated", "scores": scores}
         else:
-            logger.warning(f"[council] Could not parse critic scores: {critique['content'][:200]}")
-            return candidates[0]
+            logger.warning("[council] outcome=critic_unparseable — critic %s "
+                           "answered in an unreadable shape; candidate 1 "
+                           "unadjudicated. Raw: %r",
+                           critic_provider["name"], critique["content"][:300])
+            return {**candidates[0], "critique_outcome": "critic_unparseable"}
     except Exception as e:
-        logger.warning(f"[council] Critique failed ({e}), returning first candidate")
-        return candidates[0]
+        logger.warning("[council] outcome=critic_call_failed — critique raised "
+                       "(%s); candidate 1 unadjudicated", e)
+        return {**candidates[0], "critique_outcome": "critic_call_failed"}
 
 
 # ---------------------------------------------------------------------------

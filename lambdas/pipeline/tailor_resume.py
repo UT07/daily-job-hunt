@@ -877,11 +877,38 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
     tex_key = f"users/{user_id}/resumes/{job_hash}_tailored.tex"
     s3.put_object(Bucket=bucket, Key=tex_key, Body=tailored_tex.encode("utf-8"))
 
-    # Update job record
-    db.table("jobs").update({
+    # Update job record. critique_outcome records WHETHER the council
+    # adjudicated this result or fell back to the first candidate — measured at
+    # 26% adjudication over 80 rounds, and previously discoverable only by
+    # grepping CloudWatch. Recording it makes the rate one SQL query.
+    outcome = response_dict.get("critique_outcome", "unknown")
+    update = {
         "resume_version": 1,
         "tailoring_model": f"{response_dict.get('provider', 'council')}:{response_dict.get('model', 'consensus')}",
-    }).eq("user_id", user_id).eq("job_hash", job_hash).execute()
+        "critique_outcome": outcome,
+    }
+    try:
+        db.table("jobs").update(update).eq("user_id", user_id) \
+            .eq("job_hash", job_hash).execute()
+    except Exception as exc:
+        # PostgREST fails the WHOLE update on an unknown column, with PGRST204
+        # and the wording "schema cache" — never "does not exist", which is raw
+        # Postgres phrasing and the reason an earlier guard in this repo never
+        # once fired. Losing the outcome is acceptable; losing the
+        # tailoring_model write is not.
+        if "PGRST204" not in str(exc) and "schema cache" not in str(exc).lower():
+            raise
+        logger.warning(
+            "jobs.critique_outcome is missing — recording without it. Apply "
+            "supabase/migrations/20260930020000_jobs_critique_outcome.sql"
+        )
+        update.pop("critique_outcome")
+        db.table("jobs").update(update).eq("user_id", user_id) \
+            .eq("job_hash", job_hash).execute()
+
+    if outcome != "adjudicated":
+        logger.warning("[tailor] %s was NOT adjudicated (outcome=%s) — the "
+                       "winner is candidate 1, unreviewed", job_hash, outcome)
 
     logger.info(
         f"[tailor] {tailoring_depth.capitalize()} tailor for {job_hash} "
