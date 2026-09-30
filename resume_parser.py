@@ -188,7 +188,9 @@ _SYSTEM = ("You are a resume parser. Extract structured data from the text you "
 _SECTION_PROMPTS = {
     "_header": (
         'Return {"name": "", "email": "", "phone": "", "location": "", '
-        '"title_line": ""} from this resume header. Use "" for anything absent.'
+        '"title_line": "", "github": "", "linkedin": "", "website": ""} from '
+        'this resume header. Use "" for anything absent. Copy any URL or handle '
+        'exactly as written, without adding or removing a scheme.'
     ),
     "experience": (
         'Return {"experience": [{"company": "", "role": "", "dates": "", '
@@ -197,13 +199,20 @@ _SECTION_PROMPTS = {
         'summarise, merge or omit any.'
     ),
     "projects": (
-        'Return {"projects": [{"name": "", "dates": "", "tech": "", '
+        'Return {"projects": [{"name": "", "dates": "", "tech": "", "url": "", '
         '"bullets": ["", ""]}]} — one object per project, with every bullet. '
-        'Include every project present; do not omit any.'
+        'Include every project present; do not omit any. "url" is the project\'s '
+        'own link if the entry shows one (a repository, demo or store listing), '
+        'copied exactly and "" if there is none.'
     ),
     "education": (
-        'Return {"education": [{"school": "", "degree": "", "dates": ""}]} — '
-        'one object per institution. Include every one present.'
+        'Return {"education": [{"school": "", "degree": "", "dates": "", '
+        '"coursework": ""}]} — one object per institution. Include every one '
+        'present. "coursework" is everything else the entry lists -- named '
+        'modules, a thesis, honours, a teaching-assistant role -- copied '
+        'verbatim as one string, and "" if the entry has none. Do not summarise '
+        'it: these are the named subjects a reviewer matches against a job '
+        'description.'
     ),
     "skills": (
         'Return {"skills": ["Category: item, item", "Category: item"]} — a '
@@ -211,8 +220,13 @@ _SECTION_PROMPTS = {
         'items". Never a single string, never an object.'
     ),
     "certifications": (
-        'Return {"certifications": ["", ""]} — a list of strings, one per '
-        'certification.'
+        'Return {"certifications": ["", ""], "additional": ["", ""]} — '
+        '"certifications" is one string per certification. "additional" is every '
+        'OTHER line in this block, verbatim and one per line: spoken languages, '
+        'work authorisation or visa status, availability, anything else. Resumes '
+        'commonly park these under an "Additional" heading next to the '
+        'certifications, and they are content, not decoration. Use [] if there '
+        'are none.'
     ),
 }
 
