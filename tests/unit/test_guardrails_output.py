@@ -140,7 +140,75 @@ def test_check_output_fabrication_requires_base_skills_text():
 def test_check_output_fabrication_runs_when_base_skills_text_given():
     tex = r"\section*{Technical Skills} Python, Java \section*{Experience}"
     result = og.check_output(tex, "tailor", base_skills_text="Python, AWS")
-    assert any(v.rule == "fabrication" and v.severity == "warn" for v in result.violations)
+    # Severity is "block", not "warn". This assertion pinned "warn" until CI
+    # run 36651253369 showed what that meant in practice: a resume claiming
+    # Rust reported guards_passed=True and shipped. The test was green the
+    # whole time -- it asserted the detector fired, which it did, and said
+    # nothing about whether firing changed anything.
+    assert any(v.rule == "fabrication" and v.severity == "block" for v in result.violations)
+
+
+def test_fabrication_is_the_only_thing_blocking_a_well_formed_resume():
+    """Isolates fabrication as the cause, which a minimal fixture cannot.
+
+    The first draft of this test asserted `passed is False` against a
+    two-section snippet. It passed with fabrication set to either severity,
+    because a snippet that short is already missing four required sections
+    and those block on their own -- green for a reason unrelated to what it
+    claimed to test. Verified by mutation: restore "warn" and the assertion
+    below fails, which the earlier one did not.
+    """
+    tex = _COMPLETE_RESUME.replace("Docker", "Docker, Rust")
+    result = og.check_output(tex, "tailor", base_skills_text="Python, AWS, Docker")
+    blocking = {v.rule for v in result.violations if v.severity == "block"}
+    assert blocking == {"fabrication"}
+    assert result.passed is False
+
+
+_COMPLETE_RESUME = (
+    r"\section*{Summary} Backend engineer. "
+    r"\section*{Technical Skills} Python, AWS, Docker "
+    r"\section*{Experience} \textbf{Engineer} built services. "
+    r"\section*{Featured Projects} A project. "
+    r"\section*{Education} A degree. "
+    r"\section*{Certifications} A cert."
+)
+
+
+def test_the_exact_case_that_shipped_in_ci():
+    """Regression for eval case 12ed5b1de5e8 (CI run 36651253369).
+
+    A tailor case served by gemini-3.5-flash-lite emitted a Skills section
+    listing Rust against a base resume that has none. Reproduced with that
+    shape rather than a minimal fixture so the test is recognisable as the
+    incident: all six real section headers present, document well-formed,
+    braces balanced -- every structural check passes. The only thing wrong
+    with the document is that it is not true.
+    """
+    tex = _COMPLETE_RESUME.replace("Docker", "Docker, Rust")
+    result = og.check_output(tex, "tailor", base_skills_text="Python, AWS, Docker")
+    assert og.check_brace_balance(tex) is True
+    assert not og.check_required_sections(tex), "structural checks must be clean"
+    assert result.passed is False
+    assert any("Rust" in v.detail for v in result.violations)
+
+
+def test_cosmetic_violations_still_only_warn():
+    """The distinction severity exists for, pinned from the other side.
+
+    Promoting fabrication is not an argument for promoting everything:
+    guardrails/types.py keeps severity so a stylistic nit cannot cost two
+    repair rounds. A banned phrase and a dropped \textbf are cosmetic, and a
+    document carrying only those must still finalize.
+    """
+    tex = (
+        r"\section*{Experience} \section*{Skills} \section*{Education} "
+        r"\section*{Projects} \section*{Certifications} a robust solution"
+    )
+    result = og.check_output(tex, "tailor", base_body=r"\textbf{a} \textbf{b}")
+    assert [v.rule for v in result.violations if v.severity == "block"] == []
+    assert result.passed is True
+    assert {v.rule for v in result.violations} <= {"banned_phrase", "textbf_preservation"}
 
 
 def test_check_output_fabrication_disabled_for_score_task():

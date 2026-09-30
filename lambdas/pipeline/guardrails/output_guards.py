@@ -194,7 +194,35 @@ def check_output(
 
     if policy.get("fabrication") and base_skills_text:
         for fabrication in check_fabrication(base_skills_text, tex):
-            violations.append(Violation("fabrication", fabrication, "warn"))
+            # "block", unlike every other non-structural check here. The
+            # severity split above is otherwise a compile-integrity axis --
+            # unbalanced braces and missing sections break the document, so
+            # they block; filler phrases and lost \textbf are cosmetic, so
+            # they warn. Fabrication does not break the document, which is
+            # how it ended up on the cosmetic side of a distinction that was
+            # never about honesty. It belongs with the blocking checks for a
+            # different reason: the document is well-formed and false.
+            #
+            # Measured, not assumed. CI run 36651253369 (eval case
+            # 12ed5b1de5e8, tailor, gemini-3.5-flash-lite) emitted a resume
+            # listing Rust, which is not in the base resume. This guard
+            # caught it. `GuardResult.passed` is `not any(severity ==
+            # "block")`, so at "warn" the case reported guards_passed=True,
+            # quality_gate read a passing report and routed to finalize, and
+            # the resume shipped. The repair loop that exists to fix exactly
+            # this was armed, correctly wired, and never told: repair_node
+            # folds violation text verbatim into the retry prompt, so at
+            # "block" the model is handed "fabrication: 'Rust' not in base
+            # resume" and gets two bounded attempts to correct it.
+            #
+            # This is the one check whose output leaves the system under the
+            # user's own name and over their signature. A false claim of
+            # language experience on a submitted job application is not a
+            # quality regression to log and ship; it is the single outcome
+            # this pipeline must never produce. Latency is the cost severity
+            # exists to protect (see guardrails/types.py) and two repair
+            # rounds is the right price here.
+            violations.append(Violation("fabrication", fabrication, "block"))
 
     if base_body:
         for textbf_issue in check_textbf_preservation(base_body, tex):

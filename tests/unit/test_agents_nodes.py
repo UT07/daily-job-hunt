@@ -108,3 +108,76 @@ def test_repair_node_feeds_violations_back_into_prompt():
     # so a plain [] would merge as a no-op rather than clearing anything.
     # repair_node must bypass the reducer with Overwrite to actually reset it.
     assert out["candidates"] == Overwrite(value=[])
+
+
+# ---------------------------------------------------------------------------
+# Fabrication must arm the repair loop (CI run 36651253369, case 12ed5b1de5e8).
+# ---------------------------------------------------------------------------
+
+_FABRICATING_WINNER = (
+    r"\section*{Summary} Backend engineer. "
+    r"\section*{Technical Skills} Python, AWS, Docker, Rust "
+    r"\section*{Experience} \textbf{Engineer} built services. "
+    r"\section*{Featured Projects} A project. "
+    r"\section*{Education} A degree. "
+    r"\section*{Certifications} A cert."
+)
+
+
+def test_fabricated_skill_routes_guard_output_to_repair():
+    """The seam that was broken, exercised end to end.
+
+    test_quality_gate_repairs_on_violation above hand-seeds a failing
+    guard_report, so it passes whatever severity fabrication carries -- it
+    proves quality_gate can route to repair, never that a fabricated resume
+    reaches that route. This drives the REAL guard_output_node (which calls
+    the real check_output) and feeds its actual output to the real
+    quality_gate. At severity "warn" this returned "finalize".
+    """
+    state = {
+        "winner": {"content": _FABRICATING_WINNER},
+        "task": "tailor",
+        "base_skills": "Python, AWS, Docker",
+        "repair_attempts": 0,
+    }
+    state.update(nodes.guard_output_node(state))
+
+    assert state["guard_report"]["passed"] is False
+    assert nodes.quality_gate(state) == "repair"
+
+
+def test_repair_prompt_names_the_fabricated_skill():
+    """Repair has to be informed to be worth two rounds.
+
+    repair_node folds guard violations into the retry prompt verbatim, so the
+    blocking severity is only useful if the detail string reaching the model
+    identifies what was invented. A repair round that just re-rolls the dice
+    would be latency with no mechanism.
+    """
+    state = {
+        "winner": {"content": _FABRICATING_WINNER},
+        "task": "tailor",
+        "base_skills": "Python, AWS, Docker",
+        "prompt": "Tailor this resume.",
+        "repair_attempts": 0,
+    }
+    state.update(nodes.guard_output_node(state))
+    repaired = nodes.repair_node(state)["prompt"]
+
+    assert "Rust" in repaired
+    assert "not in base resume" in repaired
+    assert "Tailor this resume." in repaired
+
+
+def test_clean_output_still_finalizes_on_the_first_pass():
+    """No new repair rounds for honest output -- the cost control on this change."""
+    state = {
+        "winner": {"content": _FABRICATING_WINNER.replace(", Rust", "")},
+        "task": "tailor",
+        "base_skills": "Python, AWS, Docker",
+        "repair_attempts": 0,
+    }
+    state.update(nodes.guard_output_node(state))
+
+    assert state["guard_report"]["passed"] is True
+    assert nodes.quality_gate(state) == "finalize"
