@@ -26,6 +26,17 @@ Parameters:
   OpenRouterApiKey:
     Type: String
     NoEcho: true
+  CerebrasApiKey:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: |
+      Cerebras Cloud key (https://cloud.cerebras.ai). Empty = the provider is
+      skipped, which is the default: lambdas/pipeline/ai_helper.py resolves it
+      through get_param and treats an absent or blank value as a failed hop,
+      so the council simply moves on. The zip pipeline Lambdas read it from
+      SSM (/naukribaba/CEREBRAS_API_KEY); JobHuntApi reads it from the
+      environment variable below.
   QwenApiKey:
     Type: String
     NoEcho: true
@@ -1767,6 +1778,7 @@ Resources:
         Variables:
           GROQ_API_KEY: !Ref GroqApiKey
           OPENROUTER_API_KEY: !Ref OpenRouterApiKey
+          CEREBRAS_API_KEY: !Ref CerebrasApiKey
           QWEN_API_KEY: !Ref QwenApiKey
           NVIDIA_API_KEY: !Ref NvidiaApiKey
           GOOGLE_CREDENTIALS_JSON: !Ref GoogleCredentialsJson

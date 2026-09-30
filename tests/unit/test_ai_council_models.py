@@ -70,6 +70,13 @@ def test_council_has_at_least_three_distinct_families():
     [
         ("openai/gpt-oss-120b", "openai/gpt-oss-20b"),
         ("qwen/qwen3.8-27b", "qwen/qwen3.6-27b"),
+        # Two HOSTS for one model, not two models. Cerebras serves Qwen 3.8 27B
+        # as "qwen-3.8-27b" and Groq as "qwen/qwen3.8-27b" — the hyphen is the
+        # only difference, and the prefix table matches "qwen3", so the
+        # Cerebras spelling used to fall through to its own family. Two
+        # generators on the same weights is one generator.
+        ("qwen-3.8-27b", "qwen/qwen3.8-27b"),
+        ("gpt-oss-120b", "openai/gpt-oss-120b"),
     ],
 )
 def test_same_family_models_collapse(a, b):
