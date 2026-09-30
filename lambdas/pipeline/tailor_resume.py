@@ -36,7 +36,11 @@ from guardrails.output_guards import check_textbf_preservation as _check_textbf_
 # aliased because guardrails/output_guards.py exports a different function of
 # the same name.
 from shared.composition_policy import check_output as _check_composition
-from shared.composition_policy import describe_violations, render_for_prompt
+from shared.composition_policy import (
+    compose_from_corpus,
+    describe_violations,
+    render_for_prompt,
+)
 
 # Every column the tailor needs from the user's row. composition_policy was
 # added by supabase/migrations/20260929200000_users_composition_policy.sql.
@@ -949,11 +953,40 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
     # the base resume is the corpus and a corpus exceeds the caps by
     # definition; that is worth reporting rather than papering over.
     composition_violations = _check_composition(tailored_tex, composition_policy)
-    if composition_violations and tailored_tex is base_tex:
-        logger.warning(
-            "[tailor] base-resume fallback for %s does not meet the composition "
-            "rules: %s", job_hash, "; ".join(composition_violations),
-        )
+    if composition_violations:
+        # Last resort, and deterministic on purpose. Until 2026-09-30 this
+        # branch only LOGGED, with a comment arguing that a corpus exceeds the
+        # caps "by definition" and that saying so beat papering over it. That
+        # reasoning was wrong in the way CLAUDE.md rule 13 describes: the check
+        # fired, correctly, on every fallback, and nothing acted on it, so the
+        # user's 3-entry policy produced 5-entry resumes whenever a hard gate
+        # tripped. Measured on the live corpus: 5 experience entries and 5
+        # projects, shipped, with the violation in CloudWatch.
+        #
+        # Trimming needs no model. The entries are written and ordered already;
+        # which to keep is arithmetic over the user's own `prefer` rules plus
+        # the caps. So it runs on whatever is about to ship — a base-resume
+        # fallback or a generated body whose two AI repair rounds did not
+        # converge — and the result is accepted only if it FULLY complies.
+        # A partial trim would mean mangling the document for nothing.
+        trimmed, actions = compose_from_corpus(tailored_tex, composition_policy)
+        still_wrong = _check_composition(trimmed, composition_policy)
+        if actions and not still_wrong:
+            source = "base-resume fallback" if tailored_tex is base_tex else "generated body"
+            logger.info(
+                "[tailor] composed %s for %s down to the policy: %s",
+                source, job_hash, "; ".join(actions),
+            )
+            tailored_tex = trimmed
+            composition_violations = still_wrong
+        else:
+            logger.warning(
+                "[tailor] %s for %s breaks the composition rules and could NOT "
+                "be trimmed (%s); shipping as-is: %s",
+                "base-resume fallback" if tailored_tex is base_tex else "generated body",
+                job_hash, "; ".join(still_wrong) or "no entries located",
+                "; ".join(composition_violations),
+            )
 
     # Write to S3
     tex_key = f"users/{user_id}/resumes/{job_hash}_tailored.tex"

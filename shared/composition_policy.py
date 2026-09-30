@@ -26,7 +26,22 @@ COUNTABLE — the model is told, and the output is counted:
 
 JUDGEMENT — prompt text only, because there is nothing to count:
 
-    prefer, rename, writing, emphasise
+    rename, writing, emphasise
+
+EXECUTABLE — told to the model, and applied deterministically if it does not
+comply:
+
+    prefer, when written structurally
+
+`prefer` used to sit in JUDGEMENT, on the reasoning that "choose the more
+relevant of these two roles" cannot be executed. Two of its three real uses
+turned out not to need relevance at all: "never include the teaching assistant
+role" and "include UT Arlington IT rather than Seattle Kraken" are set
+operations over entry names. Written as {"exclude": ...} or
+{"include": ..., "over": ...} they are rendered into the prompt AND applied by
+`compose_from_corpus` when the output ignores them. A prose rule still works
+and stays prompt-only, which is the honest boundary: prose that needs a
+judgement is left to the thing that can judge.
 
 `writing` and `emphasise` are judgement by necessity, not by choice. "Every
 bullet states an outcome and a number" is checkable in principle -- count the
@@ -155,7 +170,23 @@ def render_for_prompt(policy: dict[str, Any]) -> str:
     if p["prefer"]:
         lines.append("")
         lines.append("PREFERENCES when choosing between entries:")
-        lines += [f"- {rule}" for rule in p["prefer"]]
+        # A structured rule is rendered to prose here so it reaches the model as
+        # an instruction AND stays executable by compose_from_corpus. One
+        # definition, both consumers -- the alternative is a prose rule and a
+        # machine rule that drift apart, which is CLAUDE.md rule 10's failure.
+        for rule in p["prefer"]:
+            if not isinstance(rule, dict):
+                lines.append(f"- {rule}")
+                continue
+            why = f" — {rule['why']}" if rule.get("why") else ""
+            if rule.get("exclude"):
+                lines.append(f"- NEVER include \"{rule['exclude']}\"{why}.")
+            elif rule.get("include") and rule.get("over"):
+                lines.append(f"- Include \"{rule['include']}\" IN PREFERENCE TO "
+                             f"\"{rule['over']}\"{why}. Never both: they compete "
+                             "for the same slot.")
+            elif rule.get("include"):
+                lines.append(f"- Always include \"{rule['include']}\"{why}.")
     if p["writing"]:
         lines.append("")
         lines.append("WRITING QUALITY (this is the difference between a resume "
@@ -221,3 +252,184 @@ def describe_violations(violations: list[str]) -> str:
             + ". Remove the least relevant entries until it complies. Delete "
               "the whole entry including its itemize block — do not leave an "
               "empty shell.")
+
+
+# --------------------------------------------------------------------------
+# Deterministic composition, for when no model output survives.
+#
+# `tailor_resume` falls back to the base resume whenever a hard gate fails, and
+# until 2026-09-30 it shipped the corpus verbatim — 5 experience entries and 5
+# projects against caps of 3 and 3 — while logging that it did. The log said
+# "does not meet the composition rules" and nothing acted on it: CLAUDE.md rule
+# 13, a check whose severity is not wired to behaviour.
+#
+# Trimming a corpus to the caps needs no model. The entries are already there,
+# already ordered, already written; the only question is which to keep. That is
+# arithmetic over the user's own rules, so it happens here and it always
+# happens, whether the council produced a document or died trying.
+# --------------------------------------------------------------------------
+
+# Where an entry's block ends: the next entry, the next section, a page break,
+# or the end of the document. Scanning to the next boundary swallows the
+# entry's own \begin{itemize}...\end{itemize} without having to parse it, so a
+# removed entry never leaves an orphaned bullet list behind.
+_BOUNDARY = re.compile(
+    r"(?<!\{)\\(?:jobentry|projectentry(?:url)?|section|subsection|clearpage"
+    r"|newpage|end\{document\})(?![a-zA-Z])"
+)
+
+
+def _read_group(tex: str, i: int) -> tuple[str, int]:
+    """Read the balanced ``{...}`` starting at ``tex[i] == '{'``.
+
+    Returns (inner text, index just past the closing brace). Escaped braces
+    (``\\{``) are not counted; a LaTeX resume that puts one inside an entry
+    NAME would defeat this, and none of the six real corpus entries does.
+    """
+    if i >= len(tex) or tex[i] != "{":
+        raise ValueError("not a group")
+    depth = 0
+    for j in range(i, len(tex)):
+        if tex[j] == "{" and (j == 0 or tex[j - 1] != "\\"):
+            depth += 1
+        elif tex[j] == "}" and tex[j - 1] != "\\":
+            depth -= 1
+            if depth == 0:
+                return tex[i + 1:j], j + 1
+    raise ValueError("unbalanced braces")
+
+
+def _normalise_name(text: str) -> str:
+    """An entry name reduced to something a policy needle can match.
+
+    The corpus writes "Dept. of Computer Science \\& Engineering" and
+    "NaukriBaba – AI Job-Automation Platform"; a user writing a rule types
+    "Dept. of Computer Science" and "NaukriBaba". Both sides go through this,
+    so the comparison is substring-on-normalised rather than exact.
+    """
+    # No explicit \& -> & step: the character filter below already drops the
+    # backslash, so "Science \& Engineering" and "Science & Engineering"
+    # normalise identically. A replace() pass was written here first and
+    # measured redundant -- a mutation removing it killed no test, because the
+    # filter does the work. Named rather than deleted silently: the next reader
+    # should not have to rediscover that the escape is handled.
+    s = re.sub(r"\\[a-zA-Z]+\s*", " ", text)  # \textbf, \textit, \\ -- NOT redundant
+    s = re.sub(r"[^a-z0-9&]+", " ", s.lower())
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _entry_blocks(tex: str, kind: str) -> list[dict]:
+    """Every entry of ``kind`` as a removable span, in document order.
+
+    Each item carries ``start``/``end`` character offsets, the entry's first
+    argument as ``name``, and its normalised form as ``key``.
+    """
+    blocks = []
+    for match in _MACROS[kind].finditer(tex or ""):
+        start = match.start()
+        pos = match.end()
+        while pos < len(tex) and tex[pos] in " \t\n":
+            pos += 1
+        try:
+            name, _ = _read_group(tex, pos)
+        except ValueError:
+            continue                          # malformed call: leave it alone
+        following = _BOUNDARY.search(tex, match.end())
+        end = following.start() if following else len(tex)
+        blocks.append({"start": start, "end": end, "name": name,
+                       "key": _normalise_name(name)})
+    return blocks
+
+
+def actionable_preferences(policy: dict[str, Any] | None = None) -> list[dict]:
+    """The `prefer` rules that can be applied without a model.
+
+    Two shapes, both optional, both also rendered into the prompt:
+
+        {"exclude": "<entry name>", "why": "..."}
+        {"include": "<entry name>", "over": "<entry name>", "why": "..."}
+
+    A plain string stays prompt-only. That is the honest split: prose like
+    "lead with whichever role the job resembles" cannot be executed here, and
+    pretending to parse it would be worse than leaving it to the model.
+    """
+    rules = []
+    for rule in resolve(policy)["prefer"]:
+        if isinstance(rule, dict) and (rule.get("exclude") or
+                                       (rule.get("include") and rule.get("over"))):
+            rules.append(rule)
+    return rules
+
+
+def compose_from_corpus(tex: str,
+                        policy: dict[str, Any] | None = None) -> tuple[str, list[str]]:
+    """Cut a corpus down to one job's resume. Returns (tex, what it did).
+
+    Selection applies the user's rules in a fixed order — exclusions, then
+    preferences, then the caps — and emission keeps DOCUMENT order, because
+    those are two different questions. Relevance and preference decide WHICH
+    entries survive; chronology decides where they sit. Trimming from the end
+    is what preserves the latter: the corpus is most-recent-first, so the cap
+    drops the oldest survivor rather than reordering anything.
+
+    An empty action list means the corpus already complied.
+    """
+    p = resolve(policy)
+    rules = actionable_preferences(p)
+    dropped, actions = [], []
+
+    for kind, cap_key, noun in (("experience", "max_experience_entries", "experience entry"),
+                                ("projects", "max_projects", "project")):
+        keep = _entry_blocks(tex, kind)
+
+        for rule in rules:
+            needle = _normalise_name(rule.get("exclude") or "")
+            if not needle:
+                continue
+            for block in [b for b in keep if needle in b["key"]]:
+                keep.remove(block)
+                dropped.append(block)
+                why = rule.get("why") or "excluded by policy"
+                actions.append(f"dropped {noun} \"{block['name']}\" — {why}")
+
+        for rule in rules:
+            wanted = _normalise_name(rule.get("include") or "")
+            beaten = _normalise_name(rule.get("over") or "")
+            if not wanted or not beaten:
+                continue
+            # Only honoured when the preferred entry actually survived. If it
+            # was excluded or absent, dropping its rival too would leave the
+            # resume short for no reason the user asked for.
+            if not any(wanted in b["key"] for b in keep):
+                continue
+            for block in [b for b in keep if beaten in b["key"]]:
+                keep.remove(block)
+                dropped.append(block)
+                why = rule.get("why") or "the other entry is preferred"
+                actions.append(f"dropped {noun} \"{block['name']}\" — {why}")
+
+        cap = p[cap_key]
+        if isinstance(cap, int) and len(keep) > cap:
+            # Said out loud when the cap is the ONLY thing selecting, because
+            # position is a weak reason and a prose `prefer` rule means the user
+            # has a stronger one this function cannot read. On the live corpus
+            # that difference decides Seattle Kraken (3rd) against the UT
+            # Arlington IT role (4th): by position the wrong one survives. A
+            # silently-wrong trim would look exactly like a working one.
+            prose_only = [r for r in resolve(p)["prefer"] if not isinstance(r, dict)]
+            if prose_only and not rules:
+                actions.append(
+                    f"selected {noun}s by position only: {len(prose_only)} "
+                    "preference rule(s) are prose and cannot be applied without "
+                    "a model — rewrite them as {\"exclude\": ...} or "
+                    "{\"include\": ..., \"over\": ...} to have them enforced here"
+                )
+            for block in keep[cap:]:
+                dropped.append(block)
+                actions.append(f"dropped {noun} \"{block['name']}\" — over the "
+                               f"limit of {cap}, and the oldest of those kept")
+
+    # Back to front, so each removal leaves earlier offsets valid.
+    for block in sorted(dropped, key=lambda b: b["start"], reverse=True):
+        tex = tex[:block["start"]] + tex[block["end"]:]
+    return tex, actions

@@ -352,15 +352,41 @@ class TestEnforcementByCounting:
 # ---------------------------------------------------------------------------
 
 class TestUnrepairedViolations:
+    """What ships when the AI repair does not produce a compliant document.
+
+    Every assertion about the SHIPPED document was inverted on 2026-09-30, and
+    the reason is worth stating rather than quietly editing. The old contract
+    was "discard the bad repair, ship the council's over-cap body, and report
+    the violation on the return value". That is exactly the shape of CLAUDE.md
+    rule 13: the check fired every time, correctly, and the response was a
+    field nobody acted on. Measured in production the same day, job
+    0ab484ad7687 shipped 5 experience entries and 5 projects against caps of 3
+    and 3, with "does not meet the composition rules" in CloudWatch.
+
+    Trimming needs no model, so it now always happens (compose_from_corpus).
+    The assertions about what the REPAIR did are unchanged -- a truncated,
+    empty or section-missing repair is still discarded -- and they are now
+    sharper: the shipped document must contain the council's entries trimmed to
+    the cap, NOT the discarded repair's. body(projects=1) yields Project0
+    alone, so asserting three projects INCLUDING Project2 distinguishes "the
+    council's five were trimmed" from "the truncated repair was used after
+    all", which the old count-only assertion could not.
+    """
+
     def test_still_violating_repair_is_flagged(self, caplog):
+        from shared.composition_policy import count_entries
         with caplog.at_level(logging.ERROR):
             result, _, repair, s3, _ = run_handler(
                 council_body=body(projects=5),
                 repair={"content": body(projects=4)},
             )
         assert repair.call_count == 1
-        assert result["composition_violations"] == ["5 projects, limit is 3"]
+        # Still logged at ERROR by _enforce_composition: the model was asked
+        # and did not comply, which is worth an alert even though the document
+        # is then repaired by arithmetic.
         assert "composition" in caplog.text.lower()
+        assert count_entries(written_tex(s3))["projects"] == 3
+        assert result["composition_violations"] == []
 
     def test_still_violating_repair_is_logged_at_error_level(self):
         with patch.object(tailor_resume.logger, "error") as err:
@@ -369,14 +395,20 @@ class TestUnrepairedViolations:
         assert err.called
 
     def test_truncated_repair_is_discarded(self):
-        """A repair that complied by being cut off is not a repair."""
+        """A repair that complied by being cut off is not a repair.
+
+        The truncated repair held ONE project. Three shipping, Project2 among
+        them, proves the council's five were trimmed rather than the stub used.
+        """
         result, _, _, s3, _ = run_handler(
             council_body=body(projects=5),
             repair={"content": body(projects=1), "truncated": True},
         )
         from shared.composition_policy import count_entries
-        assert count_entries(written_tex(s3))["projects"] == 5
-        assert result["composition_violations"] == ["5 projects, limit is 3"]
+        written = written_tex(s3)
+        assert count_entries(written)["projects"] == 3
+        assert "Project2" in written, "the truncated one-project repair shipped"
+        assert result["composition_violations"] == []
 
     def test_repair_missing_sections_is_discarded(self):
         result, _, _, s3, _ = run_handler(
@@ -384,19 +416,27 @@ class TestUnrepairedViolations:
             repair={"content": "\\section*{Summary}\nToo short.\n"},
         )
         from shared.composition_policy import count_entries
-        assert count_entries(written_tex(s3))["projects"] == 5
-        assert result["composition_violations"]
+        written = written_tex(s3)
+        assert count_entries(written)["projects"] == 3
+        # The discarded repair had no Certifications and no entries at all.
+        assert "Project2" in written
+        assert "\\section*{Certifications}" in written
+        assert result["composition_violations"] == []
 
     def test_empty_repair_is_discarded(self):
         result, _, _, s3, _ = run_handler(
             council_body=body(projects=5), repair={"content": "   "},
         )
         from shared.composition_policy import count_entries
-        assert count_entries(written_tex(s3))["projects"] == 5
+        written = written_tex(s3)
+        assert count_entries(written)["projects"] == 3
+        assert "Project2" in written
+        assert result["composition_violations"] == []
 
     def test_repair_call_failure_does_not_raise(self):
         """The council body is still a resume. A failed repair degrades to
-        shipping it with a flag, it does not fail the job."""
+        trimming it deterministically; it does not fail the job."""
+        from shared.composition_policy import count_entries
         db = FakeDB(user_row())
         council = MagicMock(return_value={"content": body(projects=5),
                                           "provider": "groq", "model": "t"})
@@ -408,7 +448,9 @@ class TestUnrepairedViolations:
                           side_effect=RuntimeError("all providers exhausted")):
             result = tailor_resume.handler(EVENT, None)
         assert result["tex_s3_key"]
-        assert result["composition_violations"] == ["5 projects, limit is 3"]
+        assert result["composition_violations"] == []
+        written = boto3_mock.client.return_value.put_object.call_args_list[0][1]["Body"]
+        assert count_entries(written.decode())["projects"] == 3
 
     def test_flag_is_always_present_on_the_return_value(self):
         result, _, _, _, _ = run_handler(council_body=body(projects=3))
@@ -420,20 +462,49 @@ class TestUnrepairedViolations:
 # ---------------------------------------------------------------------------
 
 class TestFlagDescribesTheShippedDocument:
-    def test_base_resume_fallback_reports_the_corpus_counts(self):
-        """A fallback ships the corpus, which exceeds the caps by definition —
-        that is what a corpus is. Returning a clean bill of health for a
-        document nobody composed would be a lie."""
-        result, _, _, _, _ = run_handler(council_body=body_missing_a_section())
-        assert result["used_fallback"] is True
-        assert result["composition_violations"] == ["5 projects, limit is 3"]
+    def test_base_resume_fallback_is_composed_down_to_the_policy(self):
+        """Superseded on 2026-09-30, premise and all.
 
-    def test_fallback_is_not_repaired(self):
-        """There is nothing to repair: the base resume is the input, not a
-        generation, and re-splicing over a deliberate fallback would undo it."""
+        This asserted that a fallback reports the corpus counts, reasoning that
+        "a fallback ships the corpus, which exceeds the caps by definition --
+        returning a clean bill of health for a document nobody composed would
+        be a lie". The reasoning was sound and the conclusion was the bug: the
+        fix is not to report the lie accurately, it is to compose the document.
+        A corpus exceeds the caps by definition, and cutting it down to them
+        needs no model -- the entries are already written and already ordered.
+
+        So the clean bill of health is now earned rather than false, and
+        `used_fallback` stays True because the council's body really was
+        rejected. The two facts are separate: WHERE the content came from, and
+        WHETHER what shipped obeys the user's rules.
+        """
+        from shared.composition_policy import count_entries
+        result, _, _, s3, _ = run_handler(council_body=body_missing_a_section())
+        assert result["used_fallback"] is True
+        assert result["composition_violations"] == []
+        assert count_entries(written_tex(s3))["projects"] == 3
+
+    def test_the_fallback_is_trimmed_arithmetically_never_by_a_model(self):
+        """No AI call on this path -- that part of the old contract holds.
+
+        The original name was `test_fallback_is_not_repaired` and its point was
+        that re-splicing a generated body over a deliberate fallback would undo
+        the fallback. Still true, and still enforced: repair.call_count is 0.
+        What changed is that the corpus is no longer written out verbatim. It is
+        the same document minus the entries over the cap -- every surviving
+        entry byte-identical to the base, because nothing generated it.
+        """
         _, _, repair, s3, _ = run_handler(council_body=body_missing_a_section())
         assert repair.call_count == 0
-        assert written_tex(s3) == BASE_TEX
+
+        written = written_tex(s3)
+        assert written != BASE_TEX, "the corpus shipped untrimmed"
+        # Kept entries are the base's own text, not a regeneration.
+        for kept in ("Project0", "Project1", "Project2", "Company0", "Company1"):
+            assert kept in written
+        for dropped in ("Project3", "Project4"):
+            assert dropped not in written
+        assert "\\section*{Certifications}" in written
 
 
 # ---------------------------------------------------------------------------

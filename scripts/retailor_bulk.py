@@ -66,6 +66,19 @@ def _one_user(url, headers) -> str:
     return rows[0]["id"]
 
 
+def partition_unhashed(jobs: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split rows into (tailorable, unhashed). Pure, so it is testable directly.
+
+    A NULL job_hash cannot go into PostgREST's `in.(...)` filter -- `,`.join
+    raises TypeError on it -- and there is nothing for handler() to look up
+    anyway. Manually-added jobs have produced these: job_id and canonical_hash
+    set, job_hash NULL (one A-tier row, 2026-09-29, which also had an empty
+    description and no jobs_raw row at all).
+    """
+    return ([j for j in jobs if j.get("job_hash")],
+            [j for j in jobs if not j.get("job_hash")])
+
+
 def select_jobs(url, headers, user_id: str, tiers: list[str], max_jobs: int | None):
     """Active, non-expired jobs in `tiers` that the handler can actually read.
 
@@ -89,6 +102,13 @@ def select_jobs(url, headers, user_id: str, tiers: list[str], max_jobs: int | No
         if len(page) < 1000:
             break
         offset += 1000
+
+    # Reported, never dropped quietly: a batch that silently narrows its own
+    # population is the same lie as a status that cannot fail.
+    jobs, unhashed = partition_unhashed(jobs)
+    for j in unhashed:
+        print(f"  {j.get('score_tier')} SKIPPED, no job_hash to look up: "
+              f"{str(j.get('title'))[:40]} @ {j.get('company')}")
 
     hashes = [j["job_hash"] for j in jobs]
     present: set[str] = set()
@@ -126,7 +146,8 @@ def main() -> int:
     jobs = select_jobs(url, headers, user_id, tiers, args.max_jobs)
     print(f"{len(jobs)} job(s) in tier(s) {','.join(tiers)} for user {user_id[:8]}")
     for j in jobs[:10]:
-        print(f"  {j['score_tier']}  {j['job_hash'][:12]}  {j['title'][:38]:40s} {j['company'][:22]}")
+        print(f"  {j['score_tier']}  {j['job_hash'][:12]}  "
+              f"{str(j['title'])[:38]:40s} {str(j['company'])[:22]}")
     if len(jobs) > 10:
         print(f"  ... and {len(jobs) - 10} more")
 
