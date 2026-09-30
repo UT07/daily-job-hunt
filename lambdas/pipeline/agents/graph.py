@@ -347,7 +347,7 @@ def _configure_langsmith_tracing(force: bool = False) -> str:
 
     So the key reaches this process the same way every other secret in this
     codebase already does -- get_param() at runtime, gated by the
-    SSMParameterReadPolicy IAM grant the three council-using functions
+    SSMParameterReadPolicy IAM grant the four council-using functions
     already carry -- set into the environment once per warm container, which
     is where langsmith reads it from on every traced call after that.
 
