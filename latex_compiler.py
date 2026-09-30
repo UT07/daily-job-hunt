@@ -8,6 +8,15 @@ import shutil
 import subprocess
 from pathlib import Path
 
+# The user's page policy, and the check that measures it against the compiled
+# PDF. This module is imported by app.py (the container-image Lambda, where
+# Dockerfile.lambda's `COPY shared/` puts the package on the path and
+# requirements-web.txt installs pdfplumber), by main.py and by scripts/ — all
+# from the repo root. No zip Lambda imports it; lambdas/pipeline/compile_latex.py
+# is the pipeline's own compiler and calls shared.page_check directly.
+from shared.composition_policy import resolve
+from shared.page_check import check_pdf, log_violations
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -245,19 +254,50 @@ def check_size_bounds(
 
 
 def compile_tex_to_pdf(tex_path: str, output_dir: str = None) -> str:
-    """Compile a .tex file to PDF with quality gates and rollback.
+    """Compile a .tex file to PDF. Returns the PDF path, or "" on failure.
+
+    Thin wrapper over `compile_tex_to_pdf_with_report` for the callers that
+    only want the path (app.py, main.py, scripts/). The page check still runs
+    and still logs; only the violation list is dropped here.
+    """
+    pdf_path, _violations = compile_tex_to_pdf_with_report(tex_path, output_dir)
+    return pdf_path
+
+
+def compile_tex_to_pdf_with_report(
+    tex_path: str,
+    output_dir: str = None,
+    policy: dict = None,
+    expected_pages: int | None = None,
+) -> tuple[str, list[str]]:
+    r"""Compile a .tex file to PDF with quality gates, rollback and a page check.
 
     Works on a copy of the .tex file to preserve the original.
     Applies hard gates (brace balance, section completeness) that block
     compilation on failure, and soft gates (size bounds) that warn only.
 
     Compiler preference: tectonic (fast, self-contained) -> pdflatex (fallback).
-    Returns the path to the generated PDF, or empty string on failure.
+
+    Returns ``(pdf_path, page_violations)``. `pdf_path` is "" on failure, and
+    `page_violations` is empty when the compiled PDF meets the page rules —
+    page count, and no effectively blank page. See shared/page_check.py for
+    both, and for why the floor is where it is.
+
+    The page check does NOT block: a violation is logged at error level and
+    handed back, the same way `tailor_resume._enforce_composition` ships a
+    document that breaks the composition rules rather than shipping nothing.
+    Blocking here would turn one bad page into no resume at all.
+
+    Page COUNT is asserted for resumes only. Cover letters get the blank-page
+    floor but no count, because nothing in this repo has measured what a cover
+    letter should compile to — the same reason the required-sections gate below
+    already exempts them. Callers with a real expectation pass `policy` (the
+    user's ``composition_policy``) or `expected_pages`.
     """
     tex_path = Path(tex_path)
     if not tex_path.exists():
         logger.error(f"TeX file not found: {tex_path}")
-        return ""
+        return "", []
 
     if output_dir:
         out_dir = Path(output_dir)
@@ -274,7 +314,7 @@ def compile_tex_to_pdf(tex_path: str, output_dir: str = None) -> str:
         # --- Hard gate: brace balance ---
         if not check_brace_balance(sanitized):
             logger.error(f"[HARD GATE] Brace imbalance in {tex_path.name} — compilation blocked")
-            return ""
+            return "", []
 
         # --- Hard gate: section completeness (resumes only, skip cover letters) ---
         is_cover_letter = "coverletter" in tex_path.name.lower().replace("_", "").replace("-", "")
@@ -286,7 +326,7 @@ def compile_tex_to_pdf(tex_path: str, output_dir: str = None) -> str:
                 f"[HARD GATE] Missing required sections in {tex_path.name}: "
                 f"{', '.join(missing)} — compilation blocked"
             )
-            return ""
+            return "", []
 
         # --- Soft gate: size bounds (warning only) ---
         if not check_size_bounds(len(raw_tex), len(sanitized)):
@@ -308,11 +348,22 @@ def compile_tex_to_pdf(tex_path: str, output_dir: str = None) -> str:
 
         # Compile the work copy
         pdf_path = _compile_work_copy(work_copy, tex_path, out_dir)
-        return pdf_path
+        if not pdf_path:
+            # Nothing was typeset, so there are no pages to measure. Returning
+            # [] here is "nothing to check", and the empty pdf_path beside it
+            # is what says the compile failed.
+            return "", []
+
+        # --- Page check: the only rule that needs the compiled artifact ---
+        if expected_pages is None and not is_cover_letter:
+            expected_pages = resolve(policy)["pages"]
+        page_violations = check_pdf(pdf_path, expected_pages=expected_pages)
+        log_violations(page_violations, label=Path(pdf_path).name)
+        return pdf_path, page_violations
 
     except Exception as e:
         logger.error(f"Compilation failed for {tex_path.name}: {e}")
-        return ""
+        return "", []
     finally:
         # Always clean up the work copy
         if work_copy.exists():
