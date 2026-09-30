@@ -108,3 +108,77 @@ describe('Settings profile hydration vs the user typing', () => {
     expect(screen.getByDisplayValue('Dublin, Ireland')).toBeInTheDocument();
   });
 });
+
+/**
+ * The same race, twice more, in sibling state. Settings has THREE hydration
+ * effects and the first fix covered one:
+ *
+ *   /api/profile        -> profile          (fixed in #176)
+ *   /api/search-config  -> prefs            (assert 60 == 70 in CI)
+ *   /api/search-config  -> enabledSources   (a toggle before load is undone)
+ *
+ * `prefs` defaults are NOT blank (min_match_score 60, days_back 7,
+ * max_jobs_per_run 15), so the "fill blanks" test that works for the profile
+ * cannot tell a default from a deliberate choice of the same value. These two
+ * use a dirty ref instead, which works whatever the defaults are.
+ *
+ * Asserted here rather than in the browser suite because the browser suite
+ * CANNOT see it: the E2E tests pass with and without the guard locally, and
+ * failed only on the slower runner. Verified — removing either guard leaves all
+ * 6 TestSettings E2E tests green.
+ */
+describe('Settings preference hydration vs the user editing', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(useAuthModule, 'useAuth').mockReturnValue({
+      user: { id: 'u1', email: 'a@b.com' }, loading: false,
+    });
+  });
+
+  // 85 deliberately differs from the component's default of 60, so "hydrated"
+  // and "left at the default" are distinguishable. Asserting the server value
+  // 60 would pass either way.
+  function deferredConfig() {
+    let release;
+    const gate = new Promise((res) => { release = res; });
+    vi.spyOn(api, 'apiGet').mockImplementation((endpoint) => {
+      if (endpoint === '/api/search-config') {
+        return gate.then(() => ({
+          queries: ['sre'], locations: ['Dublin'], experience_levels: ['mid'],
+          days_back: 14, max_jobs_per_run: 25, min_match_score: 85,
+          enabled_sources: ['linkedin'],
+        }));
+      }
+      return Promise.resolve(endpoint === '/api/resumes' ? { resumes: [] } : {});
+    });
+    return () => release();
+  }
+
+  const scoreSlider = () => document.querySelector('input[type="range"]');
+
+  it('keeps a min-match-score changed before the fetch resolves', async () => {
+    const release = deferredConfig();
+    render(<Settings />);
+
+    await waitFor(() => expect(scoreSlider()).toBeTruthy());
+    fireEvent.change(scoreSlider(), { target: { value: '70' } });
+    expect(screen.getByText('70')).toBeInTheDocument();
+
+    release();
+    await waitFor(() => expect(api.apiGet).toHaveBeenCalledWith('/api/search-config'));
+
+    // 85 is what the server sent; it must not win over the user's 70.
+    await waitFor(() => expect(scoreSlider()).toHaveValue('70'));
+    expect(screen.queryByText('85')).not.toBeInTheDocument();
+  });
+
+  it('still hydrates preferences the user has not touched', async () => {
+    // The guard must not degrade into "never load the saved config".
+    const release = deferredConfig();
+    render(<Settings />);
+    await waitFor(() => expect(scoreSlider()).toBeTruthy());
+    release();
+
+    await waitFor(() => expect(scoreSlider()).toHaveValue('85'));
+  });
+});
