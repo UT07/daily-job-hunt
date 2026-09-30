@@ -302,3 +302,43 @@ class TestAuthStatusValueNormalisation:
         """An unanswered row is missing data, not a declaration."""
         assert _requires_sponsorship({"United States": ""}, "US") is False
         assert _requires_sponsorship({"United States": None}, "US") is False
+
+
+def test_the_eval_gate_cannot_see_this_cap():
+    """Names a coverage gap, so a green AI Eval Gate is not read as covering it.
+
+    `shared/work_auth.py` is in the eval gate's path filter, so touching it runs
+    the golden set — which looks like coverage and is not. Not one of the 26
+    golden cases carries a `location` field, and `evals/harness.py` never calls
+    `apply_geo_score_cap`. `_detect_country(None)` returns None, so the cap
+    returns before doing anything on every single case.
+
+    That matters because the cap is not a corner: it applies to 290 of 1,313
+    scored production jobs (22%), and the bug this file's other tests cover had
+    been live in production for months with the gate green throughout.
+
+    Closing it means adding located cases with expected tiers calibrated for a
+    capped score, which is its own job. Until then this test is the honest
+    statement of what the gate does not measure (CLAUDE.md rules 1 and 7).
+    """
+    import json
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    golden = sorted((root / "evals" / "golden").glob("*.json"))
+    assert golden, "no golden cases found — this test's premise cannot be checked"
+
+    located = [
+        f.name for f in golden
+        if (json.loads(f.read_text()) or {}).get("location")
+    ]
+    harness = (root / "evals" / "harness.py").read_text()
+    calls_cap = "apply_geo_score_cap" in harness
+
+    assert not located and not calls_cap, (
+        "the eval gate now exercises the geo/work-auth cap "
+        f"(located cases: {located}, harness calls cap: {calls_cap}). That is an "
+        "improvement — delete this test and rely on the gate, but first confirm "
+        "the expected tiers in those cases were calibrated WITH the cap applied "
+        "and not against uncapped scores."
+    )
