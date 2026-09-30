@@ -830,8 +830,25 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
                            else f"missing sections {retry_missing}")
                     )
                     raise _RetryRejected
-                # Re-check quality
-                retry_quality = _check_banned_phrases(retry_body) + _check_textbf_preservation(base_body, retry_body)
+                # Re-check quality. The two sides of this comparison MUST count
+                # the same checks. They did not: `quality_warnings` above
+                # includes _check_fabrication, and this line omitted it, so the
+                # retry was scored on a strictly easier rubric than the body it
+                # was replacing. A retry that kept every fabricated skill still
+                # counted as "improved" whenever it dropped one banned phrase --
+                # 1 fabrication + 2 phrases (3) beaten by the same fabrication +
+                # 2 phrases (2) -- and the fabrication shipped. Same asymmetry
+                # the comment above guards against for truncation, one check
+                # further along. Since 55ebff2 a fabrication is a BLOCKING
+                # violation in the council's own guard, so leaving it out of the
+                # retry's rubric let this path accept what that guard exists to
+                # reject.
+                retry_quality = (
+                    _check_banned_phrases(retry_body)
+                    + _check_textbf_preservation(base_body, retry_body)
+                    + (_check_fabrication(fabrication_baseline, retry_body)
+                       if fabrication_baseline else [])
+                )
                 if len(retry_quality) < len(quality_warnings):
                     logger.info(f"[tailor] Retry improved quality: {len(quality_warnings)} -> {len(retry_quality)} warnings")
                     ai_body = retry_body
