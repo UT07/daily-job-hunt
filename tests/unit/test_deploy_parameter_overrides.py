@@ -164,3 +164,147 @@ def test_every_parameter_the_template_requires_is_supplied():
         f"template.yaml requires {missing} with no Default, and the deploy step never "
         "supplies them. CloudFormation will reject the stack."
     )
+
+
+# ── Dead parameters ───────────────────────────────────────────────────────
+#
+# The tests above keep deploy.yml and template.yaml in agreement about which
+# parameters exist. They say nothing about whether a parameter DOES anything,
+# and on 2026-09-30 two of the twenty-one did not:
+#
+#   GoogleCredentialsJson  declared 5e21293 (the commit that added the SAM
+#     template), wired into JobHuntApi's environment, and supplied by deploy.yml
+#     as the inline literal "GoogleCredentialsJson=PLACEHOLDER_SET_MANUALLY".
+#     abc0fe9 — the SAME DAY — reverted the Google Docs approach the parameter
+#     was for, and removed everything except the parameter. Six months of
+#     deploys carried it. The live Lambda held
+#     GOOGLE_CREDENTIALS_JSON=PLACEHOLDER_SET_MANUALLY, verified by
+#     `aws lambda get-function-configuration`.
+#
+#   CapSolverApiKey  declared for the Smart Apply cloud-browser work, plumbed
+#     through a GitHub secret and an optional() line, and referenced NOWHERE in
+#     template.yaml — not one !Ref. Smart Apply was torn down in August;
+#     BrowserSubnetIds went with it and this one stayed.
+#
+# Same defect class as the `fairness_cap` key removed from
+# guardrails/policy.py, and worse than an absent key in both cases. A NoEcho
+# parameter that only ever carries a committed placeholder makes the stack
+# report a secret it does not have, and google_docs_client._get_credentials
+# takes its env-var branch on the variable being non-empty rather than on its
+# being credentials — so the placeholder turned an honest FileNotFoundError
+# naming google_credentials.json into `JSONDecodeError: Expecting value: line 1
+# column 1`, which reads as corrupt credentials rather than absent ones.
+#
+# These two tests are what makes the next revert-leftover fail CI. They are
+# deliberately NOT "the env var this parameter feeds is read by some Python
+# module": GOOGLE_CREDENTIALS_JSON *is* read, by google_docs_client.py, which
+# `COPY *.py` ships into the API container and which app.py imports
+# transitively via cover_letter.py. That formulation passes under the bug,
+# which per CLAUDE.md rule 6 makes it worse than no test.
+
+PARAMETERS_BLOCK = re.compile(r"^Parameters:\n.*?(?=^\w)", re.M | re.S)
+
+
+def _template_body() -> str:
+    """template.yaml with the Parameters block removed.
+
+    A parameter's own declaration is not a use of it, so it has to come out
+    before asking whether anything references the name — otherwise every
+    parameter trivially "references itself" and the test below is vacuous.
+    """
+    text = TEMPLATE.read_text()
+    body, n = PARAMETERS_BLOCK.subn("", text)
+    assert n == 1, "could not locate the top-level Parameters block in template.yaml"
+    return body
+
+
+def _inline_literals() -> set[str]:
+    """Parameter names given a hardcoded value inside --parameter-overrides."""
+    run = _deploy_step()
+    overrides = run.split("--parameter-overrides", 1)
+    assert len(overrides) == 2, "could not find --parameter-overrides in the deploy step"
+    return set(re.findall(r'"(\w+)=[^$"]+"', overrides[1]))
+
+
+def test_the_dead_parameter_scaffolding_is_not_vacuous():
+    """Guard the guard (CLAUDE.md rule 6).
+
+    Both tests below are "assert not <set>". A broken regex empties the set and
+    they pass while checking nothing — which is how the thing they check for
+    survived six months in the first place.
+    """
+    params = _template_parameters()
+    assert len(params) >= 15, f"only found {len(params)} parameters; the loader is broken"
+
+    body = _template_body()
+    assert "Resources:" in body, "Parameters-block excision ate the rest of the template"
+    assert "SupabaseUrl" in body, "a known-referenced parameter vanished from the body"
+    assert "  SupabaseUrl:\n" not in body, "the Parameters block was not actually removed"
+
+    literals = _inline_literals()
+    assert len(literals) >= 3, (
+        f"expected several inline literal overrides, found {sorted(literals)}; "
+        "the regex no longer matches the deploy step"
+    )
+    assert literals <= set(params), (
+        f"{sorted(literals - set(params))} are passed as overrides but template.yaml "
+        "declares no such parameter — sam deploy rejects unknown parameters."
+    )
+
+
+def test_every_declared_parameter_is_referenced_by_the_template():
+    """A parameter nothing !Refs is configuration that configures nothing.
+
+    CapSolverApiKey was exactly this: declared, secret-backed, passed on every
+    deploy, and read by no resource in the stack.
+    """
+    body = _template_body()
+    params = _template_parameters()
+    unreferenced = sorted(
+        name for name in params
+        if not re.search(r"\b" + re.escape(name) + r"\b", body)
+    )
+    assert not unreferenced, (
+        f"{unreferenced} are declared in template.yaml's Parameters and referenced by "
+        "nothing in the template. Either wire them into a resource or delete them "
+        "(and their deploy.yml require()/optional() line and step env entry)."
+    )
+
+
+def test_no_noecho_parameter_is_supplied_as_a_hardcoded_literal():
+    """A secret whose only value is committed to the repo is not a secret.
+
+    `NoEcho: true` is a claim that the value is sensitive. An inline
+    "Name=literal" in --parameter-overrides is a claim that it is a constant
+    checked into a public repo. Both cannot be true, so one of them is a lie:
+    either the parameter does not need NoEcho, or — as with
+    GoogleCredentialsJson=PLACEHOLDER_SET_MANUALLY — the value is a placeholder
+    and the parameter is dead. Route a real secret through require()/optional().
+    """
+    params = _template_parameters()
+    offenders = sorted(
+        name for name in _inline_literals()
+        if str(params.get(name, {}).get("NoEcho", "")).lower() == "true"
+    )
+    assert not offenders, (
+        f"{offenders} are declared NoEcho in template.yaml but supplied as hardcoded "
+        "literals in deploy.yml's --parameter-overrides. A committed value is not a "
+        "secret; if it is a placeholder the parameter is dead and should be removed."
+    )
+
+
+def test_the_announced_literal_count_matches_the_literals_actually_passed():
+    """The deploy step prints how many literals it passes. It must not drift.
+
+    CLAUDE.md rule 2: a status that cannot distinguish did-the-work from
+    did-nothing is a lie, and a hardcoded count in a log line goes stale the
+    moment a literal is added or removed — silently, because nothing reads it
+    back. Removing GoogleCredentialsJson made "plus 5 literals" wrong.
+    """
+    run = _deploy_step()
+    announced = re.search(r"plus (\d+) literals", run)
+    assert announced, "the SAM Deploy step no longer announces a literal count"
+    assert int(announced.group(1)) == len(_inline_literals()), (
+        f"the deploy step announces {announced.group(1)} inline literals but passes "
+        f"{len(_inline_literals())}: {sorted(_inline_literals())}."
+    )

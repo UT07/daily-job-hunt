@@ -15,12 +15,30 @@ logger = logging.getLogger(__name__)
 
 
 def _get_credentials(credentials_path: str = "google_credentials.json"):
-    """Load credentials — supports OAuth token, service account, and Lambda env var.
+    """Load credentials — supports OAuth token, service account, and an env var.
 
     Priority:
     1. oauth_token.json (user's personal Google account — has Drive storage)
-    2. Service account JSON (for automated pipelines)
-    3. GOOGLE_CREDENTIALS_JSON env var (Lambda)
+    2. GOOGLE_CREDENTIALS_JSON env var, written to a temp file
+    3. Service account JSON at `credentials_path`
+
+    Branch 2 is fed by `.github/workflows/daily_job_hunt.yml`, which runs
+    `main.py`. It is NOT fed by the deployed stack, and must not be again.
+    template.yaml declared a `GoogleCredentialsJson` parameter and wired it into
+    JobHuntApi's environment from 5e21293 until 2026-09-30; abc0fe9 reverted the
+    Google Docs approach the same day the parameter landed and never removed it,
+    so deploy.yml passed the inline literal `GoogleCredentialsJson=
+    PLACEHOLDER_SET_MANUALLY` on every deploy for six months. The live Lambda
+    really did hold GOOGLE_CREDENTIALS_JSON=PLACEHOLDER_SET_MANUALLY.
+
+    That was worse than the variable being unset, because branch 2 is reached on
+    the strength of the variable being non-empty, not on its being credentials.
+    Anything reaching here in the Lambda wrote the placeholder to /tmp and failed
+    in branch 3 with `JSONDecodeError: Expecting value: line 1 column 1`, which
+    reads as corrupt credentials. Unset, the same call raises FileNotFoundError
+    naming google_credentials.json, which is the truth. See
+    tests/unit/test_deploy_parameter_overrides.py for the guards that now keep a
+    NoEcho parameter from being supplied as a hardcoded literal.
     """
     import json
 
@@ -40,7 +58,7 @@ def _get_credentials(credentials_path: str = "google_credentials.json"):
         )
         return creds
 
-    # 2. Lambda env var fallback
+    # 2. Env var fallback (daily_job_hunt.yml; never the deployed stack)
     if not Path(credentials_path).exists() and os.environ.get("GOOGLE_CREDENTIALS_JSON"):
         credentials_path = "/tmp/google_credentials.json"
         with open(credentials_path, "w") as f:

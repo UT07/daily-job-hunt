@@ -103,7 +103,6 @@ jobs:
           SB_JWT: ${{ secrets.SUPABASE_JWT_SECRET }}
           SERPER_KEY: ${{ secrets.SERPER_API_KEY }}
           APIFY_KEY: ${{ secrets.APIFY_API_KEY }}
-          CAPSOLVER_KEY: ${{ secrets.CAPSOLVER_API_KEY }}
           DAILY_USER_ID: ${{ secrets.DAILY_PIPELINE_USER_ID }}
           POSTHOG_KEY: ${{ secrets.POSTHOG_API_KEY }}
         run: |
@@ -181,7 +180,6 @@ jobs:
           optional NvidiaApiKey    "${NVIDIA_KEY:-}"
           optional SerperApiKey    "${SERPER_KEY:-}"
           optional ApifyApiKey     "${APIFY_KEY:-}"
-          optional CapSolverApiKey "${CAPSOLVER_KEY:-}"
           optional PostHogApiKey   "${POSTHOG_KEY:-}"
 
           if [ ${#MISSING[@]} -ne 0 ]; then
@@ -199,7 +197,7 @@ jobs:
           else
             echo "All optional parameters supplied."
           fi
-          echo "Passing ${#OVERRIDES[@]} secret-backed overrides plus 5 literals."
+          echo "Passing ${#OVERRIDES[@]} secret-backed overrides plus 4 literals."
 
           sam deploy \
             --stack-name job-hunt-api \
@@ -213,7 +211,6 @@ jobs:
             --no-disable-rollback \
             --parameter-overrides \
               "${OVERRIDES[@]}" \
-              "GoogleCredentialsJson=PLACEHOLDER_SET_MANUALLY" \
               "PostHogHost=https://eu.i.posthog.com" \
               "CouncilEngine=langgraph" \
               "SemanticDedup=on" \
