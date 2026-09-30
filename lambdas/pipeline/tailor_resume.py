@@ -23,6 +23,8 @@ from guardrails.output_guards import check_brace_balance as _check_brace_balance
 from guardrails.output_guards import check_required_sections as _check_required_sections
 from guardrails.output_guards import check_fabrication as _check_fabrication
 from guardrails.output_guards import check_header_present as _check_header_present
+from guardrails.output_guards import check_near_empty as _check_near_empty
+from guardrails.output_guards import check_prompt_echo as _check_prompt_echo
 from guardrails.output_guards import check_textbf_preservation as _check_textbf_preservation
 
 # The user's resume-composition rules (how many experience entries, how many
@@ -779,6 +781,30 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
     missing_header = _check_header_present(tailored_tex, header_markers)
     if missing_header:
         validation_errors.append(f"missing header markers: {missing_header}")
+
+    # Two 2026-09-30 defects, both found in SHIPPED resumes, both terminal here
+    # rather than only in the council's guard. `check_output` blocks on both, so
+    # the council gets two bounded repair attempts first — but `quality_gate`
+    # routes to `finalize` once `repair_attempts >= 2`, best-effort, with the
+    # rejected body intact. A route that ends in the same place whether the
+    # repair worked or was abandoned is not a gate (CLAUDE.md rule 2). This is
+    # the gate: a body that still fails here never reaches S3, because
+    # `validation_errors` forces the corpus instead and `used_fallback: True`
+    # says so in the return value.
+    #
+    # Measured on `ai_body`, not `tailored_tex`, and the difference is
+    # load-bearing for both. The spliced document carries the base preamble,
+    # which is ~1.2KB of \usepackage and \newcommand identical in every output:
+    # it contributes 9 anchors to b45671b7ec5c, whose body is the single word
+    # "and", and it is the one stretch of text a prompt-echo marker firing on it
+    # would flag in 100% of documents. The body is also exactly what
+    # `check_output` sees, so the two gates judge the same string.
+    echoed = _check_prompt_echo(ai_body)
+    if echoed:
+        validation_errors.append(f"prompt echo: {'; '.join(echoed[:3])}")
+    near_empty = _check_near_empty(ai_body)
+    if near_empty:
+        validation_errors.append(f"near-empty output: {near_empty[0]}")
 
     if validation_errors:
         logger.warning(

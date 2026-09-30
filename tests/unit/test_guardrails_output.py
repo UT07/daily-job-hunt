@@ -8,6 +8,7 @@ tests cover the functions directly from their new home, plus the new
 `check_output` aggregator that did not exist before this task.
 """
 from guardrails import output_guards as og
+from tests.unit.realistic_resume_body import body as realistic_body
 
 
 # ---------------------------------------------------------------------------
@@ -174,8 +175,7 @@ def test_check_fabrication_scope_is_skills_section_only():
 
 
 def test_check_output_passes_on_clean_tailor_output():
-    tex = r"\section*{Experience} \section*{Skills} \section*{Education} \section*{Projects} \section*{Certifications}"
-    result = og.check_output(tex, "tailor")
+    result = og.check_output(_COMPLETE_RESUME, "tailor")
     assert result.passed is True
 
 
@@ -212,10 +212,7 @@ def test_check_output_flags_missing_header_marker_as_block():
 
 
 def test_check_output_banned_phrase_is_warn_not_block():
-    tex = (
-        r"\section*{Experience} \section*{Skills} \section*{Education} "
-        r"\section*{Projects} \section*{Certifications} A highly motivated engineer."
-    )
+    tex = _COMPLETE_RESUME + " A highly motivated engineer."
     result = og.check_output(tex, "tailor")
     assert result.passed is True  # warn severity never fails the result
     assert any(v.rule == "banned_phrase" and v.severity == "warn" for v in result.violations)
@@ -257,14 +254,13 @@ def test_fabrication_is_the_only_thing_blocking_a_well_formed_resume():
     assert result.passed is False
 
 
-_COMPLETE_RESUME = (
-    r"\section*{Summary} Backend engineer. "
-    r"\section*{Technical Skills} Python, AWS, Docker "
-    r"\section*{Experience} \textbf{Engineer} built services. "
-    r"\section*{Featured Projects} A project. "
-    r"\section*{Education} A degree. "
-    r"\section*{Certifications} A cert."
-)
+# Was six one-line sections, ~250 characters, 3 identity anchors. `check_output`
+# now reads document CONTENT as well as structure (check_near_empty), and no
+# document the pipeline has ever produced is that thin -- 740 real tailored
+# resumes carry 102-289 anchors. See tests/unit/realistic_resume_body.py for
+# why the stub was replaced rather than the floor lowered. "Docker" is still in
+# the Skills section, which the fabrication cases below substitute into.
+_COMPLETE_RESUME = realistic_body()
 
 
 def test_the_exact_case_that_shipped_in_ci():
@@ -293,10 +289,7 @@ def test_cosmetic_violations_still_only_warn():
     repair rounds. A banned phrase and a dropped \textbf are cosmetic, and a
     document carrying only those must still finalize.
     """
-    tex = (
-        r"\section*{Experience} \section*{Skills} \section*{Education} "
-        r"\section*{Projects} \section*{Certifications} a robust solution"
-    )
+    tex = _COMPLETE_RESUME + " a robust solution"
     result = og.check_output(tex, "tailor", base_body=r"\textbf{a} \textbf{b}")
     assert [v.rule for v in result.violations if v.severity == "block"] == []
     assert result.passed is True
@@ -310,11 +303,8 @@ def test_check_output_fabrication_disabled_for_score_task():
 
 
 def test_check_output_textbf_preservation_runs_whenever_base_body_given():
-    tex = (
-        r"\section*{Experience} \section*{Skills} \section*{Education} "
-        r"\section*{Projects} \section*{Certifications} \textbf{A}"
-    )
-    base = r"\textbf{A} \textbf{B} \textbf{C} \textbf{D}"
+    tex = _COMPLETE_RESUME
+    base = r"\textbf{A} " * 200
     result = og.check_output(tex, "tailor", base_body=base)
     assert any(v.rule == "textbf_preservation" and v.severity == "warn" for v in result.violations)
     assert result.passed is True  # warn only
