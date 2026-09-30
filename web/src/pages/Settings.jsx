@@ -776,21 +776,45 @@ export default function Settings() {
     if (!user) return
     apiGet('/api/profile')
       .then((data) => {
+        // Hydration FILLS BLANKS; it must never overwrite. Every field above
+        // starts as '' (or []), so "still blank" is an exact test for "the user
+        // has not typed here" and no dirty-tracking is needed.
+        //
+        // This used to be `data.full_name ?? prev.name`, which let a
+        // late-resolving fetch clobber whatever had been typed in the meantime.
+        // Open Settings on a slow connection, start typing your name, and the
+        // response lands and silently reverts it -- then Save submits the old
+        // value. It is the same shape as the job-edit defect in #165: the form
+        // shows one thing and the request carries another.
+        //
+        // Caught by tests/e2e/test_critical_journeys.py::TestSettings::
+        // test_profile_update, which failed on main at e82c2db and 5bc82c4 with
+        // `assert 'E2E Test User' == 'Renamed User'` -- the PUT carrying the
+        // pre-typed name. It passes locally (3/3) and fails on the slower
+        // runner, which is what a load-sensitive race looks like rather than a
+        // flake.
+        const keep = (typed, incoming) =>
+          (typed === '' || typed === undefined || typed === null)
+            ? (incoming ?? typed ?? '')
+            : typed
         setProfile((prev) => ({
           ...prev,
-          name: data.full_name ?? prev.name,
-          email: data.email ?? user.email ?? prev.email,
-          phone: data.phone ?? prev.phone,
-          location: data.location ?? prev.location,
-          github_url: data.github_url ?? prev.github_url,
-          linkedin_url: data.linkedin_url ?? prev.linkedin_url,
-          website: data.website ?? prev.website,
-          visa_status: data.visa_status ?? prev.visa_status,
-          work_authorizations: data.work_authorizations
-            ? Object.entries(data.work_authorizations).map(([country, status]) => ({ country, status }))
-            : prev.work_authorizations,
-          salary_expectation_notes: data.salary_expectation_notes ?? prev.salary_expectation_notes,
-          notice_period_text: data.notice_period_text ?? prev.notice_period_text,
+          name: keep(prev.name, data.full_name),
+          email: keep(prev.email, data.email ?? user.email),
+          phone: keep(prev.phone, data.phone),
+          location: keep(prev.location, data.location),
+          github_url: keep(prev.github_url, data.github_url),
+          linkedin_url: keep(prev.linkedin_url, data.linkedin_url),
+          website: keep(prev.website, data.website),
+          visa_status: keep(prev.visa_status, data.visa_status),
+          // Array field: only hydrate while the user has added no rows, for the
+          // same reason. Replacing a half-filled list mid-edit loses the rows.
+          work_authorizations:
+            (prev.work_authorizations || []).length === 0 && data.work_authorizations
+              ? Object.entries(data.work_authorizations).map(([country, status]) => ({ country, status }))
+              : prev.work_authorizations,
+          salary_expectation_notes: keep(prev.salary_expectation_notes, data.salary_expectation_notes),
+          notice_period_text: keep(prev.notice_period_text, data.notice_period_text),
         }))
       })
       .catch((e) => console.warn('Failed to load profile:', e))

@@ -192,6 +192,130 @@ def test_case_is_not_content():
         assert anchor_recall(src, out, output_is_latex=False)[0] == 1.0, (src, out)
 
 
+# --- a quantity's unit is not content either ---------------------------------
+#
+# extract_anchors folds word anchors (`token.lower()`) but NOT quantity anchors
+# (`token.replace(" ", "")`), and _QUANTITY's unit alternation was written
+# case-sensitively -- `[KMB]` uppercase, `x` and `ms` lowercase. So a lowercase
+# unit was not recognised as a unit at all and the digits were kept without it.
+# Measured on the branch that fixed the two defects above, which deliberately
+# left this path alone:
+#
+#     extract_anchors("raised $2.4M")   {'raised', '$2.4M'}
+#     extract_anchors("raised $2.4m")   {'raised', '$2.4'}    unit dropped
+#     extract_anchors("scaled 10X")     {'scaled'... }        NO quantity at all
+#     extract_anchors("120MS")          {'120'}               unit dropped
+#
+#     anchor_recall("raised $2.4M", "raised $2.4m")   (0.5, ['$2.4M'])
+#     anchor_recall("saved 500K users", "saved 500k users")  (0.5, ['500K'])
+#
+# Same family as the two above -- case treated as identity -- but it biases the
+# instrument the OTHER way: it invents loss that did not occur. The cost is a
+# refused upload of a good document, not a missed degradation, so it is a
+# false-positive problem and CLAUDE.md rule 16 applies to the fix.
+#
+# The unit set is deliberately closed: %, K/M/B, x, ms, +. Nothing else is a
+# unit, and `[KMB]` must not become "any letter" -- see
+# test_a_unit_letter_does_not_absorb_an_arbitrary_word.
+
+# (source spelling, the same quantity spelled the other way)
+UNIT_CASE_PAIRS = (
+    ("$2.4M", "$2.4m"),
+    ("500K", "500k"),
+    ("12B", "12b"),
+    ("10X", "10x"),
+    ("120MS", "120ms"),
+    ("3X", "3x"),
+)
+
+
+def test_a_quantitys_unit_is_not_dropped_in_lower_case():
+    """"$2.4m" must extract the same anchor as "$2.4M", not a bare "$2.4"."""
+    assert extract_anchors("raised $2.4m") == extract_anchors("raised $2.4M")
+
+
+def test_every_unit_suffix_is_recognised_in_both_cases():
+    """One quantity, two spellings, one anchor. Asserted as an identity over
+    the whole unit set so the next omission fails here rather than in review."""
+    for upper, lower in UNIT_CASE_PAIRS:
+        assert extract_anchors(upper) == extract_anchors(lower), (upper, lower)
+
+
+def test_unit_case_is_not_content():
+    """The mirror of test_case_is_not_content, for quantities. A renderer that
+    writes "$2.4m" where the PDF said "$2.4M" has lost nothing, in either
+    direction."""
+    for upper, lower in UNIT_CASE_PAIRS:
+        for src, out in ((upper, lower), (lower, upper)):
+            recall, missing = anchor_recall(f"we raised {src} last year",
+                                            f"we raised {out} last year",
+                                            output_is_latex=False)
+            assert recall == 1.0, (src, out, missing)
+
+
+# The unit vocabulary, in both cases. Anything not here is not a unit.
+RECOGNISED_UNITS = ("43%", "8,000+", "500K", "500k", "2.4M", "2.4m",
+                    "12B", "12b", "10X", "10x", "120MS", "120ms")
+# Letters that follow a number without being a unit. The bare number is still
+# an anchor; the letter must not be glued onto it.
+NOT_UNITS = ("400g", "250s", "43d", "99w")
+
+
+def test_the_unit_set_is_closed():
+    """Case-insensitivity must widen the unit set's CASE, not its membership.
+
+    `[KMB]` is one character class away from `[A-Za-z]`, and that mutation
+    passes every other test in this file: the trailing \b hides it on
+    "$2.4 million" and "43 kg", and it only shows up on a number followed by a
+    single non-unit letter, where it invents "400g", "250s" and "5t" as anchors
+    the output is then required to match. That is a new source of the very false
+    refusals this fix exists to remove, so the membership is pinned here.
+
+    The recognised half of the assertion also pins % and + , which an unscoped
+    re.IGNORECASE (with \b moved outside the group) silently destroys.
+    """
+    for quantity in RECOGNISED_UNITS:
+        anchors = extract_anchors(f"grew {quantity} last year")
+        assert quantity.lower() in anchors, f"{quantity} -> {sorted(anchors)}"
+    for quantity in NOT_UNITS:
+        anchors = extract_anchors(f"grew {quantity} last year")
+        assert quantity.lower() not in anchors, f"{quantity} -> {sorted(anchors)}"
+
+
+def test_a_unit_letter_does_not_absorb_an_arbitrary_word():
+    """The over-correction guard. Making the alternation case-insensitive must
+    not turn `[KMB]` into "any letter": a unit is a unit only when the letter
+    ENDS the token, so "$2.4 million", "43 kg" and "5 Mbps" keep the bare
+    number and let the word stand as its own anchor."""
+    for text, fake in (("$2.4 million", "$2.4m"), ("43 kg", "43k"),
+                       ("5 Mbps", "5m"), ("2 bytes", "2b")):
+        assert fake not in extract_anchors(text), f"{text} invented {fake}"
+    assert "million" in extract_anchors("$2.4 million")
+
+
+def test_a_missing_quantity_is_named_with_the_sources_casing():
+    """Folding the anchor must not fold the REPORT. "Missing: $2.4m" reads as a
+    bug in the tool; the source wrote "$2.4M" and that is what to go look for.
+    Guards the fold introduced for the tests above from costing the message its
+    casing -- _display_forms only ever indexed word anchors."""
+    msg = describe_loss("Cut spend by $2.4M across 500K accounts",
+                        "Cut spend", output_is_latex=False)
+    assert "$2.4M" in msg and "500K" in msg, msg
+    assert "$2.4m" not in msg and "500k" not in msg, msg
+
+
+def test_a_conversion_that_only_recases_units_is_not_refused():
+    """The defect at the gate. conversion_is_faithful is what refuses a PDF
+    upload with a 422, so a document whose only difference is the case of its
+    unit letters must not be blocked."""
+    source = ("Cut cloud spend by $2.4M and served 500K users at 120MS p99, "
+              "scaling throughput 10X on 12B monthly events.")
+    output = ("Cut cloud spend by $2.4m and served 500k users at 120ms p99, "
+              "scaling throughput 10x on 12b monthly events.")
+    ok, why = conversion_is_faithful(source, output, output_is_latex=False)
+    assert ok, why
+
+
 # --- prose verbs are not proper nouns ---------------------------------------
 
 def test_capitalised_bullet_verbs_are_not_anchors():

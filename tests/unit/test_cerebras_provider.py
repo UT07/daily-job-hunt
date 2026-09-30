@@ -170,9 +170,17 @@ def test_cerebras_gets_a_short_cooldown_because_its_limit_refills_continuously()
     assert ai_helper._RATE_LIMIT_COOLDOWN_S["cerebras"] <= 300
 
 
-def test_a_cerebras_429_naming_a_daily_cap_still_cools_until_midnight():
-    """The body-derived policy is account-agnostic and must stay that way."""
+def test_a_cerebras_429_naming_a_daily_cap_still_cools_until_midnight(pinned_clock):
+    """The body-derived policy is account-agnostic and must stay that way.
+
+    The clock is pinned because this assertion is otherwise false for the last
+    90 seconds of every UTC day: the daily window shrinks towards midnight and
+    floors at 60s, while Cerebras' flat window is 90s. Measured 2026-09-30 —
+    passes at 23:58:00, fails at 23:58:30 — the same defect that made
+    test_rate_limit_cooldown.py fail on clean main at 23:48.
+    """
     cerebras = _cerebras_entries()[0]
+    pinned_clock("2026-09-29T11:00:00")
     secs = ai_helper._rate_limit_cooldown_seconds(
         "cerebras", "Rate limit exceeded: tokens per day")
     assert secs > ai_helper._RATE_LIMIT_COOLDOWN_S["cerebras"]
