@@ -141,45 +141,42 @@ def _claims(text: str) -> set[str]:
 
 
 def _supported_by_base(skill: str, base_lower: str) -> bool:
-    """Is `skill` present in the base resume? Substring containment, knowingly.
+    """Is `skill` present in the base resume, by word boundary not substring?
 
-    This has one documented miss and it is deliberate. The corpus Skills section
-    reads "TypeScript/JavaScript (React, ...)", and "java" is a substring of
-    "javascript", so a resume claiming standalone Java is exonerated and can
-    never be flagged. That is the ONLY such collision in this corpus, and it is
-    the worst one available -- Java is the most-fabricated token in the list.
+    Both halves of this were measured, and they are only correct together.
 
-    Word-boundary matching fixes it and must not ship yet. Measured over 140 real
-    production resumes:
+    Substring containment silently exonerated the most-fabricated token in the
+    blocklist: the corpus Skills section reads "TypeScript/JavaScript (React,
+    ...)", "java" is a substring of "javascript", and so a standalone Java claim
+    could never be flagged. 482 of 707 real outputs list Java as a bare comma
+    item; none was flaggable.
 
-        substring       23/140 flagged (16.4%),  27 violations
-        word boundary   97/140 flagged (69.3%), 115 violations, java alone 88
+    But word boundaries alone make it far worse, because the baseline matters
+    more than the matching. Measured over 140 real resumes:
 
-    Those 88 are not fabrications. Java IS in the candidate's April corpus row;
-    it is missing only from the Skills section of the degraded 2026-09-28 row
-    production currently tailors from. So word boundaries turn this guard into a
-    corpus-drift alarm that blocks 69% of resumes and spends two repair rounds on
-    each, for content the candidate actually has. An independent measurement over
-    707 resumes put 95.5% of all precision-direction signal down to exactly that
-    drift.
+        baseline = production row only,  substring       23/140 (16.4%)
+        baseline = production row only,  word boundary   97/140 (69.3%)
+        baseline = union of ALL rows,    word boundary   23/140 (16.4%)
 
-    REVERSAL CONDITION, so this is a decision and not an oversight: switch to the
-    word-boundary form once the corpus production reads contains the candidate's
-    full profile (the Sep-28 row dropped 5 of 7 projects, the GitHub handle, the
-    university and every certification code). Re-run the 140-resume measurement
-    after that; if `java` stops dominating, word boundaries are correct and this
-    docstring is obsolete. The regex is kept below, unused, so the switch is one
-    line and the intent survives.
+    The 74-resume gap is Java, and it is not fabrication: Java is in the
+    candidate's 2026-04-05 corpus row and missing only from the degraded
+    2026-09-28 row production now tailors from. Against one row, word boundaries
+    turn this guard into a corpus-drift alarm that blocks 69% of resumes and
+    spends two repair rounds on each, over content the candidate actually has.
 
-    Baseline width was measured too and is NOT the variable that matters:
-    Skills-section-only and whole-corpus-body baselines give identical results
-    (23/140 both ways), so widening it would be churn.
+    So the caller must pass the union of every user_resumes row -- see
+    shared.resume_format.BaseResume.all_tex, which exists for this. "Has the
+    candidate ever claimed this?" is a question about the whole profile; asking
+    it of one revision convicts them of their own deleted history.
+
+    The boundary is alphanumeric-only, not \b: "vue.js" and "spring boot"
+    contain a dot and a space, and "rust" must still match "Rust," and
+    "(Rust/TypeScript)". What must not match is a longer alphanumeric word that
+    merely contains it.
     """
-    # The word-boundary form this will become. Alphanumeric lookaround rather
-    # than \b, because "vue.js" and "spring boot" contain a dot and a space,
-    # while "Rust" must still match "Rust," and "(Rust/TypeScript)".
-    #   return re.search(rf"(?<![a-z0-9]){re.escape(skill)}(?![a-z0-9])", base_lower) is not None
-    return skill in base_lower
+    return re.search(
+        rf"(?<![a-z0-9]){re.escape(skill)}(?![a-z0-9])", base_lower
+    ) is not None
 
 
 def _plain(fragment: str) -> str:

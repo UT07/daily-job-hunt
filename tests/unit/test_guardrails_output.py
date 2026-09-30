@@ -119,17 +119,41 @@ def test_a_document_with_no_header_still_has_its_skills_checked():
     assert any("Kotlin" in r for r in og.check_fabrication("Python", tex))
 
 
-def test_substring_exoneration_is_pinned_as_a_known_miss():
-    """Documents the deliberate miss so the reversal is a decision, not a bug.
+def test_a_longer_word_does_not_exonerate_a_claim():
+    """"javascript" must not whitelist "java".
 
-    "java" is a substring of "javascript", so a standalone Java claim is
-    exonerated by a corpus that only lists TypeScript/JavaScript. Fixing it with
-    word boundaries was measured at 97/140 resumes flagged (69.3%) versus 23/140,
-    with `java` alone accounting for 88 -- and those 88 are corpus drift, not
-    fabrication. See _supported_by_base for the reversal condition.
+    Substring containment did exactly that, and it disabled the most-fabricated
+    token in the blocklist: 482 of 707 real outputs list Java as a bare comma
+    item and none could be flagged, because the corpus Skills section reads
+    "TypeScript/JavaScript (React, ...)".
     """
     tex = r"\section*{Technical Skills} Java, SQL \section*{Experience}"
-    assert og.check_fabrication("TypeScript/JavaScript (React)", tex) == []
+    result = og.check_fabrication("TypeScript/JavaScript (React)", tex)
+    assert any("Java" in r for r in result), result
+
+
+def test_a_claim_the_candidate_really_has_is_not_flagged():
+    """The other half, which only works because the baseline is every row.
+
+    Word boundaries alone are not an improvement: against the single row
+    production tailors from they flag 97 of 140 real resumes instead of 23,
+    because the 2026-09-28 row dropped Java and the 2026-04-05 row has it. The
+    caller passes BaseResume.all_tex so a skill the candidate has ever listed
+    counts as supported.
+    """
+    tex = r"\section*{Technical Skills} Java, SQL \section*{Experience}"
+    union_of_all_rows = "TypeScript/JavaScript (React), Java, Python"
+    assert og.check_fabrication(union_of_all_rows, tex) == []
+
+
+def test_punctuated_names_still_match_their_own_boundary():
+    """A dot and a space are inside these tokens, so \b would misbehave."""
+    for name in ("vue.js", "spring boot"):
+        supported = r"\section*{Technical Skills} Python \section*{X}"
+        claimed = rf"\section*{{Technical Skills}} Python, {name} \section*{{X}}"
+        assert og.check_fabrication(f"Python, {name}, SQL", claimed) == [], name
+        assert og.check_fabrication("Python, SQL", claimed), name
+        assert og.check_fabrication(f"Python, {name}", supported) == []
 
 
 def test_check_fabrication_scope_is_skills_section_only():

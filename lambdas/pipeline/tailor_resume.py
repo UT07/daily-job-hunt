@@ -583,6 +583,17 @@ def handler(event, context):
     )
     base_skills_text = base_skills_match.group(1) if base_skills_match else ""
 
+    # The fabrication check compares against EVERY stored resume row, not just
+    # the one being tailored. "Has the candidate ever claimed this skill?" is a
+    # question about the whole profile; asking it of one revision convicts them
+    # of content an earlier row had and this one dropped. Measured: with
+    # word-boundary matching, the production row alone flags 97 of 140 real
+    # resumes and the union flags 23 -- the 74 differences are all Java, which
+    # the April row lists and the September row does not. Falls back to the
+    # Skills section when no union is available, which keeps the guard armed
+    # (check_output gates fabrication on this string being non-empty).
+    fabrication_baseline = base.all_tex or base_skills_text
+
     # Extract keywords and detect archetype
     from utils.keyword_extractor import extract_keywords
     description = job.get("description", "") or ""
@@ -664,7 +675,7 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
             temperature=0.3,
             max_tokens=tailor_max_tokens,
             task="tailor",
-            base_skills=base_skills_text,
+            base_skills=fabrication_baseline,
             base_body=base_body,
             # header_markers is deliberately NOT forwarded here. The graph's
             # guard_output_node evaluates `winner.content`, which is the
@@ -779,8 +790,8 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         # Quality validation — writing quality, not just structure
         quality_warnings = _check_banned_phrases(ai_body)
         quality_warnings.extend(_check_textbf_preservation(base_body, ai_body))
-        if base_skills_text:
-            quality_warnings.extend(_check_fabrication(base_skills_text, ai_body))
+        if fabrication_baseline:
+            quality_warnings.extend(_check_fabrication(fabrication_baseline, ai_body))
 
         if quality_warnings:
             logger.warning(f"[tailor] Quality warnings for {job_hash}: {'; '.join(quality_warnings[:5])}")

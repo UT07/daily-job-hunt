@@ -65,6 +65,20 @@ class BaseResume(NamedTuple):
     skipped: int
     newest_tex: str | None
     n_rows: int = 0
+    all_tex: str = ""
+    """Every row's tex_content joined -- the fabrication baseline.
+
+    NOT the same question as `row`. `row` is the document to tailor, and only
+    one can be. Whether the candidate has ever claimed a skill is a question
+    about the whole profile, and answering it from one row convicts them of
+    content an earlier row had and the current one dropped.
+
+    Measured on 140 real resumes, with word-boundary matching:
+        baseline = production row only    97/140 flagged (69.3%), java alone 88
+        baseline = union of all rows      23/140 flagged (16.4%)
+    The 74-resume difference is entirely Java, which the 2026-04-05 row lists
+    and the 2026-09-28 row does not.
+    """
 
     @property
     def tex(self) -> str:
@@ -124,7 +138,10 @@ def fetch_tailorable_resume(db, user_id: str, *, limit: int = 10) -> BaseResume:
     ) or []
     row, skipped = pick_latest_tailorable(rows)
     newest_tex = rows[0].get("tex_content") if rows else None
-    return BaseResume(row=row, skipped=skipped, newest_tex=newest_tex, n_rows=len(rows))
+    return BaseResume(
+        row=row, skipped=skipped, newest_tex=newest_tex, n_rows=len(rows),
+        all_tex="\n".join(r.get("tex_content") or "" for r in rows),
+    )
 
 
 # --- Did a conversion actually carry the content across? ---------------------
