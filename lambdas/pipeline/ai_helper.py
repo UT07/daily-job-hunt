@@ -76,7 +76,61 @@ def get_supabase():
 # and the council silently degraded to "return the first candidate". The critic
 # only needs to emit a short JSON array, so the headroom is almost entirely for
 # reasoning tokens.
+# The critic's ANSWER is tiny — a numeric verdict per candidate — but a
+# reasoning model spends its budget thinking before it emits anything, and
+# _call_provider treats empty content as a failure. So an under-budgeted critic
+# does not return a worse verdict; it returns NO verdict, and the council
+# silently falls back to candidate 1.
+#
+# That is what has been happening. Measured over 3 days of production logs
+# (2026-09-27..30), across naukribaba-tailor-resume and
+# naukribaba-generate-cover-letter:
+#
+#     adjudicated            24 / 107   22%
+#     critic_call_failed     61 / 107   57%   <-- this
+#     critic_unparseable     12 / 107   11%
+#     single_candidate       10 / 107    9%
+#     no_critic_family        0 / 107    0%
+#
+# agents/model_registry.json records min_output_tokens: 3000 for
+# openai/gpt-oss-120b and openai/gpt-oss-20b — Groq's primary entries, so a
+# frequent critic pick — with the note "Reasoning models consume the budget
+# internally before emitting". At 1024 they never reach the answer.
+#
+# The same fix was applied to the GENERATOR budget (_REASONING_HEADROOM_TOKENS,
+# rewrite_budget) and the critic was left flat. Two of everything.
+#
+# Sized per model rather than raised globally, because Groq bills
+# prompt_tokens + max_tokens against 8k/minute. The critique prompt truncates
+# each candidate to 3000 chars (build_critique_prompt), so two candidates plus
+# the rubric is roughly 2k tokens; 2k + 3256 stays inside 8k, while a flat
+# raise for every provider would not have been checkable.
 CRITIC_MAX_TOKENS = 1024
+
+# Room for the verdict itself once a reasoning model has finished thinking.
+# The answer is a few numbers and a sentence.
+CRITIC_ANSWER_TOKENS = 256
+
+
+def critic_budget(provider: dict | None) -> int:
+    """Output budget for THIS critic, respecting its reasoning floor.
+
+    Falls back to CRITIC_MAX_TOKENS for any model the registry does not know,
+    so an unrecognised provider behaves exactly as before.
+    """
+    model = (provider or {}).get("model") or ""
+    floor = 0
+    try:
+        from agents.registry import all_models
+
+        for entry in all_models():
+            if entry.get("model") == model:
+                floor = int(entry.get("min_output_tokens") or 0)
+                break
+    except Exception:  # registry unreadable in some deploy shapes
+        floor = 0
+    return min(max(CRITIC_MAX_TOKENS, floor + CRITIC_ANSWER_TOKENS),
+               MAX_OUTPUT_TOKENS_CAP)
 
 # System prompt for the critic call. Shared by the sequential council below
 # (council_complete) and the LangGraph port (agents.nodes.critique_node) so
@@ -977,7 +1031,7 @@ def _council_complete_legacy(
         critique = _call_provider(
             critic_provider, critique_prompt,
             system=CRITIQUE_SYSTEM,
-            temperature=0, max_tokens=CRITIC_MAX_TOKENS,
+            temperature=0, max_tokens=critic_budget(critic_provider),
         )
         if not critique:
             logger.warning("[council] outcome=critic_call_failed — critic %s "

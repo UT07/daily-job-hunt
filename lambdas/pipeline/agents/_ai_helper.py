@@ -60,3 +60,9 @@ prefer_complete = ai_helper.prefer_complete
 build_critique_prompt = ai_helper.build_critique_prompt
 CRITIQUE_SYSTEM = ai_helper.CRITIQUE_SYSTEM
 CRITIC_MAX_TOKENS = ai_helper.CRITIC_MAX_TOKENS
+# Sizes the critic's output budget from the model registry's min_output_tokens,
+# so a reasoning critic is not cut off before it emits a verdict. Must be
+# re-exported here: agents/nodes.py imports through this shim, not from
+# ai_helper directly, and a name missing from it is an ImportError at module
+# load rather than a missing feature.
+critic_budget = ai_helper.critic_budget
