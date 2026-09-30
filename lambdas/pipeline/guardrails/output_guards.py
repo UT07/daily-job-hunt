@@ -16,10 +16,11 @@ see that module's import block.
 
 IMPORTANT — scope limitation of `check_fabrication`:
 This guard does NOT detect fabrication across a tailored document. It only
-scans the resume's Skills section (matched via a `\\section*{...Skills}`
-regex) for a hardcoded list of ~15 skill keywords (Java, Vue.js, Angular,
-Rust, ...) that do not appear in the candidate's base resume. Two things
-narrow it further: (1) the tailoring system prompt already constrains the
+scans the header subtitle and the resume's Skills section (matched via a
+`\\section*{...Skills}` regex) for a hardcoded list of 17 skill keywords
+(Java, Vue.js, Angular, Rust, ...) that do not appear in the candidate's base
+resume. Two things narrow it further: (1) the tailoring system prompt already
+constrains the
 model to reorder-only within Skills, so the window this guard watches is
 one the model is instructed not to touch anyway, and (2) it has no view of
 the Experience, Projects, Summary or Certifications sections, where an
@@ -31,7 +32,18 @@ because this instrument cannot see where it would. Do not read a clean
 `check_output` result as "the document contains no fabricated content";
 read it as "the Skills section blocklist found nothing," which is a much
 narrower claim. A whole-document fabrication detector is separate,
-not-yet-built work.
+not-yet-built work — and deliberately so: measured over 707 real resumes it
+fires on 533 (75.4%) with a hand-adjudicated ~52% false-positive rate, most
+often over the candidate's own degree (CLAUDE.md rule 16).
+
+Within those two regions, though, the guard must read ALL of the text it is
+looking at, and for a long time it did not: `_plain` + field-equality
+matching hid the leading entry of every `\\item`, which is where the real
+corpus row puts a technology on each of its seven category lines. See
+`_mentions` for what that missed, and
+tests/unit/test_fabrication_claim_extraction.py for the fix's measurement.
+"Narrow scope" is a decision about which regions to inspect; it was never a
+licence to read those regions partially.
 
 Two checks here are NOT about honesty and are much cheaper to be sure of
 than fabrication, because neither needs a baseline to compare against —
@@ -149,14 +161,72 @@ _SKILLS_SECTION_RE = re.compile(
 )
 
 
+def _mentions(skill: str, text: str) -> bool:
+    """Is `skill` asserted anywhere in `text`, by word boundary?
+
+    The ONE matcher, used for both sides of the fabrication comparison: the
+    claim side (`_claims`) and the support side (`_supported_by_base`). They
+    were different before -- the base was searched with this boundary regex
+    while the tailored text was split on `[,&/()\\n]+` and compared for field
+    EQUALITY -- and the asymmetry is what CLAUDE.md rule 14 is about: when a
+    comparison decides whether to accept output, both sides must count the
+    same things. Field equality counted fewer, so the guard could see a claim
+    in the base resume that it could not see in the resume being checked.
+
+    What that cost, concretely. `_plain` turns
+
+        \\item \\textbf{Primary:} Java, Python
+
+    into `item Primary: Java, Python`, whose first field is `item Primary:
+    Java` -- not equal to any blocklist token, so the FIRST entry of every
+    `\\item` was invisible. That is not a hypothetical shape: the real
+    2026-09-28 `user_resumes.tex_content` row writes its whole Technical
+    Skills section as seven `\\item \\textbf{Category:} ...` lines, so in
+    production the leading technology of every category sat outside the
+    guard's view. Field equality also missed `Java;`, `Java.`,
+    `Java-based` and `AWS\\\\Java` for the same reason -- anything whose
+    field was not the bare token.
+
+    The boundary is alphanumeric-only, not \\b: "vue.js" and "spring boot"
+    contain a dot and a space, and "rust" must still match "Rust,",
+    "(Rust/TypeScript)" and "\\textbf{Rust}". What must not match is a longer
+    alphanumeric word that merely contains it -- "javascript" must never
+    stand in for "java", "scalable" never for "scala", "robust" never for
+    "rust". That is the same containment the docstring of `check_fabrication`
+    refuses as an exoneration, refused here in the other direction too.
+
+    Case folding happens HERE, on both arguments, rather than being each
+    caller's job. It was the caller's job for the base side (`base_lower`) and
+    the matcher's job for the claim side, and that is one more way for the two
+    sides to stop counting the same things: a caller that forgets makes the
+    boundary regex -- all lowercase -- match nothing, every claim unsupported,
+    and every tailored resume a blocking fabrication. A test caught exactly
+    that while this was being written.
+    """
+    return re.search(
+        rf"(?<![a-z0-9]){re.escape(skill.lower())}(?![a-z0-9])", text.lower()
+    ) is not None
+
+
 def _claims(text: str) -> set[str]:
-    """Blocklisted technologies asserted in `text`."""
-    return {
-        item.strip().lower() for item in re.split(r"[,&/()\n]+", text)
-    } & _KNOWN_FABRICATIONS
+    """Blocklisted technologies asserted in `text`.
+
+    Longest match wins when one blocklist token contains another -- today only
+    "spring" inside "spring boot". Reporting both would put two lines in the
+    repair prompt for one claim, and the repo already cares about that (see
+    the dedupe across regions in `check_fabrication`). This is a report
+    dedupe, NOT the substring exoneration `check_fabrication`'s docstring
+    refuses: the claim is still reported, under its more specific name, and
+    the severity is unchanged. It also cannot hide anything, because
+    `_mentions` is symmetric -- a base resume containing "spring boot"
+    supports "spring" too, so dropping the shorter token can never turn an
+    unsupported claim into a supported one.
+    """
+    found = {skill for skill in _KNOWN_FABRICATIONS if _mentions(skill, text)}
+    return {s for s in found if not any(s != t and s in t for t in found)}
 
 
-def _supported_by_base(skill: str, base_lower: str) -> bool:
+def _supported_by_base(skill: str, base_tex: str) -> bool:
     """Is `skill` present in the base resume, by word boundary not substring?
 
     Both halves of this were measured, and they are only correct together.
@@ -185,20 +255,27 @@ def _supported_by_base(skill: str, base_lower: str) -> bool:
     candidate ever claimed this?" is a question about the whole profile; asking
     it of one revision convicts them of their own deleted history.
 
-    The boundary is alphanumeric-only, not \b: "vue.js" and "spring boot"
-    contain a dot and a space, and "rust" must still match "Rust," and
-    "(Rust/TypeScript)". What must not match is a longer alphanumeric word that
-    merely contains it.
+    Matching itself is `_mentions`, shared verbatim with `_claims` -- see there
+    for why the boundary is alphanumeric-only, why the two sides must not have
+    separate matchers, and why case folding belongs to the matcher rather than
+    to this function's caller.
     """
-    return re.search(
-        rf"(?<![a-z0-9]){re.escape(skill)}(?![a-z0-9])", base_lower
-    ) is not None
+    return _mentions(skill, base_tex)
 
 
 def _plain(fragment: str) -> str:
-    """Strip one level of LaTeX macro wrapping, then stray delimiters."""
-    out = re.sub(r"\\[a-zA-Z]+\{([^}]*)\}", r"\1", fragment)
-    return re.sub(r"[{}\\]", "", out)
+    r"""Unwrap one level of LaTeX macro, then turn delimiters into separators.
+
+    Separators, not deletions. Deleting them glued neighbouring words into one
+    alphanumeric run, which then failed `_mentions`' boundary test and hid the
+    claim: `AWS\\Java` collapsed to `AWSJava`, and "java" preceded by "S" does
+    not match. Every replacement here is a space for that reason -- this
+    function may only ever ADD word boundaries, never remove one, or it
+    becomes a way for the model's own line breaks to smuggle a claim past the
+    guard.
+    """
+    out = re.sub(r"\\[a-zA-Z]+\{([^}]*)\}", r" \1 ", fragment)
+    return re.sub(r"[{}\\]", " ", out)
 
 
 def _fabrication_regions(tailored_tex: str) -> list[tuple[str, str]]:
@@ -236,13 +313,25 @@ def check_fabrication(base_skills_text: str, tailored_tex: str) -> list[str]:
     real hits ARE dictionary words), and "it is in the job description" -- 92% of
     real hits appear in the JD, because lifting the JD's requirement is the
     failure mode, not an excuse for it.
+
+    What DID change (see `_mentions`): the claim side now uses the same
+    boundary matcher as the support side, instead of splitting the region into
+    fields and comparing them for equality. That is a widening, so it was
+    measured before shipping, per rule 16, by
+    `scripts/measure_fabrication_claims.py` -- four arms, because the baseline
+    is half of the comparison (rule 15). On the real tailored documents
+    reachable from this repository it newly exposes 33 leading `\\item`
+    entries across 4 documents, none of them blocklisted, for 0 new flags
+    against either the union or the single-row baseline, with the harness's
+    self-check confirming both arms diverge on that position. Four is not the
+    740 the gate wants; re-run it with `--source loader` wherever the real
+    corpus is reachable before treating the false-positive rate as measured.
     """
-    base_lower = base_skills_text.lower()
     errors = []
     seen = set()
     for region, text in _fabrication_regions(tailored_tex):
         for skill in sorted(_claims(text)):
-            if skill in seen or _supported_by_base(skill, base_lower):
+            if skill in seen or _supported_by_base(skill, base_skills_text):
                 continue
             seen.add(skill)
             errors.append(f"fabrication: '{skill.title()}' not in base resume ({region})")
