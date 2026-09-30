@@ -3192,6 +3192,25 @@ async def upload_resume(
 
     result = _db.upsert_resume(user.id, resume_data)
 
+    # Index the corpus. Until 2026-09-30 index_bullets() had NO production
+    # caller — only tests and scripts/bench_retrieval.py — so the 35 rows in
+    # resume_bullets were a frozen snapshot from one manual run on 2026-09-25
+    # against an April resume, while production tailored a different document
+    # entirely. BULLET_RAG was on and retrieve_evidence WAS being called, so
+    # tailoring was grounded in a resume the user had already replaced.
+    #
+    # Best-effort: retrieval is an enhancement, never a dependency (see
+    # tailor_resume.safe_evidence_block), so a failure here must not fail the
+    # upload the user asked for.
+    if tailorable:
+        try:
+            from retrieval.bullets import index_bullets
+
+            n = index_bullets(user.id, tex_content, str(result.get("id", "")))
+            logger.info("Indexed %d bullets for user %s", n, user.id)
+        except Exception as exc:
+            logger.warning("Bullet indexing failed for user %s: %s", user.id, exc)
+
     # Auto-populate profile from parsed resume sections (best-effort)
     profile_updates = {}
     if sections.get("name"):
