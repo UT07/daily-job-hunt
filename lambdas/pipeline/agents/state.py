@@ -46,6 +46,14 @@ class CouncilState(TypedDict, total=False):
     candidates: Annotated[list[Candidate], add_candidates]
     scores: list[int]
     winner: Candidate | None
+    # WHY this winner was chosen. Until 2026-09-30 the four paths through
+    # critique_node that give up and take candidates[0] were indistinguishable
+    # from a real adjudication: the return shape differed only by scores being
+    # empty, and one path logged nothing at all. Measured over 80 rounds, the
+    # critic produced a usable verdict in 21 — so 74% of "council decisions"
+    # were the first candidate, unreviewed, and no caller could tell.
+    # See CRITIQUE_OUTCOMES for the values.
+    critique_outcome: str
     guard_report: dict[str, Any] | None
     repair_attempts: int
     trace_id: str

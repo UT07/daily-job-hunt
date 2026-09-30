@@ -187,6 +187,58 @@ def _build_provider_list() -> list[dict]:
         "timeout": 60,
     })
 
+    # Cerebras — a fifth independent quota, and the largest per-minute token
+    # budget anywhere in this pool.
+    #
+    # The pool's weakness has never been entry count; it is that the entries
+    # sit on a handful of ACCOUNTS and two of them carry the load. Groq's free
+    # tier is 8,000 tokens per MINUTE, which a tailoring call (whole base
+    # resume in, whole body out) can spend by itself — see rewrite_budget's
+    # note. OpenRouter's free pool shares ONE daily allowance across every
+    # model on it, so its entries die as a unit; measured 2026-09-29 against
+    # the live keys, all four failed in the same sweep (two 404, two 429).
+    #
+    # Cerebras' published free-tier limits, read 2026-09-30 from
+    # inference-docs.cerebras.ai/support/rate-limits:
+    #
+    #   gpt-oss-120b   5 RPM   30k TPM   1M TPH   1M TPD   ~3,000 tok/s
+    #   qwen-3.8-27b   5 RPM   30k TPM   1M TPH   1M TPD   ~1,850 tok/s
+    #
+    # 30k tokens/minute is ~4x Groq's, on a quota shared with nothing else in
+    # the chain. Both models are ones this repo has already probed successfully
+    # on another host — gpt-oss-120b is the council's primary Groq entry
+    # ("strongest available, ~800ms") and qwen3.8-27b its fastest ("~335ms,
+    # clean JSON") — so the new quota arrives without new capability risk. That
+    # also means Cerebras adds no new FAMILY: it is depth, not diversity, and
+    # _model_family deliberately collapses each pair (see the qwen- hyphen note
+    # in that function).
+    #
+    # NOT probed against a live key: this repo holds no Cerebras credential, so
+    # these two ids come from the vendor's own docs rather than from
+    # scripts/probe_models.py. They are therefore absent from
+    # agents/model_registry.json, whose contract is "proved by a live call" —
+    # add them there after a probe, not before. Until the key exists every call
+    # here is a get_param miss, which _call_provider already treats as a skip.
+    #
+    # Position: after Gemini, ahead of NVIDIA and OpenRouter. Gemini is the one
+    # failover measured under sustained load (24/24 at ~0.9s) and keeps its
+    # slot; an unprobed provider should not displace it. Ahead of NVIDIA (4/6
+    # under concurrency) and OpenRouter (50 requests/day without credits) on
+    # the published limits above.
+    cerebras_url = "https://api.cerebras.ai/v1/chat/completions"
+    for cerebras_model in ("gpt-oss-120b", "qwen-3.8-27b"):
+        providers.append({
+            "name": f"cerebras/{cerebras_model}",
+            "url": cerebras_url,
+            "key_param": "/naukribaba/CEREBRAS_API_KEY",
+            "model": cerebras_model,
+            # 60s: same budget as the Groq entries serving these same two
+            # models. Cerebras advertises 1,850-3,000 tok/s, so a full resume
+            # body should land well inside this; revise on measurement, not on
+            # the advertised figure.
+            "timeout": 60,
+        })
+
     # NVIDIA NIM — the fourth independent quota, and the reason it is here
     # rather than disabled is a correction worth recording.
     #
@@ -293,6 +345,15 @@ def _model_family(model: str) -> str:
     """
     m = model.lower().split("/")[-1]
     m = m.replace(":free", "")
+    # One model, two host spellings. Cerebras serves Qwen 3.8 27B as
+    # `qwen-3.8-27b`; Groq and DashScope serve the same weights as
+    # `qwen3.8-27b`. The prefix table below matches `qwen3`, so the hyphenated
+    # id fell through to `return m` and became its own family — which would let
+    # _select_diverse_providers pick BOTH as "distinct" generators and have the
+    # council review its own answer. Only a hyphen followed by a DIGIT is
+    # collapsed, so DashScope's qwen-plus / qwen-turbo / qwen-max (real,
+    # separate entries in the table) are untouched.
+    m = re.sub(r"^qwen-(?=\d)", "qwen", m)
     for prefix in ("gemini", "deepseek", "llama-3.3", "llama-3.1", "llama-4", "qwen3",
                     "qwen-plus", "qwen-turbo", "qwen-max", "gpt-oss",
                     "mistral-small", "nemotron", "hermes", "gemma", "glm",
@@ -337,6 +398,16 @@ _COOLDOWNS: dict[str, float] = {}
 
 _RATE_LIMIT_COOLDOWN_S = {
     "groq": 90,          # 8k tokens/min — recovers within the minute
+    # Cerebras rate-limits with a token bucket that "replenishes continuously
+    # rather than resetting at fixed intervals" (its own docs), at 5 RPM /
+    # 30k TPM against a 1M-token daily cap. The limit a real run trips is
+    # therefore the per-minute one, which clears in about a minute — the same
+    # shape as Groq's, so the same window. Leaving it out would take the 300s
+    # unknown-account default and bench a healthy provider five times longer
+    # than needed. A Cerebras 429 that DOES name a per-day cap still gets the
+    # until-midnight treatment: _rate_limit_cooldown_seconds decides from the
+    # response body, not from the account.
+    "cerebras": 90,
     # Fallback for a 429 whose body does NOT name a per-day quota — i.e. a
     # short throttle. The daily case is detected from the body and cooled until
     # UTC midnight instead; see _rate_limit_cooldown_seconds.
@@ -887,8 +958,8 @@ def _council_complete_legacy(
         raise RuntimeError("Council: all generators failed")
     candidates = prefer_complete(candidates)
     if len(candidates) == 1:
-        logger.info("[council] Only 1 candidate — returning without critique")
-        return candidates[0]
+        logger.info("[council] outcome=single_candidate — returning without critique")
+        return {**candidates[0], "critique_outcome": "single_candidate"}
 
     # Step 3: Select critic from a different model family
     gen_families = {_model_family(g["model"]) for g in generators}
@@ -909,8 +980,10 @@ def _council_complete_legacy(
             temperature=0, max_tokens=CRITIC_MAX_TOKENS,
         )
         if not critique:
-            logger.warning("[council] Critic call failed, returning first candidate")
-            return candidates[0]
+            logger.warning("[council] outcome=critic_call_failed — critic %s "
+                           "returned nothing; candidate 1 unadjudicated",
+                           critic_provider["name"])
+            return {**candidates[0], "critique_outcome": "critic_call_failed"}
 
         scores = _parse_critic_scores(critique["content"], len(candidates))
         if scores:
@@ -920,13 +993,17 @@ def _council_complete_legacy(
                 f"[council] Scores: {scores}, Winner: candidate {best_idx + 1} "
                 f"({winner['provider']}:{winner['model']}) score={scores[best_idx]}"
             )
-            return winner
+            return {**winner, "critique_outcome": "adjudicated", "scores": scores}
         else:
-            logger.warning(f"[council] Could not parse critic scores: {critique['content'][:200]}")
-            return candidates[0]
+            logger.warning("[council] outcome=critic_unparseable — critic %s "
+                           "answered in an unreadable shape; candidate 1 "
+                           "unadjudicated. Raw: %r",
+                           critic_provider["name"], critique["content"][:300])
+            return {**candidates[0], "critique_outcome": "critic_unparseable"}
     except Exception as e:
-        logger.warning(f"[council] Critique failed ({e}), returning first candidate")
-        return candidates[0]
+        logger.warning("[council] outcome=critic_call_failed — critique raised "
+                       "(%s); candidate 1 unadjudicated", e)
+        return {**candidates[0], "critique_outcome": "critic_call_failed"}
 
 
 # ---------------------------------------------------------------------------

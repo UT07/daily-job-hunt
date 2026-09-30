@@ -117,6 +117,18 @@ def generate_node(payload: dict) -> dict:
     return {"candidates": [result] if result else []}
 
 
+# Every way critique_node can end. Four of these five mean the winner was NOT
+# adjudicated — it is simply candidates[0]. They were previously
+# indistinguishable from a real verdict by anything downstream.
+CRITIQUE_OUTCOMES = (
+    "adjudicated",        # a critic scored the candidates and one won
+    "single_candidate",   # only one survived generation; nothing to compare
+    "no_critic_family",   # no model family left unused by the generators
+    "critic_call_failed",  # the critic provider returned nothing
+    "critic_unparseable",  # the critic answered in a shape we cannot read
+)
+
+
 def critique_node(state: dict) -> dict:
     """Score candidates with a critic from an unused model family."""
     candidates = state.get("candidates") or []
@@ -127,13 +139,25 @@ def critique_node(state: dict) -> dict:
     # critic can see. Same rule the legacy council applies.
     candidates = prefer_complete(candidates)
     if len(candidates) == 1:
-        logger.info("[council] Only 1 candidate — skipping critique")
-        return {"winner": candidates[0], "scores": []}
+        logger.info("[council] outcome=single_candidate — only 1 candidate, "
+                    "skipping critique")
+        return {"winner": candidates[0], "scores": [],
+                "critique_outcome": "single_candidate"}
 
     used = {family_of({"model": c["model"]}) for c in candidates}
     critic = select_critic(used)
     if critic is None:
-        return {"winner": candidates[0], "scores": []}
+        # This branch logged NOTHING. It is the one degradation that left no
+        # trace at all, in a system whose only view of the council was its log
+        # lines.
+        logger.warning(
+            "[council] outcome=no_critic_family — every family is already a "
+            "generator (%s), so no cross-family critic is available; "
+            "returning candidate 1 unadjudicated",
+            ", ".join(sorted(f for f in used if f)),
+        )
+        return {"winner": candidates[0], "scores": [],
+                "critique_outcome": "no_critic_family"}
 
     verdict = call_one(
         critic,
@@ -143,17 +167,29 @@ def critique_node(state: dict) -> dict:
         max_tokens=CRITIC_MAX_TOKENS,
     )
     if not verdict:
-        logger.warning("[council] Critic call failed — returning first candidate")
-        return {"winner": candidates[0], "scores": []}
+        logger.warning("[council] outcome=critic_call_failed — critic %s "
+                       "returned nothing; returning candidate 1 unadjudicated",
+                       critic.get("name", "?"))
+        return {"winner": candidates[0], "scores": [],
+                "critique_outcome": "critic_call_failed"}
 
     scores = _parse_critic_scores(verdict["content"], len(candidates))
     if not scores:
-        logger.warning("[council] Unparseable critic output — returning first candidate")
-        return {"winner": candidates[0], "scores": []}
+        # Log the raw answer, truncated. Phase 2 has to fix the SHAPE, and
+        # "unparseable" without the text is not something anyone can act on.
+        logger.warning(
+            "[council] outcome=critic_unparseable — critic %s answered in an "
+            "unreadable shape; returning candidate 1 unadjudicated. Raw: %r",
+            critic.get("name", "?"), (verdict.get("content") or "")[:300],
+        )
+        return {"winner": candidates[0], "scores": [],
+                "critique_outcome": "critic_unparseable"}
 
     best = max(range(len(scores)), key=lambda i: scores[i])
-    logger.info("[council] Scores: %s, winner: candidate %d", scores, best + 1)
-    return {"winner": candidates[best], "scores": scores}
+    logger.info("[council] outcome=adjudicated scores=%s winner=candidate %d",
+                scores, best + 1)
+    return {"winner": candidates[best], "scores": scores,
+            "critique_outcome": "adjudicated"}
 
 
 def guard_output_node(state: dict) -> dict:

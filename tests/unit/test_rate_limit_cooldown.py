@@ -89,11 +89,38 @@ def test_429_records_the_body_derived_cooldown_end_to_end():
     """note_provider_failure must actually route the body into the policy."""
     provider = {"name": "openrouter/x", "model": "a/b:free",
                 "key_param": "/naukribaba/OPENROUTER_API_KEY"}
+    import time
+
     ai_helper.note_provider_failure(provider, 429, DAILY_BODY)
     assert not ai_helper._is_available(provider), "provider should be cooled"
-    # Still cooled well past the old flat 1800s window.
-    import time
-    future = time.time() + ai_helper._RATE_LIMIT_COOLDOWN_S["openrouter"] + 60
-    assert not ai_helper._is_available(provider, now=future), (
-        "cooldown expired after the old flat window — the body was ignored"
+
+    # The daily cooldown runs until UTC MIDNIGHT, so its length depends on the
+    # time of day. Probing at a fixed `now + flat_window + 60` asserted the
+    # provider was still cooled at a moment that is past midnight whenever the
+    # test runs within that window of it — i.e. this failed for roughly the
+    # last 31 minutes of every UTC day. Caught at 23:48 UTC on 2026-09-29,
+    # when it failed on clean main and looked like a regression from unrelated
+    # work.
+    #
+    # Assert the property instead of a wall-clock instant: a body naming the
+    # daily quota must produce a LONGER cooldown than the flat per-account
+    # window, whatever the hour. Near midnight that is legitimately shorter, so
+    # compare against what the same body would yield, not a constant.
+    flat = ai_helper._RATE_LIMIT_COOLDOWN_S["openrouter"]
+    daily = ai_helper._rate_limit_cooldown_seconds("openrouter", DAILY_BODY)
+    transient = ai_helper._rate_limit_cooldown_seconds("openrouter", "429 too many requests")
+    assert transient == flat, (
+        f"an unrecognised body should take the flat window, got {transient}"
     )
+    if daily > flat:
+        # The usual case: still hours from midnight.
+        future = time.time() + flat + 60
+        assert not ai_helper._is_available(provider, now=future), (
+            "cooldown expired after the flat window — the body was ignored"
+        )
+    else:
+        # Within `flat` seconds of UTC midnight the daily cooldown is genuinely
+        # the shorter of the two. The body was still read; there is just less
+        # of the day left to wait.
+        assert daily <= flat
+        assert not ai_helper._is_available(provider, now=time.time() + daily - 5)

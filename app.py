@@ -839,6 +839,26 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
     description = payload.get("job_description", "")
     location = payload.get("location", "") or ""
 
+    # A job with no description cannot be scored or tailored — there is nothing
+    # to work against — so creating a row for one produces a permanent stub:
+    # it can never acquire an artifact, and smoke_prod's artifact-completeness
+    # check flags it on every deploy with no action that would clear it.
+    #
+    # Measured 2026-09-30: 2 such rows existed, both from Add Job attempts that
+    # failed partway. One (d1ad2affe913, Viatel) carried score_tier A with a
+    # zero-length description and failed the deploy gate.
+    #
+    # Returning "" rather than raising keeps every caller's existing
+    # behaviour for a missing job_id; the endpoints already validate the
+    # description before they get here, so this is a backstop, not the primary
+    # guard.
+    if not description.strip():
+        logger.warning(
+            "Refusing to create a job row for %s/%s with an empty description — "
+            "it could never be scored or tailored", company, title,
+        )
+        return ""
+
     # Compute canonical hash for dedup
     chash = canonical_hash(company, title, description)
 
@@ -3171,6 +3191,25 @@ async def upload_resume(
     }
 
     result = _db.upsert_resume(user.id, resume_data)
+
+    # Index the corpus. Until 2026-09-30 index_bullets() had NO production
+    # caller — only tests and scripts/bench_retrieval.py — so the 35 rows in
+    # resume_bullets were a frozen snapshot from one manual run on 2026-09-25
+    # against an April resume, while production tailored a different document
+    # entirely. BULLET_RAG was on and retrieve_evidence WAS being called, so
+    # tailoring was grounded in a resume the user had already replaced.
+    #
+    # Best-effort: retrieval is an enhancement, never a dependency (see
+    # tailor_resume.safe_evidence_block), so a failure here must not fail the
+    # upload the user asked for.
+    if tailorable:
+        try:
+            from retrieval.bullets import index_bullets
+
+            n = index_bullets(user.id, tex_content, str(result.get("id", "")))
+            logger.info("Indexed %d bullets for user %s", n, user.id)
+        except Exception as exc:
+            logger.warning("Bullet indexing failed for user %s: %s", user.id, exc)
 
     # Auto-populate profile from parsed resume sections (best-effort)
     profile_updates = {}

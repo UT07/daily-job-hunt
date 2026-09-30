@@ -9,11 +9,12 @@ Supports two modes:
      of more API calls.
 
 Supported providers (all have free tiers):
-  1. Groq (Llama 3.3 70B + others) — 30 RPM, 14,400 RPD (fastest)
-  2. OpenRouter (free models)       — aggregator with many free models
-  3. NVIDIA NIM                     — free credits, DeepSeek/Kimi/Qwen/Mistral
-  4. Qwen (DashScope)               — free tier, strong quality
-  5. Anthropic Claude               — paid, premium fallback only
+  1. Groq (gpt-oss, Qwen)           — 30 RPM, 14,400 RPD (fastest)
+  2. Cerebras (gpt-oss, Qwen)       — independent quota, 30k tokens/min
+  3. OpenRouter (free models)       — aggregator, ONE shared daily allowance
+  4. NVIDIA NIM                     — free credits, DeepSeek/Kimi/Qwen/Mistral
+  5. Qwen (DashScope)               — PAID, last-resort fallback
+  6. Anthropic Claude               — paid, premium fallback only
 
 The client tries providers in order and fails over automatically.
 Responses are cached in SQLite to avoid burning quota on repeated requests.
@@ -301,6 +302,71 @@ class GroqProvider(AIProvider):
             api_key=api_key,
             rate_limiter=RateLimiter(requests_per_minute=30, requests_per_day=14400),
             base_url="https://api.groq.com/openai/v1",
+            **kwargs,
+        )
+
+    def complete(self, prompt: str, system: str = "", temperature: float = None) -> str:
+        import requests
+
+        if not self.rate_limiter.acquire():
+            raise RateLimitError(f"[{self.name}] Rate limit exceeded")
+
+        temp = temperature if temperature is not None else self.temperature
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        resp = requests.post(
+            f"{self.base_url}/chat/completions",
+            headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+            json={"model": self.model, "messages": messages, "temperature": temp, "max_tokens": self.max_tokens},
+            timeout=90,
+        )
+
+        if resp.status_code == 429:
+            raise RateLimitError(f"[{self.name}] HTTP 429 — rate limited")
+        resp.raise_for_status()
+
+        data = resp.json()
+        return data["choices"][0]["message"]["content"]
+
+
+class CerebrasProvider(AIProvider):
+    """Cerebras Cloud inference. OpenAI-compatible API, its own free quota.
+
+    Added for CAPACITY, not for a new opinion. This client's free chain was
+    Groq then OpenRouter, and those are the two accounts that run out: Groq's
+    free tier is 8,000 tokens per MINUTE, and every OpenRouter free model draws
+    on ONE per-account daily allowance, so all of them fail together (measured
+    2026-09-29 against the live keys: four entries, two 404 and two 429, in the
+    same sweep).
+
+    Cerebras' published free limits, read 2026-09-30 from
+    inference-docs.cerebras.ai/support/rate-limits, are 5 RPM / 30k TPM / 1M
+    tokens per day on each of the two models it serves through shared
+    inference — roughly 4x Groq's per-minute token budget, on a quota shared
+    with nothing else in the chain.
+
+    The model ids come from Cerebras' own docs, NOT from a live probe: this
+    repo holds no Cerebras credential. `gpt-oss-120b` and `qwen-3.8-27b` are
+    the same weights Groq already serves as `openai/gpt-oss-120b` and
+    `qwen/qwen3.8-27b`, both of which this repo has probed successfully, so the
+    quality risk is the host's rather than the model's.
+    """
+
+    def __init__(self, api_key: str, model: str = "gpt-oss-120b", **kwargs):
+        super().__init__(
+            name="cerebras",
+            model=model,
+            api_key=api_key,
+            # 5 requests/minute on the free tier. The day bucket is left
+            # unlimited deliberately: Cerebras meters the daily cap in TOKENS
+            # (1M/day), and a request-counting bucket cannot express that
+            # without inventing an average prompt size. The provider's own 429
+            # plus this client's failover is what handles the daily case.
+            rate_limiter=RateLimiter(requests_per_minute=5, requests_per_day=0),
+            base_url="https://api.cerebras.ai/v1",
             **kwargs,
         )
 
@@ -1244,8 +1310,10 @@ class AIClient:
     def from_config(cls, config: dict) -> "AIClient":
         """Build client from config.yaml settings.
 
-        Initializes providers based on available API keys.
-        Priority order: Qwen → Groq → NVIDIA NIM → OpenRouter
+        Initializes providers based on available API keys. A provider whose key
+        is absent is simply not added — never an error.
+
+        Priority order: Groq → Cerebras → NVIDIA NIM → OpenRouter → Qwen (paid)
         (Gemini intentionally excluded — user reserves it for other purposes.
         DeepSeek removed — credits exhausted, accessible via NVIDIA NIM + OpenRouter.)
         """
@@ -1261,8 +1329,9 @@ class AIClient:
             return val
 
         # ── LLM Council: all free models, ordered by preference ──
-        # Strategy: Groq (free + fastest) → NVIDIA NIM → OpenRouter (free pool)
-        # → Qwen LAST (paid, ~$0.005/call — fallback only).
+        # Strategy: Groq (free + fastest) → Cerebras (free, independent quota)
+        # → NVIDIA NIM → OpenRouter (free pool) → Qwen LAST (paid,
+        # ~$0.005/call — fallback only).
         # DeepSeek direct API removed (credits exhausted, 402 errors).
         # DeepSeek models still accessible via NVIDIA NIM + OpenRouter (free there).
         # No paid providers (Anthropic removed).
@@ -1284,7 +1353,30 @@ class AIClient:
                 providers.append(GroqProvider(api_key=groq_key, model=model))
             logger.info(f"[AI] Groq council: {len(groq_models)} models")
 
-        # 2. NVIDIA NIM — free credits
+        # 2. Cerebras — free, its own quota, 30k tokens/minute
+        #
+        # Placed directly behind Groq because it is the only other account in
+        # this chain whose limits are shared with nothing else. Groq's free
+        # tier is 8,000 tokens/MINUTE, and a Studio tailoring call carries the
+        # whole base resume in and the whole body out — so the failover that
+        # matters most is one with a bigger per-minute budget, not one with a
+        # different model. Cerebras' published free limits (2026-09-30) are
+        # 5 RPM / 30k TPM / 1M tokens per day, per model.
+        #
+        # Both ids are the same weights Groq serves as openai/gpt-oss-120b and
+        # qwen/qwen3.8-27b, which this repo has probed; Cerebras itself is
+        # UNPROBED (no key in the repo), so the ids come from its docs.
+        cerebras_key = get_key("cerebras", "CEREBRAS_API_KEY")
+        if cerebras_key:
+            cerebras_models = [
+                "gpt-oss-120b",    # ~3,000 tok/s per Cerebras' docs
+                "qwen-3.8-27b",    # ~1,850 tok/s
+            ]
+            for model in cerebras_models:
+                providers.append(CerebrasProvider(api_key=cerebras_key, model=model))
+            logger.info(f"[AI] Cerebras council: {len(cerebras_models)} models")
+
+        # 3. NVIDIA NIM — free credits
         nvidia_key = get_key("nvidia", "NVIDIA_API_KEY")
         if nvidia_key:
             # Re-verified live 2026-08-31: six of the previous seven returned
@@ -1296,7 +1388,7 @@ class AIClient:
                 providers.append(NvidiaNIMProvider(api_key=nvidia_key, model=model))
             logger.info(f"[AI] NVIDIA NIM council: {len(nvidia_models)} models (incl. DeepSeek, Kimi)")
 
-        # 3. OpenRouter — free model aggregator (shared daily quota)
+        # 4. OpenRouter — free model aggregator (shared daily quota)
         or_key = get_key("openrouter", "OPENROUTER_API_KEY")
         if or_key:
             # Verified-working free models on OpenRouter (2026-04-05).
@@ -1317,7 +1409,7 @@ class AIClient:
                 providers.append(OpenRouterProvider(api_key=or_key, model=model))
             logger.info(f"[AI] OpenRouter council: {len(or_models)} free models")
 
-        # 4. Qwen (Alibaba DashScope) — LAST because it is PAID.
+        # 5. Qwen (Alibaba DashScope) — LAST because it is PAID.
         # ai_helper.py (the pipeline path) already treats qwen-plus as paid and
         # gates it behind ENABLE_PAID_QWEN; this file used to call it "free tier"
         # and put it FIRST, so every interactive API call was billed even though
@@ -1340,6 +1432,7 @@ class AIClient:
             raise ProviderError(
                 "No AI providers configured. Set at least one API key:\n"
                 "  GROQ_API_KEY       — https://console.groq.com/keys (free, recommended)\n"
+                "  CEREBRAS_API_KEY   — https://cloud.cerebras.ai (free, independent quota)\n"
                 "  OPENROUTER_API_KEY — https://openrouter.ai/keys (free models)\n"
                 "  NVIDIA_API_KEY     — https://build.nvidia.com (free credits)\n"
                 "  QWEN_API_KEY       — https://dashscope.console.aliyun.com (free tier)"

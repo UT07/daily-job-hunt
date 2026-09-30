@@ -93,6 +93,9 @@ jobs:
         env:
           GROQ_KEY: ${{ secrets.GROQ_API_KEY }}
           OR_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          # Unset until the operator adds the secret; an empty value is passed
+          # through and the provider is skipped at call time.
+          CEREBRAS_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           QWEN_KEY: ${{ secrets.QWEN_API_KEY }}
           NVIDIA_KEY: ${{ secrets.NVIDIA_API_KEY }}
           SB_URL: ${{ secrets.SUPABASE_URL }}
@@ -121,6 +124,7 @@ jobs:
             --parameter-overrides \
               "GroqApiKey=${GROQ_KEY}" \
               "OpenRouterApiKey=${OR_KEY}" \
+              "CerebrasApiKey=${CEREBRAS_KEY}" \
               "QwenApiKey=${QWEN_KEY}" \
               "NvidiaApiKey=${NVIDIA_KEY}" \
               "GoogleCredentialsJson=PLACEHOLDER_SET_MANUALLY" \

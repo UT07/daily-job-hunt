@@ -88,8 +88,16 @@ _SECTION = re.compile(r"\\section\*?\{([^}]*)\}")
 # header lines between a section heading and its itemize block are simply
 # not matched by either alternative below, so they're skipped rather than
 # mistaken for bullets.
+# \jobentry{company}{location}{dates}{title} and
+# \projectentry{name}{dates}{tech} / \projectentryurl{name}{dates}{url}{text}{tech}
+# name the entry a run of bullets belongs to. The first argument is the
+# company or project in every one of them.
+_ENTRY = re.compile(r"\\(?:jobentry|projectentry(?:url)?)\{([^}]*)\}")
+
 _TOKEN = re.compile(
-    r"\\section\*?\{[^}]*\}|\\item\s+.*?(?=\\item\b|\\end\{itemize\}|\\section\*?\{|\Z)",
+    r"\\section\*?\{[^}]*\}"
+    r"|\\(?:jobentry|projectentry(?:url)?)\{[^}]*\}"
+    r"|\\item\s+.*?(?=\\item\b|\\end\{itemize\}|\\section\*?\{|\Z)",
     re.DOTALL,
 )
 _ITEM_TEXT = re.compile(r"\\item\s+(.*)", re.DOTALL)
@@ -226,22 +234,56 @@ def extract_bullets(resume_tex: str) -> list[dict]:
     tex = _strip_comments(resume_tex)
     results: list[dict] = []
     section = "Unknown"
+    entry = ""
     for token in _TOKEN.finditer(tex):
         chunk = token.group(0)
         heading = _SECTION.fullmatch(chunk)
         if heading:
             section = heading.group(1).strip()
+            # A new section ends the previous entry; otherwise the last job of
+            # Experience would be attributed to the first project.
+            entry = ""
+            continue
+        header = _ENTRY.fullmatch(chunk)
+        if header:
+            entry = _clean(header.group(1))
             continue
         item = _ITEM_TEXT.match(chunk)
         if item:
             text = _clean(item.group(1))
             if text:
-                results.append({"section": section, "text": text})
+                results.append({"section": section, "text": text, "entry": entry})
     return results
 
 
 def _insert_bullets(rows: list[dict]) -> None:
-    ai_helper.get_supabase().table("resume_bullets").insert(rows).execute()
+    """Insert, dropping `entry` if the migration has not been applied yet.
+
+    PostgREST fails the WHOLE request on an unknown column with PGRST204 and
+    the wording "Could not find the 'entry' column ... in the schema cache" —
+    never "does not exist", which is raw Postgres phrasing and the reason an
+    earlier retry guard in this repo never once fired. Match the code.
+
+    Indexing without attribution is worth having; failing the upload over a
+    missing column is not.
+    """
+    table = ai_helper.get_supabase().table("resume_bullets")
+    try:
+        table.insert(rows).execute()
+        return
+    except Exception as exc:
+        if "PGRST204" not in str(exc) and "schema cache" not in str(exc).lower():
+            raise
+        logger.warning(
+            "resume_bullets.entry is missing — indexing without attribution. "
+            "Apply supabase/migrations/20260930010000_resume_bullets_entry.sql"
+        )
+    table.insert([{k: v for k, v in r.items() if k != "entry"} for r in rows]).execute()
+
+
+def _delete_user_bullets(user_id: str) -> None:
+    """Clear this user's bullets before re-indexing."""
+    ai_helper.get_supabase().table("resume_bullets").delete().eq("user_id", user_id).execute()
 
 
 def index_bullets(user_id: str, resume_tex: str, source_resume_id: str) -> int:
@@ -250,10 +292,18 @@ def index_bullets(user_id: str, resume_tex: str, source_resume_id: str) -> int:
     if not items:
         return 0
     vectors = embed_batch([i["text"] for i in items])
+    # Replace this user's corpus rather than adding to it. Until 2026-09-30
+    # nothing in production called this at all, so the 35 rows on the live
+    # table were a frozen snapshot from one manual script run on 2026-09-25
+    # against an April resume, while production tailored a different document.
+    # Appending on every upload would be the opposite failure: retrieval would
+    # start returning bullets from resumes the user had already replaced.
+    _delete_user_bullets(user_id)
     _insert_bullets([
         {
             "user_id": user_id,
             "section": item["section"],
+            "entry": item.get("entry", ""),
             "text": item["text"],
             "embedding": vector,
             "source_resume_id": source_resume_id,
