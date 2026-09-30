@@ -9,7 +9,7 @@ import logging
 from langgraph.types import Overwrite
 
 from agents._ai_helper import (
-    CRITIC_MAX_TOKENS,
+    critic_budget,
     CRITIQUE_SYSTEM,
     _parse_critic_scores,
     build_critique_prompt,
@@ -184,7 +184,10 @@ def critique_node(state: dict) -> dict:
         build_critique_prompt(candidates, state.get("task_description", "")),
         CRITIQUE_SYSTEM,
         temperature=0,
-        max_tokens=CRITIC_MAX_TOKENS,
+        # Sized for THIS critic. A reasoning model spends the budget thinking
+        # before it emits, and _call_provider treats empty content as failure —
+        # which is why 57% of council rounds returned critic_call_failed.
+        max_tokens=critic_budget(critic),
     )
     if not verdict:
         logger.warning("[council] outcome=critic_call_failed — critic %s "
