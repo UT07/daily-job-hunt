@@ -18,6 +18,24 @@ from latex_compiler import _sanitize_latex
 from quality_logger import log_quality
 from utils.keyword_extractor import extract_keywords
 
+# The near-empty gate, shared with lambdas/pipeline/tailor_resume.py rather
+# than reimplemented, so both paths use one floor and one instrument. Imported
+# through the shim score_batch.py documents: guardrails/*.py import their own
+# siblings unqualified (`from guardrails.policy import policy_for`), so the
+# qualified spelling alone raises ModuleNotFoundError from inside the module,
+# and putting lambdas/pipeline on sys.path instead would shadow the repo-root
+# `utils/` package this file imports two lines up (lambdas/pipeline/utils/
+# mirrors it filename-for-filename).
+try:
+    from guardrails.output_guards import check_near_empty
+except ImportError:
+    import sys as _sys
+
+    from lambdas.pipeline import guardrails as _guardrails_pkg
+
+    _sys.modules.setdefault("guardrails", _guardrails_pkg)
+    from guardrails.output_guards import check_near_empty
+
 if TYPE_CHECKING:
     from user_profile import UserProfile
 
@@ -464,8 +482,9 @@ Reminder: your output MUST contain all six section headers verbatim: \\section*{
         # Validate structural integrity: check that key LaTeX structures survived
         tailored_tex = _validate_latex_structure(tailored_tex, base_tex, job.company)
 
-        # Check page length: fall back to base if body is too short (1 page)
-        tailored_tex = _check_page_length(tailored_tex, base_tex, job.company)
+        # Reject a document that is empty in all but name. Was a word-count
+        # page-length proxy; see _check_not_near_empty for what it discarded.
+        tailored_tex = _check_not_near_empty(tailored_tex, base_tex, job.company)
 
         # Fix common AI LaTeX typos before sanitization
         _TYPO_FIXES = {
@@ -504,36 +523,43 @@ Reminder: your output MUST contain all six section headers verbatim: \\section*{
         return ""
 
 
-def _estimate_body_words(tex: str) -> int:
-    """Estimate word count of LaTeX body content (excluding commands/markup)."""
-    m = re.search(r"\\begin\{document\}(.*?)\\end\{document\}", tex, re.DOTALL)
-    body = m.group(1) if m else tex
-    stripped = re.sub(r"\\[a-zA-Z]+\*?(\{[^}]*\})*", " ", body)
-    stripped = re.sub(r"[{}\\%&$#_^~]", " ", stripped)
-    stripped = re.sub(r"\s+", " ", stripped)
-    return len(stripped.split())
+def _check_not_near_empty(tailored_tex: str, base_tex: str, company: str) -> str:
+    r"""Fall back to base if the model returned a document in name only.
 
+    REPLACES `_check_page_length`, which counted words with
+    `\\[a-zA-Z]+\*?(\{[^}]*\})*` — a pattern that deletes a macro AND its
+    braced arguments, so `\textbf{Python}` scored zero — and fell back to
+    `base_tex` under 500. Same instrument, same floor and same defect as the
+    branch removed from `lambdas/pipeline/tailor_resume.py`; this is the
+    second copy CLAUDE.md rule 10 exists to find.
 
-def _check_page_length(tailored_tex: str, base_tex: str, company: str) -> str:
-    """Warn and fallback to base if content is wildly off 2-page target.
+    Measured here, on this function's own input (whole spliced documents,
+    counted words over true words):
 
-    Approximate thresholds (LaTeX with standard resume formatting):
-    - Under 500 words → likely 1 page (too short)
-    - Over 1200 words → likely 3+ pages (too long)
+        resumes/fullstack.tex      861 / 1097  (0.78)   passed
+        resumes/sre_devops.tex     846 / 1033  (0.82)   passed
+        production-density body    150 /  201  (0.75)   FELL BACK
+        b45671b7ec5c shape ("and")   1 /    1           fell back
+
+    Row three is the whole problem: `tests/unit/realistic_resume_body`, which
+    is abridged from the real 2026-09-28 corpus row and carries ~200 identity
+    anchors, was discarded as "too short". On the pipeline's 740 stored
+    outputs the same rule fires on 52 (7.03%), anchor counts 131-228.
+    `check_near_empty` fires on 1 of those 740, and is silent on rows one to
+    three above.
+
+    The `words > 1200` warning went with it. It never once fired on an
+    over-long document: both corpus resumes typeset to THREE pages against a
+    policy of two (tests/unit/test_page_check.py) and score 861 and 846 —
+    and 1097 and 1033 even with the undercount corrected. Page count is not
+    a function of word count, and `latex_compiler.compile_tex_to_pdf` already
+    asks `shared.page_check.check_pdf` the question properly, against the
+    typeset PDF, on this exact path.
     """
-    words = _estimate_body_words(tailored_tex)
-    if words < 500:
-        base_words = _estimate_body_words(base_tex)
-        logger.warning(
-            f"[TAILOR] {company}: body too short ({words} words, base={base_words}). "
-            f"Likely 1 page. Using base resume."
-        )
+    violations = check_near_empty(tailored_tex)
+    if violations:
+        logger.warning(f"[TAILOR] {company}: {violations[0]}. Using base.")
         return base_tex
-    if words > 1200:
-        logger.warning(
-            f"[TAILOR] {company}: body too long ({words} words). "
-            f"Likely 3+ pages. Content may overflow."
-        )
     return tailored_tex
 
 

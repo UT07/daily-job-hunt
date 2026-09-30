@@ -4,6 +4,8 @@ from langgraph.types import Overwrite
 
 from agents import nodes
 
+from tests.unit.realistic_resume_body import body as realistic_body
+
 PROV = {"name": "groq/a", "model": "openai/gpt-oss-120b"}
 # Distinct model family from PROV ("gpt-oss" vs "glm") — see
 # lambdas.pipeline.ai_helper._model_family.
@@ -114,14 +116,12 @@ def test_repair_node_feeds_violations_back_into_prompt():
 # Fabrication must arm the repair loop (CI run 36651253369, case 12ed5b1de5e8).
 # ---------------------------------------------------------------------------
 
-_FABRICATING_WINNER = (
-    r"\section*{Summary} Backend engineer. "
-    r"\section*{Technical Skills} Python, AWS, Docker, Rust "
-    r"\section*{Experience} \textbf{Engineer} built services. "
-    r"\section*{Featured Projects} A project. "
-    r"\section*{Education} A degree. "
-    r"\section*{Certifications} A cert."
-)
+# A realistic body (see tests/unit/realistic_resume_body.py) with Rust added to
+# the Skills section. The six-one-liner version this replaced had 3 identity
+# anchors; check_output for the tailor task now reads content as well as
+# structure, so the clean variant below would have blocked on near_empty and
+# the "no new repair rounds for honest output" claim would have been untestable.
+_FABRICATING_WINNER = realistic_body().replace("Docker", "Docker, Rust")
 
 
 def test_fabricated_skill_routes_guard_output_to_repair():

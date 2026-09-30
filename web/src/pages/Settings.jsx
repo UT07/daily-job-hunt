@@ -653,9 +653,15 @@ function JobSourcesSection() {
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState(null)
 
+  // Third instance of the same race in this file. Toggle a source before
+  // /api/search-config resolves and the response replaces the whole list,
+  // silently undoing the toggle.
+  const sourcesDirty = useRef(false)
+
   useEffect(() => {
     apiGet('/api/search-config')
       .then((data) => {
+        if (sourcesDirty.current) return
         if (data.enabled_sources && Array.isArray(data.enabled_sources)) {
           setEnabledSources(data.enabled_sources)
         }
@@ -664,6 +670,7 @@ function JobSourcesSection() {
   }, [])
 
   function toggleSource(sourceId) {
+    sourcesDirty.current = true
     setEnabledSources((prev) =>
       prev.includes(sourceId)
         ? prev.filter((s) => s !== sourceId)
@@ -763,6 +770,15 @@ export default function Settings() {
     notice_period_text: '',
   })
 
+  // Set the moment the user edits preferences, so a late /api/search-config
+  // response cannot revert them. A ref rather than state: it must be readable
+  // inside the fetch callback without re-running the effect.
+  const prefsDirty = useRef(false)
+  const editPrefs = (updater) => {
+    prefsDirty.current = true
+    setPrefs(updater)
+  }
+
   const [prefs, setPrefs] = useState({
     queries: [],
     locations: [],
@@ -821,6 +837,16 @@ export default function Settings() {
 
     apiGet('/api/search-config')
       .then((data) => {
+        // Same race as the profile hydration above, sibling state. `prefs`
+        // defaults are NOT blank (min_match_score 60, days_back 7,
+        // max_jobs_per_run 15), so the "fill blanks" test that works for the
+        // profile cannot tell a default from a deliberate choice of the same
+        // value. A dirty flag can, and works whatever the defaults are.
+        //
+        // Caught by tests/e2e/.../TestSettings::test_search_config_update:
+        // `assert 60 == 70` -- the user moves the score to 70, this response
+        // lands, and Save submits the default.
+        if (prefsDirty.current) return
         setPrefs((prev) => ({
           ...prev,
           queries: data.queries ?? prev.queries,
@@ -854,7 +880,7 @@ export default function Settings() {
         <PasswordSection />
         <ResumeSection />
         <JobSourcesSection />
-        <PreferencesSection prefs={prefs} setPrefs={setPrefs} />
+        <PreferencesSection prefs={prefs} setPrefs={editPrefs} />
       </div>
     </div>
   )

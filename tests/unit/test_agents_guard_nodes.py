@@ -19,13 +19,15 @@ import pytest
 from agents import graph as graph_mod
 from agents import nodes
 
-CLEAN_TAILORED_TEX = (
-    r"\section*{Experience}\resumeItem{Built it.}"
-    r"\section*{Technical Skills}Python, AWS"
-    r"\section*{Education}BSc Computer Science"
-    r"\section*{Projects}Side project"
-    r"\section*{Certifications}AWS Certified"
-)
+from tests.unit.realistic_resume_body import body as realistic_body
+
+# Structurally complete AND with production-like content density: check_output
+# for the tailor task now reads content as well as structure (check_near_empty),
+# and the five-one-liner version of this constant carried 4 identity anchors
+# against a real-resume range of 102-289. See
+# tests/unit/realistic_resume_body.py. "Python, AWS" is preserved inside the
+# Skills section so the fabrication case below can still substitute into it.
+CLEAN_TAILORED_TEX = realistic_body()
 
 
 def test_guard_input_blocks_an_injected_job_description():
