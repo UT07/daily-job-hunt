@@ -24,3 +24,11 @@ python-jose[cryptography]>=3.3
 # requirements-web.txt — kept identical here so CI exercises the same
 # `mcp` major version production runs.
 mcp>=1.2.0,<2
+
+# Browser E2E (tests/e2e/test_critical_journeys.py). `playwright` is also in
+# requirements.txt for the dormant scrapers/playwright/ Fargate scrapers, but
+# the e2e CI job installs only this file, so it is named here too.
+# pytest-playwright supplies the page/context/browser fixtures and the
+# --screenshot/--video/--output flags the workflow passes.
+playwright>=1.40.0
+pytest-playwright>=0.5
