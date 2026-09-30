@@ -158,7 +158,24 @@ jobs:
           require SupabaseJwtSecret   "${SB_JWT:-}"        SUPABASE_JWT_SECRET
           require DailyPipelineUserId "${DAILY_USER_ID:-}" DAILY_PIPELINE_USER_ID
 
+          # MCP_ALLOWED_HOSTS is derived from web/.env.production's VITE_API_URL,
+          # the same committed file the post-deploy smoke step reads for the API
+          # URL -- one source of truth, not a second copy of the host. It cannot
+          # come from the template as !Sub "<HttpApi id>..." because that makes
+          # the function reference the API while SAM's API body already
+          # references the function: a circular dependency CloudFormation
+          # refuses. Empty means the transport falls back to localhost-only,
+          # which is closed, not open.
+          MCP_HOSTS="$(grep -hoE '^VITE_API_URL=.+' web/.env.production 2>/dev/null \
+            | cut -d= -f2- | sed -E 's#^https?://##; s#/.*$##')"
+          if [ -z "${MCP_HOSTS}" ]; then
+            echo "::warning::Could not read VITE_API_URL from web/.env.production — MCP transport will answer for localhost only."
+          else
+            echo "MCP transport will answer for: ${MCP_HOSTS}"
+          fi
+
           # --- optional: Default: '' in template.yaml ---
+          optional McpAllowedHosts "${MCP_HOSTS:-}"
           optional CerebrasApiKey  "${CEREBRAS_KEY:-}"
           optional QwenApiKey      "${QWEN_KEY:-}"
           optional NvidiaApiKey    "${NVIDIA_KEY:-}"
