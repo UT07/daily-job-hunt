@@ -717,7 +717,6 @@ def rebuild_tex_from_sections(sections: dict, base_tex: str) -> str:
         "%==================== CERTIFICATIONS ====================",
         r"\section*{Certifications}",
         _rebuild_certifications(certifications),
-        _rebuild_additional(additional),
     ]
 
     body = "\n".join(body_parts)
