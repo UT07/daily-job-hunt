@@ -44,11 +44,27 @@ corpus row puts a technology on each of its seven category lines. See
 tests/unit/test_fabrication_claim_extraction.py for the fix's measurement.
 "Narrow scope" is a decision about which regions to inspect; it was never a
 licence to read those regions partially.
+
+Two checks here are NOT about honesty and are much cheaper to be sure of
+than fabrication, because neither needs a baseline to compare against —
+`check_prompt_echo` and `check_near_empty`. Both were found in shipped
+production resumes on 2026-09-30 while measuring 740 real artifacts, and
+both are documented at their own definitions with the measured
+false-positive rate and the denominator.
 """
 import re
 
 from guardrails.policy import policy_for
 from guardrails.types import GuardResult, Violation
+
+# `shared` is a repo-root package that reaches zip Lambdas via /opt/python
+# (layer/build.sh FIRST_PARTY="shared") and the container image via
+# Dockerfile.lambda's `COPY shared/`, both pinned by
+# tests/unit/test_deploy_path_parity.py. This is the first `shared.*` import
+# inside the guardrails package; it is safe in every deploy path for the same
+# reason tailor_resume.py's module-level `from shared.composition_policy
+# import ...` is, and `extract_anchors` itself needs nothing but `re`.
+from shared.resume_verify import extract_anchors
 
 _REQUIRED_SECTIONS = ["experience", "skills", "education", "projects", "certifications"]
 
@@ -322,6 +338,173 @@ def check_fabrication(base_skills_text: str, tailored_tex: str) -> list[str]:
     return errors
 
 
+# --- prompt echo -----------------------------------------------------------
+#
+# Each entry is a family of phrases that exist in the TAILORING PROMPT and
+# nowhere on a resume. The name is the repair feedback: repair_node folds
+# violation text verbatim into the retry, so "planning_voice" plus the matched
+# phrase tells the model what to delete, where a bare "output rejected" does
+# not (CLAUDE.md rule 4).
+#
+# Chosen by measurement over the real population, not by taste. Two shipped
+# resumes contain the model's own instruction vocabulary; the candidate set was
+# scored against the other 738, and only markers at 0/738 were kept:
+#
+#     marker                     false positives over 738 real resumes
+#     ------                     -------------------------------------
+#     "header"  (bare word)      129/738  17.48%   <- REJECTED
+#     "ensure"  (bare word)       56/738   7.59%   <- REJECTED
+#     "job description"            2/738   0.27%   <- kept, see below
+#     "keyword" / "safer"          1/738   0.14%   <- REJECTED
+#     every marker below           0/738   0.00%
+#
+# "header" and "ensure" are the trap: they are in the leaked text, so a
+# detector calibrated on the two known-bad documents would have picked them and
+# fired on one resume in six. The bare words the incident report listed --
+# 'alternatively', 'bullet', 'instead', 'example', 'thus', 'similarly',
+# 'possibly' -- measure 0/738 today but are generic English with no
+# self-referential meaning, and are deliberately NOT markers: a summary that
+# says "however" is not a leaked prompt. What every family below has in common
+# is that it can only be ABOUT the generation task. "job description" is kept
+# despite 2/738 because those two are genuine leaks that the other families
+# also catch, so it never fires alone (verified: removing it changes nothing on
+# this population) -- and a resume that discusses "the job description" is
+# leaking regardless.
+_ECHO_MARKERS: dict[str, re.Pattern] = {
+    # the prompt's names for its own inputs
+    "base_resume_ref": re.compile(
+        r"\bbase (?:resume|header|body|bullets?|template)\b", re.I),
+    "jd_ref": re.compile(
+        r"\bthe jd\b|\bjd[-\s](?:relevant|keywords?|terminology|vocabulary|terms?)\b",
+        re.I),
+    "job_description_ref": re.compile(r"\bjob description\b", re.I),
+    # the prompt's names for its own output contract
+    "output_contract_ref": re.compile(
+        r"\breturn only\b|\btailored body\b|\bverbatim\b|\bsection headers?\b"
+        r"|\bbullet counts?\b|\bmax_tokens\b", re.I),
+    "fabrication_ref": re.compile(
+        r"\bfabricat(?:e|ed|ing|ion)\b|\bdo not invent\b", re.I),
+    # the model narrating its own process instead of producing the document
+    "planning_voice": re.compile(
+        r"\bwe (?:must|cannot|can|should|need to|have|will|are given)\b|\blet'?s\b",
+        re.I),
+    "instruction_ref": re.compile(
+        r"\bthe instructions?\b|\breminder:|\bthe rules? says?\b", re.I),
+    # an unfilled placeholder sitting where content belongs
+    "placeholder": re.compile(
+        r"\.\.\.\s*tailored\s*\.\.\.|\bplaceholder\b|\[insert\b|<insert\b", re.I),
+}
+
+
+def check_prompt_echo(tex: str) -> list[str]:
+    """The model's own instruction vocabulary, left inside the document.
+
+    Two of 740 real production resumes (0.27%) contain it. Both are the whole
+    chain of thought written into the .tex between \\begin{document} and
+    \\end{document}: a0527faaf531 narrates "1. Header: We must change the
+    \\normalsize title line", 773dd7cd6729 emits six section headers with
+    "... tailored ..." under each and then argues with itself about whether the
+    header block counts as body. A resume containing the word "jd-relevant" was
+    sent to an employer.
+
+    Neither is catchable structurally. 773dd7cd6729 carries all six required
+    \\section* headers, balanced braces and 1728 words, so
+    `check_required_sections`, `check_brace_balance` and tailor_resume's
+    `word_count < 500` fallback all pass it, and 181 anchors put it far above
+    `check_near_empty`'s floor. This check is the only thing in the repository
+    that sees it.
+
+    Measured false-positive rate: 0 of 737 real tailored resumes (0.00%), the
+    737 being the 740-document population minus the three known defects.
+    Measured on the body AND on the spliced document, because the shared
+    preamble is the one piece of text every output has in common and a marker
+    firing there would be a 100% false positive on tailor_resume's hard-gate
+    path.
+
+    LaTeX comments are stripped first, the same way
+    `shared.resume_verify._strip_latex` does, and that is a scope decision
+    rather than an exculpation of the kind CLAUDE.md rule 16 refuses: a `%`
+    comment is not typeset, so it cannot reach an employer, which is the harm
+    this check exists to prevent. It is not hypothetical — `resumes/fullstack.tex`
+    carries the line `% "section header on page 1, content on page 2" awkward
+    split`, an author's note about page breaks, and matching it made this check
+    fire on the repository's own base resume, failing two tests in
+    test_ai_truncation.py including the end-to-end eval-harness case (the same
+    path CI's AI Eval Gate runs). The 740-document production population
+    contains no comments at all, so this narrowing changes nothing there: both
+    known-bad documents still fire on 5 and 7 marker families with comments
+    stripped, because their leaked text is plain prose, not commented out.
+
+    Returns one entry per marker FAMILY, not per match: the repair prompt needs
+    to know what kind of text to remove, and eight copies of "planning_voice"
+    would just crowd out the other violations.
+    """
+    tex = re.sub(r"(?<!\\)%.*", " ", tex)
+    out = []
+    for name, pattern in _ECHO_MARKERS.items():
+        match = pattern.search(tex)
+        if match:
+            out.append(f"prompt_echo: {name} — the output contains "
+                       f"{match.group(0)!r}, which is prompt text, not resume "
+                       f"content; emit the document only")
+    return out
+
+
+# --- near-empty output -----------------------------------------------------
+
+# An absolute floor on identity tokens, not a completeness measure. Measured
+# over 740 real tailored resumes (body only, the input the guard is handed):
+#
+#     min 0   p1 133   p5 186   median 236   p90 248   max 289
+#
+# The distribution has exactly one member below 102: b45671b7ec5c, whose entire
+# document body is the word "and". So every floor from 5 to 100 flags 1 of 740
+# and that one is the known defect. 40 is chosen for margin on both sides --
+# 2.55x below the lowest legitimate reading in the population, and far enough
+# above 0 that a one-page resume from a future user with half this candidate's
+# history still clears it. It is NOT tight enough to catch partial loss; that
+# is shared.composition_policy's job, and DOC_RECALL_FLOOR's at ingest.
+#
+# Deliberately NOT tailor_resume.py's existing `word_count < 500` measure,
+# which is not a near-empty instrument: it fires on 52 of 740 real stored
+# outputs (7.03%) whose anchor counts are 131-228, because it strips
+# `\textbf{Python}` whole and so undercounts exactly the LaTeX-dense bodies
+# that carry the most content. At floor 40 this check fires on 1 of 740
+# (0.14%) -- a 50x more precise instrument for the same question (CLAUDE.md
+# rule 12).
+NEAR_EMPTY_ANCHOR_FLOOR = 40
+
+
+def check_near_empty(tex: str) -> list[str]:
+    """Did the model return a document at all?
+
+    `is_latex_document` and `sections_have_content` both pass b45671b7ec5c, a
+    real shipped artifact whose body is the single word "and" -- the first
+    because \\documentclass and \\begin{document} are present in the preamble
+    the splice supplies, the second because it needs only ONE of five sections
+    to be non-empty (CLAUDE.md rule 2 names it). A near-empty resume is worse
+    than a failed one: a failure is visible and this is not.
+
+    Instrument is `shared.resume_verify.extract_anchors` -- proper nouns,
+    years and quantities, the tokens a document cannot be about a career
+    without. The count, the floor and the margin are in NEAR_EMPTY_ANCHOR_FLOOR
+    above; test_output_quality_echo_and_empty.py pins the floor against both
+    the thinnest real resume and a body-less preamble, so a change to
+    extract_anchors (e.g. PR #167) fails a test rather than silently moving
+    this check's sensitivity.
+
+    Reports the number, not just the verdict: a repair told "8 identity anchors,
+    a complete resume has about 200" can act; "output rejected" cannot.
+    """
+    found = len(extract_anchors(tex, is_latex=True))
+    if found >= NEAR_EMPTY_ANCHOR_FLOOR:
+        return []
+    return [f"near_empty: only {found} identity anchors (proper nouns, years, "
+            f"quantities) in the output; the floor is {NEAR_EMPTY_ANCHOR_FLOOR} "
+            f"and a complete resume carries about 200 — the document is "
+            f"effectively blank"]
+
+
 def check_output(
     tex: str,
     task: str,
@@ -353,6 +536,13 @@ def check_output(
         this check when the base resume's Skills section was found). See
         the module docstring for this check's real, narrow scope — it is
         NOT a whole-document fabrication detector.
+      - `prompt_echo` gates check_prompt_echo -> "block" violations, and
+        `near_empty` gates check_near_empty -> "block" violations. Both are
+        new in the task that added those checks; both are on for `tailor`
+        and off everywhere else, because both thresholds were measured
+        against 740 real tailored RESUMES and nothing else (CLAUDE.md
+        rule 7). See `guardrails.policy` for what each other task would
+        need measured before it could turn them on.
       - check_textbf_preservation has no dedicated policy flag in
         `guardrails.policy` today. It runs unconditionally whenever
         `base_body` is supplied (its own required input), as a "warn"
@@ -410,6 +600,34 @@ def check_output(
             # exists to protect (see guardrails/types.py) and two repair
             # rounds is the right price here.
             violations.append(Violation("fabrication", fabrication, "block"))
+
+    if policy.get("prompt_echo"):
+        for echo in check_prompt_echo(tex):
+            # "block", for the same reason fabrication is: the document is
+            # well-formed and wrong, and it leaves the system under the user's
+            # own name. A resume carrying the phrase "jd-relevant" was sent to
+            # an employer. Unlike fabrication this one is unambiguously
+            # repairable -- the model already produced the resume, it just
+            # shipped its notes alongside -- and repair_node hands it the
+            # matched phrase verbatim, so the two bounded attempts are likely
+            # to succeed. Cost is measured: it fires on 2 of 740 real outputs
+            # (0.27%), so this buys at most 4 extra provider calls per 740
+            # tailoring runs.
+            violations.append(Violation("prompt_echo", echo, "block"))
+
+    if policy.get("near_empty"):
+        for empty in check_near_empty(tex):
+            # "block" here is an ATTEMPT, not the guarantee. `quality_gate`
+            # finalizes best-effort once `repair_attempts >= 2`, so a model
+            # that keeps returning nothing still reaches finalize -- which is
+            # precisely CLAUDE.md rule 2: a route that ends in the same state
+            # whether the repair worked or was abandoned cannot be the only
+            # defence. The guarantee is the matching hard gate in
+            # tailor_resume.handler(), which discards the body and ships the
+            # corpus instead; see the comment there. Blocking here as well is
+            # still worth it because a repair is cheap on 1 output in 740 and
+            # recovers the tailoring that the hard gate would throw away.
+            violations.append(Violation("near_empty", empty, "block"))
 
     if base_body:
         for textbf_issue in check_textbf_preservation(base_body, tex):

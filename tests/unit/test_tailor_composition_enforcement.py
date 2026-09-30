@@ -37,6 +37,8 @@ sys.path.insert(0, str(REPO / "lambdas" / "pipeline"))
 
 import tailor_resume  # noqa: E402
 
+from tests.unit.realistic_resume_body import SKILLS_FLAT  # noqa: E402
+
 USER_NAME = "Ada Lovelace"
 USER_EMAIL = "ada@example.com"
 
@@ -74,7 +76,13 @@ def body(projects: int = 3, jobs: int = 2, filler: str = FILLER) -> str:
         "\\section*{Summary}\n"
         "\\textbf{3+ years} building payment systems.\n"
         "\\section*{Technical Skills}\n"
-        "Python, AWS, PostgreSQL, Docker\n"
+        # Was "Python, AWS, PostgreSQL, Docker". The handler now also counts
+        # identity anchors (guardrails.check_near_empty, floor 40) before
+        # accepting a generated body, for the same reason FILLER above exists:
+        # a fixture has to clear the content gates or the test measures the
+        # fixture. Four technologies is not a Technical Skills section --
+        # the real corpus row's carries 126 anchors.
+        f"{SKILLS_FLAT}\n"
         "\\section*{Experience}\n"
         f"{jobs_tex}\n"
         "\\section*{Featured Projects}\n"

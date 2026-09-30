@@ -27,6 +27,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "lambdas" / "pipeline"))
 import ai_helper  # noqa: E402
 import tailor_resume  # noqa: E402
 
+from tests.unit.realistic_resume_body import SKILLS_FLAT  # noqa: E402
+
 # A base resume long enough that a real budget calculation exceeds 4096 —
 # roughly the size of the ones in resumes/ (11.4k-12.8k characters).
 _FILLER = "Delivered measurable outcomes on production systems. " * 240
@@ -39,7 +41,12 @@ BASE_TEX = (
     "\\newcommand{\\header}{Test User \\\\ test@example.com}\n"
     "\\begin{document}\n"
     "\\section*{Summary}\nBase summary.\n"
-    "\\section*{Technical Skills}\nPython, AWS, Docker\n"
+    # `_FILLER` above is one sentence repeated 240 times: enormous word count,
+    # almost no distinct identity tokens. The handler now also counts identity
+    # anchors (guardrails.check_near_empty, floor 40) before accepting a
+    # generated body, so a real Technical Skills section is needed for these
+    # cases to reach the retry logic they are about rather than falling back.
+    f"\\section*{{Technical Skills}}\n{SKILLS_FLAT}\n"
     f"\\section*{{Experience}}\n\\textbf{{Acme}} — {_FILLER}\n"
     "\\section*{Featured Projects}\nBuilt things.\n"
     "\\section*{Education}\nBSc Computer Science.\n"

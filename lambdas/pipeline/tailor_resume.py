@@ -23,6 +23,8 @@ from guardrails.output_guards import check_brace_balance as _check_brace_balance
 from guardrails.output_guards import check_required_sections as _check_required_sections
 from guardrails.output_guards import check_fabrication as _check_fabrication
 from guardrails.output_guards import check_header_present as _check_header_present
+from guardrails.output_guards import check_near_empty as _check_near_empty
+from guardrails.output_guards import check_prompt_echo as _check_prompt_echo
 from guardrails.output_guards import check_textbf_preservation as _check_textbf_preservation
 
 # The user's resume-composition rules (how many experience entries, how many
@@ -756,15 +758,50 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
     # near the top of this function. Removed rather than worked around.)
     tailored_tex = escape_body_specials(tailored_tex)
 
-    # Page length check: estimate body word count
-    body_text = re.sub(r"\\[a-zA-Z]+\*?(\{[^}]*\})*", " ", ai_body)
-    body_text = re.sub(r"[{}\\%&$#_^~]", " ", body_text)
-    word_count = len(body_text.split())
-    if word_count < 500:
-        logger.warning(
-            f"[tailor] body too short ({word_count} words) for {job_hash}, using base"
-        )
-        tailored_tex = base_tex
+    # REMOVED here: a `word_count < 500` fallback that sat on this line and
+    # swapped `tailored_tex = base_tex` WITHOUT appending to the
+    # `validation_errors` list built below. The gates below then ran against
+    # the corpus, which passes all of them, so `used_fallback` came back False
+    # for a run that fell back, the summary line read "(ok)", and the quality
+    # retry went on to score a body that had already been thrown away. That is
+    # CLAUDE.md rule 2 — a status that cannot distinguish "did the work" from
+    # "did nothing" — and it also fed `scripts/bench_retrieval.py`, which
+    # reports fallback rates per arm off this same field.
+    #
+    # It was deleted rather than wired into `validation_errors`, because
+    # reporting its verdict honestly would have meant standing behind a verdict
+    # that is wrong three ways:
+    #
+    # 1. THE INSTRUMENT UNDERCOUNTS. `\\[a-zA-Z]+\*?(\{[^}]*\})*` deletes a
+    #    macro AND its braced arguments, so `\textbf{Python}` scores zero
+    #    words. Measured on this repo's real resumes, counted words over true
+    #    words: fullstack.tex 861/1097 (0.785), sre_devops.tex 846/1033
+    #    (0.819), tests/unit/realistic_resume_body 150/201 (0.746). A floor
+    #    advertised as 500 words was enforcing 611-670 on real documents, and
+    #    it bit hardest on exactly the LaTeX-dense bodies that carry the most
+    #    content.
+    # 2. IT FIRED ON REAL RESUMES. Over the 740 stored tailored outputs
+    #    (PR #170's population, `exclude_untailored=True`): 52 hits, 7.03%,
+    #    anchor counts 131-228 against a corpus range of 102-289. Those are
+    #    resumes, not stubs. `check_near_empty` at floor 40 fires on 1 of the
+    #    same 740 — the one genuinely empty document.
+    # 3. ITS STATED PURPOSE IS MEASURED PROPERLY ELSEWHERE, AND ITS REMEDY
+    #    WORKED AGAINST IT. The comment called it a "page length check", but
+    #    page rules can only be answered by a compiled PDF, and since
+    #    shared/page_check.py they are — per-page text floor included, wired
+    #    into compile_latex.py downstream of this function. Meanwhile what
+    #    this branch did about a suspected-too-short resume was ship
+    #    `base_tex`: the master corpus, which is longer, not shorter. Both of
+    #    this repo's real corpus resumes measure THREE pages in
+    #    tests/unit/test_page_check.py against a policy of two, and the
+    #    composition check further down already logs that a base-resume
+    #    fallback breaks the caps "by definition". Swapping a short document
+    #    for an over-long one is not a page-length remedy.
+    #
+    # Nothing is left uncovered. The one production document this branch
+    # would have caught alone is b45671b7ec5c, whose body is the word "and":
+    # `check_required_sections` already blocks it, and `check_near_empty`
+    # below blocks it on the instrument built for the question.
 
     # Hard gates: fall back to base_tex on validation failure
     validation_errors = []
@@ -779,6 +816,30 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
     missing_header = _check_header_present(tailored_tex, header_markers)
     if missing_header:
         validation_errors.append(f"missing header markers: {missing_header}")
+
+    # Two 2026-09-30 defects, both found in SHIPPED resumes, both terminal here
+    # rather than only in the council's guard. `check_output` blocks on both, so
+    # the council gets two bounded repair attempts first — but `quality_gate`
+    # routes to `finalize` once `repair_attempts >= 2`, best-effort, with the
+    # rejected body intact. A route that ends in the same place whether the
+    # repair worked or was abandoned is not a gate (CLAUDE.md rule 2). This is
+    # the gate: a body that still fails here never reaches S3, because
+    # `validation_errors` forces the corpus instead and `used_fallback: True`
+    # says so in the return value.
+    #
+    # Measured on `ai_body`, not `tailored_tex`, and the difference is
+    # load-bearing for both. The spliced document carries the base preamble,
+    # which is ~1.2KB of \usepackage and \newcommand identical in every output:
+    # it contributes 9 anchors to b45671b7ec5c, whose body is the single word
+    # "and", and it is the one stretch of text a prompt-echo marker firing on it
+    # would flag in 100% of documents. The body is also exactly what
+    # `check_output` sees, so the two gates judge the same string.
+    echoed = _check_prompt_echo(ai_body)
+    if echoed:
+        validation_errors.append(f"prompt echo: {'; '.join(echoed[:3])}")
+    near_empty = _check_near_empty(ai_body)
+    if near_empty:
+        validation_errors.append(f"near-empty output: {near_empty[0]}")
 
     if validation_errors:
         logger.warning(
@@ -931,9 +992,16 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         logger.warning("[tailor] %s was NOT adjudicated (outcome=%s) — the "
                        "winner is candidate 1, unreviewed", job_hash, outcome)
 
+    # Both this line and `used_fallback` below read `validation_errors`, and
+    # they must keep reading it: the defect this replaced was a fallback that
+    # reached neither. The reason is repeated here rather than left to the
+    # warning logged at the point of failure so that one line carries the
+    # whole verdict — grepping for "[tailor] Moderate tailor" now tells you
+    # WHICH gate fired, not merely that something did.
     logger.info(
         f"[tailor] {tailoring_depth.capitalize()} tailor for {job_hash} "
-        f"({'fallback' if validation_errors else 'ok'})"
+        + (f"(fallback: {'; '.join(validation_errors)})" if validation_errors
+           else "(ok)")
     )
     return {
         "job_hash": job_hash,
