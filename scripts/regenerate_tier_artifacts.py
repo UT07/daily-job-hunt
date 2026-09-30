@@ -85,6 +85,9 @@ def safe_name(s: str, n: int = 30) -> str:
     return re.sub(r"[^a-zA-Z0-9]", "_", s or "")[:n]
 
 
+IGNORE_POLICY = False
+
+
 def process_resume(job, jd, base_tex, ai_client, out_resumes, db):
     tailor_resume(job=job, base_tex=base_tex, ai_client=ai_client, output_dir=out_resumes)
     if not job.tailored_tex_path or not Path(job.tailored_tex_path).exists():
@@ -111,20 +114,79 @@ def process_cover_letter(job, ai_client, out_cl, fn_base):
 
 
 def main(action: str, tier_filter: str, max_jobs: int | None, skip_existing: bool):
+    # THIS SCRIPT DOES NOT APPLY THE USER'S COMPOSITION POLICY.
+    #
+    # It composes through tailorer.tailor_resume -- the legacy local orchestrator
+    # -- which has no reference to shared/composition_policy.py. The production
+    # path (lambdas/pipeline/tailor_resume.handler) reads
+    # users.composition_policy and renders max_experience_entries,
+    # max_projects, the ORDER rule and the `prefer` rules into the prompt. This
+    # script renders none of them.
+    #
+    # Measured 2026-09-30: with a policy of 3 experience entries, "prefer UT
+    # Arlington Office of IT over Seattle Kraken" and "never include the TA
+    # role", this script produced Clover + Seattle Kraken -- two entries, no
+    # Yuno, no Arlington -- and logged "✓ resume uploaded". It then PATCHed the
+    # jobs row, so a wrong artifact became the record.
+    #
+    # Refusing rather than warning: a warning above a green "✓" is how the
+    # wrong artifact shipped in the first place (CLAUDE.md rule 2). Use the
+    # production path -- the Regenerate button, or POST /api/pipeline/re-tailor
+    # -- which honours the policy. --ignore-policy exists for the contacts
+    # action, which composes nothing.
     db = SupabaseClient.from_env()
+    if action in ("resumes", "covers", "all") and not IGNORE_POLICY:
+        policy = (db.client.table("users").select("composition_policy")
+                  .eq("id", USER_ID).maybe_single().execute().data or {})
+        if policy.get("composition_policy"):
+            log.error(
+                "REFUSING: %s has a composition_policy (%s) that this script "
+                "cannot apply -- it composes via the legacy tailorer, which "
+                "never reads it. Regenerate through the pipeline instead "
+                "(Regenerate in the UI, or POST /api/pipeline/re-tailor), or "
+                "pass --ignore-policy to accept resumes that disregard those "
+                "rules.", USER_ID, sorted(policy["composition_policy"]),
+            )
+            return
     config = yaml.safe_load(open(Path(__file__).parent.parent / "config.yaml"))
     ai_client = AIClient.from_config(config)
 
-    # Load base resumes from user_resumes table
-    r = db.client.table("user_resumes").select("resume_key, tex_content").eq(
-        "user_id", USER_ID
-    ).execute()
-    base_resumes = {row["resume_key"]: row["tex_content"] for row in r.data}
-    if not base_resumes:
-        # Fallback to filesystem
-        for f in (Path(__file__).parent.parent / "resumes").glob("*.tex"):
-            base_resumes[f.stem] = f.read_text()
-    log.info(f"Loaded base resumes: {list(base_resumes.keys())}")
+    # ONE base resume, chosen by the same rule the pipeline uses.
+    #
+    # This used to build {resume_key: tex_content} and pick per job by
+    # `job.matched_resume` archetype, falling back to keys()[0]. Both paths can
+    # select a STALE row: on 2026-09-30, minutes after a new 20,037-char master
+    # was uploaded (5 employers, 3 certifications), this script regenerated an
+    # S-tier resume from the 2026-04-05 `fullstack` row instead — the output
+    # carried Clover + Seattle Kraken, no Yuno, no UT Arlington, 2 of 3
+    # certifications, and compiled to 1 page against a 2-page policy.
+    #
+    # That made this the FOURTH reader of user_resumes with its own rule, after
+    # the three reconciled in #159. A script that writes real artifacts to S3 and
+    # PATCHes jobs rows is the worst place to disagree with the pipeline about
+    # which document is the candidate's resume. Archetype selection is obsolete
+    # under the corpus-not-resume model: production composes every resume from
+    # one master via pick_latest_tailorable.
+    from shared.resume_format import fetch_tailorable_resume
+
+    base = fetch_tailorable_resume(db.client, USER_ID)
+    if base.skipped:
+        log.warning("skipped %d newer resume(s) that are not LaTeX", base.skipped)
+    base_tex = base.tex
+    if not base_tex:
+        # Fallback to filesystem, newest-first so the choice is not arbitrary.
+        candidates = sorted((Path(__file__).parent.parent / "resumes").glob("*.tex"))
+        if not candidates:
+            log.error("no base resume in user_resumes and none on disk: %s",
+                      base.why_unusable(USER_ID))
+            return
+        base_tex = candidates[0].read_text()
+        log.warning("using on-disk %s — %s", candidates[0].name,
+                    base.why_unusable(USER_ID))
+    else:
+        log.info("base resume: %s chars, row %s created %s",
+                 len(base_tex), str((base.row or {}).get("id"))[:8],
+                 (base.row or {}).get("created_at"))
 
     # Fetch jobs for target tier(s) or score threshold
     query = db.client.table("jobs").select("*").eq("user_id", USER_ID)
@@ -167,14 +229,19 @@ def main(action: str, tier_filter: str, max_jobs: int | None, skip_existing: boo
                 log.info(f"  skip resume (exists)")
                 results["skipped"] += 1
             else:
-                rtype = job.matched_resume if job.matched_resume in base_resumes else list(base_resumes.keys())[0]
                 try:
-                    pdf_path, s3_url = process_resume(job, jd, base_resumes[rtype], ai_client, out_resumes, db)
+                    pdf_path, s3_url = process_resume(job, jd, base_tex, ai_client, out_resumes, db)
                     if s3_url:
                         update = {
                             "resume_s3_url": s3_url,
                             "tailoring_model": f"{getattr(job, 'tailoring_provider', 'council')}:{getattr(job, 'tailoring_model', 'consensus')}",
-                            "matched_resume": rtype,
+                            # The resume_key of the single master this was
+                            # composed from, not an archetype choice. Archetype
+                            # selection is gone (see the base-resume comment
+                            # above); recording the row that was actually used
+                            # is what makes a later "which document produced
+                            # this?" answerable.
+                            "matched_resume": (base.row or {}).get("resume_key") or "default",
                         }
                         db.client.table("jobs").update(update).eq("job_id", jd["job_id"]).execute()
                         results["resume"] += 1
@@ -263,7 +330,11 @@ if __name__ == "__main__":
     p.add_argument("--tier", required=True,
                    help="Tier letter (S/A/B/C/D), ALL, or score threshold like '>=75'")
     p.add_argument("--max", type=int, default=None, dest="max_jobs")
+    p.add_argument("--ignore-policy", action="store_true",
+                   help="compose even though this script cannot apply the "
+                        "user's composition_policy (see main()'s comment)")
     p.add_argument("--skip-existing", action="store_true",
                    help="Skip jobs that already have this artifact (default: regenerate)")
     args = p.parse_args()
+    globals()["IGNORE_POLICY"] = args.ignore_policy
     main(args.action, args.tier, args.max_jobs, args.skip_existing)
