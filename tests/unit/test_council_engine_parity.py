@@ -136,3 +136,129 @@ def test_the_eval_gate_measures_a_named_engine():
         '"legacy" default while production runs the graph'
     )
     assert m.group(1) in ("legacy", "langgraph"), m.group(1)
+
+
+# ---------------------------------------------------------------------------
+# 3. The API container is outside _council_callers()' scope entirely.
+#
+# JobHuntApi is PackageType: Image with no Handler and no CodeUri, so the
+# discovery above skips it at `if not handler or not isinstance(code_uri,
+# str)`. It sets no COUNCIL_ENGINE, and the tests above pass anyway -- not
+# because the container is safe but because nothing looked. A check that
+# silently excludes part of the population it is meant to judge reports a
+# clean result about the wrong set.
+#
+# It happens to be safe today: app.py reaches only
+# score_batch.score_single_job_deterministic and suggest_sections, and
+# neither calls the council (suggest_sections uses ai_complete_cached, a
+# single-model call). That is a fact about today's imports, not a property of
+# the deployment, and it is what these tests pin.
+#
+# The stakes if it changes: the container would run the frozen legacy engine,
+# which imports no guardrails at all, so injection detection, PII scrub and
+# the fabrication check would all be absent on a user-facing path -- and the
+# obvious one-line fix is a trap. requirements-web.txt carries no langgraph,
+# so setting COUNCIL_ENGINE=langgraph on this container alone would raise
+# ImportError at the call site rather than enable the graph.
+# ---------------------------------------------------------------------------
+
+import ast  # noqa: E402  (grouped with the section it serves)
+
+APP = ROOT / "app.py"
+PIPELINE = ROOT / "lambdas" / "pipeline"
+
+
+def _calls_council(path):
+    """True if the module CALLS council_complete, by AST rather than substring.
+
+    score_batch.py contains the string in prose and in an import it does not
+    invoke; ai_helper.py defines it. A text match flags all three, so a
+    substring version of this test would fail on arrival and get deleted or
+    weakened rather than believed.
+    """
+    try:
+        tree = ast.parse(path.read_text())
+    except (OSError, SyntaxError):
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
+        if name == "council_complete":
+            return True
+    return False
+
+
+def _pipeline_modules_reachable_from_app():
+    """Pipeline modules app.py imports, plus what those import, within pipeline."""
+    tree = ast.parse(APP.read_text())
+    frontier, seen = [], set()
+    for node in ast.walk(tree):
+        mod = None
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("lambdas.pipeline"):
+            tail = (node.module or "").removeprefix("lambdas.pipeline").lstrip(".")
+            mod = tail or None
+            if mod is None:  # `from lambdas.pipeline import x, y`
+                frontier.extend(a.name for a in node.names)
+                continue
+            frontier.append(mod)
+    while frontier:
+        mod = frontier.pop()
+        if mod in seen:
+            continue
+        seen.add(mod)
+        path = PIPELINE / f"{mod.replace('.', '/')}.py"
+        if not path.exists():
+            continue
+        sub = ast.parse(path.read_text())
+        for node in ast.walk(sub):
+            if isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                cand = node.module.split(".")[0]
+                if (PIPELINE / f"{cand}.py").exists() and cand not in seen:
+                    frontier.append(cand)
+    return sorted(seen)
+
+
+def test_the_api_container_is_skipped_by_the_caller_scan():
+    """Guard the gap, so the next reader knows the clean result above is partial."""
+    props = _template_resources()["JobHuntApi"]["Properties"]
+    assert props.get("PackageType") == "Image"
+    assert "Handler" not in props and "CodeUri" not in props
+    assert "JobHuntApi" not in [n for n, _ in _council_callers()]
+
+
+def test_the_discovery_finds_real_pipeline_modules():
+    """Guard this guard too -- an empty walk would make the next test vacuous."""
+    mods = _pipeline_modules_reachable_from_app()
+    assert "suggest_sections" in mods and "score_batch" in mods, mods
+
+
+def test_no_council_caller_is_reachable_from_the_api_container():
+    """Either the API never calls the council, or it must select the engine.
+
+    If this fails, adding COUNCIL_ENGINE to JobHuntApi is only half the fix:
+    langgraph and langchain-core have to reach the image via
+    requirements-web.txt as well, because the shared-deps layer does not
+    serve the container.
+    """
+    offenders = [
+        m for m in _pipeline_modules_reachable_from_app()
+        if _calls_council(PIPELINE / f"{m}.py")
+    ]
+    if offenders:
+        variables = (
+            _template_resources()["JobHuntApi"]["Properties"].get("Environment") or {}
+        ).get("Variables") or {}
+        assert "COUNCIL_ENGINE" in variables, (
+            f"app.py now reaches council_complete via {offenders}, but JobHuntApi "
+            "sets no COUNCIL_ENGINE, so those calls run the guard-free legacy "
+            "engine on a user-facing path. Set it AND add langgraph to "
+            "requirements-web.txt -- the container does not use the shared layer."
+        )
+
+
+def test_the_ast_check_can_tell_a_call_from_a_mention():
+    """Pins the distinction the substring version got wrong."""
+    assert _calls_council(PIPELINE / "tailor_resume.py") is True
+    assert _calls_council(PIPELINE / "suggest_sections.py") is False
