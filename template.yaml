@@ -45,9 +45,6 @@ Parameters:
     Type: String
     NoEcho: true
     Default: ""
-  GoogleCredentialsJson:
-    Type: String
-    NoEcho: true
   SupabaseUrl:
     Type: String
   SupabaseServiceKey:
@@ -61,10 +58,6 @@ Parameters:
     NoEcho: true
     Default: ""
   ApifyApiKey:
-    Type: String
-    NoEcho: true
-    Default: ""
-  CapSolverApiKey:
     Type: String
     NoEcho: true
     Default: ""
@@ -1803,7 +1796,6 @@ Resources:
           CEREBRAS_API_KEY: !Ref CerebrasApiKey
           QWEN_API_KEY: !Ref QwenApiKey
           NVIDIA_API_KEY: !Ref NvidiaApiKey
-          GOOGLE_CREDENTIALS_JSON: !Ref GoogleCredentialsJson
           SUPABASE_URL: !Ref SupabaseUrl
           SUPABASE_SERVICE_KEY: !Ref SupabaseServiceKey
           SUPABASE_JWT_SECRET: !Ref SupabaseJwtSecret
