@@ -262,8 +262,57 @@ def no_pipeline_states():
     return "application_status holds only user-facing states"
 
 
+@check("score-tier-matches-score", "a stored tier the row's own score does not support")
+def score_tier_matches_score():
+    """`score_tier` is denormalised and nothing enforces that it agrees.
+
+    The dashboard's tier filter queries the STORED column (app.py's
+    `.in_("score_tier", tiers)`), so a stale label means filtering by S returns
+    jobs that are not S. Measured 2026-09-30: 52 of 1,313 scored rows disagreed
+    with their own score -- 23 of them stored "S" against a score in the A band.
+
+    The current pipeline cannot produce this (score_batch derives the tier from
+    the POST-cap score), so a failure here means either a new write path that
+    sets one without the other, or a partial update. Either is worth a red
+    deploy, which is why this is a check and not a periodic script.
+
+    Imports the pipeline's own `score_to_tier` rather than restating the
+    boundaries: a copy of them here could drift from the column it judges.
+    """
+    import sys as _sys
+    _sys.path.insert(0, os.path.join(_REPO, "lambdas", "pipeline"))
+    from score_batch import score_to_tier
+
+    db = _db()
+    rows, offset = [], 0
+    while True:
+        page = (db.table("jobs").select("job_id, match_score, score_tier")
+                .not_.is_("match_score", "null")
+                .range(offset, offset + 999).execute()).data or []
+        rows += page
+        if len(page) < 1000:
+            break
+        offset += 1000
+
+    assert rows, "no scored jobs found — this check would pass vacuously"
+    bad = [
+        r for r in rows
+        if (r.get("score_tier") or "") != score_to_tier(r["match_score"])
+    ]
+    examples = ", ".join(
+        f"{r.get('score_tier')!r}@{r['match_score']}" for r in bad[:5]
+    )
+    assert not bad, (
+        f"{len(bad)} of {len(rows)} scored rows hold a tier their own score does not "
+        f"support ({examples}). The dashboard filters on this column, so those rows "
+        "appear under the wrong tier. Run scripts/backfill_score_tier_consistency.py."
+    )
+    return f"{len(rows)} scored rows, every stored tier matches its score"
+
+
 CHECKS = [api_alive, tex_key_resolves, base_resume_tailorable,
-          latex_escaping, artifact_completeness, no_pipeline_states]
+          latex_escaping, artifact_completeness, no_pipeline_states,
+          score_tier_matches_score]
 
 
 def main() -> int:
