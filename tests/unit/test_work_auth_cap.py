@@ -304,6 +304,38 @@ class TestAuthStatusValueNormalisation:
         assert _requires_sponsorship({"United States": None}, "US") is False
 
 
+def test_the_config_yaml_shape_still_resolves():
+    """The third live key shape, and the reason the bug looked like working code.
+
+    config.yaml's profile.work_authorization is keyed with lowercase names AND a
+    lowercase code -- {"ireland": ..., "india": ..., "us": ...}. The old lookup's
+    `get(country.lower())` fallback matched "us" there, so single-user/local mode
+    behaved correctly and only the database path (country NAMES, title-cased)
+    silently failed. One lookup, three data sources, one of them tested.
+
+    Read from the committed file rather than a fixture, so a change to the real
+    config is what fails this.
+    """
+    import pathlib
+
+    import yaml
+
+    root = pathlib.Path(__file__).resolve().parents[2]
+    cfg = yaml.safe_load((root / "config.yaml").read_text()) or {}
+    wa = (cfg.get("profile") or {}).get("work_authorization") or {}
+    assert wa, "config.yaml has no profile.work_authorization — premise gone"
+
+    assert {_normalize_key(k) for k in wa} <= {"IE", "IN", "US", "UK", "DE", "CA",
+                                               "FR", "NL", "SG", "AU"}, wa
+    assert all(_normalize_key(k) is not None for k in wa), (
+        f"config.yaml names a country this module cannot resolve: "
+        f"{[k for k in wa if _normalize_key(k) is None]} — it would silently "
+        "never cap for that country"
+    )
+    assert _requires_sponsorship(wa, "US") is True
+    assert _requires_sponsorship(wa, "IE") is False
+
+
 def test_the_eval_gate_cannot_see_this_cap():
     """Names a coverage gap, so a green AI Eval Gate is not read as covering it.
 
