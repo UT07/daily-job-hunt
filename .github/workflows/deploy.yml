@@ -93,8 +93,8 @@ jobs:
         env:
           GROQ_KEY: ${{ secrets.GROQ_API_KEY }}
           OR_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          # Unset until the operator adds the secret; an empty value is passed
-          # through and the provider is skipped at call time.
+          # May be unset. Empty values are FILTERED OUT below rather than
+          # interpolated -- see the long comment on the run block.
           CEREBRAS_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           QWEN_KEY: ${{ secrets.QWEN_API_KEY }}
           NVIDIA_KEY: ${{ secrets.NVIDIA_API_KEY }}
@@ -107,10 +107,83 @@ jobs:
           DAILY_USER_ID: ${{ secrets.DAILY_PIPELINE_USER_ID }}
           POSTHOG_KEY: ${{ secrets.POSTHOG_API_KEY }}
         run: |
-          if [ -z "${DAILY_USER_ID}" ]; then
-            echo "::error::DAILY_PIPELINE_USER_ID secret is not set. Set it to the real Supabase user UUID under which the daily pipeline should run." >&2
+          set -euo pipefail
+
+          # Every secret-backed parameter used to be interpolated inline as
+          # "Name=${VAR}". A GitHub secret that does not exist expands to the
+          # empty string, so an unset secret produced the argument "Name=",
+          # which the SAM CLI rejects outright:
+          #
+          #   Error: Invalid value for '--parameter-overrides':
+          #   CerebrasApiKey= is not a valid format
+          #
+          # That is a parse error on the whole flag, not a per-parameter
+          # warning, so ONE missing optional secret failed the entire deploy
+          # before CloudFormation was ever called. CEREBRAS_API_KEY was never
+          # added after the provider landed, and every deploy from c15723b
+          # through 55ebff2 died this way -- while CI stayed green, so `main`
+          # moved four commits ahead of production silently. The comment on
+          # CEREBRAS_KEY above used to claim "an empty value is passed through
+          # and the provider is skipped at call time". Nothing tested that, and
+          # it was false.
+          #
+          # Required vs optional is not a judgement made here -- template.yaml
+          # already encodes it. A parameter with `Default: ''` is survivable:
+          # the stack takes the default, the key is absent, and the failover
+          # chain skips that provider. A parameter with NO Default must be
+          # supplied or the stack has no value for it at all, so an empty one
+          # fails loudly and names the secret to set, which is more actionable
+          # than SAM's parse error. tests/unit/test_deploy_parameter_overrides.py
+          # asserts this split still matches template.yaml's Defaults, so adding
+          # a parameter on one side without the other fails in CI rather than at
+          # deploy time.
+          #
+          # Values are never echoed -- only parameter names and secret names.
+          OVERRIDES=()
+          MISSING=()
+          SKIPPED=()
+
+          require() {  # PARAM_NAME VALUE SECRET_NAME
+            if [ -z "${2}" ]; then MISSING+=("${3} (parameter ${1})"); else OVERRIDES+=("${1}=${2}"); fi
+          }
+          optional() {  # PARAM_NAME VALUE
+            if [ -z "${2}" ]; then SKIPPED+=("${1}"); else OVERRIDES+=("${1}=${2}"); fi
+          }
+
+          # --- required: no Default in template.yaml ---
+          require GroqApiKey          "${GROQ_KEY:-}"      GROQ_API_KEY
+          require OpenRouterApiKey    "${OR_KEY:-}"        OPENROUTER_API_KEY
+          require SupabaseUrl         "${SB_URL:-}"        SUPABASE_URL
+          require SupabaseServiceKey  "${SB_KEY:-}"        SUPABASE_SERVICE_KEY
+          require SupabaseJwtSecret   "${SB_JWT:-}"        SUPABASE_JWT_SECRET
+          require DailyPipelineUserId "${DAILY_USER_ID:-}" DAILY_PIPELINE_USER_ID
+
+          # --- optional: Default: '' in template.yaml ---
+          optional CerebrasApiKey  "${CEREBRAS_KEY:-}"
+          optional QwenApiKey      "${QWEN_KEY:-}"
+          optional NvidiaApiKey    "${NVIDIA_KEY:-}"
+          optional SerperApiKey    "${SERPER_KEY:-}"
+          optional ApifyApiKey     "${APIFY_KEY:-}"
+          optional CapSolverApiKey "${CAPSOLVER_KEY:-}"
+          optional PostHogApiKey   "${POSTHOG_KEY:-}"
+
+          if [ ${#MISSING[@]} -ne 0 ]; then
+            for m in "${MISSING[@]}"; do
+              echo "::error::Required secret not set: ${m}. template.yaml declares it with no Default, so the stack cannot take a fallback." >&2
+            done
             exit 1
           fi
+
+          # Announced, not silent. A deploy that quietly drops a parameter is
+          # the "status that cannot tell did-the-work from did-nothing" failure
+          # this repo keeps paying for (CLAUDE.md rule 2).
+          if [ ${#SKIPPED[@]} -ne 0 ]; then
+            echo "::warning::Optional parameters omitted (secret unset, template Default applies): ${SKIPPED[*]}"
+          else
+            echo "All optional parameters supplied."
+          fi
+          echo "Passing ${#OVERRIDES[@]} secret-backed overrides plus 5 literals."
+
           sam deploy \
             --stack-name job-hunt-api \
             --region eu-west-1 \
@@ -122,20 +195,8 @@ jobs:
             --no-fail-on-empty-changeset \
             --no-disable-rollback \
             --parameter-overrides \
-              "GroqApiKey=${GROQ_KEY}" \
-              "OpenRouterApiKey=${OR_KEY}" \
-              "CerebrasApiKey=${CEREBRAS_KEY}" \
-              "QwenApiKey=${QWEN_KEY}" \
-              "NvidiaApiKey=${NVIDIA_KEY}" \
+              "${OVERRIDES[@]}" \
               "GoogleCredentialsJson=PLACEHOLDER_SET_MANUALLY" \
-              "SupabaseUrl=${SB_URL}" \
-              "SupabaseServiceKey=${SB_KEY}" \
-              "SupabaseJwtSecret=${SB_JWT}" \
-              "SerperApiKey=${SERPER_KEY}" \
-              "ApifyApiKey=${APIFY_KEY}" \
-              "CapSolverApiKey=${CAPSOLVER_KEY}" \
-              "DailyPipelineUserId=${DAILY_USER_ID}" \
-              "PostHogApiKey=${POSTHOG_KEY}" \
               "PostHogHost=https://eu.i.posthog.com" \
               "CouncilEngine=langgraph" \
               "SemanticDedup=on" \
