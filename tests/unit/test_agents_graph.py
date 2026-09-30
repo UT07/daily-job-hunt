@@ -22,15 +22,55 @@ def test_end_to_end_picks_highest_scoring_candidate():
 
 
 def test_return_shape_matches_legacy_contract():
-    """council_complete_langgraph's contract is legacy's three keys PLUS
-    trace_id (Task 10) -- legacy has no tracing, so trace_id is intentionally
-    a langgraph-only addition, not a fourth key legacy is expected to grow.
+    """The contract is legacy's keys, plus what only the graph can supply.
+
+    trace_id is deliberately langgraph-only -- legacy has no tracing.
+    critique_outcome and scores were added to BOTH engines on 2026-09-30, so
+    they belong in the shared part: a caller that has to branch on which engine
+    produced a result is how post_score silently ran guard-free for weeks.
+
+    Asserted as an exact set on purpose. This test caught critique_outcome
+    being added to the graph, which is what it is for -- a key appearing on one
+    engine and not the other is the failure mode, and a subset check would not
+    have noticed.
     """
     with patch("agents.nodes.select_generators", return_value=[P1]), \
          patch("agents.nodes.call_one", return_value=CAND_A):
         out = graph_mod.council_complete_langgraph("p", "s", "desc", n_generators=1)
-    assert set(out) == {"content", "provider", "model", "trace_id"}
+    assert set(out) == {"content", "provider", "model", "trace_id",
+                        "critique_outcome", "scores"}
     assert out["trace_id"]
+    assert out["critique_outcome"] == "single_candidate", (
+        "one generator means nothing to compare; the outcome must say so "
+        "rather than implying a verdict"
+    )
+
+
+def test_both_engines_agree_on_the_shared_keys():
+    """The invariant behind the test above, stated directly.
+
+    Every key the legacy engine returns must also come back from the graph, so
+    no caller needs to know which engine ran. Written as a comparison rather
+    than a second literal, because two hardcoded lists drift apart silently --
+    which is the same "two of everything" problem the orchestration spec is
+    about.
+    """
+    import ai_helper
+
+    with patch("agents.nodes.select_generators", return_value=[P1]), \
+         patch("agents.nodes.call_one", return_value=CAND_A):
+        graph_out = graph_mod.council_complete_langgraph("p", "s", "desc", n_generators=1)
+
+    with patch.object(ai_helper, "_select_diverse_providers", return_value=[P1]), \
+         patch.object(ai_helper, "_call_provider", return_value=dict(CAND_A)), \
+         patch.object(ai_helper, "_build_provider_list", return_value=[P1]):
+        legacy_out = ai_helper._council_complete_legacy("p", "s", "desc", n_generators=1)
+
+    missing = set(legacy_out) - set(graph_out)
+    assert not missing, (
+        f"the legacy engine returns {sorted(missing)} and the graph does not; "
+        "a caller would have to branch on the engine"
+    )
 
 
 def test_raises_when_every_generator_fails():
