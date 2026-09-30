@@ -108,10 +108,19 @@ def _names(tex, macro):
 
 
 def test_the_corpus_starts_non_compliant():
-    """Guards the fixture: if this passes trivially the rest proves nothing."""
+    """Guards the fixture: if this passes trivially the rest proves nothing.
+
+    The preference violation joined this list on 2026-09-30, when check_output
+    started judging `prefer` as well as the caps. The corpus carries the
+    teaching-assistant role the policy excludes, so a corpus is non-compliant
+    on both axes -- which is the point of composing one into a resume.
+    """
     assert count_entries(CORPUS) == {"experience": 5, "projects": 5}
-    assert check_output(CORPUS, POLICY) == ["5 experience entries, limit is 3",
-                                            "5 projects, limit is 3"]
+    violations = check_output(CORPUS, POLICY)
+    assert "5 experience entries, limit is 3" in violations
+    assert "5 projects, limit is 3" in violations
+    assert any("Dept. of Computer Science" in v and "excludes it" in v
+               for v in violations), violations
 
 
 def test_trimming_yields_exactly_the_entries_the_user_asked_for():
@@ -279,7 +288,14 @@ def test_prose_only_rules_are_announced_when_the_cap_selects_alone():
     policy = {"max_experience_entries": 3, "max_projects": 3,
               "prefer": ["Prefer UT Arlington IT over Seattle Kraken."]}
     out, actions = compose_from_corpus(CORPUS, policy)
-    assert check_output(out, POLICY) == []                  # still compliant
+    # Compliant ON THE CAPS, which is all a prose rule can buy. Checked against
+    # `policy` rather than POLICY on purpose: under the executable rules this
+    # document IS a violation -- it kept Kraken and dropped UT Arlington -- and
+    # that is exactly what the warning below is warning about.
+    assert check_output(out, policy) == []
+    assert count_entries(out) == {"experience": 3, "projects": 3}
+    assert any("the policy prefers the latter" in v
+               for v in check_output(out, POLICY)), "the wrong-entry case is not detected"
     assert any("by position only" in a for a in actions)
     # and the warning is honest about the consequence
     assert "Seattle Kraken (NHL)" in out
@@ -290,3 +306,83 @@ def test_no_positional_warning_once_the_rules_are_executable():
     """The same corpus, the same caps, structured rules: no warning, right answer."""
     _, actions = compose_from_corpus(CORPUS, POLICY)
     assert not any("by position only" in a for a in actions)
+
+
+# ---------------------------------------------------------------------------
+# A document can satisfy every count and still be the wrong document
+#
+# Job 385ba44d33e6 (Twilio), written 2026-09-30 19:56:18, three experience
+# entries and three projects -- fully inside the caps, so the trimmer never
+# fired -- having chosen Seattle Kraken and omitted the UT Arlington IT role.
+# That is the exact swap the policy forbids, and check_output passed it.
+# Rule 4: the preference was a request in the prompt, and only a check is a
+# guarantee.
+# ---------------------------------------------------------------------------
+
+def _within_caps_but_wrong():
+    """Three experience entries: Yuno, Clover, Kraken. No UT Arlington."""
+    out, _ = compose_from_corpus(CORPUS, {"max_experience_entries": 3,
+                                          "max_projects": 3, "prefer": []})
+    return out
+
+
+def test_the_twilio_shape_is_caught():
+    from shared.composition_policy import check_preferences
+    tex = _within_caps_but_wrong()
+    assert count_entries(tex) == {"experience": 3, "projects": 3}, "fixture is not within caps"
+    assert "Seattle Kraken" in tex and "Office of IT" not in tex, "fixture is not the Twilio shape"
+
+    prefs = check_preferences(tex, POLICY)
+    assert any("Seattle Kraken" in v and "Office of IT" in v for v in prefs), prefs
+    # and it reaches the single question the pipeline asks
+    assert check_preferences(tex, POLICY) and check_output(tex, POLICY), \
+        "a within-caps document with the wrong entries passed check_output"
+
+
+def test_an_excluded_entry_is_a_violation_even_with_room_to_spare():
+    from shared.composition_policy import check_preferences
+    policy = {"max_experience_entries": 9, "max_projects": 9,
+              "prefer": [{"exclude": "Dept. of Computer Science",
+                          "why": "academic, not industry"}]}
+    v = check_preferences(CORPUS, policy)
+    assert len(v) == 1 and "excludes it" in v[0]
+    assert "academic, not industry" in v[0], "the reason is not carried through"
+
+
+def test_the_preferred_entry_alone_is_not_a_violation():
+    """The winner without the rival is the desired outcome, not a breach."""
+    from shared.composition_policy import check_preferences
+    tex, _ = compose_from_corpus(CORPUS, POLICY)      # Kraken already dropped
+    assert "Office of IT" in tex and "Seattle Kraken" not in tex
+    assert check_preferences(tex, POLICY) == []
+
+
+def test_neither_entry_present_is_not_a_violation():
+    """Caps are limits, not quotas: a resume may legitimately include neither."""
+    from shared.composition_policy import check_preferences
+    policy = {"max_experience_entries": 9, "max_projects": 9,
+              "prefer": [{"include": "Office of IT", "over": "Seattle Kraken"}]}
+    stripped = CORPUS.replace("Seattle Kraken (NHL)", "Some Other Employer") \
+                     .replace("Office of IT, University of Texas at Arlington", "Another Employer")
+    assert check_preferences(stripped, policy) == []
+
+
+def test_prose_preferences_are_never_reported_as_violations():
+    """They are not executable, so flagging them would flag every document."""
+    from shared.composition_policy import check_preferences
+    policy = {"prefer": ["Lead with whichever role the job most resembles."]}
+    assert check_preferences(CORPUS, policy) == []
+
+
+def test_the_repair_instruction_says_swap_for_a_preference_not_delete():
+    """"Remove the least relevant entries" is the wrong fix for a wrong choice:
+    deleting produces a shorter resume that is still missing the entry."""
+    from shared.composition_policy import describe_violations
+    swap = describe_violations(['"Seattle Kraken" is included but "Office of IT" '
+                                'is not; the policy prefers the latter'])
+    assert "SWAP" in swap and "copied from the base resume verbatim" in swap
+    assert "Remove the least relevant" not in swap
+
+    count_only = describe_violations(["5 projects, limit is 3"])
+    assert "Remove the least relevant" in count_only
+    assert "SWAP" not in count_only
