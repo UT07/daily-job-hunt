@@ -236,6 +236,10 @@ def check_output(tex: str, policy: dict[str, Any] | None = None) -> list[str]:
         if isinstance(cap, int) and counts[kind] > cap:
             noun = "experience entries" if kind == "experience" else "projects"
             violations.append(f"{counts[kind]} {noun}, limit is {cap}")
+    # Preferences are part of "does this comply", not a separate question. They
+    # were checked nowhere until 2026-09-30, and a resume that satisfies every
+    # count while choosing the entries the user rejected passed silently.
+    violations.extend(check_preferences(tex, p))
     return violations
 
 
@@ -247,11 +251,23 @@ def describe_violations(violations: list[str]) -> str:
     """
     if not violations:
         return ""
-    return ("The document you produced breaks the composition rules: "
-            + "; ".join(violations)
-            + ". Remove the least relevant entries until it complies. Delete "
-              "the whole entry including its itemize block — do not leave an "
-              "empty shell.")
+    # Two kinds of violation need two kinds of instruction. "Remove the least
+    # relevant entries" is the wrong advice for a preference break, where the
+    # fix is a SWAP: the rejected entry out, the preferred one in. Telling the
+    # model to delete would produce a shorter resume that is still wrong.
+    swaps = [v for v in violations if "the policy" in v]
+    counts = [v for v in violations if v not in swaps]
+    parts = ["The document you produced breaks the composition rules: "
+             + "; ".join(violations) + "."]
+    if counts:
+        parts.append("Remove the least relevant entries until it complies. "
+                     "Delete the whole entry including its itemize block — do "
+                     "not leave an empty shell.")
+    if swaps:
+        parts.append("For the preference rules, SWAP rather than delete: take "
+                     "out the entry the policy rejects and put in the one it "
+                     "prefers, copied from the base resume verbatim.")
+    return " ".join(parts)
 
 
 # --------------------------------------------------------------------------
@@ -433,3 +449,49 @@ def compose_from_corpus(tex: str,
     for block in sorted(dropped, key=lambda b: b["start"], reverse=True):
         tex = tex[:block["start"]] + tex[block["end"]:]
     return tex, actions
+
+
+def check_preferences(tex: str, policy: dict[str, Any] | None = None) -> list[str]:
+    """Violations of the EXECUTABLE `prefer` rules. Empty means it complies.
+
+    Separate from the caps because a document can satisfy every count and still
+    be the wrong document. Measured in production 2026-09-30: job 385ba44d33e6
+    (Twilio) shipped three experience entries and three projects -- fully
+    within the caps, so nothing fired -- having chosen Seattle Kraken and
+    omitted the UT Arlington IT role, which is the exact swap the user's policy
+    forbids. `check_output` passed it. Rule 4: the preference was a request in
+    the prompt, and only a check is a guarantee.
+
+    Prose rules are not judged here. They are not executable, so reporting them
+    as violations would mean flagging every document forever.
+    """
+    p = resolve(policy)
+    rules = actionable_preferences(p)
+    if not rules:
+        return []
+
+    keys = [b["key"] for kind in ("experience", "projects")
+            for b in _entry_blocks(tex, kind)]
+    violations, seen = [], set()
+    for rule in rules:
+        excluded = _normalise_name(rule.get("exclude") or "")
+        wanted = _normalise_name(rule.get("include") or "")
+        beaten = _normalise_name(rule.get("over") or "")
+
+        if excluded and any(excluded in k for k in keys):
+            msg = f'"{rule["exclude"]}" is included and the policy excludes it'
+        elif (wanted and beaten and any(beaten in k for k in keys)
+              and not any(wanted in k for k in keys)):
+            # Only a violation in this direction. The winner alone is the
+            # desired outcome, and neither present is a valid choice -- the
+            # caps are limits, not quotas.
+            msg = (f'"{rule["over"]}" is included but "{rule["include"]}" is '
+                   f'not; the policy prefers the latter')
+        else:
+            continue
+        if rule.get("why"):
+            msg += f' ({rule["why"]})'
+        if msg not in seen:
+            seen.add(msg)
+            violations.append(msg)
+    return violations
