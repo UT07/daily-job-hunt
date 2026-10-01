@@ -371,8 +371,7 @@ def actionable_preferences(policy: dict[str, Any] | None = None) -> list[dict]:
     """
     rules = []
     for rule in resolve(policy)["prefer"]:
-        if isinstance(rule, dict) and (rule.get("exclude") or
-                                       (rule.get("include") and rule.get("over"))):
+        if isinstance(rule, dict) and (rule.get("exclude") or rule.get("include")):
             rules.append(rule)
     return rules
 
@@ -423,6 +422,32 @@ def compose_from_corpus(tex: str,
                 dropped.append(block)
                 why = rule.get("why") or "the other entry is preferred"
                 actions.append(f"dropped {noun} \"{block['name']}\" — {why}")
+
+        # Required entries survive the cap. Today the user's corpus lists Yuno
+        # Energy first, so trimming from the end never reaches it -- but that
+        # is the corpus's shape, not a guarantee, and a rule that holds only
+        # while the data cooperates is not a rule. When the cap would cut into
+        # a required entry, the oldest NON-required entry goes instead.
+        required = [_normalise_name(r["include"]) for r in rules
+                    if r.get("include") and not r.get("over")]
+        cap_now = p[cap_key]
+        if required and isinstance(cap_now, int) and len(keep) > cap_now:
+            protected = [b for b in keep if any(n in b["key"] for n in required)]
+            rest = [b for b in keep if b not in protected]
+            room = max(cap_now - len(protected), 0)
+            survivors = {id(b) for b in protected} | {id(b) for b in rest[:room]}
+            # Both halves, or nothing is removed from the document: `keep`
+            # decides what survives, `dropped` is what is actually cut out. The
+            # first version of this block updated only `keep`, so the cap
+            # silently stopped trimming whenever a required entry existed --
+            # caught by test_the_cap_never_drops_a_required_entry asserting the
+            # SURVIVING COUNT rather than only the required entry's presence.
+            for block in [b for b in keep if id(b) not in survivors]:
+                dropped.append(block)
+                actions.append(f"dropped {noun} \"{block['name']}\" — over the "
+                               f"limit of {cap_now}, and the oldest of those not "
+                               f"required by the policy")
+            keep = [b for b in keep if id(b) in survivors]
 
         cap = p[cap_key]
         if isinstance(cap, int) and len(keep) > cap:
@@ -480,6 +505,16 @@ def check_preferences(tex: str, policy: dict[str, Any] | None = None) -> list[st
 
         if excluded and any(excluded in k for k in keys):
             msg = f'"{rule["exclude"]}" is included and the policy excludes it'
+        elif wanted and not beaten and not any(wanted in k for k in keys):
+            # A bare {"include": X} is "must be present". render_for_prompt has
+            # rendered it as "Always include X" since the structured shapes were
+            # introduced and nothing enforced it, so it was a request like every
+            # other prompt line. Found by auditing: job 7718b1877d50 (Paddle)
+            # shipped two experience entries with Yuno Energy -- the current role
+            # -- absent altogether. Two is inside a cap of three, no exclusion
+            # fired and no rival was present, so every existing check passed a
+            # resume with no current job on it.
+            msg = f'"{rule["include"]}" is missing and the policy requires it'
         elif (wanted and beaten and any(beaten in k for k in keys)
               and not any(wanted in k for k in keys)):
             # Only a violation in this direction. The winner alone is the
