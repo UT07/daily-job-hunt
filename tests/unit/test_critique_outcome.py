@@ -323,3 +323,74 @@ def test_the_discard_is_logged(caplog):
         critique_node({"candidates": _two("BAD", "GOOD")})
     assert any("guard-failing candidate" in r.getMessage() for r in caplog.records), \
         [r.getMessage() for r in caplog.records]
+
+
+# ---------------------------------------------------------------------------
+# A count is not a bound on the thing that breaks
+#
+# Measured 2026-10-01: the AI Eval Gate job ran 20m16s against
+# `timeout-minutes: 20` and was CANCELLED before writing evals/report.json, so
+# the gate reported a failure that was never about quality. Its log shows the
+# mechanism: `nvidia/nemotron-3-ultra-550b-a55b failed: The read operation
+# timed out`. A critic that fails by timing out costs its full provider
+# timeout, and three of those per case is a different order of latency.
+# ---------------------------------------------------------------------------
+
+def test_the_retry_stops_when_the_time_budget_is_gone():
+    clock = iter([0.0, 1000.0, 1000.0, 1000.0])
+    calls = []
+
+    def _call(critic, *a, **kw):
+        calls.append(critic["name"])
+        return None
+
+    with patch.object(nodes.time, "monotonic", side_effect=lambda: next(clock)), \
+         patch.object(nodes, "select_critics", return_value=[C1, C2, C3]), \
+         patch.object(nodes, "call_one", side_effect=_call):
+        out = critique_node({"candidates": TWO})
+
+    assert len(calls) == 1, f"kept going past the budget: {calls}"
+    assert out["critique_outcome"] == "critic_call_failed"
+
+
+def test_the_first_attempt_always_runs_however_slow_the_machine():
+    """A budget that can skip the only critic would be worse than no feature."""
+    clock = iter([0.0, 10_000.0, 10_000.0, 10_000.0])
+    with patch.object(nodes.time, "monotonic", side_effect=lambda: next(clock)), \
+         patch.object(nodes, "select_critics", return_value=[C1, C2]), \
+         patch.object(nodes, "call_one", return_value={"content": "1: 10\n2: 90"}), \
+         patch.object(nodes, "_parse_critic_scores", return_value=[10, 90]):
+        out = critique_node({"candidates": TWO})
+    assert out["critique_outcome"] == "adjudicated", "the budget skipped the first critic"
+
+
+def test_fast_failures_still_get_their_retries():
+    """An unparseable answer comes back fast; a dead provider does not. The
+    budget separates them without needing to know which happened."""
+    clock = iter([0.0] + [1.0] * 10)
+    calls = []
+
+    def _call(critic, *a, **kw):
+        calls.append(critic["name"])
+        return None if critic is not C3 else {"content": "1: 90\n2: 10"}
+
+    with patch.object(nodes.time, "monotonic", side_effect=lambda: next(clock)), \
+         patch.object(nodes, "select_critics", return_value=[C1, C2, C3]), \
+         patch.object(nodes, "call_one", side_effect=_call), \
+         patch.object(nodes, "_parse_critic_scores", return_value=[90, 10]):
+        out = critique_node({"candidates": TWO})
+
+    assert len(calls) == 3, f"a fast failure cost a retry: {calls}"
+    assert out["critique_outcome"] == "adjudicated"
+
+
+def test_the_budget_exhaustion_is_named_in_the_failure_list(caplog):
+    import logging
+    clock = iter([0.0, 1000.0, 1000.0, 1000.0])
+    with caplog.at_level(logging.WARNING), \
+         patch.object(nodes.time, "monotonic", side_effect=lambda: next(clock)), \
+         patch.object(nodes, "select_critics", return_value=[C1, C2, C3]), \
+         patch.object(nodes, "call_one", return_value=None):
+        critique_node({"candidates": TWO})
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "budget exhausted after 1 of 3" in text, text

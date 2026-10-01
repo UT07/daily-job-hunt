@@ -5,6 +5,7 @@ import ai_helper directly — agents.providers and agents._ai_helper (the
 flat/test import shim) are the only seams.
 """
 import logging
+import time
 
 from langgraph.types import Overwrite
 
@@ -201,8 +202,24 @@ def prefer_guard_clean(candidates: list[dict], state: dict) -> list[dict]:
 # How many critics to try before giving up. Three, not one, because the single
 # critic was a single point of failure: measured 2026-09-30, every missed
 # adjudication in a real batch came from this slot, never from generation.
-# Bounded because each attempt is a live provider call on a resume-sized prompt.
 CRITIC_ATTEMPTS = 3
+
+# ...and a wall-clock ceiling across all of them, because a count is not a
+# bound on the thing that actually breaks. Measured 2026-10-01: the AI Eval
+# Gate job ran 20m16s against `timeout-minutes: 20` and was CANCELLED before it
+# could write evals/report.json, so the gate reported a failure that was never
+# about quality. Its log shows the mechanism --
+# `nvidia/nemotron-3-ultra-550b-a55b failed: The read operation timed out` --
+# a critic that fails by timing out costs its full provider timeout, and three
+# of those per case is a different order of latency from one.
+#
+# The two failure modes have very different costs, and this budget separates
+# them for free. An unparseable answer comes back FAST, because the model did
+# reply; a dead provider costs ~60s. So a fast failure leaves room to retry and
+# a slow one does not, which is the behaviour worth having rather than a flat
+# attempt count. 90s allows the second attempt after one slow failure, or all
+# three after fast ones.
+CRITIC_TIME_BUDGET_S = 90.0
 
 
 def critique_node(state: dict) -> dict:
@@ -240,7 +257,19 @@ def critique_node(state: dict) -> dict:
     failures: list[str] = []
     saw_unparseable = False
 
+    deadline = time.monotonic() + CRITIC_TIME_BUDGET_S
     for attempt, critic in enumerate(critics, 1):
+        # Never on the first attempt: one critic is the behaviour this function
+        # had before retries existed, and a budget that can skip it would make
+        # a slow machine worse than no feature at all.
+        if attempt > 1 and time.monotonic() >= deadline:
+            failures.append(f"budget of {CRITIC_TIME_BUDGET_S:.0f}s exhausted "
+                            f"after {attempt - 1} attempt(s)")
+            logger.warning(
+                "[council] critic budget exhausted after %d of %d attempt(s); "
+                "not trying the rest", attempt - 1, len(critics),
+            )
+            break
         name = critic.get("name", "?")
         verdict = call_one(
             critic, prompt, CRITIQUE_SYSTEM, temperature=0,
