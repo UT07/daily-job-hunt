@@ -237,3 +237,89 @@ def test_critics_are_requested_from_families_that_did_not_generate():
 
     assert seen["n"] == nodes.CRITIC_ATTEMPTS > 1, "only one critic was requested"
     assert seen["exclude"], "the generators' families were not excluded"
+
+
+# ---------------------------------------------------------------------------
+# Making adjudication work exposed what adjudication selects on
+#
+# With one critic that almost always failed, the winner was candidate 1 and the
+# guards saw whatever that happened to be. Retrying across three critics made
+# real verdicts common, and the AI Eval Gate measured the consequence twice,
+# reproducibly: guard_pass_rate 0.92 -> 0.88 on PR #182. The critic was doing
+# its job -- picking the best-written candidate -- and best-written is not the
+# same as structurally sound. Same argument prefer_complete already makes about
+# truncation, one level up.
+# ---------------------------------------------------------------------------
+
+def _two(a_content, b_content):
+    return [{"content": a_content, "model": "m/a", "provider": "p"},
+            {"content": b_content, "model": "m/b", "provider": "p"}]
+
+
+def test_a_guard_failing_candidate_is_not_offered_to_the_critic():
+    passed = {"BAD": False, "GOOD": True}
+    seen = {}
+
+    def _check(content, *a, **kw):
+        return type("R", (), {"passed": passed[content]})()
+
+    def _critique(cands, *a, **kw):
+        seen["n"] = len(cands)
+        return "prompt"
+
+    with patch.object(nodes, "check_output", side_effect=_check), \
+         patch.object(nodes, "build_critique_prompt", side_effect=_critique), \
+         patch.object(nodes, "select_critics", return_value=[C1]), \
+         patch.object(nodes, "call_one", return_value={"content": "x"}), \
+         patch.object(nodes, "_parse_critic_scores", return_value=[50]):
+        out = critique_node({"candidates": _two("BAD", "GOOD")})
+
+    # Only one survived the filter, so there is nothing to adjudicate.
+    assert out["critique_outcome"] == "single_candidate"
+    assert out["winner"]["content"] == "GOOD", "the guard-failing candidate won"
+    assert "n" not in seen, "the critic was asked to judge anyway"
+
+
+def test_the_filter_fails_open_when_every_candidate_is_blocked():
+    """A blocked answer is still an answer. The caller's gate decides, exactly
+    as prefer_complete leaves a fully-truncated set alone."""
+    with patch.object(nodes, "check_output",
+                      side_effect=lambda *a, **kw: type("R", (), {"passed": False})()), \
+         patch.object(nodes, "select_critics", return_value=[C1]), \
+         patch.object(nodes, "call_one", return_value={"content": "x"}), \
+         patch.object(nodes, "_parse_critic_scores", return_value=[10, 90]):
+        out = critique_node({"candidates": _two("BAD1", "BAD2")})
+    assert out["critique_outcome"] == "adjudicated"
+    assert out["winner"]["content"] == "BAD2", "the critic never got both candidates"
+
+
+def test_a_clean_set_is_passed_through_untouched():
+    with patch.object(nodes, "check_output",
+                      side_effect=lambda *a, **kw: type("R", (), {"passed": True})()), \
+         patch.object(nodes, "select_critics", return_value=[C1]), \
+         patch.object(nodes, "call_one", return_value={"content": "x"}), \
+         patch.object(nodes, "_parse_critic_scores", return_value=[90, 10]):
+        out = critique_node({"candidates": _two("GOOD1", "GOOD2")})
+    assert out["critique_outcome"] == "adjudicated"
+    assert out["winner"]["content"] == "GOOD1"
+
+
+def test_a_single_candidate_is_never_guard_checked():
+    """Nothing to choose between, and check_output is not free."""
+    calls = []
+    with patch.object(nodes, "check_output",
+                      side_effect=lambda *a, **kw: calls.append(1) or type("R", (), {"passed": False})()):
+        out = critique_node({"candidates": [TWO[0]]})
+    assert out["critique_outcome"] == "single_candidate"
+    assert calls == [], "check_output ran on a one-candidate set"
+
+
+def test_the_discard_is_logged(caplog):
+    import logging
+    passed = {"BAD": False, "GOOD": True}
+    with caplog.at_level(logging.WARNING), \
+         patch.object(nodes, "check_output",
+                      side_effect=lambda c, *a, **kw: type("R", (), {"passed": passed[c]})()):
+        critique_node({"candidates": _two("BAD", "GOOD")})
+    assert any("guard-failing candidate" in r.getMessage() for r in caplog.records), \
+        [r.getMessage() for r in caplog.records]

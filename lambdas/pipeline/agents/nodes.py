@@ -156,6 +156,48 @@ CRITIQUE_OUTCOMES = (
 )
 
 
+def prefer_guard_clean(candidates: list[dict], state: dict) -> list[dict]:
+    """Drop candidates the output guards block, unless that leaves nothing.
+
+    The same argument `prefer_complete` makes about truncation, one level up.
+    Its docstring: "a fragment win on style points -- the critic scores prose
+    quality and has no idea the answer stops mid-section". A candidate missing
+    its Experience section reads perfectly well too.
+
+    This exists because making adjudication WORK exposed it. With one critic
+    that almost always failed, the winner was candidate 1 and the guards saw
+    whatever that happened to be. Retrying across three critics made real
+    verdicts common, and the AI Eval Gate measured the consequence twice,
+    reproducibly: guard_pass_rate 0.92 -> 0.88. The critic was doing its job --
+    picking the best-written candidate -- and best-written is not the same as
+    structurally sound.
+
+    So the critic now chooses among documents that already pass. Fail-open for
+    the same reason prefer_complete does: when EVERY candidate is blocked, the
+    list is returned unchanged and the caller's own gate decides whether to
+    ship it. Skipped below two candidates because there is nothing to choose
+    between, and check_output is not free.
+    """
+    if len(candidates) < 2:
+        return candidates
+    clean = [
+        c for c in candidates
+        if check_output(
+            c.get("content", ""),
+            state.get("task", "default"),
+            base_skills_text=state.get("base_skills", ""),
+            base_body=state.get("base_body", ""),
+            header_markers=state.get("header_markers"),
+        ).passed
+    ]
+    if clean and len(clean) != len(candidates):
+        logger.warning(
+            "[council] Discarded %d guard-failing candidate(s) of %d before critique",
+            len(candidates) - len(clean), len(candidates),
+        )
+    return clean or candidates
+
+
 # How many critics to try before giving up. Three, not one, because the single
 # critic was a single point of failure: measured 2026-09-30, every missed
 # adjudication in a real batch came from this slot, never from generation.
@@ -172,6 +214,7 @@ def critique_node(state: dict) -> dict:
     # allowed to out-score a complete one on prose quality, which is all the
     # critic can see. Same rule the legacy council applies.
     candidates = prefer_complete(candidates)
+    candidates = prefer_guard_clean(candidates, state)
     if len(candidates) == 1:
         logger.info("[council] outcome=single_candidate — only 1 candidate, "
                     "skipping critique")
