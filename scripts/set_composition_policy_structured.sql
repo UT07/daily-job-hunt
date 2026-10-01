@@ -14,8 +14,9 @@
 -- first three" keeps the entry to drop and drops the entry to keep.
 --
 -- The two shapes it can execute:
---     {"exclude": "<entry name>",                "why": "..."}
---     {"include": "<entry name>", "over": "...", "why": "..."}
+--     {"exclude": "<entry name>",                "why": "..."}   never include
+--     {"include": "<entry name>", "over": "...", "why": "..."}   prefer A to B
+--     {"include": "<entry name>",                "why": "..."}   must be present
 -- Names are matched as normalised substrings, so a partial name is enough and
 -- LaTeX escapes (\& etc.) do not need reproducing. `why` is carried into the
 -- prompt verbatim, so it is worth writing for the model as well as the reader.
@@ -32,6 +33,10 @@ SET composition_policy = jsonb_build_object(
     'max_experience_entries', 3,
     'max_projects', 3,
     'prefer', jsonb_build_array(
+        jsonb_build_object(
+            'include', 'Yuno Energy',
+            'why',     'the current role; a resume without it has no present employer'
+        ),
         jsonb_build_object(
             'include', 'Office of IT, University of Texas at Arlington',
             'over',    'Seattle Kraken',
@@ -59,7 +64,7 @@ SET composition_policy = jsonb_build_object(
 )
 WHERE email = '254utkarsh@gmail.com';
 
--- Expect: 3 / 3, three prefer rules, all three with an executable shape.
+-- Expect: 3 / 3, FOUR prefer rules, all four with an executable shape.
 SELECT
     composition_policy -> 'max_experience_entries'          AS max_experience,
     composition_policy -> 'max_projects'                    AS max_projects,

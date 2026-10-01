@@ -386,3 +386,58 @@ def test_the_repair_instruction_says_swap_for_a_preference_not_delete():
     count_only = describe_violations(["5 projects, limit is 3"])
     assert "Remove the least relevant" in count_only
     assert "SWAP" not in count_only
+
+
+# ---------------------------------------------------------------------------
+# A bare {"include": X} means "must be present"
+#
+# render_for_prompt has rendered it as "Always include X" since the structured
+# shapes were introduced, and nothing enforced it. Found by auditing S3: job
+# 7718b1877d50 (Paddle) shipped TWO experience entries with Yuno Energy -- the
+# current role -- absent altogether. Two is inside a cap of three, no exclusion
+# fired and no rival was present, so every check passed a resume with no
+# current job on it.
+# ---------------------------------------------------------------------------
+
+REQUIRE_YUNO = {"max_experience_entries": 3, "max_projects": 3,
+                "prefer": [{"include": "Yuno Energy",
+                            "why": "the current role"}]}
+
+
+def test_a_missing_required_entry_is_a_violation():
+    from shared.composition_policy import check_preferences
+    without = CORPUS.replace("{Yuno Energy}", "{Some Former Employer}")
+    v = check_preferences(without, REQUIRE_YUNO)
+    assert len(v) == 1 and "is missing and the policy requires it" in v[0]
+    assert "the current role" in v[0]
+    assert check_output(without, REQUIRE_YUNO), "it never reached check_output"
+
+
+def test_a_present_required_entry_is_not_a_violation():
+    from shared.composition_policy import check_preferences
+    assert check_preferences(CORPUS, REQUIRE_YUNO) == []
+
+
+def test_the_cap_never_drops_a_required_entry():
+    """The guarantee must not depend on the corpus listing it first."""
+    moved = CORPUS.replace(
+        _entry("jobentry", "Yuno Energy", "Jun 2026 – Present", "Energy Consultant", ["a", "b"]), "")
+    moved = moved.replace(
+        "\\section*{Featured Projects}",
+        _entry("jobentry", "Yuno Energy", "Jun 2026 – Present", "Energy Consultant", ["a", "b"])
+        + "\n\\section*{Featured Projects}")
+    assert _names(moved, "experience")[-1] == "Yuno Energy", "fixture did not move it last"
+
+    out, actions = compose_from_corpus(moved, REQUIRE_YUNO)
+    kept = _names(out, "experience")
+    assert "Yuno Energy" in kept, f"the cap dropped a required entry: {kept}"
+    assert len(kept) == 3
+    assert check_output(out, REQUIRE_YUNO) == []
+
+
+def test_a_bare_include_does_not_drop_anything_by_itself():
+    """"Must be present" is not "remove the others"."""
+    out, actions = compose_from_corpus(CORPUS, {"max_experience_entries": 9,
+                                                "max_projects": 9,
+                                                "prefer": [{"include": "Yuno Energy"}]})
+    assert (out, actions) == (CORPUS, [])
