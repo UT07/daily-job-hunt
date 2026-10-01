@@ -36,6 +36,7 @@ from guardrails.output_guards import check_textbf_preservation as _check_textbf_
 # aliased because guardrails/output_guards.py exports a different function of
 # the same name.
 from shared.composition_policy import check_output as _check_composition
+from shared.composition_policy import check_preferences as _check_preferences
 from shared.composition_policy import (
     compose_from_corpus,
     describe_violations,
@@ -969,7 +970,26 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         # fallback or a generated body whose two AI repair rounds did not
         # converge — and the result is accepted only if it FULLY complies.
         # A partial trim would mean mangling the document for nothing.
-        trimmed, actions = compose_from_corpus(tailored_tex, composition_policy)
+        # WHICH document to compose from is the decision here. A generated
+        # body that broke a PREFERENCE picked the wrong entries, not merely too
+        # many, and composing can only delete: measured on 385ba44d33e6, the
+        # council emitted 3 experience entries -- within the cap, so nothing
+        # fired -- having chosen Seattle Kraken and omitted UT Arlington IT.
+        # Trimming that body would drop Kraken and leave two entries, still
+        # without the role the user asked for. The corpus holds all three, so a
+        # preference break composes from the corpus instead.
+        #
+        # Cap-only violations keep the generated body: its tailoring is real
+        # work and the only thing wrong with it is length.
+        pref_broken = _check_preferences(tailored_tex, composition_policy)
+        seed = base_tex if (tailored_tex is not base_tex and pref_broken) else tailored_tex
+        if seed is not tailored_tex:
+            logger.warning(
+                "[tailor] %s broke a composition PREFERENCE (%s); composing "
+                "from the corpus instead of trimming the generated body",
+                job_hash, "; ".join(pref_broken),
+            )
+        trimmed, actions = compose_from_corpus(seed, composition_policy)
         still_wrong = _check_composition(trimmed, composition_policy)
         if actions and not still_wrong:
             source = "base-resume fallback" if tailored_tex is base_tex else "generated body"
