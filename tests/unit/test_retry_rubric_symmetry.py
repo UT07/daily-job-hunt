@@ -27,74 +27,76 @@ comparison needs Supabase, S3, a council call and a compile step stubbed, and
 CLAUDE.md rule 6 is explicit that a double which fails the way the bug fails is
 worse than no test. The invariant here is "these two expressions call the same
 set of checks", which is a property of the source.
+
+2026-10-05: the invariant is now structural rather than merely checked. Both
+sides call ONE builder, `_quality_warnings(body, base_body, fabrication_baseline)`,
+so a check added to it reaches the original and the retry simultaneously and
+there is no second list to forget. These tests therefore assert that the single
+builder exists, that both call sites use it, and that no check is invoked
+directly beside the comparison -- which is what reintroducing the bug would
+look like. The original text above is kept because it explains why the shape
+matters, not merely that it does.
 """
 import ast
 from pathlib import Path
 
-SRC = Path(__file__).resolve().parents[2] / "lambdas" / "pipeline" / "tailor_resume.py"
+SOURCE = Path("lambdas/pipeline/tailor_resume.py").read_text()
+TREE = ast.parse(SOURCE)
+
+# Every writing-quality check the rubric may legitimately call.
+CHECK_NAMES = {
+    "_check_banned_phrases", "_check_weak_openers",
+    "_check_textbf_preservation", "_check_fabrication",
+}
 
 
-def _checks_contributing_to(var: str) -> set[str]:
-    """Every `_check_*` called while building `var`, by assignment or .extend()."""
-    tree = ast.parse(SRC.read_text())
-    found: set[str] = set()
-
-    def names_in(node) -> set[str]:
-        out = set()
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.Call):
-                fn = sub.func
-                name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
-                if name and name.startswith("_check_"):
-                    out.add(name)
-        return out
-
-    for node in ast.walk(tree):
-        # var = <expr>
-        if isinstance(node, ast.Assign) and any(
-            isinstance(t, ast.Name) and t.id == var for t in node.targets
-        ):
-            found |= names_in(node.value)
-        # var.extend(<expr>) / var.append(<expr>)
-        if (isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr in ("extend", "append")
-                and isinstance(node.func.value, ast.Name)
-                and node.func.value.id == var):
-            for arg in node.args:
-                found |= names_in(arg)
-    return found
+def _function(name):
+    for node in ast.walk(TREE):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    return None
 
 
-def test_both_rubrics_are_discovered():
-    """Guard the guard: an empty set on either side makes the comparison vacuous."""
-    original = _checks_contributing_to("quality_warnings")
-    retry = _checks_contributing_to("retry_quality")
-    assert len(original) >= 3, original
-    assert len(retry) >= 3, retry
+def _called_names(node):
+    return {n.func.id for n in ast.walk(node)
+            if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
 
 
-def test_the_retry_is_scored_on_the_same_checks_as_the_original():
-    original = _checks_contributing_to("quality_warnings")
-    retry = _checks_contributing_to("retry_quality")
-    missing = original - retry
-    assert not missing, (
-        f"the retry rubric omits {sorted(missing)} that the original counts, so "
-        "`len(retry_quality) < len(quality_warnings)` compares a body against an "
-        "easier standard than itself and can accept a retry that fixed nothing"
+def test_a_single_builder_owns_the_rubric():
+    """One function, or there are two lists again and they can drift."""
+    builder = _function("_quality_warnings")
+    assert builder is not None, (
+        "_quality_warnings is gone — the rubric is being built inline again, "
+        "which is the shape that let the retry be scored on an easier rubric"
     )
-    extra = retry - original
-    assert not extra, (
-        f"the retry rubric counts {sorted(extra)} that the original does not, which "
-        "biases the comparison the other way and discards retries that did improve"
+    called = _called_names(builder)
+    missing = CHECK_NAMES - called
+    assert not missing, f"the builder no longer calls: {sorted(missing)}"
+
+
+def test_both_sides_of_the_comparison_use_that_builder():
+    handler = _function("handler")
+    assert handler is not None
+    calls = [n for n in ast.walk(handler)
+             if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+             and n.func.id == "_quality_warnings"]
+    assert len(calls) == 2, (
+        f"expected the original and the retry to each call _quality_warnings, "
+        f"found {len(calls)} call(s)"
     )
 
 
-def test_fabrication_specifically_is_counted_on_both_sides():
-    """Named because it is the regression, and the costliest omission.
+def test_no_check_is_called_directly_beside_the_comparison():
+    """Adding a check to one side only is exactly how this broke before."""
+    handler = _function("handler")
+    direct = _called_names(handler) & CHECK_NAMES
+    assert not direct, (
+        f"{sorted(direct)} called directly in handler rather than through "
+        "_quality_warnings — that is one side of the comparison again"
+    )
 
-    A fabrication is a blocking violation in the council's guard. A retry rubric
-    that cannot see it lets this path accept what that guard rejects.
-    """
-    for var in ("quality_warnings", "retry_quality"):
-        assert "_check_fabrication" in _checks_contributing_to(var), var
+
+def test_fabrication_specifically_is_counted():
+    """The check whose omission caused the original defect."""
+    builder = _function("_quality_warnings")
+    assert "_check_fabrication" in _called_names(builder)

@@ -19,6 +19,7 @@ except Exception:  # retrieval package absent in some deploy paths
 # actually runs in (pytest, zip Lambda) — no try/except needed, same as
 # guardrails/input_guards.py's own imports.
 from guardrails.output_guards import check_banned_phrases as _check_banned_phrases
+from guardrails.output_guards import check_weak_bullet_openers as _check_weak_openers
 from guardrails.output_guards import check_brace_balance as _check_brace_balance
 from guardrails.output_guards import check_required_sections as _check_required_sections
 from guardrails.output_guards import check_fabrication as _check_fabrication
@@ -210,6 +211,25 @@ def _fetch_user_profile(db, user_id: str) -> dict | None:
         resp = db.table("users").select(_USER_COLUMNS_PRE_MIGRATION) \
             .eq("id", user_id).limit(1).execute()
     return resp.data[0] if resp.data else None
+
+
+def _quality_warnings(body: str, base_body: str, fabrication_baseline) -> list[str]:
+    """Every writing-quality check, in one place.
+
+    ONE function for both sides of the retry comparison, structurally. The two
+    lists were built separately and drifted: the retry's rubric omitted
+    fabrication, so a retry that kept every fabricated skill scored as an
+    improvement whenever it dropped one banned phrase, and the fabrication
+    shipped (CLAUDE.md rule 14). Adding a check to one side and forgetting the
+    other is now impossible rather than merely discouraged -- which is the only
+    version of that rule that survives the next person adding a check.
+    """
+    warnings = _check_banned_phrases(body)
+    warnings.extend(_check_weak_openers(body))
+    warnings.extend(_check_textbf_preservation(base_body, body))
+    if fabrication_baseline:
+        warnings.extend(_check_fabrication(fabrication_baseline, body))
+    return warnings
 
 
 def _enforce_composition(
@@ -854,10 +874,7 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         tailored_tex = base_tex
     else:
         # Quality validation — writing quality, not just structure
-        quality_warnings = _check_banned_phrases(ai_body)
-        quality_warnings.extend(_check_textbf_preservation(base_body, ai_body))
-        if fabrication_baseline:
-            quality_warnings.extend(_check_fabrication(fabrication_baseline, ai_body))
+        quality_warnings = _quality_warnings(ai_body, base_body, fabrication_baseline)
 
         if quality_warnings:
             logger.warning(f"[tailor] Quality warnings for {job_hash}: {'; '.join(quality_warnings[:5])}")
@@ -909,12 +926,8 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
                 # violation in the council's own guard, so leaving it out of the
                 # retry's rubric let this path accept what that guard exists to
                 # reject.
-                retry_quality = (
-                    _check_banned_phrases(retry_body)
-                    + _check_textbf_preservation(base_body, retry_body)
-                    + (_check_fabrication(fabrication_baseline, retry_body)
-                       if fabrication_baseline else [])
-                )
+                retry_quality = _quality_warnings(
+                    retry_body, base_body, fabrication_baseline)
                 if len(retry_quality) < len(quality_warnings):
                     logger.info(f"[tailor] Retry improved quality: {len(quality_warnings)} -> {len(retry_quality)} warnings")
                     ai_body = retry_body
