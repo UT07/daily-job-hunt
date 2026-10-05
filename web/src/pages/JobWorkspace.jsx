@@ -1376,7 +1376,15 @@ export default function JobWorkspace() {
           </div>
         )}
         {activeTab === 'editor' && (
+          {/* key={jobId}: jobId comes from useParams, so navigating
+              /jobs/a -> /jobs/b keeps this component MOUNTED and only
+              changes the prop. The editor then held job A's unsaved
+              sections while displaying job B. Remounting is the whole
+              fix -- every other approach has to order a reset against
+              an in-flight fetch, and the flag that matters is its value
+              when the response lands, not when the reset ran. */}
           <ResumeEditor
+            key={jobId}
             job={job}
             onGenerateResume={() => handleRegen('resume')}
             generating={regenLoading === 'resume'}
