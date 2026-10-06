@@ -6,7 +6,8 @@ import tempfile
 import boto3
 
 from shared.composition_policy import resolve
-from shared.page_check import check_pdf, log_violations
+from shared.fit_to_pages import fit, normalise_separators
+from shared.page_check import check_pdf, log_violations, page_text_lengths
 from utils.pdf_validator import check_file_size
 
 logger = logging.getLogger()
@@ -28,6 +29,22 @@ def handler(event, context):
     # Read tex from S3
     obj = s3.get_object(Bucket=bucket, Key=tex_s3_key)
     tex_content = obj["Body"].read().decode("utf-8")
+
+    # Separator normalisation, before anything is measured or rendered.
+    # Reported 2026-10-05 and visible in every entry: \jobentry is defined as
+    # `\textbf{#1} -- #2 \hfill \textit{#3}` and the corpus passes #2 (the
+    # LOCATION) empty, so each role rendered "Yuno Energy --" with a dash
+    # attached to nothing. The date separator was also U+2013; a hyphen is what
+    # the user asked for and the safer character, since an en-dash depends on
+    # the font and the input encoding surviving every hop to the PDF.
+    #
+    # Applied here rather than at generation so it repairs the documents
+    # already in S3, which is where the ones the user is looking at live.
+    if doc_type == "resume":
+        tex_content, sep_actions = normalise_separators(tex_content)
+        if sep_actions:
+            logger.info("[compile] separators for %s: %s",
+                        job_hash, "; ".join(sep_actions))
 
     # Write to temp file and compile
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -96,6 +113,87 @@ def handler(event, context):
             page_violations = check_pdf(pdf_path, expected_pages=expected_pages)
             log_violations(page_violations, label=f"{doc_type} {job_hash}")
 
+            # --- Act on the measurement, rather than only reporting it ------
+            #
+            # Until 2026-10-06 this function measured the PDF, logged the
+            # violation and uploaded the document anyway -- the same shape the
+            # composition check had before #181, and the reason the user's
+            # resume was FOUR pages against a policy of two.
+            #
+            # Measured on the live corpus composed to the 3+3 policy: full
+            # content is 3 pages even at 0.50/0.60in margins, so two pages is
+            # not reachable by layout and content must go. shared.fit_to_pages
+            # pulls the levers cheapest-first -- margins cost nothing, then
+            # entry bullets, then skills LAST because those are ATS keyword
+            # matches -- recompiling after each, and returns the original
+            # untouched if nothing reaches the budget.
+            #
+            # Bounded by WALL CLOCK, not just by step count. Each attempt is a
+            # tectonic run, this function already allows 110s for one of them,
+            # and a retry loop bounded only by attempts is unbounded in the
+            # dimension that actually ends the invocation (the same defect as
+            # the council's critic retry, fixed the same week).
+            fit_actions: list[str] = []
+            if page_violations and doc_type == "resume":
+                attempts = {"n": 0}
+
+                def _measure(candidate: str) -> int:
+                    attempts["n"] += 1
+                    cand_tex = os.path.join(tmpdir, f"fit{attempts['n']}.tex")
+                    with open(cand_tex, "w") as fh:
+                        fh.write(candidate)
+                    r = subprocess.run(
+                        [tectonic_path, "-X", "compile", cand_tex],
+                        capture_output=True, text=True, timeout=110, env=env,
+                    )
+                    cand_pdf = cand_tex.replace(".tex", ".pdf")
+                    if r.returncode != 0 or not os.path.exists(cand_pdf):
+                        # A candidate that will not compile is not a smaller
+                        # document; report it as over budget so the loop moves
+                        # on instead of treating a build failure as a fit.
+                        return 10**6
+                    return len(page_text_lengths(cand_pdf))
+
+                def _time_left() -> float:
+                    if context is None or not hasattr(context, "get_remaining_time_in_millis"):
+                        return float("inf")
+                    return context.get_remaining_time_in_millis() / 1000.0
+
+                def _measure_guarded(candidate: str) -> int:
+                    # 40s: one more tectonic run plus the S3 writes below.
+                    if _time_left() < 40:
+                        logger.warning(
+                            "[compile] stopping page fit for %s with %.0fs left",
+                            job_hash, _time_left())
+                        return 10**6
+                    return _measure(candidate)
+
+                try:
+                    fitted, fit_actions, fits = fit(tex_content, _measure_guarded)
+                except Exception as exc:  # noqa: BLE001 - never fail a compile over this
+                    logger.warning("[compile] page fit raised for %s: %s", job_hash, exc)
+                    fitted, fit_actions, fits = tex_content, [], False
+
+                if fits and fit_actions:
+                    logger.info("[compile] fitted %s to %s page(s): %s",
+                                job_hash, expected_pages, "; ".join(fit_actions))
+                    tex_content = fitted
+                    with open(tex_path, "w") as fh:
+                        fh.write(fitted)
+                    subprocess.run([tectonic_path, "-X", "compile", tex_path],
+                                   capture_output=True, text=True, timeout=110, env=env)
+                    # The .tex is the Studio's source of truth, so it must carry
+                    # the document that was actually shipped -- otherwise the
+                    # editor opens content that does not match the PDF beside it.
+                    s3.put_object(Bucket=bucket, Key=tex_s3_key,
+                                  Body=tex_content.encode("utf-8"))
+                    page_violations = check_pdf(pdf_path, expected_pages=expected_pages)
+                elif fit_actions or not fits:
+                    logger.warning(
+                        "[compile] could NOT fit %s to %s page(s) after %d attempt(s); "
+                        "shipping it over budget rather than half-trimmed",
+                        job_hash, expected_pages, attempts["n"])
+
             size_issue = check_file_size(os.path.getsize(pdf_path))
             if size_issue:
                 logger.warning(f"[compile] PDF file size for {job_hash}: {size_issue}")
@@ -111,7 +209,11 @@ def handler(event, context):
             # indistinguishable from a check that never ran — the exact failure
             # this block replaces.
             return {"job_hash": job_hash, "pdf_s3_key": pdf_key, "user_id": user_id,
-                    "doc_type": doc_type, "page_violations": page_violations}
+                    "doc_type": doc_type, "page_violations": page_violations,
+                    # Always present, like page_violations: an empty list is the
+                    # claim that nothing needed cutting, which is different from
+                    # a fit that was never attempted.
+                    "fit_actions": fit_actions}
 
         except FileNotFoundError:
             # tectonic binary not available in this runtime
