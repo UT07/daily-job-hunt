@@ -516,11 +516,27 @@ Resources:
       CodeUri: lambdas/pipeline/
       Handler: compile_latex.handler
       Runtime: python3.11
-      # 150s so the Lambda outlives compile_latex.py's 110s tectonic
-      # subprocess timeout (a cold container's empty /tmp means tectonic
-      # must fetch its bundle before it can compile) rather than the
-      # platform hard-killing the function first.
-      Timeout: 150
+      # The Lambda must outlive compile_latex.py's 110s tectonic subprocess
+      # timeout (a cold container's empty /tmp means tectonic fetches its
+      # bundle before it can compile) rather than the platform hard-killing
+      # the function first. That alone set 150s.
+      #
+      # 150 -> 420 on 2026-10-06, measured in production compiling a real
+      # resume: the FIRST tectonic run costs ~80s on a cold container, because
+      # it fetches the bundle before it can typeset anything. shared/
+      # fit_to_pages then recompiles once per lever it pulls, and the wall-clock
+      # guard correctly stopped it mid-way:
+      #
+      #   [compile] stopping page fit for 0ab484ad7687 with 37s left
+      #   [compile] could NOT fit 0ab484ad7687 to 2 page(s) after 5 attempt(s)
+      #
+      # It shipped the document over budget rather than half-trimmed, which is
+      # the right failure, but the budget was the constraint rather than the
+      # document — a four-page resume that COULD reach two pages was left at
+      # four because the function ran out of seconds. 420s leaves the cold
+      # first compile plus roughly eight further attempts, and the guard still
+      # bounds the loop so a pathological document cannot consume all of it.
+      Timeout: 420
       MemorySize: 512
       AutoPublishAlias: live
       DeploymentPreference:
