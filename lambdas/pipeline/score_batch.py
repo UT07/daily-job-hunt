@@ -53,6 +53,7 @@ except ImportError:  # container-image shape only
         maybe_scrub_pii,
     )
 from shared.apply_platform import classify_apply_platform, extract_platform_ids
+from shared.score_caps import apply_anti_inflation_caps
 from shared.work_auth import apply_geo_score_cap
 from shared.tex_utils import tex_to_plaintext
 
@@ -265,6 +266,14 @@ def handler(event, context):
         # caps IE-only candidates' US/UK jobs without sponsor signal at
         # B-tier max (70). See shared/work_auth.py for full rules.
         score_result = apply_geo_score_cap(score_result, job, user_work_auth)
+
+        # The anti-inflation rules the prompt has always stated and nothing has
+        # ever applied (CLAUDE.md rule 4). Both are read from what the model
+        # itself returned -- a blocker_gap it declared, and whether the resume
+        # it was shown carries any quantified achievement -- so this holds the
+        # model to its own findings rather than second-guessing them. On a run
+        # where it obeyed its instructions this is a no-op.
+        score_result = apply_anti_inflation_caps(score_result, resume_tex)
 
         match_score = score_result.get("match_score", 0)
         if match_score < min_score:
