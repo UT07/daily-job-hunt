@@ -65,12 +65,19 @@ SET composition_policy = jsonb_build_object(
 WHERE email = '254utkarsh@gmail.com';
 
 -- Expect: 3 / 3, FOUR prefer rules, all four with an executable shape.
+--
+-- The executable_rules predicate mirrors actionable_preferences() and must
+-- keep mirroring it. It read `r ? 'exclude' OR (r ? 'include' AND r ? 'over')`
+-- until 2026-10-01, which predated the bare-include shape and could not count
+-- the rule it was added to verify -- it would have printed 3 beside a comment
+-- promising 4. A check that cannot see the thing it checks is the defect class
+-- this whole file exists to close.
 SELECT
     composition_policy -> 'max_experience_entries'          AS max_experience,
     composition_policy -> 'max_projects'                    AS max_projects,
     jsonb_array_length(composition_policy -> 'prefer')      AS prefer_rules,
     (SELECT count(*)
        FROM jsonb_array_elements(composition_policy -> 'prefer') r
-      WHERE r ? 'exclude' OR (r ? 'include' AND r ? 'over'))  AS executable_rules
+      WHERE r ? 'exclude' OR r ? 'include')                   AS executable_rules
 FROM users
 WHERE email = '254utkarsh@gmail.com';
