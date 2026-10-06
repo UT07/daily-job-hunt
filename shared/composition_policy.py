@@ -88,19 +88,32 @@ DEFAULTS: dict[str, Any] = {
     # 2026-09-30 report: "the writing should be of very high quality with impact
     # measured rather than looking like a list of tools".
     "writing": [
-        "Every bullet states an OUTCOME and, wherever the base resume supports "
-        "one, a NUMBER: latency, cost, uptime, throughput, error rate, time "
-        "saved, scale, headcount. A bullet with no measurable result is a weak "
-        "bullet.",
-        "Lead each bullet with a concrete action, not a technology. "
-        '"Cut p99 checkout latency 40% by sharding the session store" beats '
-        '"Worked with Redis, Kubernetes and Terraform".',
-        "Technologies appear where they earned the result, not as a list. If a "
-        "bullet is mostly comma-separated tool names it is a Skills entry in "
-        "the wrong place -- rewrite it or drop it.",
-        "Never invent or inflate a number. Use only figures the base resume "
-        "already states; if it gives none for an achievement, describe the "
-        "outcome qualitatively instead.",
+        "FORMULA for every bullet: ACTION VERB + what you did and at what "
+        "scale + QUANTIFIED RESULT. Yale Office of Career Strategy's "
+        "formulation, and the order matters -- the verb first, the number "
+        "last, so the line lands on its outcome.",
+        "Open with a strong past-tense verb: Designed, Built, Cut, Migrated, "
+        "Automated, Scaled, Led, Shipped, Reduced, Recovered. NEVER open with "
+        "\"Responsible for\", \"Worked on\", \"Helped with\", "
+        "\"Assisted in\", \"Duties included\", \"Involved in\" or "
+        "\"Tasked with\" -- those describe a job description, not a person.",
+        "Give the scope: the tools, and the SIZE. \"across 34 Lambda "
+        "functions\", \"for 150 API endpoints\", \"a 12-person team\". A "
+        "reader cannot judge an achievement whose scale is unstated.",
+        "End on a measured result -- latency, cost, uptime, error rate, time "
+        "saved, throughput, revenue, headcount. A close estimate beats no "
+        "number; an INVENTED number is worse than either. Use only figures "
+        "the base resume already supports, and where it gives none, state the "
+        "outcome qualitatively rather than reaching for a percentage.",
+        "The progression to aim for, from Yale's own example: "
+        "\"Managed customer service calls\" (a task) -> "
+        "\"Improved customer support by managing client calls\" (an action) "
+        "-> \"Increased customer satisfaction 20% in three months by "
+        "resolving client issues and streamlining call workflows\" (an "
+        "action with a measured result). Write the third kind.",
+        "Mirror the job description's own vocabulary where the resume "
+        "genuinely supports it -- an ATS matches words, not synonyms. Never "
+        "claim a tool the base resume does not evidence.",
     ],
     # Conditional emphasis, keyed on the target role like `rename`. Empty by
     # default: which axis to foreground depends on the roles a given candidate

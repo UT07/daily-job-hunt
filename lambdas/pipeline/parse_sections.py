@@ -593,6 +593,38 @@ def _rebuild_projects(projects: list[dict]) -> str:
     return "\n".join(parts)
 
 
+_COURSEWORK_LABEL = re.compile(
+    r"^\s*((?:relevant\s+)?coursework[^.:]*)\s*[.:]\s*", re.IGNORECASE)
+
+
+def _label_coursework(text: str) -> str:
+    """Render the coursework line with its label set as a label.
+
+    The parser is told "coursework is everything else the entry lists", so it
+    keeps the source resume's own heading inside the value. Measured on the
+    live corpus, the stored string is
+
+        "coursework, transferred. Algorithms \\& Data Structures, Operating
+         Systems, Computer Networks, Information Security."
+
+    which renders as a bullet beginning with a lowercase "coursework," -- the
+    heading reading as if it were the first module. Reported 2026-10-05.
+
+    The heading is emphasised rather than deleted, because the qualifier in it
+    is real information: "transferred" says these are transferred credits, and
+    dropping it would quietly change what the resume claims. A value with no
+    recognisable heading gets one, so every entry reads the same way.
+    """
+    if not text:
+        return text
+    m = _COURSEWORK_LABEL.match(text)
+    if m:
+        head = m.group(1).strip()
+        head = head[:1].upper() + head[1:]
+        return f"\\textbf{{{head}:}} {text[m.end():].strip()}"
+    return f"\\textbf{{Relevant coursework:}} {text}"
+
+
 def _rebuild_education(education: list[dict]) -> str:
     parts = []
     for idx, entry in enumerate(education):
@@ -603,7 +635,8 @@ def _rebuild_education(education: list[dict]) -> str:
         # resumes/sre_devops.tex's Education section). Dropping it is what made
         # conversion_is_faithful refuse a real master upload: the named modules
         # are 26% of that section's anchors.
-        coursework = _escape_tex(str(entry.get("coursework") or "").strip())
+        coursework = _label_coursework(
+            _escape_tex(str(entry.get("coursework") or "").strip()))
         block = (
             f"\\textbf{{{school}}} \\hfill \\textit{{{dates}}}\\\\[-0.15em]\n"
             f"\\textbf{{\\textit{{{degree}}}}}\\\\[-0.25em]"

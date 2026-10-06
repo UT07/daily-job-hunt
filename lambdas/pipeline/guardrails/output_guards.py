@@ -106,6 +106,40 @@ def check_banned_phrases(tex: str) -> list[str]:
     return [f"banned_phrase: '{p}'" for p in _BANNED_PHRASES if p in tex_lower]
 
 
+# Openers that describe a job description rather than a person. Position is the
+# whole point, which is why this is not another entry in _BANNED_PHRASES: "was
+# responsible for the migration" mid-sentence is clumsy, but a bullet that
+# OPENS this way has given up its strongest word. Yale Office of Career
+# Strategy's formula is ACTION VERB + task at scale + quantified result, and
+# every phrase here occupies the verb slot without being one.
+_WEAK_OPENERS = (
+    "responsible for", "worked on", "helped with", "helped to", "assisted in",
+    "assisted with", "duties included", "involved in", "tasked with",
+    "participated in", "contributed to", "in charge of",
+)
+
+_BULLET = re.compile(r"\\item\s+(.{0,48})", re.DOTALL)
+
+
+def check_weak_bullet_openers(tex: str) -> list[str]:
+    """Bullets that open with a phrase where the action verb belongs.
+
+    Reported rather than blocked: a weak opener is a writing problem, and
+    falling back to the corpus over one would trade a whole tailored document
+    for a phrase. It feeds the quality retry, which is the mechanism that can
+    actually rewrite it.
+    """
+    out = []
+    for m in _BULLET.finditer(tex or ""):
+        head = re.sub(r"\\[a-zA-Z]+\s*|[{}]", " ", m.group(1)).strip().lower()
+        for weak in _WEAK_OPENERS:
+            if head.startswith(weak):
+                out.append(f"weak_opener: a bullet begins \"{weak}\" — open "
+                           f"with an action verb instead")
+                break
+    return out
+
+
 def check_brace_balance(tex: str) -> bool:
     """Return True if {/} are balanced (ignoring \\{ and \\})."""
     depth = 0

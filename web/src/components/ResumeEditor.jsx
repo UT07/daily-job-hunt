@@ -35,6 +35,29 @@ export default function ResumeEditor({ job, onGenerateResume, generating }) {
   const [uploadError, setUploadError] = useState(null);
   const fileInputRef = useRef(null);
 
+  // Why a ref and not state: the loader below re-runs whenever
+  // `job.resume_s3_url` changes, and EVERY save changes it -- the backend mints
+  // a fresh presigned URL for the same key, so the value differs even when the
+  // document does not. Without this flag the loader overwrites `sections` with
+  // the server's copy and silently discards whatever has been typed since.
+  // Same defect class as the three hydration races in Settings.jsx (#171,
+  // #176): a refetch racing the user's own edits.
+  const sectionsDirty = useRef(false);
+
+  // Self-contained reset, during render -- React's documented pattern for
+  // "adjust state when a prop changes". JobWorkspace also passes key={jobId},
+  // which remounts and makes this unreachable there; it stays because a
+  // component should be correct for every caller, not only for the one that
+  // remembered the key. In render rather than in an effect because what decides
+  // the outcome is the flag's value when the in-flight fetch RESOLVES, not when
+  // an effect fired, and only a render-pass reset closes that window.
+  const [renderedJobId, setRenderedJobId] = useState(jobId);
+  if (jobId !== renderedJobId) {
+    setRenderedJobId(jobId);
+    sectionsDirty.current = false;
+    setSections(null);
+  }
+
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -54,7 +77,9 @@ export default function ResumeEditor({ job, onGenerateResume, generating }) {
       try {
         const data = await apiGet(`/api/dashboard/jobs/${jobId}/sections`);
         if (!cancelled) {
-          setSections(data.sections || {});
+          // Unsaved edits win. The JD analysis is server-derived and carries no
+          // user input, so it always refreshes.
+          if (!sectionsDirty.current) setSections(data.sections || {});
           setJdAnalysis(data.jd_analysis || null);
         }
       } catch (err) {
@@ -67,7 +92,21 @@ export default function ResumeEditor({ job, onGenerateResume, generating }) {
     return () => { cancelled = true; };
   }, [jobId, job.resume_s3_url]);
 
+
+  // `pdfUrl` seeds from the prop once via useState, so it never saw a later
+  // change to it: a regenerate or re-tailor elsewhere in the page updated
+  // `job.resume_s3_url` and the preview kept rendering the previous document.
+  // Not folded into the loader above, because that one returns early when
+  // there is no resume yet and would skip this.
+  useEffect(() => {
+    if (job.resume_s3_url) {
+      setPdfUrl(job.resume_s3_url);
+      setPdfKey((k) => k + 1);
+    }
+  }, [job.resume_s3_url]);
+
   function handleSectionChange(key, value) {
+    sectionsDirty.current = true;
     setSections((prev) => ({ ...prev, [key]: value }));
     setSaveSuccess(false);
     setSaveError(null);
@@ -79,6 +118,9 @@ export default function ResumeEditor({ job, onGenerateResume, generating }) {
     setSaveSuccess(false);
     try {
       const result = await apiCall(`/api/dashboard/jobs/${jobId}/sections`, { sections });
+      // Saved: the server's copy and the editor's now agree, so a later reload
+      // is no longer a race and is allowed to refresh from it.
+      sectionsDirty.current = false;
       setSaveSuccess(true);
       // If backend returns updated PDF URL, use it
       const newUrl = result?.resume_s3_url || result?.pdf_url || null;

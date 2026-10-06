@@ -1,7 +1,10 @@
 # Resume Studio — design
 
 **Date:** 2026-09-28
-**Status:** approved in outline; phase 1 to be implemented first
+**Status:** phases 1-3 shipped; **phase 4 specified below and not yet built**
+**Last revised:** 2026-10-06 — phase 4 taken from outline to an implementable
+design, phasing updated to what is actually deployed, and §7.5 added from a
+defect found in the shipped editor.
 **Supersedes:** nothing. Extends the existing `ResumeEditor` / `SectionEditor` / `/api/compile-latex` surface.
 
 ---
@@ -143,6 +146,15 @@ row. They have never been displayed. Rendering them is the single largest
 
 ### 5.2 Scores — and why they must not be live
 
+> **2026-10-06:** what the three scores ARE — and what "trained" does and does
+> not mean for them — is specified in
+> [`2026-10-06-persona-scoring-design.md`](2026-10-06-persona-scoring-design.md).
+> That document is the authority on the numbers; this section is the authority
+> on how the Studio *displays* them. The banding decision below is unchanged by
+> it and is in fact reinforced: a judgement rendered to one decimal place claims
+> a resolution nothing supports.
+
+
 The owner's requirement: *"I need the scoring to be consistent as we want the
 AI to be reliable."*
 
@@ -221,7 +233,7 @@ in it.
 
 ---
 
-## 7. Per-section AI instruction
+## 7. Per-section AI instruction  *(phase 4 — specified, not built)*
 
 Each section has `Ask AI ▸`, opening a single-line instruction box:
 
@@ -239,28 +251,105 @@ Full-resume instructions are out of scope. They rewrite everywhere at once,
 which makes reviewing the change impractical and a bad result unrecoverable
 short of regenerating.
 
-**Prompt-injection note.** The instruction is user text reaching a model that
-also sees the JD and the resume. It is passed as a scoped instruction for one
-section, and the output is validated as section content — it can only ever
-replace the text of the section it was invoked on. It cannot alter other
-sections, the preamble, or the compile.
+### 7.1 API
+
+Mirrors the existing suggestions endpoint, which is already async and already
+polled by `apiCall`:
+
+```
+POST /api/dashboard/jobs/{job_id}/instruct   -> 202 {task_id, poll_url}
+  body: {section_key: str, section_text: str, instruction: str}
+  task result: {section_key, proposed: str, unchanged: bool, refused: str|null}
+```
+
+`section_text` comes from the client for the same reason `/suggestions` takes
+it: the Studio compiles on blur, so the editor is routinely ahead of the stored
+`.tex`, and a proposal anchored to S3 would rewrite text the user has already
+changed. The JD is read server-side from the job row — it is not the client's
+to supply.
+
+`unchanged: true` is a first-class outcome, not an error. A model that returns
+the input is common for vague instructions, and the UI must say "no change
+proposed" rather than render an empty diff that looks like a bug.
+
+### 7.2 Validation — what a proposal may be
+
+The proposal replaces **the text of one section**. It is validated before it
+reaches the UI:
+
+- **Shape.** A list section (`experience`, `projects`) must come back as a list
+  of entry objects; a text section as a string. `SectionEditor` renders these
+  differently and a type mismatch produces an editor with nothing in it —
+  observed on 2026-10-05 while writing tests, where a string passed for
+  `experience` rendered an empty editor that read as a data-loss bug.
+- **Containment.** No `\section`, no preamble commands, no `\begin{document}`.
+  The proposal cannot introduce or remove a section.
+- **Quality, reported not blocking.** `check_weak_bullet_openers` and
+  `check_banned_phrases` run on the proposal. A weak opener is shown as a
+  warning beside Accept, because the user may still prefer it.
+- **Fabrication, blocking.** `check_fabrication` against the base résumé. An
+  instruction is user text, and "say I know Kubernetes" must not become a
+  claim. A blocked proposal is refused with its reason in `refused`.
+
+### 7.3 Prompt injection
+
+The instruction is user text reaching a model that also sees the JD and the
+résumé. Three properties contain it, and they are structural rather than
+prompt-level:
+
+- The output is validated as section content (§7.2), so it can only ever
+  replace the text of the section it was invoked on.
+- It cannot alter other sections, the preamble, or the compile.
+- The JD is server-supplied, so an instruction cannot smuggle in a different
+  job description.
+
+Note what is deliberately NOT relied on: telling the model to ignore
+instructions in the JD. The JD is also untrusted, `guardrails/input_guards`
+already fences it, and a second prompt-level request would add no guarantee.
+
+### 7.4 State and staleness
+
+A proposal is anchored to the `section_text` it was computed from. If the user
+edits that section while the task is in flight, the proposal is **stale** and
+is discarded with a message, not silently applied to different text. Same rule
+phase 3 established for suggestions; the implementation should share it rather
+than restate it.
+
+### 7.5 Lesson from the shipped editor — carry it into this phase
+
+`ResumeEditor` shipped with two state defects, fixed 2026-10-05, and phase 4
+can reintroduce both because it adds a second writer to the same state:
+
+1. The section loader re-ran on `job.resume_s3_url` and overwrote the user's
+   unsaved text. Every save changes that URL — the backend mints a fresh
+   presigned URL for the same key — so the race fired on the common path, not
+   a rare one.
+2. The PDF preview seeded from the prop once and never re-synced.
+
+The rule this gives phase 4: **accepting a proposal is an edit like any other.**
+It sets the dirty flag, it does not bypass the save path, and it must not
+trigger a reload that races itself. A test asserting the accepted text survives
+a concurrent refetch belongs in this phase, not after it.
 
 ---
 
 ## 8. Phasing
 
-**Phase 1 — the two-pane Studio.** Route, layout, section editor, live PDF
+Status as of 2026-10-06: phases 1-3 are deployed (`web/src/pages/ResumeStudio.jsx`,
+`components/studio/CoveragePanel.jsx`, `components/studio/PdfPane.jsx`, and both
+`/suggest` and `/suggestions` endpoints). Phase 4 has no endpoint and no UI.
+
+**Phase 1 — the two-pane Studio.** SHIPPED. Route, layout, section editor, live PDF
 with hash-keyed blur compilation, coverage panel, banded scores from a single
 scoring call. Uses only data that already exists. This is the phase to land
 first.
 
-**Phase 2 — reliable scoring.** `num_calls=3` with cache bypass on the Studio
+**Phase 2 — reliable scoring.** SHIPPED. `num_calls=3` with cache bypass on the Studio
 path; band derived from the spread.
 
-**Phase 3 — suggestions.** Suggestion model, anchoring, staleness, Apply/undo.
+**Phase 3 — suggestions.** SHIPPED. Suggestion model, anchoring, staleness, Apply/undo.
 
-**Phase 4 — per-section instructions.** Instruction box, proposed-change
-review.
+**Phase 4 — per-section instructions.** Specified in §7. Not built.
 
 Each phase is independently shippable and independently useful. Phase 1 alone
 delivers the visible-AI product claim.

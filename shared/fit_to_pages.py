@@ -1,0 +1,229 @@
+"""Make a resume fit its page budget, deterministically.
+
+`compile_latex` has measured the compiled PDF since shared/page_check landed,
+and on a violation it logged and uploaded anyway:
+
+    page_violations = check_pdf(pdf_path, expected_pages=expected_pages)
+    log_violations(page_violations, label=...)
+    ... s3.put_object(...)
+
+The same shape as the composition check before 2026-09-30 — the instrument was
+right and nothing was wired to it. Measured on the live corpus, composed to the
+user's 3+3 policy and compiled with tectonic:
+
+    full content, margins 0.60/0.70in   4 pages  [4040, 4178, 3958, 80]
+    full content, margins 0.50/0.60in   3 pages  [4264, 4481, 3511]
+    3 bullets/entry, 6 skills, tight    3 pages  [4075, 3996, 147]
+    3 bullets/entry, 5 skills, tight    2 pages  [4176, 3830]
+
+Two things follow. A two-page resume is not reachable from this corpus by
+layout alone, so content must go; and the last 147 characters cost a whole
+skills row, so the order the levers are pulled in decides what the candidate
+loses. Hence a fixed order, cheapest first:
+
+    1. margins          loses nothing, 4 pages -> 3
+    2. entry bullets    the N+1th bullet of each role, oldest roles first
+    3. skills items     last, because they are ATS keyword matches
+
+and each step is followed by a real compile. Guessing constants would be
+quicker and would also be wrong for the next corpus: this returns a document
+MEASURED to fit, or says it could not and leaves the document alone.
+"""
+from __future__ import annotations
+
+import re
+from typing import Any, Callable
+
+from shared.composition_policy import resolve
+
+_ENTRY = re.compile(r"(?<!\{)\\(?:jobentry|projectentry(?:url)?)(?![a-zA-Z])")
+_BLOCK = re.compile(r"\\begin\{itemize\}(.*?)\\end\{itemize\}", re.DOTALL)
+_GEOMETRY = re.compile(r"top=[\d.]+in,bottom=[\d.]+in,left=[\d.]+in,right=[\d.]+in")
+
+TIGHT_MARGINS = "top=0.50in,bottom=0.50in,left=0.60in,right=0.60in"
+
+# Floors. Below these the document stops being a resume: an entry with fewer
+# than three bullets reads as filler, and a skills section of three lines
+# throws away the keyword matches an ATS scores on.
+MIN_BULLETS = 3
+MIN_SKILLS = 5
+
+
+def _itemize_blocks(tex: str) -> list[dict]:
+    """Every itemize block, tagged with whether it belongs to an entry."""
+    starts = [m.start() for m in _ENTRY.finditer(tex)]
+    blocks = []
+    for i, m in enumerate(_BLOCK.finditer(tex)):
+        before = [s for s in starts if s < m.start()]
+        between = tex[before[-1]:m.start()] if before else "\\section"
+        is_entry = bool(before) and "\\section" not in between and "\\end{itemize}" not in between
+        items = re.split(r"(?=\\item)", m.group(1))
+        real = [x for x in items if x.lstrip().startswith("\\item")]
+        blocks.append({"span": (m.start(1), m.end(1)),
+                       "head": items[0] if not items[0].lstrip().startswith("\\item") else "",
+                       "items": real, "is_entry": is_entry, "index": i})
+    return blocks
+
+
+def tighten_margins(tex: str) -> tuple[str, bool]:
+    """The one lever that costs no content. Returns (tex, changed)."""
+    if TIGHT_MARGINS in tex:
+        return tex, False
+    out, n = _GEOMETRY.subn(TIGHT_MARGINS, tex, count=1)
+    return out, bool(n)
+
+
+def cap_items(tex: str, *, entry_max: int | None = None,
+              skills_max: int | None = None) -> tuple[str, int]:
+    """Trim itemize blocks to a maximum. Returns (tex, items removed).
+
+    `skills_max` applies to the FIRST non-entry block only — the Technical
+    Skills list. Education's coursework and the Certifications list are left
+    alone: they are short, and certifications are a claim the candidate holds,
+    not padding.
+    """
+    blocks = _itemize_blocks(tex)
+    first_non_entry = next((b["index"] for b in blocks if not b["is_entry"]), None)
+    pieces, pos, removed = [], 0, 0
+    for b in blocks:
+        cap = entry_max if b["is_entry"] else (
+            skills_max if b["index"] == first_non_entry else None)
+        if cap is None or len(b["items"]) <= cap:
+            continue
+        removed += len(b["items"]) - cap
+        start, end = b["span"]
+        pieces.append(tex[pos:start])
+        pieces.append(b["head"] + "".join(b["items"][:cap]))
+        pos = end
+    pieces.append(tex[pos:])
+    return "".join(pieces), removed
+
+
+def reduction_plan(tex: str, policy: dict[str, Any] | None = None) -> list[tuple[str, Callable]]:
+    """The levers, cheapest first. Each returns (tex, description or None)."""
+    p = resolve(policy)
+    bullet_start = p["bullets_per_entry"]["max"]
+
+    def margins(t):
+        out, changed = tighten_margins(t)
+        return out, ("tightened margins to 0.5/0.6in" if changed else None)
+
+    steps: list[tuple[str, Callable]] = [("margins", margins)]
+
+    for n in range(bullet_start - 1, MIN_BULLETS - 1, -1):
+        def bullets(t, n=n):
+            out, removed = cap_items(t, entry_max=n)
+            return out, (f"capped entries at {n} bullets (-{removed})" if removed else None)
+        steps.append((f"bullets<={n}", bullets))
+
+    for n in (7, 6, MIN_SKILLS):
+        def skills(t, n=n):
+            out, removed = cap_items(t, skills_max=n)
+            return out, (f"capped skills at {n} items (-{removed})" if removed else None)
+        steps.append((f"skills<={n}", skills))
+
+    return steps
+
+
+def fit(tex: str, measure: Callable[[str], int], policy: dict[str, Any] | None = None,
+        ) -> tuple[str, list[str], bool]:
+    """Reduce until the compiled document fits. Returns (tex, actions, fits).
+
+    `measure` compiles and returns a page count — injected so this stays a pure
+    decision procedure and so the caller owns the (slow) compile. A step that
+    changes nothing costs no compile.
+
+    Returns the ORIGINAL document when no reduction reaches the budget. A
+    half-trimmed resume that still overflows is strictly worse than the
+    untrimmed one: the same page count, less of the candidate on it.
+    """
+    budget = resolve(policy)["pages"]
+    if not isinstance(budget, int) or budget < 1:
+        return tex, [], True
+
+    pages = measure(tex)
+    if pages <= budget:
+        return tex, [], True
+
+    actions, current = [], tex
+    for _name, step in reduction_plan(tex, policy):
+        nxt, described = step(current)
+        if described is None or nxt == current:
+            continue
+        current = nxt
+        actions.append(described)
+        pages = measure(current)
+        if pages <= budget:
+            return current, actions, True
+
+    return tex, [], False
+
+
+# ---------------------------------------------------------------------------
+# Separators
+#
+# Two defects visible in the compiled PDF, both reported 2026-10-05.
+#
+# The corpus defines
+#
+#     \newcommand{\jobentry}[4]{... \textbf{#1} -- #2 \hfill \textit{#3} ...}
+#
+# and calls it as `\jobentry{Yuno Energy}{}{Jun 2026 – Present}{...}`. #2 is
+# the LOCATION and it is empty for every entry, so each role renders as
+# "Yuno Energy --" with a dash attached to nothing. That is the "dash in the
+# wrong place": it is not the date separator at all, it is a separator for an
+# argument that was never supplied.
+#
+# And the date separator is U+2013 (e2 80 93). The user asked for a hyphen, and
+# a hyphen is also the safer character: an en-dash depends on the font and the
+# input encoding surviving every hop between here and the PDF, and a resume is
+# read by parsers that do not all agree about U+2013.
+# ---------------------------------------------------------------------------
+
+# Only between two date-ish tokens, so an en-dash inside a project NAME --
+# "NaukriBaba – AI Job-Automation Platform" -- keeps its typography. Replacing
+# every dash in the document would be the easy version and would rewrite the
+# candidate's own titles.
+_DATE_SEP = re.compile(
+    r"((?:[A-Z][a-z]{2,8}\.?\s+)?\d{4})\s*[‐-―]\s*"
+    r"((?:[A-Z][a-z]{2,8}\.?\s+)?\d{4}|Present|Current|Now)"
+)
+
+_JOBENTRY_DEF = re.compile(
+    r"(\\newcommand\{\\jobentry\}\[4\]\{)(.*?)(\n\})", re.DOTALL)
+
+
+def normalise_date_separators(tex: str) -> tuple[str, int]:
+    """En/em dashes BETWEEN DATES become hyphens. Returns (tex, count)."""
+    out, n = _DATE_SEP.subn(r"\1 - \2", tex)
+    return out, n
+
+
+def fix_empty_location_separator(tex: str) -> tuple[str, bool]:
+    """Make `\\jobentry`'s location separator conditional on a location.
+
+    `\\ifx\\relax#2\\relax` is the standard empty-argument test: it compares the
+    argument, wrapped in \\relax on both sides, against a bare \\relax pair. An
+    empty #2 makes the two sides identical.
+    """
+    m = _JOBENTRY_DEF.search(tex)
+    if not m or "\\ifx\\relax#2\\relax" in m.group(2):
+        return tex, False
+    body = m.group(2)
+    fixed = body.replace("\\textbf{#1} -- #2",
+                         "\\textbf{#1}\\ifx\\relax#2\\relax\\else{} -- #2\\fi")
+    if fixed == body:
+        return tex, False
+    return tex[:m.start(2)] + fixed + tex[m.end(2):], True
+
+
+def normalise_separators(tex: str) -> tuple[str, list[str]]:
+    """Both separator fixes. Returns (tex, what it did)."""
+    actions = []
+    tex, dashes = normalise_date_separators(tex)
+    if dashes:
+        actions.append(f"date separator -> hyphen in {dashes} place(s)")
+    tex, fixed = fix_empty_location_separator(tex)
+    if fixed:
+        actions.append("suppressed the location separator when no location is given")
+    return tex, actions
