@@ -5,6 +5,7 @@ import ai_helper directly — agents.providers and agents._ai_helper (the
 flat/test import shim) are the only seams.
 """
 import logging
+import time
 
 from langgraph.types import Overwrite
 
@@ -15,7 +16,14 @@ from agents._ai_helper import (
     build_critique_prompt,
     prefer_complete,
 )
-from agents.providers import all_providers, call_one, family_of, select_critic, select_generators
+from agents.providers import (
+    all_providers,
+    call_one,
+    family_of,
+    select_critic,  # noqa: F401 -- still exported for callers wanting one
+    select_critics,
+    select_generators,
+)
 from guardrails.input_guards import INSTRUCTION_HIERARCHY, check_input, fence, maybe_scrub_pii
 from guardrails.output_guards import check_output
 
@@ -149,6 +157,71 @@ CRITIQUE_OUTCOMES = (
 )
 
 
+def prefer_guard_clean(candidates: list[dict], state: dict) -> list[dict]:
+    """Drop candidates the output guards block, unless that leaves nothing.
+
+    The same argument `prefer_complete` makes about truncation, one level up.
+    Its docstring: "a fragment win on style points -- the critic scores prose
+    quality and has no idea the answer stops mid-section". A candidate missing
+    its Experience section reads perfectly well too.
+
+    This exists because making adjudication WORK exposed it. With one critic
+    that almost always failed, the winner was candidate 1 and the guards saw
+    whatever that happened to be. Retrying across three critics made real
+    verdicts common, and the AI Eval Gate measured the consequence twice,
+    reproducibly: guard_pass_rate 0.92 -> 0.88. The critic was doing its job --
+    picking the best-written candidate -- and best-written is not the same as
+    structurally sound.
+
+    So the critic now chooses among documents that already pass. Fail-open for
+    the same reason prefer_complete does: when EVERY candidate is blocked, the
+    list is returned unchanged and the caller's own gate decides whether to
+    ship it. Skipped below two candidates because there is nothing to choose
+    between, and check_output is not free.
+    """
+    if len(candidates) < 2:
+        return candidates
+    clean = [
+        c for c in candidates
+        if check_output(
+            c.get("content", ""),
+            state.get("task", "default"),
+            base_skills_text=state.get("base_skills", ""),
+            base_body=state.get("base_body", ""),
+            header_markers=state.get("header_markers"),
+        ).passed
+    ]
+    if clean and len(clean) != len(candidates):
+        logger.warning(
+            "[council] Discarded %d guard-failing candidate(s) of %d before critique",
+            len(candidates) - len(clean), len(candidates),
+        )
+    return clean or candidates
+
+
+# How many critics to try before giving up. Three, not one, because the single
+# critic was a single point of failure: measured 2026-09-30, every missed
+# adjudication in a real batch came from this slot, never from generation.
+CRITIC_ATTEMPTS = 3
+
+# ...and a wall-clock ceiling across all of them, because a count is not a
+# bound on the thing that actually breaks. Measured 2026-10-01: the AI Eval
+# Gate job ran 20m16s against `timeout-minutes: 20` and was CANCELLED before it
+# could write evals/report.json, so the gate reported a failure that was never
+# about quality. Its log shows the mechanism --
+# `nvidia/nemotron-3-ultra-550b-a55b failed: The read operation timed out` --
+# a critic that fails by timing out costs its full provider timeout, and three
+# of those per case is a different order of latency from one.
+#
+# The two failure modes have very different costs, and this budget separates
+# them for free. An unparseable answer comes back FAST, because the model did
+# reply; a dead provider costs ~60s. So a fast failure leaves room to retry and
+# a slow one does not, which is the behaviour worth having rather than a flat
+# attempt count. 90s allows the second attempt after one slow failure, or all
+# three after fast ones.
+CRITIC_TIME_BUDGET_S = 90.0
+
+
 def critique_node(state: dict) -> dict:
     """Score candidates with a critic from an unused model family."""
     candidates = state.get("candidates") or []
@@ -158,6 +231,7 @@ def critique_node(state: dict) -> dict:
     # allowed to out-score a complete one on prose quality, which is all the
     # critic can see. Same rule the legacy council applies.
     candidates = prefer_complete(candidates)
+    candidates = prefer_guard_clean(candidates, state)
     if len(candidates) == 1:
         logger.info("[council] outcome=single_candidate — only 1 candidate, "
                     "skipping critique")
@@ -165,8 +239,8 @@ def critique_node(state: dict) -> dict:
                 "critique_outcome": "single_candidate"}
 
     used = {family_of({"model": c["model"]}) for c in candidates}
-    critic = select_critic(used)
-    if critic is None:
+    critics = select_critics(used, n=CRITIC_ATTEMPTS)
+    if not critics:
         # This branch logged NOTHING. It is the one degradation that left no
         # trace at all, in a system whose only view of the council was its log
         # lines.
@@ -179,40 +253,69 @@ def critique_node(state: dict) -> dict:
         return {"winner": candidates[0], "scores": [],
                 "critique_outcome": "no_critic_family"}
 
-    verdict = call_one(
-        critic,
-        build_critique_prompt(candidates, state.get("task_description", "")),
-        CRITIQUE_SYSTEM,
-        temperature=0,
-        # Sized for THIS critic. A reasoning model spends the budget thinking
-        # before it emits, and _call_provider treats empty content as failure —
-        # which is why 57% of council rounds returned critic_call_failed.
-        max_tokens=critic_budget(critic),
-    )
-    if not verdict:
-        logger.warning("[council] outcome=critic_call_failed — critic %s "
-                       "returned nothing; returning candidate 1 unadjudicated",
-                       critic.get("name", "?"))
-        return {"winner": candidates[0], "scores": [],
-                "critique_outcome": "critic_call_failed"}
+    prompt = build_critique_prompt(candidates, state.get("task_description", ""))
+    failures: list[str] = []
+    saw_unparseable = False
 
-    scores = _parse_critic_scores(verdict["content"], len(candidates))
-    if not scores:
-        # Log the raw answer, truncated. Phase 2 has to fix the SHAPE, and
-        # "unparseable" without the text is not something anyone can act on.
-        logger.warning(
-            "[council] outcome=critic_unparseable — critic %s answered in an "
-            "unreadable shape; returning candidate 1 unadjudicated. Raw: %r",
-            critic.get("name", "?"), (verdict.get("content") or "")[:300],
+    deadline = time.monotonic() + CRITIC_TIME_BUDGET_S
+    for attempt, critic in enumerate(critics, 1):
+        # Never on the first attempt: one critic is the behaviour this function
+        # had before retries existed, and a budget that can skip it would make
+        # a slow machine worse than no feature at all.
+        if attempt > 1 and time.monotonic() >= deadline:
+            failures.append(f"budget of {CRITIC_TIME_BUDGET_S:.0f}s exhausted "
+                            f"after {attempt - 1} attempt(s)")
+            logger.warning(
+                "[council] critic budget exhausted after %d of %d attempt(s); "
+                "not trying the rest", attempt - 1, len(critics),
+            )
+            break
+        name = critic.get("name", "?")
+        verdict = call_one(
+            critic, prompt, CRITIQUE_SYSTEM, temperature=0,
+            # Sized for THIS critic. A reasoning model spends the budget
+            # thinking before it emits, and _call_provider treats empty content
+            # as failure — which is why 57% of council rounds returned
+            # critic_call_failed.
+            max_tokens=critic_budget(critic),
         )
-        return {"winner": candidates[0], "scores": [],
-                "critique_outcome": "critic_unparseable"}
+        if not verdict:
+            failures.append(f"{name}: returned nothing")
+            continue
 
-    best = max(range(len(scores)), key=lambda i: scores[i])
-    logger.info("[council] outcome=adjudicated scores=%s winner=candidate %d",
-                scores, best + 1)
-    return {"winner": candidates[best], "scores": scores,
-            "critique_outcome": "adjudicated"}
+        scores = _parse_critic_scores(verdict["content"], len(candidates))
+        if not scores:
+            saw_unparseable = True
+            # Log the raw answer, truncated. "Unparseable" without the text is
+            # not something anyone can act on, and in production it was the
+            # model narrating its plan instead of emitting the JSON.
+            failures.append(f"{name}: unreadable shape")
+            logger.warning(
+                "[council] critic %s (attempt %d of %d) answered in an "
+                "unreadable shape. Raw: %r",
+                name, attempt, len(critics), (verdict.get("content") or "")[:300],
+            )
+            continue
+
+        best = max(range(len(scores)), key=lambda i: scores[i])
+        logger.info("[council] outcome=adjudicated scores=%s winner=candidate %d "
+                    "critic=%s (attempt %d of %d)",
+                    scores, best + 1, name, attempt, len(critics))
+        return {"winner": candidates[best], "scores": scores,
+                "critique_outcome": "adjudicated"}
+
+    # Every critic failed. The outcome vocabulary is unchanged because it is
+    # recorded in jobs.critique_outcome and older rows must stay comparable —
+    # but the log now says how many were tried and how each one failed. An
+    # outcome that cannot distinguish "one critic was unlucky" from "every
+    # family refused" is the shape CLAUDE.md rule 2 warns about.
+    outcome = "critic_unparseable" if saw_unparseable else "critic_call_failed"
+    logger.warning(
+        "[council] outcome=%s — all %d critic(s) failed (%s); returning "
+        "candidate 1 unadjudicated",
+        outcome, len(critics), "; ".join(failures),
+    )
+    return {"winner": candidates[0], "scores": [], "critique_outcome": outcome}
 
 
 def guard_output_node(state: dict) -> dict:

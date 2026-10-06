@@ -32,16 +32,31 @@ def select_generators(n: int) -> list[dict]:
     return _select_diverse_providers(_build_provider_list(), n=n)
 
 
-def select_critic(exclude_families: set[str]) -> dict | None:
-    """Pick one provider from a family that did not generate.
+def select_critics(exclude_families: set[str], n: int = 1) -> list[dict]:
+    """Up to n critics, each from a family that did not generate.
 
-    Falls back to any provider when every family already generated, which
-    matches the behaviour of the legacy council.
+    More than one because a single critic is a single point of failure, and in
+    production it failed most of the time. Measured 2026-09-30 across one batch:
+    every adjudication that did not happen came from the critic slot, not from
+    generation -- `critic nvidia/nemotron-3-super-120b-a12b returned nothing`,
+    `nvidia/nemotron-3-ultra-550b-a55b returned nothing`, and one
+    `critic_unparseable` whose raw answer was the model thinking aloud ("We need
+    to evaluate two candidates based on criteria..."). The council gave up on
+    the first failure and shipped candidate 1 unreviewed.
+
+    Families, not models: a second NVIDIA entry would fail the same way. The
+    fallback to "any provider" when every family has generated is unchanged.
     """
     all_providers = _build_provider_list()
-    picked = _select_diverse_providers(all_providers, n=1, exclude_families=exclude_families)
+    picked = _select_diverse_providers(all_providers, n=n, exclude_families=exclude_families)
     if not picked:
-        picked = _select_diverse_providers(all_providers, n=1)
+        picked = _select_diverse_providers(all_providers, n=n)
+    return picked
+
+
+def select_critic(exclude_families: set[str]) -> dict | None:
+    """The first available critic, or None. Kept for callers wanting just one."""
+    picked = select_critics(exclude_families, n=1)
     return picked[0] if picked else None
 
 
