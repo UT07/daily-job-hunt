@@ -6,6 +6,8 @@ import tempfile
 import boto3
 
 from shared.composition_policy import resolve
+from shared.ats_extract_check import check_ats_extraction
+from shared.ats_extract_check import log_violations as log_ats_violations
 from shared.fit_to_pages import fit, normalise_separators
 from shared.page_check import check_pdf, log_violations, page_text_lengths
 from utils.pdf_validator import check_file_size
@@ -194,6 +196,19 @@ def handler(event, context):
                         "shipping it over budget rather than half-trimmed",
                         job_hash, expected_pages, attempts["n"])
 
+            # --- Does our own PDF survive the way an ATS reads it? ---------
+            #
+            # Nothing asked this before 2026-10-06. The pipeline validated the
+            # LaTeX source and the page count, then shipped a document whose
+            # entire purpose is to be parsed by software nobody had pointed at
+            # it. Run AFTER fitting, because fitting is what last changed the
+            # layout, and a check on the pre-fit document would describe a file
+            # that was never uploaded.
+            ats_violations: list[str] = []
+            if doc_type == "resume":
+                ats_violations = check_ats_extraction(pdf_path, tex_content)
+                log_ats_violations(ats_violations, label=f"{doc_type} {job_hash}")
+
             size_issue = check_file_size(os.path.getsize(pdf_path))
             if size_issue:
                 logger.warning(f"[compile] PDF file size for {job_hash}: {size_issue}")
@@ -213,7 +228,8 @@ def handler(event, context):
                     # Always present, like page_violations: an empty list is the
                     # claim that nothing needed cutting, which is different from
                     # a fit that was never attempted.
-                    "fit_actions": fit_actions}
+                    "fit_actions": fit_actions,
+                    "ats_violations": ats_violations}
 
         except FileNotFoundError:
             # tectonic binary not available in this runtime
