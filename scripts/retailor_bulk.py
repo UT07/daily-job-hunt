@@ -45,6 +45,19 @@ except ImportError:
     pass
 
 FUNCTION = "naukribaba-tailor-resume"
+# Tailoring writes a .tex and NOTHING ELSE. The PDF is produced by the state
+# machine's CompileResume state (template.yaml), which invokes this function --
+# so a script that invokes the tailor directly leaves the previous PDF in place.
+#
+# Measured 2026-10-06 on job 0ab484ad7687:
+#     .tex  modified 2026-09-30 19:56Z   <- the composition fixes
+#     .pdf  modified 2026-09-30 07:23Z   <- 12.5 hours OLDER
+#
+# Every batch this script has ever run updated the source and left the document
+# the user actually opens untouched. That is why none of the composition work
+# appeared to land. The page fitting and separator normalisation also live in
+# compile, so they can ONLY reach a PDF through this.
+COMPILE_FUNCTION = "naukribaba-compile-latex"
 REGION = "eu-west-1"
 
 
@@ -126,6 +139,39 @@ def select_jobs(url, headers, user_id: str, tiers: list[str], max_jobs: int | No
     return usable[:max_jobs] if max_jobs else usable
 
 
+def tex_key(user_id: str, job_hash: str) -> str:
+    """Where tailoring writes, and where compiling reads. Deterministic, so the
+    compile phase needs no result from the tailor phase."""
+    return f"users/{user_id}/resumes/{job_hash}_tailored.tex"
+
+
+def wait_for_tex(s3, bucket: str, keys: list[str], newer_than, timeout: float = 600.0):
+    """Block until each .tex has been rewritten, or the timeout expires.
+
+    Polls S3 LastModified rather than sleeping a guessed interval: tailoring is
+    60-90s on a warm Lambda and several minutes on a cold one, and compiling a
+    .tex the tailor has not written yet would silently rebuild the OLD document
+    while reporting success.
+
+    Returns (fresh, stale) so the caller can say which jobs it is compiling and
+    which it is skipping, instead of reporting a number that covers both.
+    """
+    import time
+    deadline = time.monotonic() + timeout
+    pending, fresh = dict.fromkeys(keys), []
+    while pending and time.monotonic() < deadline:
+        for key in list(pending):
+            try:
+                if s3.head_object(Bucket=bucket, Key=key)["LastModified"] > newer_than:
+                    fresh.append(key)
+                    del pending[key]
+            except Exception:
+                pass            # not written yet, or never existed
+        if pending:
+            time.sleep(10)
+    return fresh, list(pending)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -134,6 +180,13 @@ def main() -> int:
     ap.add_argument("--commit", action="store_true", help="actually invoke (default dry run)")
     ap.add_argument("--user-id", default=None)
     ap.add_argument("--depth", default="moderate", choices=["light", "moderate", "full"])
+    ap.add_argument("--compile-only", action="store_true",
+                    help="skip tailoring; just recompile the existing .tex. No AI "
+                         "calls, and it is what fixes a PDF that is older than "
+                         "its own source")
+    ap.add_argument("--no-compile", action="store_true",
+                    help="tailor without recompiling. Leaves the PDF stale; only "
+                         "useful when a compile is being driven separately")
     ap.add_argument("--stagger", type=float, default=6.0,
                     help="seconds between invocations; the council shares a Groq "
                          "TPM ceiling, so firing 30 at once mostly produces 429s")
@@ -158,38 +211,92 @@ def main() -> int:
         return 0
 
     import boto3
+    import datetime
 
     lam = boto3.client("lambda", region_name=REGION)
-    sent = failed = 0
-    for i, j in enumerate(jobs, 1):
-        try:
-            # InvocationType="Event": returns 202 at once. A synchronous invoke
-            # times out at 60s on a 60-90s job and reports failure for work that
-            # succeeds.
-            resp = lam.invoke(
-                FunctionName=FUNCTION, InvocationType="Event",
-                Payload=json.dumps({"job_hash": j["job_hash"], "user_id": user_id,
-                                    "tailoring_depth": args.depth}).encode(),
-            )
-            code = resp.get("StatusCode")
-            if code == 202:
-                sent += 1
-                print(f"  [{i}/{len(jobs)}] queued {j['job_hash'][:12]} {j['title'][:34]}")
-            else:
-                failed += 1
-                print(f"  [{i}/{len(jobs)}] UNEXPECTED StatusCode {code} for {j['job_hash'][:12]}")
-        except Exception as exc:  # noqa: BLE001 — one bad job must not stop the batch
-            failed += 1
-            print(f"  [{i}/{len(jobs)}] FAILED to queue {j['job_hash'][:12]}: {exc}")
-        if i < len(jobs):
-            time.sleep(args.stagger)
+    s3 = boto3.client("s3", region_name=REGION)
+    bucket = os.environ.get("S3_BUCKET", "utkarsh-job-hunt")
+    started = datetime.datetime.now(datetime.timezone.utc)
+    keys = [tex_key(user_id, j["job_hash"]) for j in jobs]
 
-    print(f"\nqueued {sent}, failed to queue {failed}")
-    print("Asynchronous: a 202 means ACCEPTED, not finished. Each job takes "
-          "60-90s. Check progress with:")
-    print("  aws logs tail /aws/lambda/naukribaba-tailor-resume --since 15m --format short | grep '\\[tailor\\]'")
-    print("and verify the artifacts with scripts/smoke_prod.py.")
-    return 0 if failed == 0 else 1
+    sent = failed = 0
+    if args.compile_only:
+        print("\n--compile-only: skipping tailoring, recompiling the stored .tex")
+        fresh, stale = keys, []
+    else:
+        for i, j in enumerate(jobs, 1):
+            try:
+                # InvocationType="Event": returns 202 at once. A synchronous
+                # invoke times out at 60s on a 60-90s job and reports failure
+                # for work that succeeds.
+                resp = lam.invoke(
+                    FunctionName=FUNCTION, InvocationType="Event",
+                    Payload=json.dumps({"job_hash": j["job_hash"],
+                                        "user_id": user_id,
+                                        "tailoring_depth": args.depth}).encode(),
+                )
+                code = resp.get("StatusCode")
+                if code == 202:
+                    sent += 1
+                    print(f"  [{i}/{len(jobs)}] tailor queued {j['job_hash'][:12]} "
+                          f"{str(j['title'])[:34]}", flush=True)
+                else:
+                    failed += 1
+                    print(f"  [{i}/{len(jobs)}] UNEXPECTED StatusCode {code} "
+                          f"for {j['job_hash'][:12]}", flush=True)
+            except Exception as exc:  # noqa: BLE001 — one bad job must not stop the batch
+                failed += 1
+                print(f"  [{i}/{len(jobs)}] FAILED to queue {j['job_hash'][:12]}: {exc}",
+                      flush=True)
+            if i < len(jobs):
+                time.sleep(args.stagger)
+
+        print(f"\ntailor: queued {sent}, failed {failed}")
+        if args.no_compile:
+            print("--no-compile: the PDFs still show the PREVIOUS document.")
+            return 0 if failed == 0 else 1
+
+        print("waiting for each .tex to be rewritten before compiling...", flush=True)
+        fresh, stale = wait_for_tex(s3, bucket, keys, started)
+        print(f"  {len(fresh)} rewritten, {len(stale)} not", flush=True)
+        for key in stale:
+            print(f"  SKIP compile, .tex never rewritten: {key.rsplit('/', 1)[-1]}")
+
+    # --- compile ----------------------------------------------------------
+    # The phase this script never had. Tailoring writes a .tex and nothing
+    # else; the PDF comes from the state machine's CompileResume state. Driving
+    # the tailor directly therefore produced a new source beside a stale
+    # document -- and page fitting and separator normalisation live in compile,
+    # so they can reach a PDF no other way.
+    compiled = compile_failed = 0
+    for i, key in enumerate(fresh, 1):
+        job_hash = key.rsplit("/", 1)[-1].replace("_tailored.tex", "")
+        try:
+            resp = lam.invoke(
+                FunctionName=COMPILE_FUNCTION, InvocationType="Event",
+                Payload=json.dumps({"tex_s3_key": key, "job_hash": job_hash,
+                                    "user_id": user_id, "doc_type": "resume"}).encode(),
+            )
+            if resp.get("StatusCode") == 202:
+                compiled += 1
+                print(f"  [{i}/{len(fresh)}] compile queued {job_hash[:12]}", flush=True)
+            else:
+                compile_failed += 1
+                print(f"  [{i}/{len(fresh)}] compile UNEXPECTED {resp.get('StatusCode')} "
+                      f"{job_hash[:12]}", flush=True)
+        except Exception as exc:  # noqa: BLE001
+            compile_failed += 1
+            print(f"  [{i}/{len(fresh)}] compile FAILED {job_hash[:12]}: {exc}", flush=True)
+        if i < len(fresh):
+            time.sleep(min(args.stagger, 8.0))   # compiling is ~15s, not 90s
+
+    print(f"\ncompile: queued {compiled}, failed {compile_failed}")
+    print("Asynchronous: a 202 means ACCEPTED, not finished. Verify with:")
+    print("  aws logs tail /aws/lambda/naukribaba-compile-latex --since 15m "
+          "--format short | grep -E 'fitted|separators|ats:'")
+    print("and compare .tex vs .pdf LastModified — a PDF older than its own "
+          "source is the defect this phase exists to prevent.")
+    return 0 if (failed == 0 and compile_failed == 0) else 1
 
 
 if __name__ == "__main__":
