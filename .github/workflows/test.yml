@@ -331,6 +331,7 @@ jobs:
       - name: Run browser E2E
         run: |
           pytest tests/e2e/test_critical_journeys.py \
+                 tests/e2e/test_studio_journeys.py \
                  --tb=short \
                  --junitxml=test-results/e2e-junit.xml \
                  --screenshot=only-on-failure \
@@ -350,7 +351,11 @@ jobs:
         if: always()
         run: >-
           python scripts/assert_suite_ran.py
-          test-results/e2e-junit.xml 40 "browser E2E tests"
+          test-results/e2e-junit.xml 46 "browser E2E tests"
+      # Floor 40 -> 46 when tests/e2e/test_studio_journeys.py joined the run.
+      # 46 of 53 keeps the same slack the previous floor allowed (40 of 46,
+      # ~87%): enough for a test to be legitimately skipped, far too little for
+      # a suite to be blanket-skipped and still pass.
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
