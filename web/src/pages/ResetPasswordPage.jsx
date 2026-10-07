@@ -21,6 +21,34 @@ export default function ResetPasswordPage() {
     );
   }
 
+  // Ordered BEFORE the `!user` guard, and that order is the whole point.
+  // `handleSubmit` signs the user out as soon as the password is changed, so
+  // by the time this renders there is no session left. With the guards the
+  // other way round a SUCCESSFUL reset fell through to "Link expired": the
+  // password HAD been changed and the page told the user the opposite, whose
+  // natural next move is to request another reset, forever. `done` is
+  // terminal -- the work is done -- so it outranks any auth-state guard.
+  // Asserted in tests/e2e/test_reset_password_journeys.py.
+  if (done) {
+    return (
+      <div className="min-h-screen bg-cream flex flex-col justify-center">
+        <div className="max-w-md w-full mx-auto px-4">
+          <div className="bg-white border-2 border-black shadow-brutal p-8 text-center">
+            <h2 className="text-lg font-heading font-bold text-black mb-4">
+              Password updated
+            </h2>
+            <p className="text-sm text-stone-500 mb-6">
+              Your password has been changed. Sign in with your new password.
+            </p>
+            <Button variant="primary" onClick={() => navigate('/login')}>
+              Sign in
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // No session means the recovery link was invalid or expired
   if (!user) {
     return (
@@ -66,26 +94,6 @@ export default function ResetPasswordPage() {
     } finally {
       setSubmitting(false);
     }
-  }
-
-  if (done) {
-    return (
-      <div className="min-h-screen bg-cream flex flex-col justify-center">
-        <div className="max-w-md w-full mx-auto px-4">
-          <div className="bg-white border-2 border-black shadow-brutal p-8 text-center">
-            <h2 className="text-lg font-heading font-bold text-black mb-4">
-              Password updated
-            </h2>
-            <p className="text-sm text-stone-500 mb-6">
-              Your password has been changed. Sign in with your new password.
-            </p>
-            <Button variant="primary" onClick={() => navigate('/login')}>
-              Sign in
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
   }
 
   return (
