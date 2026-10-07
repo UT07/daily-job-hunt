@@ -299,3 +299,81 @@ class TestStripForcedBreaks:
             assert "clearpage" in out, (
                 f"reduction step {name!r} removes forced breaks; that belongs in "
                 "normalise_separators, which runs unconditionally")
+
+
+# ---------------------------------------------------------------------------
+# Free levers before content (tighten_list_spacing / tighten_section_spacing)
+# ---------------------------------------------------------------------------
+# Until 2026-10-08 `reduction_plan` spent bullets down to the floor before
+# trying any typographic lever. "Cheapest first" has to mean cheapest TO THE
+# CANDIDATE, and whitespace is the only thing a résumé loses for free.
+#
+# Measured on the three documents that still overran after every lever had been
+# pulled — page 3 holding 39, 147 and 383 characters, a spillover rather than a
+# page. Closing up list spacing alone brought two of them to exactly two pages:
+#
+#   7d7533eaa322   [4151, 3831,  39]  ->  [4337, 3684]
+#   ad871c2c1134   [4048, 3868, 147]  ->  [4173, 3890]
+#   9be139f8581f   [3913, 4124, 383]  ->  [4196, 4077, 147]
+
+TEMPLATE_SPACING = (
+    "\\setlist[itemize]{leftmargin=*, itemsep=1.8pt, topsep=2.5pt, parsep=0pt, partopsep=0pt}\n"
+    "\\titlespacing*{\\section}{0pt}{0.60em}{0.35em}\n"
+)
+
+
+class TestFreeLevers:
+    def test_list_spacing_is_closed_up(self):
+        from shared.fit_to_pages import tighten_list_spacing
+        out, changed = tighten_list_spacing(TEMPLATE_SPACING)
+        assert changed
+        assert "itemsep=0pt, topsep=1pt" in out
+        assert "leftmargin=*" in out, "the rest of the setlist must survive"
+        assert "parsep=0pt" in out
+
+    def test_section_spacing_is_closed_up(self):
+        from shared.fit_to_pages import tighten_section_spacing
+        out, changed = tighten_section_spacing(TEMPLATE_SPACING)
+        assert changed
+        assert "{0pt}{0.35em}{0.20em}" in out
+
+    def test_a_document_without_those_knobs_is_unchanged(self):
+        """Both must be no-ops on a template that does not carry them, so a
+        step that cannot apply costs no compile — `fit` skips measuring when a
+        step changes nothing."""
+        from shared.fit_to_pages import tighten_list_spacing, tighten_section_spacing
+        plain = "\\section*{Summary}\nProse.\n"
+        assert tighten_list_spacing(plain) == (plain, False)
+        assert tighten_section_spacing(plain) == (plain, False)
+
+    def test_applying_twice_changes_nothing_further(self):
+        """Idempotent, because `fit` may re-enter the plan and a lever that
+        keeps 'changing' the document would spend a compile every round."""
+        from shared.fit_to_pages import tighten_list_spacing
+        once, _ = tighten_list_spacing(TEMPLATE_SPACING)
+        twice, changed = tighten_list_spacing(once)
+        assert (twice, changed) == (once, False)
+
+
+class TestLeverOrder:
+    """The ordering IS the fix, so it is asserted rather than left to reading."""
+
+    def test_every_free_lever_comes_before_every_content_lever(self):
+        from shared.fit_to_pages import reduction_plan
+        names = [n for n, _ in reduction_plan(TEMPLATE_SPACING, None)]
+        free = {"margins", "list-spacing", "section-spacing"}
+        last_free = max(i for i, n in enumerate(names) if n in free)
+        first_content = min(i for i, n in enumerate(names)
+                            if n.startswith("bullets") or n.startswith("skills"))
+        assert last_free < first_content, (
+            f"a content lever is pulled before a free one: {names}. Whitespace "
+            "costs the candidate nothing and a dropped bullet costs them a "
+            "line of their own history")
+
+    def test_the_plan_still_ends_with_the_content_levers_it_had(self):
+        """Adding free levers must not have displaced any existing one."""
+        from shared.fit_to_pages import reduction_plan
+        names = [n for n, _ in reduction_plan(TEMPLATE_SPACING, None)]
+        assert "margins" in names
+        assert any(n.startswith("bullets<=") for n in names)
+        assert any(n.startswith("skills<=") for n in names)

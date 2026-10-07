@@ -99,8 +99,57 @@ def cap_items(tex: str, *, entry_max: int | None = None,
     return "".join(pieces), removed
 
 
+_LIST_SPACING = re.compile(r"itemsep=[\d.]+pt,\s*topsep=[\d.]+pt")
+_SECTION_SPACING = re.compile(
+    r"(\\titlespacing\*\{\\section\}\{0pt\}\{)[\d.]+em\}\{[\d.]+em\}")
+
+
+def tighten_list_spacing(tex: str) -> tuple[str, bool]:
+    r"""Close up the gaps between bullets. Costs the candidate nothing.
+
+    The template ships `itemsep=1.8pt, topsep=2.5pt`. Across ~11 lists and
+    ~29 items that is several lines of pure whitespace, and whitespace is the
+    one thing a résumé can lose for free.
+    """
+    # Compared as TEXT, not on subn's match count. The pattern matches its own
+    # output -- `itemsep=0pt, topsep=1pt` is itself `itemsep=<num>pt,
+    # topsep=<num>pt` -- so on a second application subn reports a match while
+    # producing an identical document, and the flag would be claiming a change
+    # that did not happen. `fit` is not actually fooled by that: its loop skips
+    # a step when `nxt == current` regardless of what the step says. The flag
+    # is corrected anyway, because a return value that is wrong only where the
+    # one current caller happens not to look is a trap for the next one.
+    out, _ = _LIST_SPACING.subn("itemsep=0pt, topsep=1pt", tex, count=1)
+    return out, out != tex
+
+
+def tighten_section_spacing(tex: str) -> tuple[str, bool]:
+    r"""Close up the space above and below section headings. Also free."""
+    # Text comparison, for the reason given in tighten_list_spacing.
+    out, _ = _SECTION_SPACING.subn(r"\g<1>0.35em}{0.20em}", tex, count=1)
+    return out, out != tex
+
+
 def reduction_plan(tex: str, policy: dict[str, Any] | None = None) -> list[tuple[str, Callable]]:
-    """The levers, cheapest first. Each returns (tex, description or None)."""
+    """The levers, cheapest first. Each returns (tex, description or None).
+
+    "Cheapest" means cheapest TO THE CANDIDATE, and that ordering was wrong
+    until 2026-10-08: bullets were spent down to the floor before any of the
+    free typographic levers were tried. Measured on the three documents that
+    still overran after every lever had been pulled -- page 3 holding 39, 147
+    and 383 characters, a spillover rather than a page -- closing up list
+    spacing alone brought two of them to exactly two pages:
+
+        7d7533eaa322   [4151, 3831,  39]  ->  [4337, 3684]
+        ad871c2c1134   [4048, 3868, 147]  ->  [4173, 3890]
+        9be139f8581f   [3913, 4124, 383]  ->  [4196, 4077, 147]
+
+    The consequence is larger than those three. Because whitespace is now
+    spent BEFORE content, a document that used to need its bullets cut to 3 to
+    fit may now fit at 6 or 7 -- so this removes content from fewer résumés,
+    not more. Documents already within budget are untouched either way: `fit`
+    returns before the first lever when `pages <= budget`.
+    """
     p = resolve(policy)
     bullet_start = p["bullets_per_entry"]["max"]
 
@@ -108,7 +157,21 @@ def reduction_plan(tex: str, policy: dict[str, Any] | None = None) -> list[tuple
         out, changed = tighten_margins(t)
         return out, ("tightened margins to 0.5/0.6in" if changed else None)
 
-    steps: list[tuple[str, Callable]] = [("margins", margins)]
+    def list_spacing(t):
+        out, changed = tighten_list_spacing(t)
+        return out, ("closed up list spacing" if changed else None)
+
+    def section_spacing(t):
+        out, changed = tighten_section_spacing(t)
+        return out, ("closed up section spacing" if changed else None)
+
+    # Free levers first, content last. Each of the three below takes nothing
+    # away from the candidate; everything after them does.
+    steps: list[tuple[str, Callable]] = [
+        ("margins", margins),
+        ("list-spacing", list_spacing),
+        ("section-spacing", section_spacing),
+    ]
 
     for n in range(bullet_start - 1, MIN_BULLETS - 1, -1):
         def bullets(t, n=n):
