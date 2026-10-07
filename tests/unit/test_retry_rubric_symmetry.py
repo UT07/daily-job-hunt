@@ -182,3 +182,58 @@ def test_the_handler_reports_the_shipped_warnings_not_the_first_attempt():
         f"not {ast.dump(value)[:60]} — `quality_warnings` holds the FIRST "
         "attempt's findings even when a retry replaced it"
     )
+
+
+# ---------------------------------------------------------------------------
+# What the council finalized best-effort WITH must leave the handler too
+# ---------------------------------------------------------------------------
+# Measured 2026-10-07 over a 212-résumé batch: 87 runs (41%) exhausted the
+# council's repair budget and shipped with a block-severity violation still
+# present. The figure had to be reconstructed from CloudWatch by hand, for one
+# batch, because `guard_report` never left the graph and `quality_gate` logged
+# only that the budget was spent. Same shape as `quality_warnings` before it:
+# measured, and then dropped before the return.
+
+
+def test_the_handler_reports_what_the_guard_still_objected_to():
+    handler = _function("handler")
+    returns = [n for n in ast.walk(handler)
+               if isinstance(n, ast.Return) and isinstance(n.value, ast.Dict)]
+    reported = {k.value: v for r in returns
+                for k, v in zip(r.value.keys, r.value.values)
+                if isinstance(k, ast.Constant)}
+    assert "guard_violations" in reported, (
+        "the surviving block-severity violations are not returned, so nothing "
+        "outside this function can tell a clean document from one that "
+        "exhausted the repair budget — which is 41% of them"
+    )
+
+
+class TestSurvivingBlocking:
+    """`None` (never measured) and `[]` (measured, clean) are different facts."""
+
+    @staticmethod
+    def _fn():
+        import tailor_resume
+        return tailor_resume._surviving_blocking
+
+    def test_no_report_at_all_is_not_a_clean_report(self):
+        assert self._fn()(None) is None, (
+            "the legacy engine has no guard nodes; reporting [] would claim a "
+            "clean verdict from an engine that never looked")
+
+    def test_a_clean_report_is_an_empty_list(self):
+        assert self._fn()({"passed": True, "violations": [], "blocking": []}) == []
+
+    def test_only_the_blocking_subset_is_surfaced(self):
+        got = self._fn()({"passed": False,
+                          "violations": ["fabrication: 'Kotlin'", "banned_phrase: 'robust'"],
+                          "blocking": ["fabrication: 'Kotlin'"]})
+        assert got == ["fabrication: 'Kotlin'"]
+
+    def test_a_report_predating_severity_falls_back_to_all_violations(self):
+        """No `blocking` key means severity was discarded at serialisation.
+        Reporting nothing for those would make this change look like it had
+        cleaned them up."""
+        got = self._fn()({"passed": False, "violations": ["fabrication: 'Scala'"]})
+        assert got == ["fabrication: 'Scala'"]

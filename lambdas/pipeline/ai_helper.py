@@ -952,10 +952,21 @@ def council_complete(
     #
     # Production runs the graph. Legacy is the escape hatch and the parity
     # test's baseline, nothing more. Read the stack, not the default.
-    return _council_complete_legacy(
-        prompt, system, task_description, n_generators, temperature,
-        max_tokens=max_tokens,
-    )
+    # `guard_report: None` is added here rather than at legacy's five return
+    # points, and the value is the honest one: legacy has no guard nodes, so it
+    # has not measured anything, and `None` means exactly that. Flattening it
+    # to an empty report would claim a clean verdict from an engine that never
+    # looked -- the same lie as a status that cannot fail. The KEY is present
+    # because test_return_shape_matches_legacy_contract asserts an exact set on
+    # both engines: a key on one and not the other is how post_score silently
+    # ran guard-free for weeks.
+    return {
+        **_council_complete_legacy(
+            prompt, system, task_description, n_generators, temperature,
+            max_tokens=max_tokens,
+        ),
+        "guard_report": None,
+    }
 
 
 def _council_complete_legacy(

@@ -142,7 +142,18 @@ def handler(event, context):
     compile_result = event.get("compile_result")
     if compile_result and compile_result.get("error") != _LOCAL_DEV_ERROR:
         verdict = from_step_results(event.get("tailor_result"), compile_result)
-        update["resume_verdict"] = verdict.to_row()
+        row = verdict.to_row()
+        # Recorded beside the grade, deliberately NOT inside `checks`: these
+        # are the block-severity violations the council finalized best-effort
+        # with, and they do not grade the document until their false-positive
+        # rate at this position has been measured (CLAUDE.md #16). Keeping
+        # them out of `checks` also keeps the gate's signal intact -- a 5th
+        # required check that is absent on every legacy-engine and backfilled
+        # row would grade the entire corpus `unmeasured`.
+        guard_violations = (event.get("tailor_result") or {}).get("guard_violations")
+        if guard_violations is not None:
+            row["guard_violations"] = list(guard_violations)
+        update["resume_verdict"] = row
         log = logger.warning if verdict.grade in ("fail", "unmeasured") else logger.info
         log("[save_job] %s resume verdict: %s%s", job_hash, verdict.grade,
             f" — {'; '.join(verdict.reasons[:4])}" if verdict.reasons else "")

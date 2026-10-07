@@ -181,3 +181,54 @@ def test_clean_output_still_finalizes_on_the_first_pass():
 
     assert state["guard_report"]["passed"] is True
     assert nodes.quality_gate(state) == "finalize"
+
+
+# ---------------------------------------------------------------------------
+# What ships when the repair budget runs out
+# ---------------------------------------------------------------------------
+# A bounded repair loop must terminate, so `quality_gate` finalizing
+# best-effort is correct. What was not correct is that it did so SILENTLY.
+# Measured 2026-10-07 over a 212-résumé batch: 87 runs (41%) logged "Repair
+# budget exhausted — finalizing best-effort" and shipped with a block-severity
+# violation still present, and nothing anywhere recorded which violation. A
+# warning that cannot be acted on is the same class of defect as a status that
+# cannot fail.
+
+
+def test_exhausting_the_budget_names_what_is_shipping(caplog):
+    import logging
+    state = {
+        "guard_report": {
+            "passed": False,
+            "violations": ["fabrication: 'Kotlin' not in base", "banned_phrase: 'robust'"],
+            "blocking": ["fabrication: 'Kotlin' not in base"],
+        },
+        "repair_attempts": 2,
+    }
+    with caplog.at_level(logging.WARNING):
+        assert nodes.quality_gate(state) == "finalize"
+    text = caplog.text
+    assert "Repair budget exhausted" in text
+    assert "Kotlin" in text, (
+        "the log says the budget is spent but not what survived — which is the "
+        "state 87 of 212 résumés shipped in, unrecorded")
+    assert "1 unresolved" in text, "the count of surviving blocking violations"
+
+
+def test_it_falls_back_to_all_violations_when_severity_was_not_preserved(caplog):
+    """An older `guard_report` has no `blocking` key, because `to_dict` used to
+    discard severity. Reporting nothing for those would make the fix look like
+    it had cleaned them up."""
+    import logging
+    state = {"guard_report": {"passed": False, "violations": ["fabrication: 'Scala'"]},
+             "repair_attempts": 2}
+    with caplog.at_level(logging.WARNING):
+        assert nodes.quality_gate(state) == "finalize"
+    assert "Scala" in caplog.text
+
+
+def test_a_clean_report_still_finalizes_without_crying_wolf(caplog):
+    import logging
+    with caplog.at_level(logging.WARNING):
+        assert nodes.quality_gate({"guard_report": {"passed": True}, "repair_attempts": 2}) == "finalize"
+    assert "Repair budget exhausted" not in caplog.text

@@ -213,6 +213,31 @@ def _fetch_user_profile(db, user_id: str) -> dict | None:
     return resp.data[0] if resp.data else None
 
 
+def _surviving_blocking(guard_report) -> list[str] | None:
+    """Block-severity violations that outlived the council's repair budget.
+
+    `None` and `[]` are different facts and the caller stores both:
+
+        None  the engine reported no guard verdict at all. The legacy engine
+              has no guard nodes, so it cannot have measured anything.
+        []    a guard ran and nothing blocking survived.
+
+    Collapsing the first into the second claims a clean verdict from an engine
+    that never looked -- the same lie as a status that cannot fail, and the
+    reason `shared.resume_verdict` keeps the distinction too.
+
+    Falls back to `violations` when `blocking` is absent: a guard_report
+    written before severity survived `to_dict` has no `blocking` key, and
+    reporting nothing for those would make this change look as though it had
+    cleaned them up.
+    """
+    if guard_report is None:
+        return None
+    if "blocking" in guard_report:
+        return list(guard_report.get("blocking") or [])
+    return list(guard_report.get("violations") or [])
+
+
 def _quality_warnings(body: str, base_body: str, fabrication_baseline) -> list[str]:
     """Every writing-quality check, in one place.
 
@@ -739,6 +764,17 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         logger.error(f"[tailor] Council failed: {e}")
         raise TailorError(f"council failed for {job_hash}: {e}") from e
     ai_response = response_dict["content"]
+    # Block-severity violations that SURVIVED the council's bounded repair
+    # loop, i.e. what `quality_gate` finalized best-effort with. `None` when
+    # the engine reports no guard verdict at all, which is a different fact
+    # from "it reported a clean one" and must not be flattened into [].
+    surviving_guard_violations = _surviving_blocking(response_dict.get("guard_report"))
+    if surviving_guard_violations:
+        logger.warning(
+            "[tailor] %s ships with %d unresolved block-severity violation(s): %s",
+            job_hash, len(surviving_guard_violations),
+            "; ".join(surviving_guard_violations[:4]),
+        )
     if response_dict.get("truncated"):
         # Say it at the point of failure. The hard gates below will reject
         # this body for missing sections and fall back to the base resume,
@@ -1112,4 +1148,12 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         # and is graded as such by shared.resume_verdict -- an empty list is
         # the stronger claim that the shipped body was checked and is clean.
         "quality_warnings": shipped_quality,
+        # What the council's guard still objected to when it gave up. Recorded
+        # rather than graded, for now: `shared.resume_verdict` does not take it
+        # as a grading input because its false-positive rate at this position
+        # has never been measured, and CLAUDE.md #16 is explicit that a
+        # detector's FP rate is measured BEFORE it blocks, not after. Storing
+        # it is what makes that measurement possible -- the 41% figure above
+        # was only obtainable from CloudWatch, for one batch, by hand.
+        "guard_violations": surviving_guard_violations,
     }
