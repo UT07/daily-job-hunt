@@ -180,6 +180,12 @@ def main() -> int:
     ap.add_argument("--commit", action="store_true", help="actually invoke (default dry run)")
     ap.add_argument("--user-id", default=None)
     ap.add_argument("--depth", default="moderate", choices=["light", "moderate", "full"])
+    ap.add_argument("--missing-only", action="store_true",
+                    help="only jobs with no resume_s3_url yet. After a backlog "
+                         "score run most S/A jobs have never been tailored, and "
+                         "re-tailoring the ones that have is both the expensive "
+                         "half and a fresh council roll that can make a good "
+                         "document worse")
     ap.add_argument("--compile-only", action="store_true",
                     help="skip tailoring; just recompile the existing .tex. No AI "
                          "calls, and it is what fixes a PDF that is older than "
@@ -197,6 +203,11 @@ def main() -> int:
     tiers = [t.strip().upper() for t in args.tier.split(",") if t.strip()]
 
     jobs = select_jobs(url, headers, user_id, tiers, args.max_jobs)
+    if args.missing_only:
+        before = len(jobs)
+        jobs = [j for j in jobs if not (j.get("resume_s3_url") or "").strip()]
+        print(f"--missing-only: {before - len(jobs)} job(s) already have a "
+              f"resume and are left alone")
     print(f"{len(jobs)} job(s) in tier(s) {','.join(tiers)} for user {user_id[:8]}")
     for j in jobs[:10]:
         print(f"  {j['score_tier']}  {j['job_hash'][:12]}  "
