@@ -409,9 +409,23 @@ RULES:
    - Page 1 carries the header, Summary, Technical Skills and the selected
      experience entries. Page 2 carries the selected projects, Education and
      Certifications.
-   - If the base body contains \clearpage before \section*{Featured Projects},
-     keep it — the template uses it to land that section on page 2. Do not add
-     one if it is absent.
+   - NEVER emit \clearpage, \newpage, \pagebreak or \cleardoublepage. LaTeX
+     breaks the page where it needs to; a forced break wastes the rest of the
+     page it fires on and cannot be recovered by trimming content.
+     (This bullet previously said to KEEP a \clearpage, "the template uses it
+     to land that section on page 2". True of the BUNDLED template --
+     resumes/fullstack.tex:84 carries one deliberately, to fix an awkward
+     header-on-page-1 split -- and not true of what production actually
+     tailors, since neither user_resumes row contains one. The model emitted
+     one regardless, in 87 of 272 live resumes. The forcing works only while
+     the content before it happens to fill one page: of the 15 resumes that
+     overran the two-page budget, 14 carried a forced break, and one compiled
+     to per-page text lengths of [4010, 87, 3654] after every reduction lever
+     had been pulled -- page 2 holding 87 characters. Removing that one macro:
+     [4010, 3741]. shared.fit_to_pages.strip_forced_breaks now does it before
+     every compile, whatever the document's origin, because CLAUDE.md #4 --
+     this instruction is a request, that strip is the guarantee. Still worth
+     asking: each such document burned 9 pointless tectonic compiles.)
    - If content overflows, CUT bullet points from the least relevant entries
      rather than dropping a whole section.
 6. Prominently place technologies the candidate has used that the job mentions.
@@ -866,6 +880,17 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
     if near_empty:
         validation_errors.append(f"near-empty output: {near_empty[0]}")
 
+    # The writing warnings belonging to the body that actually SHIPS, which is
+    # not always the body that was first measured. Two ways it diverges:
+    #   * the fallback below ships `base_tex`, which `_quality_warnings` never
+    #     saw -- so the honest value is None (never measured), not []
+    #   * an accepted retry ships `retry_body`, whose warnings are
+    #     `retry_quality`; reporting `quality_warnings` there would describe
+    #     the document we threw away
+    # Same asymmetry as the retry comparison a few lines down (CLAUDE.md #14):
+    # a number is only worth storing if it describes the artefact the user gets.
+    shipped_quality: list[str] | None = None
+
     if validation_errors:
         logger.warning(
             f"[tailor] validation failed for {job_hash}: {'; '.join(validation_errors)} "
@@ -875,6 +900,7 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
     else:
         # Quality validation — writing quality, not just structure
         quality_warnings = _quality_warnings(ai_body, base_body, fabrication_baseline)
+        shipped_quality = quality_warnings
 
         if quality_warnings:
             logger.warning(f"[tailor] Quality warnings for {job_hash}: {'; '.join(quality_warnings[:5])}")
@@ -931,6 +957,7 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
                 if len(retry_quality) < len(quality_warnings):
                     logger.info(f"[tailor] Retry improved quality: {len(quality_warnings)} -> {len(retry_quality)} warnings")
                     ai_body = retry_body
+                    shipped_quality = retry_quality
                     response_dict = retry_dict
                     tailored_tex = _splice_tex(base_preamble, ai_body)
                     tailored_tex = escape_body_specials(tailored_tex)
@@ -1078,4 +1105,11 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         # composition rules and complies. Non-empty means it does not, and the
         # repair above did not fix it — surfaced rather than swallowed.
         "composition_violations": composition_violations,
+        # Writing quality of the SHIPPED body. Until 2026-10-07 this was
+        # computed, logged at WARNING, used to choose between two attempts and
+        # then dropped before the return, so no column, dashboard or alarm
+        # could see it. `None` means it was never measured (the fallback path)
+        # and is graded as such by shared.resume_verdict -- an empty list is
+        # the stronger claim that the shipped body was checked and is clean.
+        "quality_warnings": shipped_quality,
     }
