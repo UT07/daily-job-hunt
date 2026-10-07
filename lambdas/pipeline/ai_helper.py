@@ -279,8 +279,38 @@ def _build_provider_list() -> list[dict]:
     # slot; an unprobed provider should not displace it. Ahead of NVIDIA (4/6
     # under concurrency) and OpenRouter (50 requests/day without credits) on
     # the published limits above.
+    # RETIRED 2026-10-08, on the measurement the note below asked for.
+    # `qwen-3.8-27b` is gone from this list; the comment above describing both
+    # ids is kept because it explains how they got here.
+    #
+    # Cerebras is now probed -- by production, over the 212-résumé batch of
+    # 2026-10-07, which is the realistic size the model-rot lesson calls for:
+    #
+    #   cerebras/qwen-3.8-27b   385 appearances   109 "returned only reasoning
+    #                                             tokens" (68 at max_tokens=8192,
+    #                                             41 at 1024)
+    #   groq/qwen3.8-27b        365 appearances     0
+    #
+    # Same weights, same family, comparable exposure, 109 failures against 0.
+    # So the defect is Cerebras' SERVING of that model, not the model -- which
+    # is why the fix is to drop this host's entry and not the family. Varying
+    # the host while holding the model fixed is what made that readable at all
+    # (CLAUDE.md #15); the raw 109 looks like a budget problem, and it is not:
+    # it fails at 8192 as readily as at 1024, so a larger budget buys nothing.
+    #
+    # The selection counts matter as much as the failures: concluding Groq's
+    # copy is healthy because its failures are absent would be wrong if it had
+    # simply never been tried. 365 appearances says it was.
+    #
+    # `cerebras/gpt-oss-120b` STAYS: 326 appearances, 7 of the same failure
+    # (2.1%), against groq/gpt-oss-120b's 384 and 0. Degraded, not broken, and
+    # it is an independent quota.
+    #
+    # Family diversity is unaffected -- 5 families before and after, because
+    # _model_family collapses the qwen pair and groq/qwen3.8-27b keeps that
+    # family on the host that works.
     cerebras_url = "https://api.cerebras.ai/v1/chat/completions"
-    for cerebras_model in ("gpt-oss-120b", "qwen-3.8-27b"):
+    for cerebras_model in ("gpt-oss-120b",):
         providers.append({
             "name": f"cerebras/{cerebras_model}",
             "url": cerebras_url,

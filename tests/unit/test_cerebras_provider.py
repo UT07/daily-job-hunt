@@ -47,7 +47,13 @@ CEREBRAS_URL = "https://api.cerebras.ai/v1/chat/completions"
 # entry ("strongest available, ~800ms") and qwen/qwen3.8-27b its fastest
 # ("~335ms, clean JSON"). Same weights, different account — which is the whole
 # point, and why no new capability risk comes with the new quota.
-CEREBRAS_MODELS = {"gpt-oss-120b", "qwen-3.8-27b"}
+# qwen-3.8-27b retired 2026-10-08. Production measured it over a 212-résumé
+# batch: 385 appearances, 109 "returned only reasoning tokens" (68 at
+# max_tokens=8192, 41 at 1024) against groq/qwen3.8-27b's 365 appearances and
+# ZERO. Same weights, different host — so Cerebras' serving of it is the
+# defect, and a larger budget buys nothing since it fails at 8192 as readily as
+# at 1024. gpt-oss-120b stays: 326 appearances, 7 of the same failure (2.1%).
+CEREBRAS_MODELS = {"gpt-oss-120b"}
 
 
 @pytest.fixture(autouse=True)

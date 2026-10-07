@@ -76,6 +76,46 @@ def pool_shrank(current: dict, baseline: dict) -> str | None:
     return None
 
 
+def pool_differs(current: dict, baseline: dict) -> str | None:
+    """Whether the two runs were served by DIFFERENT family sets, either way.
+
+    `pool_shrank` answers a narrower question -- did this run lose a family the
+    baseline had -- and that is the one that justifies INCONCLUSIVE, because a
+    missing family means a quota was exhausted and the run could not be made.
+
+    A family the baseline did NOT have is a different problem with the same
+    root. tier_accuracy measures agreement with labels this system produced
+    earlier, so changing WHICH models produce the current scores moves the
+    metric on its own; the baseline's own `_families_served_caveat` puts it
+    exactly this way -- "the two would be measuring providers against each
+    other, not the change under review".
+
+    Reported, NOT a verdict. Making any pool difference INCONCLUSIVE would be
+    the easier change and the wrong one: free-tier pools vary run to run, so a
+    gate that abstains whenever they differ is a gate that rarely judges, which
+    is the same lie as one that cannot fail. This gives the reader the fact and
+    leaves the verdict where it was.
+
+    Measured 2026-10-07: baseline ["gemini"] against a run served by
+    ["gemini", "groq"], reported as a 10-point tier_accuracy regression on a PR
+    whose diff does not touch scoring at all.
+    """
+    now, was = current.get("families_served"), baseline.get("families_served")
+    if not now or not was:
+        return None
+    gained = sorted(set(now) - set(was))
+    lost = sorted(set(was) - set(now))
+    if not gained and not lost:
+        return None
+    parts = []
+    if gained:
+        parts.append(f"gained {gained}")
+    if lost:
+        parts.append(f"lost {lost}")
+    return (f"served by {sorted(now)} vs the baseline's {sorted(was)} "
+            f"({', '.join(parts)})")
+
+
 def incomplete_run(report: dict) -> str | None:
     """Whether this run measured the whole golden set.
 
@@ -135,10 +175,14 @@ def evaluate_gate(current: dict, baseline: dict,
                        f"Re-measuring the baseline on main is a legitimate "
                        f"response; re-freezing it to turn this green is not."
                        ) if age is not None else ""
+            differs = pool_differs(current, baseline)
+            mix = (f" This run was {differs}, and tier_accuracy moves with the "
+                   f"mix because the labels it agrees-or-disagrees with were "
+                   f"produced by an earlier one.") if differs else ""
             reasons.append(
                 f"tier_accuracy fell {drop:.1%} "
                 f"({baseline['tier_accuracy']:.1%} -> {current['tier_accuracy']:.1%})."
-                + vintage
+                + vintage + mix
             )
 
     # guard_pass_rate covers the guardrails layer -- injection detection and
