@@ -36,6 +36,8 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
+# scripts/ too, so the reconcile phase can import its sibling module
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 try:
     from dotenv import load_dotenv
@@ -190,6 +192,9 @@ def main() -> int:
                     help="skip tailoring; just recompile the existing .tex. No AI "
                          "calls, and it is what fixes a PDF that is older than "
                          "its own source")
+    ap.add_argument("--no-reconcile", action="store_true",
+                    help="skip the row update (the PDFs will exist but the "
+                         "dashboard cannot link them)")
     ap.add_argument("--no-compile", action="store_true",
                     help="tailor without recompiling. Leaves the PDF stale; only "
                          "useful when a compile is being driven separately")
@@ -302,12 +307,49 @@ def main() -> int:
             time.sleep(min(args.stagger, 8.0))   # compiling is ~15s, not 90s
 
     print(f"\ncompile: queued {compiled}, failed {compile_failed}")
-    print("Asynchronous: a 202 means ACCEPTED, not finished. Verify with:")
-    print("  aws logs tail /aws/lambda/naukribaba-compile-latex --since 15m "
-          "--format short | grep -E 'fitted|separators|ats:'")
-    print("and compare .tex vs .pdf LastModified — a PDF older than its own "
-          "source is the defect this phase exists to prevent.")
-    return 0 if (failed == 0 and compile_failed == 0) else 1
+
+    # --- reconcile ---------------------------------------------------------
+    # The phase this script was missing until 2026-10-08, and the reason it
+    # mattered. Tailoring writes a .tex, compiling writes a PDF, and NEITHER
+    # writes the row: `save_job` is the only writer of jobs.resume_s3_key and
+    # jobs.resume_s3_url, and this script invokes the two Lambdas directly
+    # without ever reaching it. Measured the day it was found:
+    #
+    #     273 active S/A rows
+    #       PDF in S3 and resume_s3_key set    60
+    #       PDF in S3, resume_s3_key NULL     212   <- invisible in the dashboard
+    #
+    # 212 résumés existed and the user could not open one of them. The deploy's
+    # artifact-completeness smoke check caught it; an audit that read S3 the
+    # same day reported "missing 0", because it measured the artefact and not
+    # the user's view of it (CLAUDE.md #7).
+    #
+    # A printed reminder to go and run the reconcile would be #4 — a request,
+    # not a guarantee. So it runs here, and it waits for each PDF first,
+    # because reconciling a PDF the compile has not written yet grades the
+    # PREVIOUS document and stores that grade as current.
+    if args.no_reconcile:
+        print("\n--no-reconcile: rows NOT updated. The PDFs exist in S3 and the")
+        print("dashboard cannot link them until you run:")
+        print("  .venv/bin/python scripts/reconcile_resume_rows.py --relink --commit")
+        return 0 if (failed == 0 and compile_failed == 0) else 1
+
+    pdf_keys = [k.replace("_tailored.tex", "_tailored.pdf") for k in fresh]
+    print(f"\nwaiting for {len(pdf_keys)} PDF(s) to be written before reconciling...",
+          flush=True)
+    fresh_pdfs, stale_pdfs = wait_for_tex(s3, bucket, pdf_keys, started, timeout=900.0)
+    for key in stale_pdfs:
+        print(f"  SKIP reconcile, PDF never written: {key.rsplit('/', 1)[-1]}")
+
+    from reconcile_resume_rows import reconcile_hashes
+    hashes = [k.rsplit("/", 1)[-1].replace("_tailored.pdf", "") for k in fresh_pdfs]
+    summary = reconcile_hashes(hashes, user_id=user_id, commit=True)
+
+    print("\nVerify the thing that actually matters — the deploy's own check:")
+    print("  SMOKE_API_URL=$(grep -hoE '^VITE_API_URL=.+' web/.env.production | "
+          "cut -d= -f2-) .venv/bin/python scripts/smoke_prod.py")
+    return 0 if (failed == 0 and compile_failed == 0
+                 and summary["failed"] == 0 and not stale_pdfs) else 1
 
 
 if __name__ == "__main__":
