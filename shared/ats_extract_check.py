@@ -85,6 +85,20 @@ def check_ats_extraction(pdf_path: str | os.PathLike, tex: str) -> list[str]:
 
     violations: list[str] = []
     flat = _norm(extracted)
+    # Headings matched as LINES, not as substrings of the whole document.
+    # The first version used flat.index(name), which finds the word anywhere --
+    # and on the very first real resume it checked, the summary paragraph
+    # contained "...years of experience...", so "experience" was located inside
+    # the summary and every section after it was reported out of order:
+    #
+    #   claims:   summary, experience, technical skills, featured projects, ...
+    #   document: summary, technical skills, experience, featured projects, ...
+    #
+    # A false positive on a correct single-column document, which is precisely
+    # what CLAUDE.md rule 16 says to measure before trusting a new detector.
+    # An extractor puts a section heading on its own line, so a line that IS
+    # the heading is the signal; a line that merely contains the word is prose.
+    lines = [_norm(ln) for ln in extracted.splitlines()]
 
     dense = len(re.sub(r"\s", "", extracted))
     if dense < MIN_EXTRACTED_CHARS:
@@ -97,15 +111,28 @@ def check_ats_extraction(pdf_path: str | os.PathLike, tex: str) -> list[str]:
     sections = [_norm(m.group(1)) for m in _SECTION.finditer(tex or "")]
     sections = [s for s in sections if s]
 
-    missing = [s for s in sections if s not in flat]
+    def heading_line(name: str) -> int | None:
+        """Index of the line that IS this heading, or None.
+
+        Equality rather than containment. A heading extracts as its own short
+        line; `in` would match the prose that mentions the word.
+        """
+        for i, line in enumerate(lines):
+            if line == name:
+                return i
+        return None
+
+    located = {s: heading_line(s) for s in sections}
+    missing = [s for s, i in located.items() if i is None]
     if missing:
         violations.append(
-            f"ats: section(s) not findable in the extracted text: {missing}")
+            f"ats: section heading(s) not findable as a line in the extracted "
+            f"text: {missing}")
 
     # Reading order. Only over the sections that WERE found, so a missing
     # section is reported once as missing rather than again as out of order.
-    found = [s for s in sections if s in flat]
-    positions = [flat.index(s) for s in found]
+    found = [s for s in sections if located[s] is not None]
+    positions = [located[s] for s in found]
     if positions != sorted(positions):
         out_of_order = [s for s, _ in sorted(zip(found, positions), key=lambda p: p[1])]
         violations.append(

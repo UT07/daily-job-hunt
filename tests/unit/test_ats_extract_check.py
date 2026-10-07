@@ -35,11 +35,25 @@ from shared.ats_extract_check import (  # noqa: E402
 pytestmark = pytest.mark.skipif(
     shutil.which("tectonic") is None, reason="tectonic not installed")
 
+# Mirrors the real corpus preamble's font setup. Without T1/lmodern the
+# default OT1 Computer Modern encoding extracts without word spaces --
+# "SiteReliabilityEngineerwitheightyears..." -- which made a fixture look like
+# a detector bug. The documents under test are the ones the pipeline produces,
+# so the harness has to share their font stack or it measures something else.
 PREAMBLE = (
     "\\documentclass[10pt,a4paper]{article}\n"
+    "\\usepackage[utf8]{inputenc}\n"
+    # cmap exists to make the PDF's text extractable -- without it the glyph
+    # stream carries no character map and pdfplumber returns words run
+    # together. The real corpus loads it; a harness that omits it is testing a
+    # different document.
+    "\\usepackage{cmap}\n"
+    "\\usepackage[T1]{fontenc}\n"
+    "\\usepackage{lmodern}\n"
     "\\usepackage[margin=0.6in]{geometry}\n"
     "\\usepackage{multicol}\n"
     "\\pagestyle{empty}\n"
+    "\\raggedright\n"
     "\\begin{document}\n"
 )
 
@@ -134,3 +148,37 @@ def test_a_missing_section_is_reported_once_not_twice(tmp_path):
     violations = check_ats_extraction(pdf, claimed)
     assert any("not findable" in v for v in violations)
     assert not any("out of order" in v for v in violations), violations
+
+
+def test_prose_mentioning_a_section_name_is_not_a_heading(tmp_path):
+    """The false positive this check produced on its first real document.
+
+    Production resume 4dd96462666e, single-column and correctly ordered, was
+    reported as:
+
+        claims:   summary, experience, technical skills, featured projects, ...
+        document: summary, technical skills, experience, featured projects, ...
+
+    because its summary paragraph reads "...years of experience...", and the
+    first version located headings with `flat.index(name)` — the word anywhere
+    in the document. An extractor puts a heading on its own line, so a line
+    that IS the heading is the signal and a line that merely contains the word
+    is prose. CLAUDE.md rule 16: measure a detector's false-positive rate
+    before shipping it, not after.
+    """
+    tex = (
+        PREAMBLE
+        + "\\section*{Summary}\nSite Reliability Engineer with eight years of "
+          "experience building platforms, and projects spanning education "
+          "technology and certifications management.\n\n"
+        + _body("Technical Skills")
+        + "\\section*{Experience}\nAcme Corp \\hfill Jun 2022 - Jul 2024\n\n" + FILLER * 6 + "\n\n"
+        + _body("Education")
+        + _body("Certifications")
+        + "\\end{document}\n"
+    )
+    pdf = _compile(tex, tmp_path, "prose")
+    extracted = extract_text(pdf)
+    assert "years of experience" in extracted, "fixture lost the prose mention"
+    assert check_ats_extraction(pdf, tex) == [], (
+        "prose mentioning a section name was read as that section's heading")
