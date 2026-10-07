@@ -217,8 +217,58 @@ def fix_empty_location_separator(tex: str) -> tuple[str, bool]:
     return tex[:m.start(2)] + fixed + tex[m.end(2):], True
 
 
+# `\clearpage` and friends, as emitted by the model into the resume BODY.
+# Matched with a trailing boundary so `\newpagething` is left alone, and
+# `\cleardoublepage` is included because it can insert a blank page outright.
+_FORCED_BREAK = re.compile(
+    r"^[ \t]*\\(?:clearpage|cleardoublepage|newpage|pagebreak)\b[ \t]*$\n?",
+    re.MULTILINE,
+)
+
+
+def strip_forced_breaks(tex: str) -> tuple[str, int]:
+    r"""Remove model-emitted hard page breaks. Returns (tex, how many).
+
+    Measured 2026-10-07 over 272 live resumes: 14 of the 15 that overran the
+    two-page budget carried one of these, and the fit loop could never recover
+    any of them -- because it was pulling CONTENT levers against a LAYOUT
+    defect. One document, after every lever had been pulled, compiled to
+    per-page text lengths of
+
+        [4010, 87, 3654]        <- page 2 holds 87 characters. It is blank.
+
+    from a single `\clearpage` the model had emitted between Experience and
+    Featured Projects. Deleting that one macro: [4010, 3741]. Two pages. No
+    amount of trimming reaches that, which is exactly why the loop reported
+    "could NOT fit after 9 attempt(s)" having genuinely changed the document
+    nine times.
+
+    Safe by construction, not merely by measurement: a forced break can only
+    ever ADD a page boundary. Removing one lets LaTeX break where it would
+    have anyway, so the page count can fall or stay and cannot rise. That
+    matters because 73 of the 272 carried a break and still fit -- their break
+    happened to land near a natural boundary -- and this must not disturb them.
+
+    Done here rather than in the prompt on purpose. CLAUDE.md #4: a
+    prompt-level constraint is a request; only a check is a guarantee. The
+    prompt may ask as well, but this is what makes it true.
+
+    Only whole lines are matched. An inline `\pagebreak` mid-paragraph is not
+    something the templates produce, and a regex loose enough to catch it is
+    loose enough to corrupt a line it did not understand.
+    """
+    out, n = _FORCED_BREAK.subn("", tex)
+    return out, n
+
+
 def normalise_separators(tex: str) -> tuple[str, list[str]]:
-    """Both separator fixes. Returns (tex, what it did)."""
+    """The pre-compile fixes that are never a trade-off. Returns (tex, actions).
+
+    Everything here is a correction, not a reduction: each one either fixes
+    something that renders wrong or removes something that can only hurt. The
+    levers that COST the candidate something -- bullets, skills, margins --
+    live in `reduction_plan` and are pulled only when the document overruns.
+    """
     actions = []
     tex, dashes = normalise_date_separators(tex)
     if dashes:
@@ -226,4 +276,7 @@ def normalise_separators(tex: str) -> tuple[str, list[str]]:
     tex, fixed = fix_empty_location_separator(tex)
     if fixed:
         actions.append("suppressed the location separator when no location is given")
+    tex, breaks = strip_forced_breaks(tex)
+    if breaks:
+        actions.append(f"removed {breaks} forced page break(s)")
     return tex, actions

@@ -223,3 +223,79 @@ def test_the_fitted_document_still_compiles(tmp_path):
                        capture_output=True, text=True)
     assert r.returncode == 0, r.stderr[-800:]
     assert (tmp_path / "f.pdf").exists()
+
+
+# ---------------------------------------------------------------------------
+# Forced page breaks (strip_forced_breaks)
+# ---------------------------------------------------------------------------
+# Found by auditing 272 live resumes on 2026-10-07: 14 of the 15 that overran
+# the two-page budget carried a model-emitted `\clearpage`, and the fit loop
+# could never recover any of them because it was pulling CONTENT levers against
+# a LAYOUT defect. One document, after every lever had been pulled, compiled to
+# per-page text lengths of [4010, 87, 3654] -- page 2 holding 87 characters,
+# blank -- from a single `\clearpage` between Experience and Featured Projects.
+# Removing that macro: [4010, 3741]. Two pages.
+
+class TestStripForcedBreaks:
+    def test_a_clearpage_between_sections_is_removed(self):
+        from shared.fit_to_pages import strip_forced_breaks
+        tex = "\\end{itemize}\n\n\\clearpage\n\n\\section*{Featured Projects}"
+        out, n = strip_forced_breaks(tex)
+        assert n == 1
+        assert "clearpage" not in out
+        assert "\\section*{Featured Projects}" in out, "the section itself must survive"
+
+    @pytest.mark.parametrize("macro", ["clearpage", "cleardoublepage", "newpage", "pagebreak"])
+    def test_every_forced_break_macro_is_covered(self, macro):
+        """All four, because matching three of them fixes most documents and
+        leaves a failure mode that looks identical to the one just fixed."""
+        from shared.fit_to_pages import strip_forced_breaks
+        out, n = strip_forced_breaks(f"before\n\\{macro}\nafter")
+        assert (n, out) == (1, "before\nafter")
+
+    def test_indentation_does_not_hide_a_break(self):
+        from shared.fit_to_pages import strip_forced_breaks
+        assert strip_forced_breaks("a\n    \\newpage   \nb")[1] == 1
+
+    def test_a_macro_that_merely_starts_with_newpage_is_left_alone(self):
+        """`\\b` in the pattern, asserted. Without it this silently truncates
+        any user macro whose name begins with one of the four."""
+        from shared.fit_to_pages import strip_forced_breaks
+        out, n = strip_forced_breaks("a\n\\newpagestyle{x}\nb")
+        assert (n, out) == (0, "a\n\\newpagestyle{x}\nb")
+
+    def test_an_inline_break_is_not_touched(self):
+        """Only whole lines. A regex loose enough to catch a mid-paragraph
+        `\\pagebreak` is loose enough to corrupt a line it did not understand,
+        and the templates do not produce one."""
+        from shared.fit_to_pages import strip_forced_breaks
+        assert strip_forced_breaks("text \\pagebreak more text")[1] == 0
+
+    def test_a_document_without_one_is_returned_unchanged(self):
+        from shared.fit_to_pages import strip_forced_breaks
+        tex = "\\section*{Summary}\nSome prose.\n"
+        assert strip_forced_breaks(tex) == (tex, 0)
+
+    def test_normalise_separators_strips_them_and_says_so(self):
+        """It has to run in the pre-compile normalisation, not in
+        `reduction_plan`: the reduction levers are pulled only when a document
+        overruns, and a forced break has to go whether or not it does -- 73 of
+        the 272 carried one while still fitting."""
+        from shared.fit_to_pages import normalise_separators
+        out, actions = normalise_separators("a\n\\clearpage\nb")
+        assert "clearpage" not in out
+        assert any("forced page break" in a for a in actions), actions
+
+    def test_removing_a_break_is_reported_as_a_correction_not_a_reduction(self):
+        """The distinction the two functions encode. Everything in
+        `normalise_separators` is free; everything in `reduction_plan` costs the
+        candidate something. A break is pure cost with no benefit, so it is a
+        correction -- and nothing in `reduction_plan` should duplicate it.
+        """
+        from shared.fit_to_pages import reduction_plan
+        tex = "a\n\\clearpage\nb"
+        for name, step in reduction_plan(tex, None):
+            out, _ = step(tex)
+            assert "clearpage" in out, (
+                f"reduction step {name!r} removes forced breaks; that belongs in "
+                "normalise_separators, which runs unconditionally")
