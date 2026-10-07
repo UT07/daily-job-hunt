@@ -92,6 +92,19 @@ _TECH_TITLE_KEYWORDS = (
     "kubernetes", "aws", "gcp", "azure", "linux",
     "staff ", "principal ", "senior ", "junior ", "graduate",
     "tech lead", "technical lead", "eng", "qa ",
+    # "incident" added 2026-10-07, measured rather than guessed. Over the 6,000
+    # most recently scraped jobs the allowlist alone rejected 1,332 titles; this
+    # admits 14 of them and every one is SRE work -- incident commander, major
+    # incident manager, incident response manager. "Incident Response Manager"
+    # appeared twice in a sample of allowlist rejections, which is what prompted
+    # the check.
+    #
+    # Measured and REJECTED in the same pass, because a keyword that admits the
+    # wrong jobs costs an AI call each time: "network" (4 hits, all card-network
+    # compliance and partner development), "automation" (4, all marketing and
+    # finance workflow), "technical" (85, overwhelmingly technical account
+    # management and technical consulting). Breadth here is not free.
+    "incident",
 )
 
 # Hard reject titles — obvious non-tech roles we should never score.
