@@ -307,3 +307,148 @@ def test_a_missing_cover_letter_key_column_does_not_lose_the_whole_row():
     second = chain.update.call_args_list[-1][0][0]
     assert "cover_letter_s3_key" not in second
     assert second["resume_s3_url"], "the resume URL must still be written"
+
+
+# ---------------------------------------------------------------------------
+# The stored resume verdict (shared/resume_verdict.py)
+# ---------------------------------------------------------------------------
+# Four checks were already being measured and none were aggregated, so no
+# column, dashboard or alarm could answer "is this resume any good". These
+# assert the aggregate lands on the row -- and, just as importantly, that it
+# does NOT land on runs that measured nothing.
+
+
+def _captured_update(event):
+    """Run the handler and return the dict it PATCHed, or None if it did not."""
+    s3 = _make_s3_mock()
+    supabase = _make_supabase()
+    with patch("save_job.boto3", _make_boto3_mock(s3)), \
+         patch("save_job.get_supabase", return_value=supabase):
+        import save_job
+        save_job.handler(event, None)
+    chain = supabase.table.return_value
+    if not chain.update.called:
+        return None
+    return chain.update.call_args[0][0]
+
+
+def test_a_healthy_resume_is_graded_and_stored_on_the_row():
+    update = _captured_update({
+        **BASE_EVENT,
+        "tailor_result": {"composition_violations": [], "quality_warnings": []},
+        "compile_result": {"pdf_s3_key": "resumes/hash-abc.pdf",
+                           "page_violations": [], "ats_violations": []},
+    })
+    assert update["resume_verdict"]["grade"] == "pass"
+    assert update["resume_verdict"]["reasons"] == []
+
+
+def test_a_four_page_resume_is_stored_as_a_failure_with_its_reason():
+    """The verdict has to carry WHY, or the reader is sent back to the logs --
+    which is the thing it replaces."""
+    update = _captured_update({
+        **BASE_EVENT,
+        "tailor_result": {"composition_violations": [], "quality_warnings": []},
+        "compile_result": {"pdf_s3_key": "resumes/hash-abc.pdf",
+                           "page_violations": ["4 pages, expected 2"],
+                           "ats_violations": []},
+    })
+    verdict = update["resume_verdict"]
+    assert verdict["grade"] == "fail"
+    assert "pages: 4 pages, expected 2" in verdict["reasons"]
+
+
+def test_a_resume_whose_writing_was_never_checked_is_not_graded_a_pass():
+    """tailor_resume's fallback ships the base resume, which the writing check
+    never saw. CLAUDE.md #2: a status that cannot tell "did the work" from
+    "did nothing" is a lie."""
+    update = _captured_update({
+        **BASE_EVENT,
+        "tailor_result": {"composition_violations": [], "quality_warnings": None,
+                          "used_fallback": True},
+        "compile_result": {"pdf_s3_key": "resumes/hash-abc.pdf",
+                           "page_violations": [], "ats_violations": []},
+    })
+    assert update["resume_verdict"]["grade"] == "unmeasured"
+    assert "writing: never measured" in update["resume_verdict"]["reasons"]
+
+
+def test_a_run_that_tailored_nothing_leaves_an_existing_verdict_alone():
+    """The application_status lesson, applied before it can repeat.
+
+    A cover-letter-only pass, or a SaveJobAfterError that never reached
+    tailoring, measured nothing about the resume. Writing `unmeasured` there
+    would erase a verdict that was true -- a pipeline state overwriting real
+    data, exactly how a user's "Applied" used to revert to "ready".
+    """
+    update = _captured_update({
+        **BASE_EVENT,
+        "cover_compile_result": {"pdf_s3_key": "cover_letters/hash-abc.pdf"},
+    })
+    assert update is not None, "the cover letter should still have been saved"
+    assert "resume_verdict" not in update
+
+
+def test_a_failed_compile_is_still_graded():
+    """A compile that produced no PDF measured nothing, which is a verdict in
+    itself -- and the row should say so next to its failure_reason rather than
+    leaving the grade from the last successful run standing."""
+    update = _captured_update({
+        **BASE_EVENT,
+        "tailor_result": {"composition_violations": [], "quality_warnings": []},
+        "compile_result": {"error": "tectonic_failed", "stderr": "! Undefined control sequence."},
+    })
+    assert update["resume_verdict"]["grade"] == "unmeasured"
+    assert update["failure_reason"].startswith("tectonic_failed")
+
+
+def test_the_verdict_column_being_absent_does_not_lose_the_resume():
+    """The migration is applied BY HAND. If this code ships first, PostgREST
+    fails the WHOLE update on the unknown column and the row keeps NOTHING --
+    the PGRST204 shape that cost a run's writes on 2026-09-28. save_job's
+    existing degrade path must cover the new column too, which is only true if
+    the error names it; this asserts the resume survives either way.
+    """
+    s3 = _make_s3_mock()
+    supabase = _make_supabase()
+    chain = supabase.table.return_value
+    calls = {"n": 0}
+
+    def execute():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise Exception(
+                "{'code': 'PGRST204', 'message': \"Could not find the "
+                "'resume_verdict' column of 'jobs' in the schema cache\"}")
+        return MagicMock()
+
+    chain.execute.side_effect = execute
+
+    with patch("save_job.boto3", _make_boto3_mock(s3)), \
+         patch("save_job.get_supabase", return_value=supabase):
+        import save_job
+        result = save_job.handler({
+            **BASE_EVENT,
+            "tailor_result": {"composition_violations": [], "quality_warnings": []},
+            "compile_result": {"pdf_s3_key": "resumes/hash-abc.pdf",
+                               "page_violations": [], "ats_violations": []},
+        }, None)
+
+    assert result["has_resume"] is True
+    retried = chain.update.call_args[0][0]
+    assert "resume_verdict" not in retried
+    assert retried["resume_s3_key"] == "resumes/hash-abc.pdf"
+
+
+def test_the_local_dev_no_compile_case_is_not_graded_at_all():
+    """`tectonic_not_available` means the compile was never ATTEMPTED, so there
+    is no document to grade. Caught by test_tectonic_not_available_does_not_
+    mark_failed when the verdict's guard was merely "did either step run" --
+    recorded as its own test so the reason survives the next edit.
+    """
+    update = _captured_update({
+        **BASE_EVENT,
+        "tailor_result": {"composition_violations": [], "quality_warnings": []},
+        "compile_result": {"error": "tectonic_not_available", "pdf_s3_key": None},
+    })
+    assert update is None, f"a local dry-run should write nothing, wrote {update}"

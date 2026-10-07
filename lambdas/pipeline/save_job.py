@@ -5,6 +5,7 @@ import re
 import boto3
 
 from ai_helper import get_supabase
+from shared.resume_verdict import from_step_results
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -117,6 +118,35 @@ def handler(event, context):
     #   failed -> failure_reason IS NOT NULL
     #   ready  -> resume_s3_url IS NOT NULL
     #   scored -> match_score IS NOT NULL
+    # One stored answer to "is this resume any good", aggregated from the four
+    # measurements the pipeline already takes. See shared/resume_verdict.py for
+    # the grading rules and why an unmeasured check is graded `unmeasured`
+    # rather than `pass`.
+    #
+    # Written ONLY when a compile actually ran, because the verdict grades a
+    # DOCUMENT: no compile, no document, nothing to grade. Two cases this
+    # deliberately excludes, and the first was caught by an existing test
+    # rather than by reasoning, which is the better way round:
+    #
+    #   * _LOCAL_DEV_ERROR -- tectonic absent, so the compile was never
+    #     attempted. Already "nothing to record and nothing to write" here;
+    #     grading it would make every local dry-run PATCH a row.
+    #   * no compile_result at all -- a cover-letter-only pass, or a
+    #     SaveJobAfterError that never reached tailoring. Writing `unmeasured`
+    #     there would ERASE a verdict that was true: the application_status
+    #     mistake again, a pipeline state overwriting real user-visible data.
+    #
+    # A compile that ran and failed IS graded, as `unmeasured` -- it measured
+    # nothing, and saying so next to failure_reason beats leaving the last
+    # successful run's grade standing.
+    compile_result = event.get("compile_result")
+    if compile_result and compile_result.get("error") != _LOCAL_DEV_ERROR:
+        verdict = from_step_results(event.get("tailor_result"), compile_result)
+        update["resume_verdict"] = verdict.to_row()
+        log = logger.warning if verdict.grade in ("fail", "unmeasured") else logger.info
+        log("[save_job] %s resume verdict: %s%s", job_hash, verdict.grade,
+            f" — {'; '.join(verdict.reasons[:4])}" if verdict.reasons else "")
+
     if resume_failure_reason:
         update["failure_reason"] = resume_failure_reason
         logger.error(f"[save_job] {job_hash} compile failed: {resume_failure_reason}")

@@ -100,3 +100,85 @@ def test_fabrication_specifically_is_counted():
     """The check whose omission caused the original defect."""
     builder = _function("_quality_warnings")
     assert "_check_fabrication" in _called_names(builder)
+
+
+# ---------------------------------------------------------------------------
+# The number that LEAVES the handler must describe the body that ships
+# ---------------------------------------------------------------------------
+# Same asymmetry one step further on. Since 2026-10-07 the handler returns
+# `quality_warnings` so shared.resume_verdict can grade the resume, and the
+# accepted retry swaps the body out AFTER the first measurement was taken. If
+# the reported warnings are not swapped with it, the row describes the document
+# that was thrown away -- and because a retry is only accepted when it has
+# FEWER warnings, the error always flatters: a resume stored as clean whose
+# shipped body was not the one measured.
+#
+# Mutation-tested: deleting `shipped_quality = retry_quality` left every other
+# test in this repo passing.
+
+
+def _assignments_to(node, target_name):
+    """Every ast.Assign in `node` whose target is the bare name `target_name`."""
+    return [n for n in ast.walk(node) if isinstance(n, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == target_name for t in n.targets)]
+
+
+def test_the_retry_swaps_the_reported_warnings_with_the_body():
+    """Structural: wherever the retry body is accepted, the warnings follow.
+
+    Checked as "in the same block" rather than "somewhere in the function",
+    because the whole failure mode is the two assignments drifting apart.
+    """
+    handler = _function("handler")
+    assert handler is not None
+
+    blocks = []
+    for node in ast.walk(handler):
+        for field in ("body", "orelse", "finalbody"):
+            stmts = getattr(node, field, None)
+            if isinstance(stmts, list):
+                blocks.append(stmts)
+
+    accepting = [
+        b for b in blocks
+        if any(isinstance(s, ast.Assign)
+               and any(isinstance(t, ast.Name) and t.id == "ai_body" for t in s.targets)
+               and isinstance(s.value, ast.Name) and s.value.id == "retry_body"
+               for s in b)
+    ]
+    assert accepting, (
+        "no block assigns `ai_body = retry_body` — the retry-acceptance branch "
+        "moved, so this invariant is no longer checking anything"
+    )
+    for block in accepting:
+        assigned = {t.id for s in block if isinstance(s, ast.Assign)
+                    for t in s.targets if isinstance(t, ast.Name)}
+        assert "shipped_quality" in assigned, (
+            "the block that accepts `retry_body` does not reassign "
+            "`shipped_quality`, so the returned warnings describe the body that "
+            "was discarded — and since a retry is only accepted when it has "
+            "FEWER warnings, the stored verdict is flattering, never harsh"
+        )
+
+
+def test_the_handler_reports_the_shipped_warnings_not_the_first_attempt():
+    """`shipped_quality`, not `quality_warnings`, is what leaves the function."""
+    handler = _function("handler")
+    returns = [n for n in ast.walk(handler)
+               if isinstance(n, ast.Return) and isinstance(n.value, ast.Dict)]
+    assert returns, "handler no longer returns a dict literal"
+    reported = {
+        k.value: v for r in returns
+        for k, v in zip(r.value.keys, r.value.values)
+        if isinstance(k, ast.Constant)
+    }
+    assert "quality_warnings" in reported, (
+        "the writing measurement is not returned — shared.resume_verdict grades "
+        "it `unmeasured`, which is how it silently became a log line before"
+    )
+    value = reported["quality_warnings"]
+    assert isinstance(value, ast.Name) and value.id == "shipped_quality", (
+        "the returned warnings must be `shipped_quality` (the body that ships), "
+        f"not {ast.dump(value)[:60]} — `quality_warnings` holds the FIRST "
+        "attempt's findings even when a retry replaced it"
+    )
