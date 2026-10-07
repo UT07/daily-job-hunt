@@ -276,8 +276,23 @@ def handler(event, context):
         score_result = apply_anti_inflation_caps(score_result, resume_tex)
 
         match_score = score_result.get("match_score", 0)
-        if match_score < min_score:
-            continue
+        # NOT a storage filter. It used to be:
+        #
+        #     if match_score < min_score: continue
+        #
+        # which discarded the result of an AI call that had already been paid
+        # for, and wrote nothing. Afterwards nothing could distinguish "we
+        # assessed this job and rejected it" from "we never saw it" — and the
+        # job's row never existed, so the only trace was a log line that aged
+        # out. Measured 2026-10-07: 1401 rows in `jobs` against 14,121 in
+        # `jobs_raw`, with no record of what happened to the difference.
+        #
+        # Every scored job is now stored with its score and tier. `min_score`
+        # governs only what goes into `matched_items` below, which is what the
+        # state machine fans out for TAILORING — so the artifact rules are
+        # unchanged and a D-tier job still produces nothing. Storing is cheap,
+        # the scoring already happened, and a job you can see and reject is
+        # worth more than one that silently never existed.
 
         url = job.get("apply_url") or ""
         ids = extract_platform_ids(url)
@@ -313,6 +328,17 @@ def handler(event, context):
             "tailoring_model": f"{score_result.get('provider', 'council')}:{score_result.get('model', 'consensus')}",
             "matched_resume": resume_type,
             "first_seen": datetime.utcnow().isoformat(),
+            # Written here because nothing wrote them anywhere. `score_status`
+            # sat at its database default of 'pending' on 1290 of 1401 rows
+            # that all had a match_score, and `scored_at` was populated on 111.
+            # tests/unit/test_mcp_server.py already described them as "dead
+            # columns nothing reliably writes" — and on 2026-10-07 they misled
+            # an audit of this very table into reporting 92% of jobs unscored
+            # and a silently-failing pipeline, neither of which was true.
+            # A column that is read and never written is worse than an absent
+            # one: it answers confidently and wrongly.
+            "score_status": "scored",
+            "scored_at": datetime.utcnow().isoformat(),
             # Links this row to the LangGraph council run that produced its
             # score, when the AI call that scored it went through the
             # council and returned one (Task 10). None today for every row:
@@ -373,6 +399,11 @@ def handler(event, context):
 
         # Artifact rules: resume for B+, cover letter for A+, contacts for S+A
         tier = score_to_tier(match_score)
+        # The threshold lives HERE now, on the work, not on the record. A job
+        # below it is stored, visible and searchable; it simply does not get a
+        # tailored resume, which is the existing "signal not volume" rule.
+        if match_score < min_score:
+            continue
         matched_items.append({
             "job_hash": job["job_hash"],
             "user_id": user_id,
@@ -385,7 +416,7 @@ def handler(event, context):
     logger.info(
         f"[score_batch] {len(jobs)} fetched, {skipped_count} skipped, "
         f"{inserted} inserted, {insert_failures} insert-failed, "
-        f"{len(matched_items)} matched (min_score={min_score})"
+        f"{len(matched_items)} queued for tailoring (min_score={min_score})"
     )
     # A per-row insert failure is tolerable; every row failing is not. That
     # shape means something systemic -- an unapplied migration, an RLS change,
