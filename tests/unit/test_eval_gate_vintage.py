@@ -72,3 +72,70 @@ def test_a_pass_is_unaffected():
     cur = {"tier_accuracy": 0.86, "fabrication_rate": 0.0, "guard_pass_rate": 0.93}
     ok, reasons = evaluate_gate(cur, BASE)
     assert ok is True and reasons == []
+
+
+# ---------------------------------------------------------------------------
+# A run that measured nothing must not report a quality verdict
+#
+# Measured 2026-10-07: the AI Eval Gate job hit its `timeout-minutes: 20`
+# ceiling twice and was CANCELLED before the harness wrote a report at all.
+# The check then showed "AI Eval Gate: fail" — a quality verdict for a run that
+# measured nothing, which is the same class of lie as reporting SUCCEEDED on a
+# no-op. The harness now stops itself before the ceiling and writes a partial
+# report; the gate reads how much of the golden set that report covers.
+# ---------------------------------------------------------------------------
+import ast  # noqa: E402
+
+from check_eval_gate import incomplete_run  # noqa: E402
+
+FULL = {"tier_accuracy": 0.86, "fabrication_rate": 0.0, "guard_pass_rate": 0.93}
+
+
+def test_a_partial_run_is_detected():
+    assert incomplete_run({"n_cases_attempted": 18, "n_cases_total": 26})
+    assert "18 of 26" in incomplete_run({"n_cases_attempted": 18, "n_cases_total": 26})
+
+
+def test_a_complete_run_is_not_flagged():
+    assert incomplete_run({"n_cases_attempted": 26, "n_cases_total": 26}) is None
+
+
+def test_missing_coverage_fields_do_not_guess():
+    """A report predating these fields must not be read as partial."""
+    assert incomplete_run({}) is None
+    assert incomplete_run({"n_cases_attempted": 18}) is None
+
+
+def test_a_partial_run_fails_but_is_labelled_inconclusive():
+    """It must not merge silently — and it must not be read as a regression."""
+    ok, reasons = evaluate_gate(FULL, BASE, {"n_cases_attempted": 18, "n_cases_total": 26})
+    assert ok is False, "a run that measured 18 of 26 cases must not pass"
+    blob = " ".join(reasons)
+    assert "INCONCLUSIVE" in blob and "not a quality verdict" in blob
+    assert "do not re-freeze the baseline from a partial run" in blob
+
+
+def test_a_complete_passing_run_is_unaffected_by_the_new_check():
+    ok, reasons = evaluate_gate(FULL, BASE, {"n_cases_attempted": 26, "n_cases_total": 26})
+    assert ok is True and reasons == []
+
+
+def test_the_harness_checks_its_deadline_before_doing_case_work():
+    """A deadline evaluated after the expensive call would never save a run."""
+    src = pathlib.Path("evals/harness.py").read_text()
+    tree = ast.parse(src)
+    loop = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.For) and isinstance(node.iter, ast.Call) \
+                and getattr(node.iter.func, "id", "") == "enumerate":
+            body = ast.get_source_segment(src, node) or ""
+            if "checkpointed" in body:
+                loop = node
+                break
+    assert loop is not None, "the golden-set loop was not found"
+    first = ast.get_source_segment(src, loop.body[0]) or ""
+    assert "_deadline_s" in first, (
+        "the deadline is not the first thing the loop checks, so a run can "
+        "still be killed mid-case and write no report"
+    )
+    assert "EVAL_DEADLINE_S" in src

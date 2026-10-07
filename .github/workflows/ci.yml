@@ -142,7 +142,14 @@ jobs:
     # workflow: that filter applies to every job in the file (it would also
     # gate stale-base-check/unit-tests), not just this one.
     if: needs.detect-ai-changes.outputs.ai_relevant == 'true'
-    timeout-minutes: 20
+    # 20 -> 30, and the harness now stops itself at EVAL_DEADLINE_S well under
+    # it. Measured 2026-10-07: this job was CANCELLED at the 20-minute ceiling
+    # twice, before evals/harness.py could write a report at all, and the check
+    # then displayed "AI Eval Gate: fail" -- a quality verdict for a run that
+    # measured nothing. Raising the ceiling alone would only move the cliff;
+    # the deadline is what guarantees a report exists, and the gate reports
+    # INCONCLUSIVE when that report covers less than the whole golden set.
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -170,6 +177,10 @@ jobs:
       # reported a meaningless result. Fixing that IAM grant is out of
       # scope; needing no AWS access here at all is the simpler fix.
       - name: Run golden set
+        env:
+          # Under the job's 30-minute ceiling, so the harness stops ITSELF and
+          # writes a partial report rather than being killed with none.
+          EVAL_DEADLINE_S: "1500"
         env:
           # Measure the engine we deploy. Nothing here used to set
           # COUNCIL_ENGINE, so the harness ran at ai_helper.py:746's "legacy"

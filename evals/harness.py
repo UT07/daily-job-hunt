@@ -361,7 +361,28 @@ def run_golden(repeats: int = 1, resume: bool = True) -> list[dict]:
     resume_tex: str | None = None
     consecutive_failures = 0
 
+    # A deadline the harness imposes on ITSELF, so that running out of time
+    # produces a partial REPORT rather than no report at all.
+    #
+    # Measured 2026-10-07: the AI Eval Gate job hit its `timeout-minutes: 20`
+    # ceiling twice and was cancelled before REPORT.write_text ever ran. The
+    # check then showed "AI Eval Gate: fail" -- a quality verdict for a run that
+    # measured nothing, which is the same class of lie as reporting SUCCEEDED on
+    # a no-op. A job killed from outside can say nothing; a job that stops
+    # itself can say exactly how far it got.
+    #
+    # Default 0 (no deadline) so local and ad-hoc runs are unchanged; CI sets
+    # EVAL_DEADLINE_S safely under its own ceiling.
+    _deadline_s = float(os.environ.get("EVAL_DEADLINE_S", "0") or 0)
+    _started = time.monotonic()
+    stopped_early = False
+
     for i, case in enumerate(cases, 1):
+        if _deadline_s and (time.monotonic() - _started) > _deadline_s:
+            stopped_early = True
+            print(f"  DEADLINE: stopping after {i - 1}/{len(cases)} case(s) "
+                  f"({_deadline_s:.0f}s budget) so a partial report is written")
+            break
         checkpointed = done.get(case["id"])
         if checkpointed and checkpointed.get("_repeats") == repeats:
             print(f"  [{i}/{len(cases)}] {case['id']} already done (checkpoint) — skipping")
@@ -418,6 +439,9 @@ if __name__ == "__main__":
     _n_errors = sum(1 for r in _results if not r.get("ok", True))
     REPORT.write_text(json.dumps({
         "summary": _report,
+        # The gate reads these two. attempted < total means the numbers above
+        # describe a DIFFERENT population from the baseline's, and comparing
+        # them is not a quality judgement.
         "n_cases_attempted": len(_results),
         "n_cases_total": len(load_golden()),
         "n_errors": _n_errors,
