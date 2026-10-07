@@ -180,8 +180,18 @@ jobs:
         env:
           # Under the job's 30-minute ceiling, so the harness stops ITSELF and
           # writes a partial report rather than being killed with none.
+          #
+          # This lives in the SAME env block as the keys below, because it
+          # arrived in a second one and GitHub rejects duplicate mapping keys:
+          # every push to main from 82159a2 (2026-10-07) onward died instantly
+          # with "This run likely failed because of a workflow file issue" and
+          # no jobs at all. It passed on pull_request only because the file on
+          # the PR branch is not what a push event resolves. `yaml.safe_load`
+          # silently keeps the LAST duplicate, so local validation said the
+          # file was fine AND quietly dropped this very key -- the deadline was
+          # never set. tests/unit/test_workflow_files.py now rejects duplicates
+          # the way Actions does.
           EVAL_DEADLINE_S: "1500"
-        env:
           # Measure the engine we deploy. Nothing here used to set
           # COUNCIL_ENGINE, so the harness ran at ai_helper.py:746's "legacy"
           # default — the frozen serial engine with no guard nodes and no
