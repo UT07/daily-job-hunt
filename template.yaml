@@ -1497,12 +1497,11 @@ Resources:
               "Default": "ScoreSingleJob"
             },
             "SkipToTailor": {
-              "Comment": "A Pass with Parameters and no ResultPath REPLACES the whole state. Anything not listed here is gone for the rest of the run. resume_only and job_id were not listed, so CheckArtifactScope three states later failed with 'Invalid path $.resume_only' on every Regenerate after #126 shipped. Both callers in app.py always send resume_only, so the .$ reference always resolves.",
+              "Comment": "A Pass with Parameters and no ResultPath REPLACES the whole state. Anything not listed here is gone for the rest of the run. resume_only was not listed, so CheckArtifactScope three states later failed with 'Invalid path $.resume_only' on every Regenerate after #126 shipped. job_id was added alongside it by #132 and is dereferenced here, carried, and read by NOTHING — no Lambda, no Choice, no frontend — so its only effect was to fail any caller that did not send it. /api/pipeline/run-single is such a caller (it cannot know job_id: score_batch mints it as a fresh uuid4 when it inserts the row), which is why Add Job failed at ExtractMatchedJob with 'The JSONPath $.job_id could not be found' from #132 until 2026-10-08. Every caller that starts this machine must supply every field dereferenced here; tests/unit/test_single_job_sfn_contract.py asserts that rather than leaving it to this comment.",
               "Type": "Pass",
               "Parameters": {
                 "job_hash.$": "$.job_hash",
                 "user_id.$": "$.user_id",
-                "job_id.$": "$.job_id",
                 "resume_only.$": "$.resume_only",
                 "light_touch": false,
                 "tailoring_depth": "moderate"
@@ -1538,7 +1537,6 @@ Resources:
               "Parameters": {
                 "job_hash.$": "$.job_hash",
                 "user_id.$": "$.user_id",
-                "job_id.$": "$.job_id",
                 "resume_only.$": "$.resume_only",
                 "light_touch.$": "$.score_result.matched_items[0].light_touch"
               },

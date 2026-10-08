@@ -102,8 +102,18 @@ def _base_resume(user_id: str):
     return body, (base.all_tex or body)
 
 
+def _verdict_column_exists(url, headers) -> bool:
+    """One cheap read. If the column is absent the measurement cannot be
+    stored, and measuring anyway costs a pdfplumber text extraction per
+    document for a result that is discarded — which is what made the first
+    live run slow enough to interrupt."""
+    r = httpx.get(f"{url}/rest/v1/jobs", params={"select": "resume_verdict", "limit": "1"},
+                  headers=headers, timeout=30)
+    return r.status_code < 300
+
+
 def _reconcile(rows, *, url, headers, user_id, commit, verbose,
-               relink_always=False, tier_label="") -> dict:
+               relink_always=False, tier_label="", links_only=False) -> dict:
     """Measure and (optionally) write one row per entry. The whole driver.
 
     `relink_always` is for the post-batch path: a recompile overwrites the PDF
@@ -121,8 +131,15 @@ def _reconcile(rows, *, url, headers, user_id, commit, verbose,
     policy = policy[0]["composition_policy"] if isinstance(policy, list) and policy else None
     expected_pages = resolve(policy)["pages"]
 
-    quality = _quality_checker()
-    base_body, fabrication_baseline = _base_resume(user_id)
+    if not links_only and not _verdict_column_exists(url, headers):
+        links_only = True
+        if verbose:
+            print("  ! jobs.resume_verdict is absent, so a verdict cannot be stored.")
+            print("    Skipping the measurement rather than computing one to discard it.")
+            print("    Links are written either way; apply the migration and re-run for verdicts.")
+
+    quality = None if links_only else _quality_checker()
+    base_body, fabrication_baseline = ("", "") if links_only else _base_resume(user_id)
     tmp = Path(tempfile.mkdtemp())
 
     if verbose:
@@ -132,25 +149,39 @@ def _reconcile(rows, *, url, headers, user_id, commit, verbose,
     grades = Counter()
     reasons = Counter()
     linked = skipped = written = failed = 0
+    verdict_column_missing = [False]   # a list so the inner patch helper can set it
 
     for i, row in enumerate(rows, 1):
         h = row["job_hash"]
         pdf_key = f"users/{user_id}/resumes/{h}_tailored.pdf"
         tex_key = f"users/{user_id}/resumes/{h}_tailored.tex"
-        try:
-            pdf_bytes = s3.get_object(Bucket=bucket, Key=pdf_key)["Body"].read()
-            tex = s3.get_object(Bucket=bucket, Key=tex_key)["Body"].read().decode()
-        except Exception:
-            skipped += 1
-            continue
-
-        pdf_path = tmp / f"{h}.pdf"
-        pdf_path.write_bytes(pdf_bytes)
+        if links_only:
+            # head_object, not get_object: the question is "does the document
+            # exist", and downloading it to answer that is the whole cost.
+            try:
+                s3.head_object(Bucket=bucket, Key=pdf_key)
+            except Exception:
+                skipped += 1
+                continue
+            tex, pdf_path = "", None
+        else:
+            try:
+                pdf_bytes = s3.get_object(Bucket=bucket, Key=pdf_key)["Body"].read()
+                tex = s3.get_object(Bucket=bucket, Key=tex_key)["Body"].read().decode()
+            except Exception:
+                skipped += 1
+                continue
+            pdf_path = tmp / f"{h}.pdf"
+            pdf_path.write_bytes(pdf_bytes)
 
         # Each of the four, or None where it genuinely could not be taken.
-        page_violations = check_pdf(str(pdf_path), expected_pages=expected_pages)
-        composition = check_output(tex, policy)
-        ats = check_ats_extraction(str(pdf_path), tex)
+        # In links-only mode NONE of them are taken, and `from_step_results`
+        # grades that `unmeasured` — which is the honest answer and is why the
+        # verdict is not written at all in that mode.
+        page_violations = None if links_only else check_pdf(
+            str(pdf_path), expected_pages=expected_pages)
+        composition = None if links_only else check_output(tex, policy)
+        ats = None if links_only else check_ats_extraction(str(pdf_path), tex)
         writing = None
         if quality is not None:
             body = tex.split(r"\begin{document}", 1)[-1] if r"\begin{document}" in tex else tex
@@ -172,38 +203,61 @@ def _reconcile(rows, *, url, headers, user_id, commit, verbose,
             linked += 1
 
         if not commit:
-            if verbose and (i <= 12 or verdict.grade in ("fail", "unmeasured")):
+            if verbose and not links_only and (i <= 12 or verdict.grade in ("fail", "unmeasured")):
                 print(f"  [{i:3}/{len(rows)}] {h[:12]} {verdict.grade:10}"
                       f"{' +link' if needs_link else '':6}  "
                       f"{str(row.get('company') or '')[:20]:20} "
                       f"{('; '.join(verdict.reasons[:2]))[:60]}")
             continue
 
-        update = {"resume_verdict": verdict.to_row()}
+        update = {} if links_only else {"resume_verdict": verdict.to_row()}
         if needs_link:
             update["resume_s3_key"] = pdf_key
             update["resume_s3_url"] = s3.generate_presigned_url(
                 "get_object", Params={"Bucket": bucket, "Key": pdf_key},
                 ExpiresIn=PRESIGN_SECONDS)
-        resp = httpx.patch(f"{url}/rest/v1/jobs",
-                           params={"user_id": f"eq.{user_id}", "job_hash": f"eq.{h}"},
-                           headers={**headers, "Content-Type": "application/json",
-                                    "Prefer": "return=minimal"},
-                           json=update, timeout=60)
+        def _patch(body):
+            return httpx.patch(f"{url}/rest/v1/jobs",
+                               params={"user_id": f"eq.{user_id}", "job_hash": f"eq.{h}"},
+                               headers={**headers, "Content-Type": "application/json",
+                                        "Prefer": "return=minimal"},
+                               json=body, timeout=60)
+
+        if not update:
+            continue
+        resp = _patch(update)
+        # The verdict column arrives by a migration applied BY HAND, and the
+        # link does not depend on it. PostgREST fails the WHOLE patch on an
+        # unknown column, so without this retry a missing migration blocks the
+        # one thing that actually matters to the user: a résumé they can open.
+        # Same degrade save_job already does, for the same reason.
+        if resp.status_code >= 300 and (
+                "PGRST204" in resp.text or "schema cache" in resp.text.lower()):
+            if not verdict_column_missing[0]:
+                print("  ! jobs.resume_verdict is absent — writing the link without the "
+                      "verdict. Apply supabase/migrations/20261007230000_jobs_resume_verdict.sql "
+                      "to store verdicts too; the résumés do not need it.")
+                verdict_column_missing[0] = True
+            stripped = {k: v for k, v in update.items() if k != "resume_verdict"}
+            resp = _patch(stripped) if stripped else resp
         if resp.status_code < 300:
             written += 1
         else:
             failed += 1
             print(f"  [{i}] PATCH {resp.status_code} for {h[:12]}: {resp.text[:160]}")
-            if "PGRST204" in resp.text or "schema cache" in resp.text.lower():
-                print("      jobs.resume_verdict is absent — apply "
-                      "supabase/migrations/20261007230000_jobs_resume_verdict.sql")
-                break
 
     summary = {"measured": sum(grades.values()), "written": written, "failed": failed,
                "skipped": skipped, "needs_link": linked, "grades": dict(grades)}
 
-    if verbose:
+    if verbose and links_only:
+        # Deliberately NOT the grade table here. In this mode nothing was
+        # measured, so every check reads "unmeasured" and the counts look like
+        # findings — "ats 20" reads as twenty ATS problems when it means twenty
+        # documents nobody looked at. A number that invites the wrong reading is
+        # worse than no number.
+        print(f"\nfound {summary['measured']} résumé(s) in S3, "
+              f"{skipped} row(s) with no document")
+    elif verbose:
         print(f"\nmeasured {summary['measured']} résumé(s), "
               f"skipped {skipped} with no artefact in S3")
         for g in ("pass", "warn", "fail", "unmeasured"):
@@ -213,6 +267,7 @@ def _reconcile(rows, *, url, headers, user_id, commit, verbose,
             print("\n  checks contributing a reason:")
             for name, n in reasons.most_common():
                 print(f"    {name:14} {n:4}")
+    if verbose:
         print(f"\n  rows needing resume_s3_key/url: {linked}")
         if commit:
             print(f"  rows written: {written}, failed: {failed}")
@@ -257,6 +312,9 @@ def main() -> int:
                     help="only rows whose resume_s3_key is NULL (the 212 case)")
     ap.add_argument("--relink", action="store_true",
                     help="refresh key/url even where already set (after a recompile)")
+    ap.add_argument("--links-only", action="store_true",
+                    help="write resume_s3_key/url and nothing else — no PDF download, "
+                         "no measurement. Seconds instead of minutes.")
     args = ap.parse_args()
 
     url, headers = _rb._db()
@@ -280,7 +338,8 @@ def main() -> int:
     label = f" in tiers {args.tier}" + (" with resume_s3_key NULL" if args.only_missing else "")
     summary = _reconcile(rows, url=url, headers=headers, user_id=user_id,
                          commit=args.commit, verbose=True,
-                         relink_always=args.relink, tier_label=label)
+                         relink_always=args.relink, tier_label=label,
+                         links_only=args.links_only)
     return 0 if summary["failed"] == 0 else 1
 
 

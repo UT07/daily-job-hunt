@@ -177,9 +177,25 @@ def _walk(definition, entry_keys):
     return problems
 
 
-# What app.py actually sends when starting the single-job machine. Both callers
-# (re_tailor_job and re_tailor_jobs) send exactly these keys.
-SINGLE_JOB_INPUT = {"user_id", "job_hash", "job_id", "skip_scoring", "resume_only"}
+# What EVERY caller of the single-job machine sends — the intersection, not a
+# union and not one caller's shape.
+#
+# This line used to read "Both callers (re_tailor_job and re_tailor_jobs) send
+# exactly these keys" and included job_id. There were three callers.
+# /api/pipeline/run-single sends no job_id and cannot: score_batch mints it as
+# a fresh uuid4 when it inserts the row, so it does not exist when the
+# execution starts. So this file modelled an app.py that was not there, stayed
+# green, and Add Job failed in production at ExtractMatchedJob from #132
+# (2026-09-29) until 2026-10-08 with:
+#
+#     The JSONPath '$.job_id' specified for the field 'job_id.$'
+#     could not be found in the input
+#
+# Hardcoded here because `_walk` needs a starting payload, but no longer
+# guessed: tests/unit/test_single_job_sfn_contract.py derives the real sets
+# from app.py's AST and asserts every Pass state's requirements are a subset of
+# all of them, so this constant drifting from reality fails there.
+SINGLE_JOB_INPUT = {"user_id", "job_hash", "skip_scoring", "resume_only"}
 
 
 def _single_job_machine():
@@ -208,7 +224,33 @@ def test_the_pass_states_carry_the_scope_through():
             f"{name} drops resume_only — CheckArtifactScope will fail with "
             "'Invalid path $.resume_only' on every Regenerate"
         )
-        assert "job_id" in produced, f"{name} drops job_id"
+
+
+def test_the_pass_states_dereference_nothing_a_caller_cannot_send():
+    """The other half of the same rule, and the half that was missing.
+
+    Carrying a key through costs nothing; DEREFERENCING one with `.$` is a hard
+    JSONPath error when the caller did not send it. The fix for #126 added
+    `job_id.$` to both Pass states to stop the key being dropped, which quietly
+    turned it into a requirement on every caller — and one of the three cannot
+    meet it. The resulting failure looked nothing like the fix that caused it.
+
+    So the invariant is two-sided: a Pass state must carry what later states
+    read, AND must not demand what callers cannot supply.
+    """
+    states = _single_job_machine()["States"]
+    for name in ("SkipToTailor", "ExtractMatchedJob"):
+        params = states[name].get("Parameters") or {}
+        deref = {v[2:] for k, v in params.items()
+                 if k.endswith(".$") and isinstance(v, str) and v.startswith("$.")
+                 and "." not in v[2:]}
+        extra = sorted(deref - SINGLE_JOB_INPUT)
+        assert not extra, (
+            f"{name} dereferences {extra}, which not every caller sends. That is "
+            f"a hard States.Runtime error, not a default — it is what broke Add "
+            f"Job for nine days. Either every caller sends it, or it does not "
+            f"belong in this state's Parameters."
+        )
 
 
 def test_the_scope_choice_tolerates_a_missing_field():

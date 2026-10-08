@@ -2732,6 +2732,16 @@ def run_single_job(req: SingleJobRunRequest, user: AuthUser = Depends(get_curren
             "location": req.location,
             "apply_url": req.apply_url,
             "resume_type": req.resume_type,
+            # ExtractMatchedJob dereferences $.resume_only with .$, which is a
+            # hard error when the path is absent, so every caller of this state
+            # machine must send it. This one did not, and Add Job failed at that
+            # state from #132 (2026-09-29) until 2026-10-08 with "The JSONPath
+            # '$.job_id' specified for the field 'job_id.$' could not be found".
+            # False because Add Job runs the WHOLE pipeline: both the "Tailor
+            # Resume" and "Cover Letter" buttons in AddJob.jsx post this same
+            # payload to this same endpoint, and resume_only=True would silently
+            # stop the second one producing a cover letter.
+            "resume_only": False,
             "skip_scoring": False,
         }),
     )
