@@ -321,6 +321,81 @@ def test_check_output_default_task_unknown_falls_back_safely():
 
 
 # ---------------------------------------------------------------------------
+# Yale's third term: the quantified result (check_unquantified_bullets)
+# ---------------------------------------------------------------------------
+# ACTION VERB + what you did and at what scale + QUANTIFIED RESULT. The last
+# term is the one that gets dropped. Measured over 2,378 achievement bullets in
+# 100 live résumés: 66.4% carry a number, 33.6% do not, and 0 of 100 résumés
+# have every bullet quantified.
+#
+# So this REPORTS and never blocks, for two separate reasons. Blocking rejects
+# every résumé ever generated (CLAUDE.md #16). And a hard counter is satisfied
+# by inventing a figure — which the policy's own writing rules forbid, because
+# an invented number is worse than an absent one.
+
+class TestUnquantifiedBullets:
+    @staticmethod
+    def _f():
+        from guardrails.output_guards import check_unquantified_bullets
+        return check_unquantified_bullets
+
+    def test_a_bullet_with_a_measured_result_is_not_flagged(self):
+        tex = r"\begin{itemize}\item Cut p95 latency 42\% across 8 services." "\n" r"\end{itemize}"
+        assert self._f()(tex) == []
+
+    def test_a_bullet_with_no_number_is_named(self):
+        tex = (r"\begin{itemize}" "\n"
+               r"  \item Improved reliability of the deployment pipeline." "\n"
+               r"\end{itemize}")
+        out = self._f()(tex)
+        assert len(out) == 1
+        assert "1 of 1" in out[0]
+        assert "Improved reliability" in out[0]
+
+    def test_a_bare_year_is_not_a_result(self):
+        """"Migrated the platform in 2024" states WHEN, not how much."""
+        tex = r"\begin{itemize}" "\n" r"  \item Migrated the platform in 2024." "\n" r"\end{itemize}"
+        assert self._f()(tex), "a year was accepted as a quantified result"
+
+    def test_a_year_alongside_a_real_metric_still_passes(self):
+        tex = (r"\begin{itemize}" "\n"
+               r"  \item Migrated 12 services in 2024, cutting spend 30\%." "\n"
+               r"\end{itemize}")
+        assert self._f()(tex) == []
+
+    def test_skills_entries_are_not_achievement_bullets(self):
+        r"""The Technical Skills section lists technologies, uses \item, and
+        must never carry numbers. Counting it put the unquantified rate at 34%
+        over the wrong population — CLAUDE.md #7, and the reason the first
+        measurement of this was thrown away."""
+        tex = (r"\section*{Technical Skills}" "\n" r"\begin{itemize}" "\n"
+               r"  \item \textbf{IaC:} Terraform, Ansible, CloudFormation" "\n"
+               r"  \item \textbf{Observability:} Prometheus, Grafana, PagerDuty" "\n"
+               r"\end{itemize}")
+        assert self._f()(tex) == []
+
+    def test_the_count_covers_achievements_only_when_both_are_present(self):
+        tex = (r"\section*{Technical Skills}" "\n" r"\begin{itemize}" "\n"
+               r"  \item \textbf{IaC:} Terraform" "\n" r"\end{itemize}" "\n"
+               r"\section*{Experience}" "\n" r"\begin{itemize}" "\n"
+               r"  \item Improved the thing." "\n"
+               r"  \item Cut cost 30\%." "\n" r"\end{itemize}")
+        out = self._f()(tex)
+        assert "1 of 2" in out[0], f"skills leaked into the denominator: {out}"
+
+    def test_the_message_forbids_inventing_a_number(self):
+        """The finding drives a repair prompt. Asking for a number without
+        saying where it may come from is how fabrication gets requested."""
+        tex = r"\begin{itemize}" "\n" r"  \item Improved reliability." "\n" r"\end{itemize}"
+        msg = self._f()(tex)[0]
+        assert "never invent" in msg.lower()
+        assert "base résumé supports" in msg or "base resume supports" in msg
+
+    def test_an_empty_document_is_not_a_finding(self):
+        assert self._f()("") == []
+
+
+# -------------------------------------------------------------------------
 # Severity must survive serialisation (GuardResult.to_dict)
 # ---------------------------------------------------------------------------
 # `to_dict` flattened every violation to one "rule: detail" string, so past
