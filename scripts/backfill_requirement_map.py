@@ -61,7 +61,8 @@ PROVIDERS = [
         "name": "groq",
         "url": "https://api.groq.com/openai/v1/chat/completions",
         "key_env": "GROQ_API_KEY",
-        "model": "llama-3.3-70b-versatile",
+        # was llama-3.3-70b-versatile, retired by Groq (404) on 2026-08-31.
+        "model": "openai/gpt-oss-120b",
         "timeout": 60,
     },
     {
@@ -71,14 +72,10 @@ PROVIDERS = [
         "model": "qwen-plus",
         "timeout": 90,
     },
-    {
-        "name": "openrouter/qwen3.6-plus",
-        "url": "https://openrouter.ai/api/v1/chat/completions",
-        "key_env": "OPENROUTER_API_KEY",
-        "model": "qwen/qwen3.6-plus:free",
-        "timeout": 90,
-        "extra_headers": {"HTTP-Referer": "https://github.com/UT07/daily-job-hunt"},
-    },
+    # openrouter/qwen3.6-plus removed 2026-10-08: its id had been 404
+    # ("free tier deprecated") since the 2026-08-31 probe. The nemotron entry
+    # below is on the same OpenRouter account and daily quota, so dropping it
+    # loses no capacity.
     {
         "name": "openrouter/nemotron",
         "url": "https://openrouter.ai/api/v1/chat/completions",
@@ -91,7 +88,9 @@ PROVIDERS = [
         "name": "nvidia",
         "url": "https://integrate.api.nvidia.com/v1/chat/completions",
         "key_env": "NVIDIA_API_KEY",
-        "model": "meta/llama-3.3-70b-instruct",
+        # was meta/llama-3.3-70b-instruct: 410 "end of life" since 2026-08.
+        # This is the one NIM model the council still finds live on this key.
+        "model": "nvidia/nemotron-3-super-120b-a12b",
         "timeout": 120,
     },
 ]

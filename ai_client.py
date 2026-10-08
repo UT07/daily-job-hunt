@@ -1448,18 +1448,20 @@ class AIClient:
         # 4. OpenRouter — free model aggregator (shared daily quota)
         or_key = get_key("openrouter", "OPENROUTER_API_KEY")
         if or_key:
-            # Verified-working free models on OpenRouter (2026-04-05).
-            # Includes Meta Llama (rate-limited sometimes), NVIDIA Nemotron,
-            # OpenAI GPT-OSS, Qwen, Minimax, Arcee, z-ai GLM.
             # Re-verified live 2026-08-31: every previous entry returned 404
-            # (models moved off the free tier). These four are the current
-            # free pool. NOTE: OpenRouter free shares ONE per-account daily
-            # quota, so these return 429 once it's spent regardless of model —
-            # treat them as depth behind Groq, never as the primary path.
+            # (models moved off the free tier). NOTE: OpenRouter free shares
+            # ONE per-account daily quota, so these return 429 once it's spent
+            # regardless of model — treat them as depth behind Groq, never as
+            # the primary path.
+            #
+            # minimax/minimax-m3:free and z-ai/glm-5.2:free REMOVED 2026-10-08.
+            # Both were recorded "404 -- model id no longer exists" in
+            # lambdas/pipeline/ai_helper.py by the 2026-09-28 probe and sat here
+            # for ten more days, because the retired-model guard only read
+            # ai_helper and this module's class defaults. It now scans the
+            # whole repo (tests/unit/test_ai_council_models.py).
             or_models = [
-                "minimax/minimax-m3:free",
                 "nvidia/nemotron-3-ultra-550b-a55b:free",
-                "z-ai/glm-5.2:free",
                 "google/gemma-4-31b-it:free",
             ]
             for model in or_models:

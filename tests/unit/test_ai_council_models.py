@@ -41,6 +41,13 @@ from lambdas.pipeline import ai_helper
 # `qwen/qwen3.8-27b`, 365 appearances and ZERO failures of this kind. Retiring
 # the Groq spelling would remove a working model and, since _model_family
 # collapses the pair, take the whole qwen3 family with it.
+#
+# Added 2026-10-08, recorded dead in lambdas/pipeline/ai_helper.py since the
+# 2026-09-28 probe ("404 -- model id no longer exists") and still listed in
+# ai_client.from_config until this date, because nothing compared the two:
+#   minimax/minimax-m3:free                openrouter  404
+#   z-ai/glm-5.2:free                      openrouter  404
+#   inclusionai/ling-3.0-flash-fin:free    openrouter  404, absent from /models
 RETIRED_MODEL_IDS = {
     "llama-3.3-70b-versatile",
     "meta/llama-3.3-70b-instruct",
@@ -49,6 +56,9 @@ RETIRED_MODEL_IDS = {
     "z-ai/glm-4.5-air:free",
     "google/gemma-3-27b-it:free",
     "qwen-3.8-27b",
+    "minimax/minimax-m3:free",
+    "z-ai/glm-5.2:free",
+    "inclusionai/ling-3.0-flash-fin:free",
 }
 
 
@@ -209,3 +219,134 @@ def test_410_is_treated_as_permanent_in_both_clients():
         "ai_helper.note_provider_failure does not mention 410; an end-of-lifed "
         "model gets the short transient cooldown instead of the long one"
     )
+
+
+# ---------------------------------------------------------------------------
+# The same guard, for EVERY file that can name a model.
+#
+# Both checks above look where someone already thought to look: the pipeline
+# council, then ai_client's class defaults. CLAUDE.md #10 is the lesson that
+# keeps having to be relearned — a guard and the data it guards never meet
+# unless the scan is the whole repo. On 2026-10-08 a wider look found dead ids
+# that neither check could see: two in ai_client.from_config's OpenRouter list
+# (recorded 404 in ai_helper since 09-28), three in
+# scripts/backfill_requirement_map.py, and one in config.yaml.
+#
+# What counts as "naming a model": a Python string constant EQUAL to a retired
+# id, a YAML token outside a comment, or a JSON string value. Comments and
+# docstrings that explain WHY a model was retired are not configuration, and
+# flagging them would push people to delete exactly the history that stops a
+# retirement being reversed.
+# ---------------------------------------------------------------------------
+import ast  # noqa: E402
+import json  # noqa: E402
+import pathlib  # noqa: E402
+import re  # noqa: E402
+import subprocess  # noqa: E402
+
+REPO = pathlib.Path(__file__).resolve().parents[2]
+_EXCLUDED_DIRS = {"tests", "node_modules", ".worktrees", ".claude"}
+_SCANNED_SUFFIXES = {".py", ".yaml", ".yml", ".json"}
+_YAML_TOKEN = re.compile(r"[A-Za-z0-9._/:\-]+")
+_YAML_COMMENT = re.compile(r"(^|\s)#.*$")
+
+
+def _scanned_files() -> list[pathlib.Path]:
+    """Tracked files plus untracked-but-not-ignored ones, so a new script is
+    checked before it is ever committed."""
+    out = subprocess.run(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+        cwd=REPO, capture_output=True, check=True,
+    ).stdout.decode()
+    files = []
+    for rel in sorted(set(filter(None, out.split("\0")))):
+        p = pathlib.PurePosixPath(rel)
+        if p.suffix not in _SCANNED_SUFFIXES or set(p.parts) & _EXCLUDED_DIRS:
+            continue
+        if (REPO / rel).is_file():
+            files.append(REPO / rel)
+    return files
+
+
+def _retired_in_python(src: str) -> list[tuple[int, str]]:
+    return [
+        (node.lineno, node.value)
+        for node in ast.walk(ast.parse(src))
+        if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        and node.value in RETIRED_MODEL_IDS
+    ]
+
+
+def _retired_in_yaml(src: str) -> list[tuple[int, str]]:
+    hits = []
+    for n, line in enumerate(src.splitlines(), 1):
+        for tok in _YAML_TOKEN.findall(_YAML_COMMENT.sub("", line)):
+            if tok in RETIRED_MODEL_IDS:
+                hits.append((n, tok))
+    return hits
+
+
+def _retired_in_json(src: str) -> list[tuple[int, str]]:
+    hits = []
+
+    def walk(v):
+        if isinstance(v, str):
+            if v in RETIRED_MODEL_IDS:
+                hits.append((0, v))
+        elif isinstance(v, dict):
+            for k, x in v.items():
+                walk(k)
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+
+    walk(json.loads(src))
+    return hits
+
+
+_FINDERS = {".py": _retired_in_python, ".yaml": _retired_in_yaml,
+            ".yml": _retired_in_yaml, ".json": _retired_in_json}
+
+
+def test_the_repo_scan_covers_the_files_that_name_models():
+    """Guard the guard: a scan that silently reads nothing passes everything."""
+    scanned = {str(p.relative_to(REPO)) for p in _scanned_files()}
+    assert len(scanned) >= 100, f"only {len(scanned)} files scanned"
+    for must in ("ai_client.py", "lambdas/pipeline/ai_helper.py", "config.yaml",
+                 "scripts/backfill_requirement_map.py",
+                 "lambdas/pipeline/agents/model_registry.json", "template.yaml"):
+        assert must in scanned, f"{must} is not scanned"
+    assert not any(s.startswith("tests/") for s in scanned)
+
+
+def test_the_finders_see_configuration_and_ignore_commentary():
+    """Calibrate the instrument on known inputs before trusting its zero."""
+    dead = "z-ai/glm-5.2:free"
+    assert _retired_in_python(f'MODEL = "{dead}"\n') == [(1, dead)]
+    assert _retired_in_python(f'X = {{"model": "{dead}"}}\n') == [(1, dead)]
+    assert _retired_in_python(f'# {dead} 404\n"""{dead} was retired."""\n') == []
+    assert _retired_in_yaml(f'ai:\n  model: "{dead}"\n') == [(2, dead)]
+    assert _retired_in_yaml(f"ai:\n  model: {dead}  # retired\n") == [(2, dead)]
+    assert _retired_in_yaml(f"# was {dead}, 404\nai: {{}}\n") == []
+    assert _retired_in_json(json.dumps({"models": [{"model": dead}]})) == [(0, dead)]
+    assert _retired_in_json(json.dumps({"_note": f"{dead} was removed"})) == []
+
+
+def test_no_file_in_the_repo_configures_a_retired_model():
+    found, unreadable = [], []
+    for path in _scanned_files():
+        src = path.read_text(encoding="utf-8", errors="replace")
+        try:
+            hits = _FINDERS[path.suffix](src)
+        except (SyntaxError, ValueError) as e:
+            unreadable.append(f"{path.relative_to(REPO)}: {type(e).__name__}")
+            continue
+        found += [f"{path.relative_to(REPO)}:{line} {model}" for line, model in hits]
+    assert not found, (
+        "Retired model id(s) still configured — these return 404/410 on every "
+        "call:\n  " + "\n  ".join(found)
+    )
+    # A file the guard cannot parse is a file it did not check. Say so rather
+    # than let it count towards a clean result.
+    assert not unreadable, f"files the retired-model scan could not parse: {unreadable}"
