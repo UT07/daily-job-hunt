@@ -173,7 +173,11 @@ def evaluate_gate(current: dict, baseline: dict,
                        f"outputs (evals/harness.py), so part of any fall may be "
                        f"the reference drifting rather than this change. "
                        f"Re-measuring the baseline on main is a legitimate "
-                       f"response; re-freezing it to turn this green is not."
+                       f"response; re-freezing it to turn this green is not. "
+                       f"To re-measure: run the CI workflow on main via "
+                       f"workflow_dispatch with run_eval=true, then freeze "
+                       f"evals/report.json into evals/baseline.json with its "
+                       f"provenance."
                        ) if age is not None else ""
             differs = pool_differs(current, baseline)
             mix = (f" This run was {differs}, and tier_accuracy moves with the "
