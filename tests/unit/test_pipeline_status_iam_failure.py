@@ -152,3 +152,30 @@ def test_first_candidate_misses_second_succeeds(app_module, monkeypatch):
 
     assert result["status"] == "SUCCEEDED"
     assert result["output"] == {"job_id": "abc"}
+
+
+def test_502_detail_is_generic_and_the_boto_text_is_logged(app_module, monkeypatch, caplog):
+    """The 502 body must not carry the raw boto error.
+
+    AccessDenied text names the Lambda's role ARN, the AWS account id and the
+    state machine ARN -- infrastructure detail no client needs. The operator
+    still needs it, so it goes to the server log instead.
+    """
+    import logging
+
+    monkeypatch.setenv("DAILY_PIPELINE_ARN", "arn:aws:states:eu-west-1:123:stateMachine:Daily")
+    monkeypatch.setenv("SINGLE_JOB_PIPELINE_ARN", "arn:aws:states:eu-west-1:123:stateMachine:Single")
+    sfn_mock = MagicMock()
+    sfn_mock.exceptions.ExecutionDoesNotExist = type("ExecutionDoesNotExist", (Exception,), {})
+    sfn_mock.describe_execution.side_effect = _make_access_denied_error()
+
+    with caplog.at_level(logging.ERROR):
+        with patch.object(app_module, "_get_sfn", return_value=sfn_mock):
+            with pytest.raises(HTTPException) as exc:
+                app_module.pipeline_execution_status("any-exec-name", user=MagicMock(id="user-123"))
+
+    detail = str(exc.value.detail)
+    assert exc.value.status_code == 502
+    for leak in ("arn:aws", "assumed-role", "AccessDenied", "123", "DescribeExecution"):
+        assert leak not in detail, f"{leak!r} leaked into the 502 body: {detail}"
+    assert "assumed-role/Foo" in caplog.text, "the detail must still reach the server log"

@@ -3341,14 +3341,17 @@ def pipeline_execution_status(execution_name: str, user: AuthUser = Depends(get_
 
     if result is None:
         if saw_non_not_found_error:
-            # Surface real underlying error so the frontend doesn't think the
-            # execution simply doesn't exist — and so the user sees a banner
-            # they can act on instead of a silent hang.
+            # A 502, not a 404, so the frontend doesn't think the execution
+            # simply doesn't exist and the user sees a banner instead of a
+            # silent hang. The boto text stays in the log: an AccessDenied
+            # message names the role ARN, the account id and the state
+            # machine, none of which belongs in a client response.
             logger.error(
                 "pipeline_execution_status: backend error for %s (most likely IAM): %s",
                 execution_name, last_err,
             )
-            raise HTTPException(502, f"Pipeline status check failed: {last_err}")
+            raise HTTPException(
+                502, "Pipeline status check failed on the server. Try again shortly.")
         logger.warning(
             "pipeline_execution_status: %s not found in any state machine: %s",
             execution_name, last_err,
