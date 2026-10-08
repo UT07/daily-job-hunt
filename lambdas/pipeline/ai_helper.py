@@ -724,8 +724,9 @@ def _select_diverse_providers(
     and this fills only what would otherwise be missing.
 
     Off by default, because the critic slot must NOT use it: a critic from the
-    family that generated is not an independent reviewer, and
-    `select_critics` already has its own explicit fallback for that case.
+    family that generated is not an independent reviewer. Neither critic
+    picker (`agents/providers.select_critics`, `_council_complete_legacy`)
+    relaxes; with no unused family they record `no_critic_family` instead.
     """
     exclude_families = exclude_families or set()
 
@@ -1202,11 +1203,27 @@ def _council_complete_legacy(
         logger.info("[council] outcome=single_candidate — returning without critique")
         return {**candidates[0], "critique_outcome": "single_candidate"}
 
-    # Step 3: Select critic from a different model family
-    gen_families = {_model_family(g["model"]) for g in generators}
+    # Step 3: Select critic from a family that neither was assigned to generate
+    # nor actually produced a candidate. The second set matters: a generator's
+    # fallback can succeed from a third family, which then wrote a candidate.
+    #
+    # NEVER relaxes -- the same contract as agents/providers.select_critics
+    # (5e9794d), stated in 17b3b48: a critic from the family that generated is
+    # not an independent reviewer, which is the entire purpose of the slot.
+    # This used to fall back to `_select_diverse_providers(all_providers, n=1)`
+    # with no exclusion, so a degraded pool had a generator judge its own
+    # family's work and the run was recorded as "adjudicated".
+    gen_families = ({_model_family(g["model"]) for g in generators}
+                    | {_model_family(c["model"]) for c in candidates})
     critics = _select_diverse_providers(all_providers, n=1, exclude_families=gen_families)
     if not critics:
-        critics = _select_diverse_providers(all_providers, n=1)
+        logger.warning(
+            "[council] outcome=no_critic_family — every live family is already "
+            "a generator (%s), so no cross-family critic is available; "
+            "returning candidate 1 unadjudicated",
+            ", ".join(sorted(f for f in gen_families if f)),
+        )
+        return {**candidates[0], "critique_outcome": "no_critic_family"}
 
     critic_provider = critics[0]
     logger.info(f"[council] Critic: {critic_provider['name']}:{critic_provider['model']}")
