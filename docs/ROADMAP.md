@@ -146,7 +146,12 @@ Ordered by dependency, not by preference.
 
 - **Schedules re-enabled** (#93). First automatic daily run is Monday
   2026-09-28 07:00 UTC — the cron is weekdays only, so nothing fires at the
-  weekend. One supervised manual run was triggered on 2026-09-26.
+  weekend. One supervised manual run was triggered on 2026-09-26. All four
+  rules (daily pipeline, expiry check, stale nudge, follow-up reminder) are
+  `State: ENABLED` in template.yaml. Cost implication: AWS is negligible, but
+  each weekday run spends per request on Bright Data and Apify via the
+  scrapers, plus LLM calls; parking it again means setting all four to
+  DISABLED in the template (not the console, which the next deploy reverts).
 - **Scoring intake capped** at the measured-capacity volume (#92), backfill
   window widened 7 -> 30 days so jobs that miss a run are no longer lost.
 - **Guardrails wired as graph nodes and armed per task** (#91). Before this,

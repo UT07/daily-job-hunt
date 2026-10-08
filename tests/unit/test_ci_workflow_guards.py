@@ -452,3 +452,33 @@ def test_verify_script_fails_when_sam_is_required_but_missing(tmp_path):
     assert subprocess.run(["bash", str(probe)], env=env, capture_output=True).returncode != 0
     env.pop("VERIFY_REQUIRE_SAM")
     assert subprocess.run(["bash", str(probe)], env=env, capture_output=True).returncode == 0
+
+
+# --- the API image import smoke must not pass when it finds no image --------
+#
+# It greps `docker images` for the sam-built API image and used to print a
+# ::warning:: and `exit 0` when nothing matched. A tag-naming change in SAM
+# would turn the step into a permanent no-op pass (CLAUDE.md rule 2).
+
+def _import_smoke_run() -> str:
+    wf = yaml.safe_load(TEST_WF.read_text())
+    for step in wf["jobs"]["deploy-readiness"]["steps"]:
+        if step.get("name", "").startswith("Runtime import smoke"):
+            return step["run"]
+    raise AssertionError("Runtime import smoke step not found in test.yml")
+
+
+def _no_image_branch(run: str) -> str:
+    m = re.search(r'(?ms)if \[ -z "\$IMAGE" \]; then\n(.*?)\n\s*fi\n', run)
+    assert m, "could not find the no-image branch of the import smoke"
+    return m.group(1)
+
+
+def test_import_smoke_fails_when_no_image_is_found():
+    import subprocess
+
+    branch = _no_image_branch(_import_smoke_run())
+    rc = subprocess.run(["bash", "-c", 'IMAGE=""\nif [ -z "$IMAGE" ]; then\n' + branch + "\nfi\nexit 0"],
+                        capture_output=True).returncode
+    assert rc != 0, f"the no-image branch exits {rc}: a smoke that found nothing passed"
+    assert "::error::" in branch

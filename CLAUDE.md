@@ -215,7 +215,9 @@ error you understood is gone.
 - **Pipeline**: AWS Step Functions state machines (`DailyPipelineStateMachine`,
   `SingleJobPipelineStateMachine`) defined in `template.yaml`. `main.py` is the
   legacy local-run orchestrator, retained for local dry-runs only.
-  **All four EventBridge schedules were disabled 2026-09-02** — see ROADMAP.md.
+  **All four EventBridge schedules are ENABLED** — disabled 2026-09-02 (#87),
+  re-enabled 2026-09-26 (#93). Each weekday run spends on Bright Data, Apify
+  and LLM calls; see ROADMAP.md.
 - **API** (`app.py`): FastAPI backend with 5 endpoints, deployable to AWS Lambda via Mangum
 - **Frontend** (`web/`): React + Vite + Tailwind, deployable to Netlify
 - **Self-improvement** (`self_improver.py`): Post-run analysis that detects weak spots
@@ -312,7 +314,7 @@ Once active, `git commit` runs ruff + ruff-format and catches the
 
 - **Frontend**: Netlify (`netlify.toml` configured, set `VITE_API_URL` env var)
 - **Backend**: AWS Lambda via SAM (`template.yaml`, use `sam deploy --guided`)
-- **Pipeline**: Step Functions, triggered by EventBridge (currently DISABLED).
+- **Pipeline**: Step Functions, triggered by EventBridge (ENABLED since 2026-09-26, #93).
   `.github/workflows/daily_job_hunt.yml` still exists and still invokes `main.py`,
   but is not the production path.
 

@@ -1647,13 +1647,13 @@ Resources:
       Name: naukribaba-daily-pipeline-schedule
       Description: Run daily pipeline on weekdays at 7:00 UTC
       ScheduleExpression: "cron(0 7 ? * MON-FRI *)"
-      # RETIRED 2026-09-02. The automated pipeline is parked: the product is now
-      # the website plus on-demand "paste a JD, get a tailored resume". The
-      # scrapers drive per-request spend on Bright Data (PROXY_URL) and Apify,
-      # which is the actual cost - NaukriBaba's whole AWS footprint is ~$3/mo
-      # (Lambda $0.0001, Step Functions $0). Re-enable by flipping to ENABLED;
-      # every Lambda, layer and state machine is left deployed and idle, and
-      # idle Lambda costs nothing.
+      # ENABLED since 2026-09-26 (#93, commit 339ccb3), after being disabled
+      # 2026-09-02 (#87) while the pipeline was parked. Kept in the template,
+      # not the console, so a deploy cannot silently flip it either way.
+      # Cost: the AWS side is negligible (~$3/mo for all of NaukriBaba), but
+      # every daily run drives per-request spend on Bright Data (PROXY_URL)
+      # and Apify through the scrapers, plus LLM calls. To park it again, set
+      # all four rules to DISABLED here; nothing else needs to change.
       State: ENABLED
       Targets:
         - Arn: !GetAtt DailyPipelineStateMachine.Arn
@@ -1667,13 +1667,13 @@ Resources:
       Name: naukribaba-expiry-check
       Description: Check job expiry weekly on Sundays at 6:00 UTC
       ScheduleExpression: "cron(0 6 ? * SUN *)"
-      # RETIRED 2026-09-02. The automated pipeline is parked: the product is now
-      # the website plus on-demand "paste a JD, get a tailored resume". The
-      # scrapers drive per-request spend on Bright Data (PROXY_URL) and Apify,
-      # which is the actual cost - NaukriBaba's whole AWS footprint is ~$3/mo
-      # (Lambda $0.0001, Step Functions $0). Re-enable by flipping to ENABLED;
-      # every Lambda, layer and state machine is left deployed and idle, and
-      # idle Lambda costs nothing.
+      # ENABLED since 2026-09-26 (#93, commit 339ccb3), after being disabled
+      # 2026-09-02 (#87) while the pipeline was parked. Kept in the template,
+      # not the console, so a deploy cannot silently flip it either way.
+      # Cost: the AWS side is negligible (~$3/mo for all of NaukriBaba), but
+      # every daily run drives per-request spend on Bright Data (PROXY_URL)
+      # and Apify through the scrapers, plus LLM calls. To park it again, set
+      # all four rules to DISABLED here; nothing else needs to change.
       State: ENABLED
       Targets:
         - Arn: !Ref CheckExpiryFunctionAliaslive
@@ -1715,13 +1715,13 @@ Resources:
       Name: naukribaba-stale-nudge
       Description: Weekly stale job nudges (Monday 9:00 UTC)
       ScheduleExpression: "cron(0 9 ? * MON *)"
-      # RETIRED 2026-09-02. The automated pipeline is parked: the product is now
-      # the website plus on-demand "paste a JD, get a tailored resume". The
-      # scrapers drive per-request spend on Bright Data (PROXY_URL) and Apify,
-      # which is the actual cost - NaukriBaba's whole AWS footprint is ~$3/mo
-      # (Lambda $0.0001, Step Functions $0). Re-enable by flipping to ENABLED;
-      # every Lambda, layer and state machine is left deployed and idle, and
-      # idle Lambda costs nothing.
+      # ENABLED since 2026-09-26 (#93, commit 339ccb3), after being disabled
+      # 2026-09-02 (#87) while the pipeline was parked. Kept in the template,
+      # not the console, so a deploy cannot silently flip it either way.
+      # Cost: the AWS side is negligible (~$3/mo for all of NaukriBaba), but
+      # every daily run drives per-request spend on Bright Data (PROXY_URL)
+      # and Apify through the scrapers, plus LLM calls. To park it again, set
+      # all four rules to DISABLED here; nothing else needs to change.
       State: ENABLED
       Targets:
         - Arn: !Ref StaleNudgeFunctionAliaslive
@@ -1745,13 +1745,13 @@ Resources:
       Name: naukribaba-followup-reminder
       Description: Daily follow-up reminders (10:00 UTC weekdays)
       ScheduleExpression: "cron(0 10 ? * MON-FRI *)"
-      # RETIRED 2026-09-02. The automated pipeline is parked: the product is now
-      # the website plus on-demand "paste a JD, get a tailored resume". The
-      # scrapers drive per-request spend on Bright Data (PROXY_URL) and Apify,
-      # which is the actual cost - NaukriBaba's whole AWS footprint is ~$3/mo
-      # (Lambda $0.0001, Step Functions $0). Re-enable by flipping to ENABLED;
-      # every Lambda, layer and state machine is left deployed and idle, and
-      # idle Lambda costs nothing.
+      # ENABLED since 2026-09-26 (#93, commit 339ccb3), after being disabled
+      # 2026-09-02 (#87) while the pipeline was parked. Kept in the template,
+      # not the console, so a deploy cannot silently flip it either way.
+      # Cost: the AWS side is negligible (~$3/mo for all of NaukriBaba), but
+      # every daily run drives per-request spend on Bright Data (PROXY_URL)
+      # and Apify through the scrapers, plus LLM calls. To park it again, set
+      # all four rules to DISABLED here; nothing else needs to change.
       State: ENABLED
       Targets:
         - Arn: !Ref FollowUpReminderFunctionAliaslive
