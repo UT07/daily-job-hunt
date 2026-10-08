@@ -2020,7 +2020,16 @@ Resources:
       EvaluationPeriods: 1
       Threshold: 1
       ComparisonOperator: LessThanThreshold
-      TreatMissingData: breaching
+      # notBreaching, not breaching. The schedule is MON-FRI, so missing data
+      # is every Saturday and Sunday, and `breaching` paged every weekend for
+      # a pipeline that was correctly not running. This is safe because
+      # save_metrics ALWAYS emits JobsMatched when a run reaches
+      # SavePipelineMetrics, including Value 0, so a weekday that matched
+      # nothing still breaches. A weekday with no run at all is left to
+      # DailyPipelineNoArtifactsAlarm (still breaching) and a run that dies
+      # early to the ExecutionsFailed alarm. Pinned by
+      # tests/unit/test_no_jobs_matched_alarm.py.
+      TreatMissingData: notBreaching
       AlarmActions: [!Ref PipelineAlarmTopicArn]
 
   DailyPipelinePartialArtifactFailureAlarm:
