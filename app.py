@@ -1002,6 +1002,9 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
     title = payload.get("job_title") or payload.get("title") or "Software Engineer"
     description = payload.get("job_description") or payload.get("description") or ""
     location = payload.get("location", "") or ""
+    # Save & Score sends apply_url; auto-apply reads it. It was accepted here
+    # and written nowhere. Blank means "not given", never "erase".
+    apply_url = (payload.get("apply_url") or "").strip()
 
     # A job with no description cannot be scored or tailored — there is nothing
     # to work against — so creating a row for one produces a permanent stub:
@@ -1044,15 +1047,21 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
                 "title": title,
                 "company": company,
                 "source": "manual",
+                "apply_url": apply_url,
             }
             merged = merge_manual_job(existing, manual_data)
             # Update the existing row with merged data
-            _db.client.table("jobs").update({
+            merged_update = {
                 "description": merged["description"],
                 "title": merged["title"],
                 "company": merged["company"],
                 "source": merged["source"],
-            }).eq("job_id", existing["job_id"]).eq("user_id", user_id).execute()
+            }
+            # merge_manual_job only takes a non-empty manual value, so this is
+            # the new URL, or the stored one, and never "" over a real link.
+            if merged.get("apply_url"):
+                merged_update["apply_url"] = merged["apply_url"]
+            _db.client.table("jobs").update(merged_update).eq("job_id", existing["job_id"]).eq("user_id", user_id).execute()
             logger.info("Merged manual JD into existing job %s (hash=%s)", existing["job_id"], chash)
             return existing["job_id"]
     except Exception as e:
@@ -1069,6 +1078,7 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
         "description": description,
         "location": location,
         "source": "manual",
+        "apply_url": apply_url or None,
         "application_status": "New",
         "first_seen": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
