@@ -194,6 +194,29 @@ class AIProvider:
     def complete(self, prompt: str, system: str = "", temperature: float = None) -> str:
         raise NotImplementedError
 
+    def _usable(self, content: Optional[str], finish_reason: Optional[str]) -> str:
+        """Return `content` only if it is a complete, non-empty answer.
+
+        Every complete() used to return the message content unexamined, so
+        three unusable shapes came back as success: `null` (a reasoning model
+        that spent its whole budget thinking), `""`, and a fragment cut off
+        at max_tokens. The fragment was then cached for 72 hours and replayed
+        to every identical prompt. Raising here makes each one an ordinary
+        provider failure: AIClient fails over, and the cache, which is written
+        only after a successful return, never sees it. ai_helper's
+        _call_provider and ai_complete_cached already refuse the same cases.
+        """
+        if finish_reason in _TRUNCATION_REASONS:
+            raise TruncatedResponseError(
+                f"[{self.name}:{self.model}] hit max_tokens={self.max_tokens} mid-answer "
+                f"(finish_reason={finish_reason}, {len(content or '')} chars) — not using a fragment"
+            )
+        if content is None or not content.strip():
+            raise EmptyResponseError(
+                f"[{self.name}:{self.model}] returned empty content (finish_reason={finish_reason})"
+            )
+        return content
+
     def complete_with_retry(self, prompt: str, system: str = "", temperature: float = None) -> str:
         """Call complete() with exponential backoff retry for transient errors.
 
@@ -283,7 +306,8 @@ class GeminiProvider(AIProvider):
             raise ProviderError(f"[{self.name}] No candidates in response")
 
         parts = candidates[0].get("content", {}).get("parts", [])
-        return "".join(p.get("text", "") for p in parts)
+        text = "".join(p.get("text", "") for p in parts)
+        return self._usable(text, candidates[0].get("finishReason"))
 
 
 class GroqProvider(AIProvider):
@@ -328,8 +352,8 @@ class GroqProvider(AIProvider):
             raise RateLimitError(f"[{self.name}] HTTP 429 — rate limited")
         resp.raise_for_status()
 
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        choice = resp.json()["choices"][0]
+        return self._usable(choice.get("message", {}).get("content"), choice.get("finish_reason"))
 
 
 class CerebrasProvider(AIProvider):
@@ -393,8 +417,8 @@ class CerebrasProvider(AIProvider):
             raise RateLimitError(f"[{self.name}] HTTP 429 — rate limited")
         resp.raise_for_status()
 
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        choice = resp.json()["choices"][0]
+        return self._usable(choice.get("message", {}).get("content"), choice.get("finish_reason"))
 
 
 class OpenRouterProvider(AIProvider):
@@ -442,8 +466,8 @@ class OpenRouterProvider(AIProvider):
             raise RateLimitError(f"[{self.name}] HTTP 429 — rate limited")
         resp.raise_for_status()
 
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        choice = resp.json()["choices"][0]
+        return self._usable(choice.get("message", {}).get("content"), choice.get("finish_reason"))
 
 
 class NvidiaNIMProvider(AIProvider):
@@ -488,8 +512,8 @@ class NvidiaNIMProvider(AIProvider):
             raise RateLimitError(f"[{self.name}] HTTP 429 — rate limited")
         resp.raise_for_status()
 
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        choice = resp.json()["choices"][0]
+        return self._usable(choice.get("message", {}).get("content"), choice.get("finish_reason"))
 
 
 class QwenProvider(AIProvider):
@@ -528,8 +552,8 @@ class QwenProvider(AIProvider):
             raise RateLimitError(f"[{self.name}] HTTP 429 — rate limited")
         resp.raise_for_status()
 
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        choice = resp.json()["choices"][0]
+        return self._usable(choice.get("message", {}).get("content"), choice.get("finish_reason"))
 
 
 class AnthropicProvider(AIProvider):
@@ -559,7 +583,8 @@ class AnthropicProvider(AIProvider):
             kwargs["system"] = system
 
         resp = client.messages.create(**kwargs)
-        return resp.content[0].text
+        text = "".join(getattr(block, "text", "") or "" for block in (resp.content or []))
+        return self._usable(text, getattr(resp, "stop_reason", None))
 
 
 def _http_status(e: BaseException) -> int:
@@ -585,6 +610,17 @@ class RateLimitError(Exception):
 
 class ProviderError(Exception):
     pass
+
+class EmptyResponseError(ProviderError):
+    """The provider answered 200 with no usable content."""
+
+class TruncatedResponseError(ProviderError):
+    """The provider stopped at its output budget; the content is a fragment."""
+
+
+# Finish reasons meaning "stopped at the output budget", per wire format:
+# OpenAI-compatible `length`, Gemini `MAX_TOKENS`, Anthropic `max_tokens`.
+_TRUNCATION_REASONS = frozenset({"length", "MAX_TOKENS", "max_tokens"})
 
 
 # ── Main Client (Failover + Cache) ──────────────────────────────────────
