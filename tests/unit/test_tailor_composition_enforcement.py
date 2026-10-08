@@ -485,19 +485,31 @@ class TestFlagDescribesTheShippedDocument:
         assert count_entries(written_tex(s3))["projects"] == 3
 
     def test_the_fallback_is_trimmed_arithmetically_never_by_a_model(self):
-        """No AI call on this path -- that part of the old contract holds.
+        """Nothing a model produced may reach this document.
 
         The original name was `test_fallback_is_not_repaired` and its point was
         that re-splicing a generated body over a deliberate fallback would undo
-        the fallback. Still true, and still enforced: repair.call_count is 0.
-        What changed is that the corpus is no longer written out verbatim. It is
-        the same document minus the entries over the cap -- every surviving
-        entry byte-identical to the base, because nothing generated it.
+        the fallback. Still true. What changed is that the corpus is no longer
+        written out verbatim: it is the same document minus the entries over the
+        cap -- every surviving entry byte-identical to the base, because nothing
+        generated it.
+
+        Asserted on the BYTES rather than on `repair.call_count`, which stopped
+        meaning what it said on 2026-10-08. A corrective retry now fires when
+        the hard gates reject a body, BEFORE any fallback is chosen, so the
+        count is 1 on a path where nothing was repaired. The claim that matters
+        -- every character here came from the base document -- is checked
+        directly below, and a count that cannot tell which call it counted is
+        not evidence for it (CLAUDE.md #13).
         """
         _, _, repair, s3, _ = run_handler(council_body=body_missing_a_section())
-        assert repair.call_count == 0
+        assert repair.call_count <= 1, (
+            f"ai_complete ran {repair.call_count} times; at most ONE corrective "
+            "retry may fire, and only before the corpus is chosen")
 
         written = written_tex(s3)
+        # The decisive assertion: nothing generated appears anywhere.
+        assert "Let's" not in written and "Summary}A highly" not in written
         assert written != BASE_TEX, "the corpus shipped untrimmed"
         # Kept entries are the base's own text, not a regeneration.
         for kept in ("Project0", "Project1", "Project2", "Company0", "Company1"):
