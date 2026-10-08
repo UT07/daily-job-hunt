@@ -211,7 +211,7 @@ class AIProvider:
                 # 429 from rate limiter or provider — retryable
                 last_error = e
             except _requests.exceptions.HTTPError as e:
-                status = e.response.status_code if e.response is not None else 0
+                status = _http_status(e)
                 if status in _RETRYABLE_STATUS_CODES:
                     last_error = e
                 else:
@@ -562,6 +562,22 @@ class AnthropicProvider(AIProvider):
         return resp.content[0].text
 
 
+def _http_status(e: BaseException) -> int:
+    """The HTTP status carried by a requests exception, or 0 if it has none.
+
+    Tests the response for PRESENCE, never for truth. `requests.Response`
+    defines `__bool__` as `self.ok`, so every 4xx/5xx response is falsy. The
+    previous idiom, `... if hasattr(e, 'response') and e.response else 0`,
+    therefore read 0 for exactly the 401/402/403/404/410 responses
+    `_DEAD_CODES` exists to catch, and a retired model was retried on every
+    request for the life of the process.
+    """
+    response = getattr(e, "response", None)
+    if response is None:
+        return 0
+    return getattr(response, "status_code", 0) or 0
+
+
 # ── Errors ───────────────────────────────────────────────────────────────
 
 class RateLimitError(Exception):
@@ -652,7 +668,7 @@ class AIClient:
                 continue
             except _req.HTTPError as e:
                 # Detect permanent failures (402 payment required, 404 model not found, etc.)
-                status = e.response.status_code if hasattr(e, 'response') and e.response else 0
+                status = _http_status(e)
                 if status in self._DEAD_CODES:
                     key = (provider.name, provider.model)
                     self._dead_providers.add(key)
@@ -716,7 +732,7 @@ class AIClient:
                 last_error = e
                 continue
             except _req.HTTPError as e:
-                status = e.response.status_code if hasattr(e, 'response') and e.response else 0
+                status = _http_status(e)
                 if status in self._DEAD_CODES:
                     key = (provider.name, provider.model)
                     self._dead_providers.add(key)
@@ -883,7 +899,7 @@ class AIClient:
                         failures.append(f"{provider.name}:{provider.model} {type(e).__name__}: {e}")
                         # Mark permanently dead providers (402, 403, etc.)
                         if isinstance(e, _req.HTTPError):
-                            status = e.response.status_code if hasattr(e, "response") and e.response else 0
+                            status = _http_status(e)
                             if status in self._DEAD_CODES:
                                 self._dead_providers.add((provider.name, provider.model))
                                 logger.warning(f"[Council] Marked {provider.name}:{provider.model} dead ({status})")
@@ -945,7 +961,7 @@ class AIClient:
                                 except Exception as e:
                                     logger.warning(f"[Council] retry {provider.name}:{provider.model} failed: {e}")
                                     if isinstance(e, _req.HTTPError):
-                                        status = e.response.status_code if hasattr(e, "response") and e.response else 0
+                                        status = _http_status(e)
                                         if status in self._DEAD_CODES:
                                             self._dead_providers.add((provider.name, provider.model))
                         except concurrent.futures.TimeoutError:
