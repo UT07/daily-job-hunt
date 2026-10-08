@@ -28,6 +28,19 @@ from lambdas.pipeline import ai_helper
 #   meta-llama/llama-3.3-70b-instruct:free         404 unavailable for free
 #   z-ai/glm-4.5-air:free                          404 unavailable for free
 #   google/gemma-3-27b-it:free                     404 unavailable for free
+#
+# Added 2026-10-08, and this one is dead in a different way -- it answers, and
+# the answer is never usable:
+#   qwen-3.8-27b    cerebras    returns only reasoning tokens, no content
+# Measured by production over the 212-résumé batch of 2026-10-07: 385
+# appearances, 109 of this failure (68 at max_tokens=8192, 41 at 1024). A
+# larger budget buys nothing -- it fails at 8192 as readily as at 1024.
+#
+# HOST-SPECIFIC, and the entry is safe only because the two spellings differ.
+# Cerebras serves it as `qwen-3.8-27b`; Groq serves the SAME WEIGHTS as
+# `qwen/qwen3.8-27b`, 365 appearances and ZERO failures of this kind. Retiring
+# the Groq spelling would remove a working model and, since _model_family
+# collapses the pair, take the whole qwen3 family with it.
 RETIRED_MODEL_IDS = {
     "llama-3.3-70b-versatile",
     "meta/llama-3.3-70b-instruct",
@@ -35,6 +48,7 @@ RETIRED_MODEL_IDS = {
     "meta-llama/llama-3.3-70b-instruct:free",
     "z-ai/glm-4.5-air:free",
     "google/gemma-3-27b-it:free",
+    "qwen-3.8-27b",
 }
 
 
@@ -45,6 +59,35 @@ def test_provider_list_contains_no_retired_models():
     assert not still_dead, (
         f"Council still configures retired model(s): {sorted(still_dead)}. "
         "These return 404/410 and make the council fail closed."
+    )
+
+
+def test_the_working_host_of_a_host_specific_retirement_survives():
+    """`qwen-3.8-27b` is retired and `qwen/qwen3.8-27b` must NOT be.
+
+    The two ids are the same weights on two hosts and differ only by a hyphen
+    against a slash. Only Cerebras' serving of it is broken. Retiring the Groq
+    spelling as well would drop a model with 365 clean appearances and -- since
+    _model_family collapses the pair -- remove the qwen3 family from the
+    council entirely, which the diversity tests below would then be satisfying
+    with one family fewer and no one the wiser.
+    """
+    # The registry entry is asserted as well as the pool, because the two do
+    # different jobs and only one of them survives a careless edit. The pool
+    # assertion below stops the model coming BACK; the registry entry is the
+    # record of WHY, and deleting it leaves a retirement no reader can account
+    # for — which is how a measured decision becomes folklore and then gets
+    # reversed. Mutation-tested: emptying the registry alone broke nothing.
+    assert "qwen-3.8-27b" in RETIRED_MODEL_IDS, (
+        "the retirement is no longer recorded; the measurement behind it is in "
+        "the comment above RETIRED_MODEL_IDS and should go with it"
+    )
+    configured = {p["model"] for p in ai_helper._build_provider_list()}
+    assert "qwen-3.8-27b" not in configured, "Cerebras' broken spelling is retired"
+    assert "qwen/qwen3.8-27b" in configured, (
+        "Groq's qwen entry is gone. If that was deliberate, say so here and in "
+        "RETIRED_MODEL_IDS with the measurement; if it was collateral damage "
+        "from retiring Cerebras' lookalike id, it has cost the council a family."
     )
 
 

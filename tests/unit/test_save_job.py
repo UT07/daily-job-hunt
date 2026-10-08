@@ -452,3 +452,58 @@ def test_the_local_dev_no_compile_case_is_not_graded_at_all():
         "compile_result": {"error": "tectonic_not_available", "pdf_s3_key": None},
     })
     assert update is None, f"a local dry-run should write nothing, wrote {update}"
+
+
+def test_surviving_guard_violations_are_stored_beside_the_grade():
+    """What the council finalized best-effort WITH, recorded on the row.
+
+    Measured 2026-10-07: 87 of 212 runs (41%) exhausted the repair budget and
+    shipped with a block-severity violation present. Nothing recorded which,
+    anywhere, so the figure had to be reconstructed from CloudWatch by hand for
+    one batch. Storing it is what makes the false-positive measurement possible
+    — which is the precondition for ever letting it block (CLAUDE.md #16).
+    """
+    update = _captured_update({
+        **BASE_EVENT,
+        "tailor_result": {"composition_violations": [], "quality_warnings": [],
+                          "guard_violations": ["fabrication: 'Kotlin' not in base"]},
+        "compile_result": {"pdf_s3_key": "resumes/hash-abc.pdf",
+                           "page_violations": [], "ats_violations": []},
+    })
+    verdict = update["resume_verdict"]
+    assert verdict["guard_violations"] == ["fabrication: 'Kotlin' not in base"]
+
+
+def test_surviving_guard_violations_do_not_change_the_grade():
+    """Recorded, not graded. Their false-positive rate at this position has
+    never been measured, and #16 is explicit that measurement comes first.
+
+    This is the assertion that would fail if someone wired them into the grade
+    without taking that measurement — which is the whole point of writing it
+    down rather than relying on the comment."""
+    update = _captured_update({
+        **BASE_EVENT,
+        "tailor_result": {"composition_violations": [], "quality_warnings": [],
+                          "guard_violations": ["fabrication: 'Kotlin' not in base"]},
+        "compile_result": {"pdf_s3_key": "resumes/hash-abc.pdf",
+                           "page_violations": [], "ats_violations": []},
+    })
+    verdict = update["resume_verdict"]
+    assert verdict["grade"] == "pass"
+    assert "guard" not in verdict["checks"], (
+        "a 5th REQUIRED check would grade every legacy-engine and backfilled "
+        "row `unmeasured`, destroying the gate's signal corpus-wide")
+
+
+def test_an_engine_with_no_guard_nodes_records_nothing_rather_than_nothing_wrong():
+    """`None` from the legacy engine means "never measured", and must not be
+    stored as an empty list — that would claim a clean guard verdict from an
+    engine that has no guard nodes at all."""
+    update = _captured_update({
+        **BASE_EVENT,
+        "tailor_result": {"composition_violations": [], "quality_warnings": [],
+                          "guard_violations": None},
+        "compile_result": {"pdf_s3_key": "resumes/hash-abc.pdf",
+                           "page_violations": [], "ats_violations": []},
+    })
+    assert "guard_violations" not in update["resume_verdict"]

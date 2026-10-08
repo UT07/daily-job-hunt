@@ -54,6 +54,12 @@ def test_return_shape_matches_legacy_contract():
     they belong in the shared part: a caller that has to branch on which engine
     produced a result is how post_score silently ran guard-free for weeks.
 
+    guard_report joined them on 2026-10-08, and this test is why it reached
+    both. The graph supplies a real report; legacy has no guard nodes at all,
+    so it supplies None -- the honest value for "never measured", as opposed to
+    an empty report, which would claim a clean verdict from an engine that
+    never looked.
+
     Asserted as an exact set on purpose. This test caught critique_outcome
     being added to the graph, which is what it is for -- a key appearing on one
     engine and not the other is the failure mode, and a subset check would not
@@ -63,7 +69,7 @@ def test_return_shape_matches_legacy_contract():
          patch("agents.nodes.call_one", return_value=CAND_A):
         out = graph_mod.council_complete_langgraph("p", "s", "desc", n_generators=1)
     assert set(out) == {"content", "provider", "model", "trace_id",
-                        "critique_outcome", "scores"}
+                        "critique_outcome", "scores", "guard_report"}
     assert out["trace_id"]
     assert out["critique_outcome"] == "single_candidate", (
         "one generator means nothing to compare; the outcome must say so "
@@ -149,3 +155,31 @@ def test_repair_round_resets_candidates_not_accumulates():
     # repair budget is exhausted, but candidates must reflect only the final
     # round's output -- one generator's worth, not three rounds concatenated.
     assert len(final["candidates"]) == 1
+
+
+def test_the_legacy_engine_reports_no_guard_verdict_rather_than_a_clean_one():
+    """`guard_report: None`, and the value matters more than the key.
+
+    Legacy has no guard nodes at all -- ai_helper's own comment calls it
+    "frozen pre-guardrail behaviour" -- so it has not measured anything.
+    `None` says that. An empty report would claim a clean guard verdict from
+    an engine that never looked, which is the same lie as a status that cannot
+    fail, and `shared.resume_verdict` would then grade such a document `pass`
+    on evidence that does not exist.
+
+    Asserted on the PUBLIC `council_complete`, because that is where the key is
+    added and where every caller enters.
+    """
+    import ai_helper
+
+    with patch.object(ai_helper, "_select_diverse_providers", return_value=[P1]), \
+         patch.object(ai_helper, "_call_provider", return_value=dict(CAND_A)), \
+         patch.object(ai_helper, "_build_provider_list", return_value=[P1]), \
+         patch.dict("os.environ", {"COUNCIL_ENGINE": "legacy"}, clear=False):
+        out = ai_helper.council_complete("p", "s", "desc", n_generators=1)
+
+    assert "guard_report" in out, "shape parity with the graph"
+    assert out["guard_report"] is None, (
+        "legacy has no guard nodes; an empty report would claim a clean "
+        "verdict from an engine that never looked"
+    )
