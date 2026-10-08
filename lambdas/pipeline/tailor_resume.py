@@ -23,6 +23,7 @@ from guardrails.output_guards import check_weak_bullet_openers as _check_weak_op
 from guardrails.output_guards import check_brace_balance as _check_brace_balance
 from guardrails.output_guards import check_required_sections as _check_required_sections
 from guardrails.output_guards import check_fabrication as _check_fabrication
+from guardrails.output_guards import check_unquantified_bullets as _check_unquantified
 from guardrails.output_guards import check_header_present as _check_header_present
 from guardrails.output_guards import check_near_empty as _check_near_empty
 from guardrails.output_guards import check_prompt_echo as _check_prompt_echo
@@ -226,6 +227,11 @@ def _quality_warnings(body: str, base_body: str, fabrication_baseline) -> list[s
     """
     warnings = _check_banned_phrases(body)
     warnings.extend(_check_weak_openers(body))
+    # Yale's third term — the quantified result — is the one that gets dropped.
+    # Advisory by measurement, not by preference: 0 of 100 live résumés have
+    # every bullet quantified, so blocking would reject all of them, and a hard
+    # counter is satisfied by inventing a figure. See check_unquantified_bullets.
+    warnings.extend(_check_unquantified(body))
     warnings.extend(_check_textbf_preservation(base_body, body))
     if fabrication_baseline:
         warnings.extend(_check_fabrication(fabrication_baseline, body))

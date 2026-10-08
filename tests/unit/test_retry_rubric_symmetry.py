@@ -47,6 +47,8 @@ TREE = ast.parse(SOURCE)
 CHECK_NAMES = {
     "_check_banned_phrases", "_check_weak_openers",
     "_check_textbf_preservation", "_check_fabrication",
+    # added 2026-10-08: Yale's quantified-result term, advisory by measurement
+    "_check_unquantified",
 }
 
 

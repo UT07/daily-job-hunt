@@ -121,6 +121,65 @@ _WEAK_OPENERS = (
 _BULLET = re.compile(r"\\item\s+(.{0,48})", re.DOTALL)
 
 
+# A whole bullet, to the next \item or the end of its list — unlike _BULLET
+# above, which deliberately truncates because it only inspects the opener.
+_FULL_BULLET = re.compile(r"\\item\s+(.+?)(?=\n\s*\\item|\n\s*\\end\{itemize\})", re.DOTALL)
+# The Skills section lists technologies, not achievements, and its entries use
+# \item too. Counting them as unquantified bullets was a 34% "failure rate"
+# that was really the wrong population (CLAUDE.md #7).
+_SKILLS_SECTION = re.compile(r"\\section\*\{[^}]*Skills[^}]*\}(.*?)(?=\\section\*|\Z)", re.DOTALL)
+_YEAR_ONLY = re.compile(r"\b(?:19|20)\d{2}\b")
+_HAS_DIGIT = re.compile(r"\d")
+
+
+def check_unquantified_bullets(tex: str) -> list[str]:
+    r"""Achievement bullets that end on no measured result.
+
+    Yale's formula is ACTION VERB + what you did and at what scale + QUANTIFIED
+    RESULT, and the last term is the one that gets dropped. This names the
+    bullets that dropped it, so a repair pass has something to act on —
+    "7 of 24 bullets carry no number" plus the offending text beats repeating
+    the rule at a model that already ignored it (CLAUDE.md #4).
+
+    REPORTED, NEVER BLOCKING, and the measurement is why. Over 2,378
+    achievement bullets in 100 live résumés:
+
+        carry a number   1579   66.4%
+        carry none        799   33.6%
+        résumés with every bullet quantified   0 of 100
+
+    A blocking version fails every résumé ever generated, which is exactly the
+    detector CLAUDE.md #16 says to measure before shipping rather than after.
+    It is also the wrong pressure: a hard counter is satisfied by inventing a
+    number, and an invented figure is worse than an absent one. The policy's
+    own writing rules already say to use only figures the base résumé supports
+    and to state the outcome qualitatively where it gives none — so a bullet
+    with no honest number available is CORRECT, and this warning exists to
+    catch the ones that had a number available and did not use it.
+
+    A bare year is not a result. "Migrated the platform in 2024" states when,
+    not how much, so years are removed before looking for a digit.
+
+    Skills entries are excluded: they list technologies, use `\item`, and must
+    never carry numbers. Including them put the unquantified rate at 34% when
+    the real figure for the population this judges is the same 33.6% measured
+    over achievements alone — close by coincidence, and wrong by construction.
+    """
+    body = _SKILLS_SECTION.sub("", tex or "")
+    missing = []
+    total = 0
+    for m in _FULL_BULLET.finditer(body):
+        text = m.group(1)
+        total += 1
+        if not _HAS_DIGIT.search(_YEAR_ONLY.sub(" ", text)):
+            missing.append(" ".join(text.split()))
+    if not missing:
+        return []
+    shown = "; ".join(b[:90] for b in missing[:3])
+    return [f"unquantified: {len(missing)} of {total} bullets end on no measured "
+            f"result — add one ONLY where the base résumé supports it, never invent: {shown}"]
+
+
 def check_weak_bullet_openers(tex: str) -> list[str]:
     """Bullets that open with a phrase where the action verb belongs.
 
