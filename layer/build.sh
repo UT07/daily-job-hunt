@@ -3,12 +3,25 @@ set -euo pipefail
 cd "$(dirname "$0")"
 rm -rf python/
 
-# First-party packages every zip-based pipeline Lambda needs on its Python
-# path. Layer mounts at /opt/python at runtime, so anything imported by a
-# zip Lambda (e.g. `from shared.*`) must be copied in here — it is NOT
-# enough for it to exist at the repo root or in Dockerfile.lambda (that only
-# covers the container-image Lambda). See tests/unit/test_deploy_path_parity.py
-# for the parity check across both deploy paths.
+# NO first-party code ships in this layer. FIRST_PARTY is kept, empty, so the
+# tests and scripts/preflight_deploy.sh can assert it STAYS empty.
+#
+# shared/ used to be copied in here. It moved out on 2026-10-08 for the same
+# reason agents/ did on 2026-09-23 (below): a layer-only change does not
+# change the function artifact. Measured with `sam build CompileLatexFunction`
+# before and after a one-line edit to shared/tex_utils.py, hashed with SAM's
+# own dir_checksum (the md5 that becomes the packaged CodeUri S3 key): it was
+# 13ef36ce... both times. PRs #180, #184, #191, #200 and #202 changed only
+# shared/, so their deploys could leave the `live` alias on old code.
+#
+# shared/ now reaches zip Lambdas through the symlinks
+# lambdas/pipeline/shared and lambdas/scrapers/shared (-> ../../shared).
+# `sam build` copies a symlinked directory as real files, so shared/ is part
+# of every function's artifact and hash: the same edit now moves it
+# 018c4ddc... -> 48ff37b4..., and an unedited rebuild reproduces 018c4ddc....
+# Regression tests: test_package_not_in_layer_build_script and
+# test_zip_functions_importing_shared_carry_it_in_their_codeuri in
+# tests/unit/test_deploy_path_parity.py.
 #
 # `agents/` deliberately does NOT belong here. It moved to
 # lambdas/pipeline/agents/ (2026-09-23) specifically so it ships inside the
@@ -31,7 +44,7 @@ rm -rf python/
 # like agents/ was, so they belong inside whichever function's CodeUri
 # actually imports them (see lambdas/pipeline/agents/ for the pattern),
 # not in this layer.
-FIRST_PARTY="shared"
+FIRST_PARTY=""
 
 # Build everything inside ONE Docker invocation so ownership stays consistent.
 # - `pip install` runs as root inside the container (root-owned files appear

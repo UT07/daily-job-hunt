@@ -34,7 +34,7 @@ jobs:
           python-version: "3.11"
       - name: Install SAM CLI
         run: pip install aws-sam-cli
-      - name: Build shared-deps layer (catches Docker permission / shared/ packaging bugs)
+      - name: Build shared-deps layer (third-party deps only; catches Docker permission / wheel bugs)
         run: ./layer/build.sh
       # --lint matters, and its absence cost six consecutive failed deploys on
       # 2026-09-30. Plain `sam validate` accepts a template CloudFormation will
