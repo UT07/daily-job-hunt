@@ -77,6 +77,19 @@ _HASH_RE = re.compile(r"[0-9a-f]{6,64}")
 
 PRESIGN_SECONDS = 2592000   # 30 days, matching save_job exactly
 
+_CONTENT_RANGE_TOTAL = re.compile(r"^(?:\*|\d+-\d+)/(\d+)$")
+
+
+def _rows_patched(resp):
+    """Rows the PATCH's filter hit, from Content-Range; None if it cannot say.
+
+    Only meaningful with `Prefer: count=exact`. PostgREST answers `*/N` (or
+    `0-0/N`); `*/*` means it did not count. None is NOT zero and NOT "probably
+    fine" -- a caller that cannot confirm a write must not report one.
+    """
+    m = _CONTENT_RANGE_TOTAL.match((resp.headers.get("Content-Range") or "").strip())
+    return int(m.group(1)) if m else None
+
 
 def _quality_checker():
     """tailor_resume's writing rubric, or None if it cannot be imported.
@@ -274,14 +287,31 @@ def _reconcile(rows, *, url, headers, user_id, commit, verbose,
                 verdict_column_missing[0] = True
             stripped = {k: v for k, v in update.items() if k != "resume_verdict"}
             resp = _patch(stripped) if stripped else resp
+        # The count, not the status, decides "written": a filter that matches
+        # nothing is a 204 too. A zero-match is a FAILURE as well as
+        # `unmatched`, so both this script's and retailor_bulk's exit codes go
+        # non-zero on it -- an unlinked résumé is the outcome being prevented.
         if resp.status_code < 300:
-            written += 1
+            n = _rows_patched(resp)
+            if n:
+                written += 1
+            elif n == 0:
+                unmatched += 1
+                failed += 1
+                print(f"  [{i}] PATCH matched NO jobs row for {h[:12]} "
+                      f"(user {user_id[:8]}); nothing was linked")
+            else:
+                failed += 1
+                print(f"  [{i}] PATCH {resp.status_code} for {h[:12]} returned no row "
+                      f"count (Content-Range {resp.headers.get('Content-Range')!r}); "
+                      "cannot confirm it wrote anything")
         else:
             failed += 1
             print(f"  [{i}] PATCH {resp.status_code} for {h[:12]}: {resp.text[:160]}")
 
     summary = {"measured": sum(grades.values()), "written": written, "failed": failed,
-               "skipped": skipped, "needs_link": linked, "grades": dict(grades)}
+               "unmatched": unmatched, "skipped": skipped, "needs_link": linked,
+               "grades": dict(grades)}
 
     if verbose and links_only:
         # Deliberately NOT the grade table here. In this mode nothing was
@@ -304,7 +334,8 @@ def _reconcile(rows, *, url, headers, user_id, commit, verbose,
     if verbose:
         print(f"\n  rows needing resume_s3_key/url: {linked}")
         if commit:
-            print(f"  rows written: {written}, failed: {failed}")
+            print(f"  rows written: {written}, failed: {failed} "
+                  f"(of which matched no row: {unmatched})")
             print("\nVerify the thing that actually matters -- the deploy's own check:")
             print("  SMOKE_API_URL=$(grep -hoE '^VITE_API_URL=.+' web/.env.production | "
                   "cut -d= -f2-) .venv/bin/python scripts/smoke_prod.py")
@@ -327,7 +358,8 @@ def reconcile_hashes(job_hashes, *, user_id=None, commit=False, verbose=True) ->
     user_id = user_id or _rb._one_user(url, headers)
     hashes = [h for h in dict.fromkeys(job_hashes) if h]
     if not hashes:
-        return {"measured": 0, "written": 0, "failed": 0, "skipped": 0, "grades": {}}
+        return {"measured": 0, "written": 0, "failed": 0, "unmatched": 0,
+                "skipped": 0, "grades": {}}
     rows = [{"job_hash": h, "company": "", "resume_s3_key": None} for h in hashes]
     return _reconcile([*rows], url=url, headers=headers, user_id=user_id,
                       commit=commit, verbose=verbose, relink_always=True,
