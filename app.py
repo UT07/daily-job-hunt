@@ -5,7 +5,6 @@ Endpoints:
 - POST /api/pipeline/run-single     — start single-job pipeline (Add Job)
 - GET  /api/pipeline/status         — latest pipeline metrics
 - GET  /api/pipeline/status/{name}  — poll specific execution
-- POST /api/compile-latex           — compile LaTeX to PDF
 - POST /api/score                   — score a JD against base resumes
 - POST /api/tailor                  — tailor resume + compile PDF
 - POST /api/cover-letter            — generate cover letter PDF
@@ -3330,32 +3329,6 @@ def re_tailor_job(
             "poll_url": f"/api/tasks/{task_id}",
             "resume_version": next_version,
         }
-
-
-class CompileLatexRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    tex_source: str = Field(..., min_length=10)
-
-
-@app.post("/api/compile-latex")
-def compile_latex(req: CompileLatexRequest, user: AuthUser = Depends(get_current_user)):
-    """Compile LaTeX source to PDF and return the binary."""
-    try:
-        pdf_path = compile_tex_to_pdf(req.tex_source)
-        if not pdf_path or not Path(pdf_path).exists():
-            raise HTTPException(500, "LaTeX compilation failed — no PDF produced")
-
-        pdf_bytes = Path(pdf_path).read_bytes()
-        return StreamingResponse(
-            io.BytesIO(pdf_bytes),
-            media_type="application/pdf",
-            headers={"Content-Disposition": "attachment; filename=output.pdf"},
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("LaTeX compile error: %s", e)
-        raise HTTPException(500, f"Compilation error: {str(e)}")
 
 
 # ---------------------------------------------------------------------------
