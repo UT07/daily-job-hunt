@@ -96,6 +96,7 @@ from tailorer import tailor_resume
 from types import SimpleNamespace
 
 from utils.canonical_hash import canonical_hash
+from shared.tailor_hash import resolve_tailor_hash
 
 logger = logging.getLogger(__name__)
 
@@ -3001,9 +3002,12 @@ def re_tailor_jobs(req: RetailorRequest, user: AuthUser = Depends(get_current_us
         raise HTTPException(503, "Database not configured")
 
     tiers = ["S", "A"] if req.tier == "SA" else [req.tier]
+    # canonical_hash as well as job_hash: manual rows have job_hash NULL and
+    # are tailored under canonical_hash. Selecting only job_hash made every
+    # manual row raise TypeError at `job['job_hash'][:12]` below.
     jobs = (
         _db.client.table("jobs")
-        .select("job_id, job_hash, match_score, score_tier")
+        .select("job_id, job_hash, canonical_hash, match_score, score_tier")
         .eq("user_id", user.id)
         .in_("score_tier", tiers)
         .eq("is_expired", False)
@@ -3014,7 +3018,8 @@ def re_tailor_jobs(req: RetailorRequest, user: AuthUser = Depends(get_current_us
     )
 
     if not jobs.data:
-        return {"queued": 0, "message": "No jobs need re-tailoring"}
+        return {"queued": 0, "started": 0, "failed": 0, "skipped": 0,
+                "message": "No jobs need re-tailoring"}
 
     # Start single-job pipeline for each
     sfn = _get_sfn()
@@ -3022,16 +3027,37 @@ def re_tailor_jobs(req: RetailorRequest, user: AuthUser = Depends(get_current_us
     if not single_arn:
         raise HTTPException(500, "Single-job pipeline not configured")
 
-    queued = 0
-    errors = 0
-    for job in jobs.data:
+    # Rows that cannot possibly tailor are reported, not started: no hash at
+    # all, or a hash whose posting text was never stored in jobs_raw. The
+    # second used to start, run for minutes and die inside TailorResume with
+    # "Job ... not found in jobs_raw" -- re_tailor_job prechecks the same way.
+    resolved = [(job, resolve_tailor_hash(job)) for job in jobs.data]
+    hashes = sorted({h for _, h in resolved if h})
+    known: set = set(hashes)
+    if hashes:
+        try:
+            known = {r["job_hash"] for r in (
+                _db.client.table("jobs_raw").select("job_hash")
+                .in_("job_hash", hashes).execute().data or [])}
+        except Exception as e:  # noqa: BLE001 — a precheck failure must not block valid runs
+            logger.warning("jobs_raw precheck failed for bulk re-tailor: %s", e)
+            known = set(hashes)
+
+    started, failed, skipped = [], [], []
+    for job, job_hash in resolved:
+        if not job_hash:
+            skipped.append({"job_id": job["job_id"], "reason": "no job hash"})
+            continue
+        if job_hash not in known:
+            skipped.append({"job_id": job["job_id"], "reason": "posting text never stored"})
+            continue
         try:
             sfn.start_execution(
                 stateMachineArn=single_arn,
-                name=f"retailor-{job['job_hash'][:12]}-{int(__import__('time').time())}",
+                name=f"retailor-{job_hash[:12]}-{int(__import__('time').time())}",
                 input=json.dumps({
                     "user_id": user.id,
-                    "job_hash": job["job_hash"],
+                    "job_hash": job_hash,
                     "job_id": job["job_id"],
                     "skip_scoring": True,
                     # SkipToTailor references $.resume_only with .$, so it must
@@ -3039,16 +3065,29 @@ def re_tailor_jobs(req: RetailorRequest, user: AuthUser = Depends(get_current_us
                     "resume_only": False,
                 }),
             )
-            queued += 1
+            started.append(job["job_id"])
         except Exception as e:
-            logger.warning(f"Failed to start re-tailor for {job['job_hash']}: {e}")
-            errors += 1
+            logger.warning("Failed to start re-tailor for %s: %s", job_hash, e)
+            failed.append(job["job_id"])
 
+    # The message counts what STARTED, out of how many were found, and names
+    # the rest -- it used to open "Started re-tailoring N" whatever happened.
+    total = len(resolved)
+    message = f"Started re-tailoring {len(started)} of {total} jobs via single-job pipeline"
+    if failed:
+        message += f"; {len(failed)} failed to start"
+    if skipped:
+        message += f"; {len(skipped)} skipped (cannot be re-tailored)"
     return {
-        "queued": queued,
-        "errors": errors,
+        "queued": len(started),
+        "errors": len(failed),
+        "started": len(started),
+        "failed": len(failed),
+        "skipped": len(skipped),
+        "failed_jobs": failed,
+        "skipped_jobs": skipped,
         "tier": req.tier,
-        "message": f"Started re-tailoring {queued} jobs via single-job pipeline",
+        "message": message,
     }
 
 
@@ -3278,7 +3317,7 @@ def re_tailor_job(
     # scope or not. CLAUDE.md #17 -- the null-hash fix stacked a worse bug on
     # top of the one it fixed, and only the scope test's 500-instead-of-400
     # caught it.
-    job_hash = job.get("job_hash") or job.get("canonical_hash")
+    job_hash = resolve_tailor_hash(job)
     if not job_hash:
         raise HTTPException(
             409,
