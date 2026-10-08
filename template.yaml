@@ -1294,7 +1294,8 @@ Resources:
               "MaxConcurrency": 8,
               "ResultPath": "$.processed_jobs",
               "Next": "PostScoreTailoredJobs",
-              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PostScoreTailoredJobs"}],
+              "Comment": "Catch goes to NotifyError, not onward. It used to continue to PostScoreTailoredJobs with $.processed_jobs never written, and SavePipelineMetrics dereferences that path: a States.Runtime error, which States.ALL cannot catch, so the run failed anyway from the wrong state. Every per-job Task now has a Catch, so this fires only on a Map-level failure, which should fail the run. See tests/unit/test_sfn_catch_paths.py.",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyError"}],
               "ItemProcessor": {
                 "ProcessorConfig": {
                   "Mode": "INLINE"
@@ -1390,6 +1391,13 @@ Resources:
                   "SaveJobAfterError": {
                     "Type": "Task",
                     "Resource": "${SaveJobFunction.Alias}",
+                    "End": true,
+                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SaveJobFailed"}]
+                  },
+                  "SaveJobFailed": {
+                    "Type": "Pass",
+                    "Comment": "Static Result on purpose: naming an item field here would make it mandatory for every item (sfn_pass_state_contract). save_metrics counts failed=true as a resume failure, so a lost save is visible rather than absent.",
+                    "Result": {"saved": false, "has_resume": false, "failed": true, "error": "save_job_failed"},
                     "End": true
                   }
                 }
