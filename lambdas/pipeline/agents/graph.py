@@ -567,4 +567,13 @@ def council_complete_langgraph(
         "trace_id": trace_id,
         "critique_outcome": final.get("critique_outcome", "unknown"),
         "scores": final.get("scores") or [],
+        # The guard verdict on the content actually being returned. Omitted
+        # until 2026-10-08, which is why nothing outside this graph could tell
+        # a clean document from one that exhausted the repair budget: measured
+        # over a 212-résumé batch, 87 runs (41%) logged "Repair budget
+        # exhausted — finalizing best-effort" and shipped with a
+        # block-severity violation still present. `quality_gate` is allowed to
+        # finalize best-effort -- a bounded loop must terminate -- but the
+        # caller has to be able to KNOW that is what happened.
+        "guard_report": final.get("guard_report"),
     }

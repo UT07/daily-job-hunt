@@ -354,9 +354,16 @@ def quality_gate(state: dict) -> str:
     if report.get("passed", True):
         return "finalize"
     if state.get("repair_attempts", 0) >= 2:
+        # Name what is shipping. This used to log only that the budget was
+        # spent, so 87 of 212 résumés in one batch (41%) shipped with a
+        # block-severity violation still present and nothing recorded WHICH --
+        # a warning that cannot be acted on. `blocking` first because that is
+        # the subset that made this branch reachable at all.
+        report_blocking = report.get("blocking") or report.get("violations") or []
         logger.warning(
-            "[council] trace=%s Repair budget exhausted — finalizing best-effort",
-            _tid(state),
+            "[council] trace=%s Repair budget exhausted — finalizing best-effort "
+            "WITH %d unresolved violation(s): %s",
+            _tid(state), len(report_blocking), "; ".join(str(v) for v in report_blocking[:5]),
         )
         return "finalize"
     return "repair"

@@ -259,6 +259,7 @@ function EmptyJobsState({ hasAnyJobsEver, activeFilterChips, hiddenCount, baseli
 // narrowing further. Revisit this once the parked pipeline is producing a
 // steady flow of S/A jobs again.
 const FILTER_DEFAULTS = {
+  q: '',
   status: 'All',
   source: 'All',
   min_score: 60,
@@ -318,6 +319,7 @@ export default function Dashboard() {
   const [minScore, setMinScore] = useState(() => readFilterFromParams(searchParams, 'min_score', FILTER_DEFAULTS.min_score));
   const [companySearch, setCompanySearch] = useState(() => readFilterFromParams(searchParams, 'company', FILTER_DEFAULTS.company));
   const [titleSearch, setTitleSearch] = useState(() => readFilterFromParams(searchParams, 'title', FILTER_DEFAULTS.title));
+  const [searchQuery, setSearchQuery] = useState(() => readFilterFromParams(searchParams, 'q', FILTER_DEFAULTS.q));
   const [tailoredOnly, setTailoredOnly] = useState(() => readFilterFromParams(searchParams, 'tailored', FILTER_DEFAULTS.tailored));
   const [tierFilter, setTierFilter] = useState(() => readFilterFromParams(searchParams, 'tier', FILTER_DEFAULTS.tier));
   const [hideExpired, setHideExpired] = useState(() => readFilterFromParams(searchParams, 'hide_expired', FILTER_DEFAULTS.hide_expired));
@@ -343,8 +345,8 @@ export default function Dashboard() {
   const [filterVersion, setFilterVersion] = useState(0);
 
   // Use refs for filter values so fetchJobs stays stable across filter changes
-  const filtersRef = useRef({ statusFilter, sourceFilter, minScore, companySearch, titleSearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter });
-  filtersRef.current = { statusFilter, sourceFilter, minScore, companySearch, titleSearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter };
+  const filtersRef = useRef({ searchQuery, statusFilter, sourceFilter, minScore, companySearch, titleSearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter });
+  filtersRef.current = { searchQuery, statusFilter, sourceFilter, minScore, companySearch, titleSearch, tailoredOnly, tierFilter, hideExpired, sortBy, sortOrder, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter };
 
   // Sync the URL query string to current filter state. Only writes the keys
   // whose values differ from the defaults so the URL stays clean for the
@@ -352,6 +354,7 @@ export default function Dashboard() {
   useEffect(() => {
     const next = new URLSearchParams();
     const currentValues = {
+      q: searchQuery,
       status: statusFilter,
       source: sourceFilter,
       min_score: minScore,
@@ -379,7 +382,7 @@ export default function Dashboard() {
     setSearchParams(next, { replace: true });
     // Intentionally exclude setSearchParams to keep the effect single-source-of-truth.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [statusFilter, sourceFilter, minScore, companySearch, titleSearch, tailoredOnly, tierFilter, hideExpired, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter, showAdvanced, sortBy, sortOrder, page]);
+  }, [searchQuery, statusFilter, sourceFilter, minScore, companySearch, titleSearch, tailoredOnly, tierFilter, hideExpired, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter, showAdvanced, sortBy, sortOrder, page]);
 
   const fetchJobs = useCallback(async () => {
     setLoading(true);
@@ -472,6 +475,7 @@ export default function Dashboard() {
   }
 
   function handleClearAllFilters() {
+    setSearchQuery(FILTER_DEFAULTS.q);
     setStatusFilter(FILTER_DEFAULTS.status);
     setSourceFilter(FILTER_DEFAULTS.source);
     setMinScore(0);
@@ -515,6 +519,13 @@ export default function Dashboard() {
   }
   if (companySearch.trim()) {
     activeFilterChips.push({ key: 'company', label: `Company: "${companySearch.trim()}"`, onClear: () => { setCompanySearch(''); handleFilterApply(); } });
+  }
+  if (searchQuery.trim()) {
+    activeFilterChips.push({
+      key: 'q',
+      label: `Search: "${searchQuery.trim()}"`,
+      onClear: () => { setSearchQuery(''); handleFilterApply(); },
+    });
   }
   if (titleSearch.trim()) {
     activeFilterChips.push({ key: 'title', label: `Title: "${titleSearch.trim()}"`, onClear: () => { setTitleSearch(''); handleFilterApply(); } });
@@ -598,6 +609,40 @@ export default function Dashboard() {
 
       {/* KPI Stats */}
       <StatsBar stats={stats} />
+
+      {/* Search. Deliberately above the filter bar and full width, not another
+          40px box inside it: with a few hundred jobs the first thing anyone
+          does is look for one, and the existing Title and Company inputs
+          required knowing which column the word lived in before you could
+          find it. Searches both. */}
+      <div className="border-2 border-black bg-white p-4 mb-4">
+        <div className="flex items-center gap-3">
+          <span aria-hidden="true" className="text-xl leading-none select-none">⌕</span>
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleFilterApply(); }}
+            aria-label="Search jobs by title or company"
+            placeholder="Search jobs by title or company — press Enter"
+            className="flex-1 bg-white border-2 border-black px-4 py-3 font-body text-base text-black
+              placeholder:text-stone-400 focus:outline-none focus:shadow-brutal-yellow
+              transition-shadow"
+          />
+          <Button variant="primary" size="sm" onClick={handleFilterApply}>
+            Search
+          </Button>
+          {searchQuery.trim() && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => { setSearchQuery(''); handleFilterApply(); }}
+            >
+              Clear
+            </Button>
+          )}
+        </div>
+      </div>
 
       {/* Filter Bar */}
       <div className="border-2 border-black bg-white p-4 mb-6">

@@ -4,6 +4,23 @@ on:
   push:
     branches: [main, "feature/*"]
   pull_request:
+  # Manual, and it exists for one specific job: re-measuring the eval
+  # baseline on main. The gate's own failure text says "re-measuring the
+  # baseline on main is a legitimate response; re-freezing it to turn this
+  # green is not" — and until 2026-10-08 that remedy was impossible, because
+  # detect-ai-changes returns false for every event that is not a
+  # pull_request, to protect free-tier provider quota. A gate that prescribes
+  # a fix its own configuration forbids leaves re-freezing as the only
+  # available action, which is the one thing it was written to prevent.
+  workflow_dispatch:
+    inputs:
+      run_eval:
+        description: >-
+          Run the AI Eval Gate on this ref. Use on main to take a fresh
+          baseline measurement, then freeze evals/report.json into
+          evals/baseline.json with its provenance.
+        type: boolean
+        default: false
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -91,8 +108,17 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_EVAL: ${{ github.event.inputs.run_eval }}
         run: |
           set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            # The only way to measure this ref deliberately. No path filter:
+            # the point of a manual run is usually to measure main, where
+            # nothing changed relative to itself.
+            echo "Manual dispatch, run_eval=$RUN_EVAL"
+            echo "ai_relevant=$RUN_EVAL" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if [ "$EVENT_NAME" != "pull_request" ]; then
             echo "Event is '$EVENT_NAME', not pull_request — ai-eval only runs on PRs (provider quota)."
             echo "ai_relevant=false" >> "$GITHUB_OUTPUT"

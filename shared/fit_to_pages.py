@@ -324,6 +324,53 @@ def strip_forced_breaks(tex: str) -> tuple[str, int]:
     return out, n
 
 
+# A LaTeX line-break length, e.g. the `[0.08em]` in `\\[0.08em]`.
+_SPACING_ARG = re.compile(r"\[\d*\.?\d+em\]")
+
+
+def strip_orphan_spacing(tex: str) -> tuple[str, int]:
+    r"""Remove a `[0.08em]` that is text rather than an argument.
+
+    `\\[0.08em]` is a line break with extra leading. The length in brackets is
+    an OPTIONAL ARGUMENT to `\\` and is only that when a `\\` precedes it; on
+    its own it is ordinary prose and LaTeX sets it as "[0.08em]" in the
+    document.
+
+    The model rewrites the header subtitle on roughly half of all résumés, and
+    on 2 of 120 sampled it emitted the spacing twice -- once correctly, once as
+    text on the next line:
+
+        ...Kubernetes, AWS, Terraform, CI/CD}\\[0.08em]
+        [0.08em] Dublin, Ireland | +353 ... | 254utkarsh@gmail.com
+
+    which prints a literal "[0.08em]" immediately above the candidate's phone
+    number, on the most-read line of the document.
+
+    Decided by looking BACKWARDS from each match rather than by anchoring to
+    the line start, because `\\` and its argument may legitimately be split
+    across a newline -- whitespace is allowed between them -- so "at the start
+    of a line" would delete valid markup. Preceded by `\\` (ignoring
+    whitespace) it is an argument and is kept; otherwise it is prose and goes.
+    """
+    out, removed = [], 0
+    pos = 0
+    for m in _SPACING_ARG.finditer(tex):
+        before = tex[:m.start()].rstrip()
+        if before.endswith("\\\\"):
+            continue                      # a real optional argument
+        out.append(tex[pos:m.start()])
+        pos = m.end()
+        # swallow one following space so "[0.08em] Dublin" does not become
+        # " Dublin" with a leading gap
+        if tex[pos:pos + 1] == " ":
+            pos += 1
+        removed += 1
+    if not removed:
+        return tex, 0
+    out.append(tex[pos:])
+    return "".join(out), removed
+
+
 def normalise_separators(tex: str) -> tuple[str, list[str]]:
     """The pre-compile fixes that are never a trade-off. Returns (tex, actions).
 
@@ -342,4 +389,7 @@ def normalise_separators(tex: str) -> tuple[str, list[str]]:
     tex, breaks = strip_forced_breaks(tex)
     if breaks:
         actions.append(f"removed {breaks} forced page break(s)")
+    tex, orphans = strip_orphan_spacing(tex)
+    if orphans:
+        actions.append(f"removed {orphans} stray line-break length(s) printing as text")
     return tex, actions

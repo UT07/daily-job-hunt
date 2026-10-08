@@ -16,6 +16,10 @@ export function buildJobQueryParams(f, { page, perPage, lifecycle } = {}) {
   if (f.statusFilter !== 'All') params.set('status', f.statusFilter);
   if (f.sourceFilter !== 'All') params.set('source', f.sourceFilter);
   if (f.minScore > 0) params.set('min_score', String(f.minScore));
+  // One box over title AND company. Separate from `company`/`title`, which
+  // are AND-ed narrowing filters — `q` is "find me this thing, wherever it
+  // lives", which is what someone with 273 jobs actually wants.
+  if (f.searchQuery && f.searchQuery.trim()) params.set('q', f.searchQuery.trim());
   if (f.companySearch.trim()) params.set('company', f.companySearch.trim());
   if (f.titleSearch && f.titleSearch.trim()) params.set('title', f.titleSearch.trim());
   if (f.tailoredOnly) params.set('tailored', 'true');

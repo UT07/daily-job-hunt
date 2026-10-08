@@ -393,3 +393,41 @@ class TestUnquantifiedBullets:
 
     def test_an_empty_document_is_not_a_finding(self):
         assert self._f()("") == []
+
+
+# -------------------------------------------------------------------------
+# Severity must survive serialisation (GuardResult.to_dict)
+# ---------------------------------------------------------------------------
+# `to_dict` flattened every violation to one "rule: detail" string, so past
+# that boundary nothing could tell a block from a warn. `passed` is computed
+# before the flattening and survived; the REASONS did not -- and the reasons
+# are what a repair prompt, a log line and a stored verdict all need.
+# CLAUDE.md #13 at a serialisation boundary.
+
+def test_to_dict_separates_blocking_violations_from_warnings():
+    from guardrails.types import GuardResult, Violation
+    r = GuardResult(violations=[
+        Violation(rule="fabrication", detail="'Kotlin' not in base", severity="block"),
+        Violation(rule="banned_phrase", detail="'robust'", severity="warn"),
+    ])
+    d = r.to_dict()
+    assert d["passed"] is False
+    assert d["blocking"] == ["fabrication: 'Kotlin' not in base"]
+    assert len(d["violations"]) == 2, "`violations` must keep its previous contents"
+
+
+def test_a_clean_result_reports_an_empty_blocking_list_not_a_missing_key():
+    """`[]` is the claim that it ran and found nothing blocking. A missing key
+    is indistinguishable from an older report that never recorded severity,
+    and callers would have to guess which."""
+    from guardrails.types import GuardResult
+    assert GuardResult.ok().to_dict() == {"passed": True, "violations": [], "blocking": []}
+
+
+def test_warnings_alone_pass_and_are_not_listed_as_blocking():
+    from guardrails.types import GuardResult, Violation
+    d = GuardResult(violations=[
+        Violation(rule="banned_phrase", detail="'leveraging'", severity="warn")]).to_dict()
+    assert d["passed"] is True
+    assert d["blocking"] == []
+    assert d["violations"] == ["banned_phrase: 'leveraging'"]

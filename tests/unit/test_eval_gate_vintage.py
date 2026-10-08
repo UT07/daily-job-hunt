@@ -139,3 +139,46 @@ def test_the_harness_checks_its_deadline_before_doing_case_work():
         "still be killed mid-case and write no report"
     )
     assert "EVAL_DEADLINE_S" in src
+
+
+# ---------------------------------------------------------------------------
+# A prescribed remedy that the configuration forbids is not a remedy
+# ---------------------------------------------------------------------------
+# The failure message tells the reader "re-measuring the baseline on main is a
+# legitimate response; re-freezing it to turn this green is not."
+#
+# Until 2026-10-08 that was impossible. `detect-ai-changes` in ci.yml returns
+# ai_relevant=false for every event that is not a `pull_request` — deliberately,
+# to protect free-tier provider quota — so the eval gate had never run on main
+# and could not be made to. The only ACHIEVABLE action was the one the message
+# forbids, which makes the advice worse than none: it reads as a procedure
+# while leaving re-freezing as the single thing anyone can actually do.
+#
+# ci.yml now has a `workflow_dispatch` with a `run_eval` input for exactly this.
+# These tests tie the two together so the message cannot outlive the mechanism.
+
+def test_the_message_tells_the_reader_how_to_re_measure():
+    cur = {"tier_accuracy": 0.75, "fabrication_rate": 0.0, "guard_pass_rate": 0.92}
+    _, reasons = evaluate_gate(cur, BASE)
+    blob = " ".join(reasons)
+    assert "workflow_dispatch" in blob and "run_eval" in blob, (
+        "the message prescribes re-measuring on main without saying how; the "
+        "gate does not run on main automatically, so 'how' is the whole advice"
+    )
+
+
+def test_the_workflow_can_actually_do_what_the_message_prescribes():
+    """The other half, and the half that was missing. Asserted against ci.yml
+    itself rather than against the message, because the message being right is
+    worthless if the workflow cannot honour it."""
+    ci = (_ROOT / ".github/workflows/ci.yml").read_text()
+    triggers = ci.split("jobs:", 1)[0]
+    assert "workflow_dispatch" in triggers, (
+        "ci.yml has no manual trigger, so the eval gate cannot be run on main "
+        "on demand and the baseline can never be legitimately re-measured"
+    )
+    assert "run_eval" in triggers, "workflow_dispatch has no run_eval input"
+    assert 'if [ "$EVENT_NAME" = "workflow_dispatch" ]' in ci, (
+        "detect-ai-changes does not special-case workflow_dispatch, so a manual "
+        "run still reports ai_relevant=false and the gate still skips"
+    )

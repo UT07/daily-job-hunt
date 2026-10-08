@@ -1368,9 +1368,14 @@ class AIClient:
         # UNPROBED (no key in the repo), so the ids come from its docs.
         cerebras_key = get_key("cerebras", "CEREBRAS_API_KEY")
         if cerebras_key:
+            # qwen-3.8-27b retired 2026-10-08 — see the measurement in
+            # lambdas/pipeline/ai_helper.py's Cerebras block. Kept in step with
+            # that list deliberately: test_cerebras_provider.py asserts both
+            # modules serve the same set, and two copies of a provider list
+            # drifting apart is the "two of everything" failure this repo has
+            # already paid for more than once.
             cerebras_models = [
                 "gpt-oss-120b",    # ~3,000 tok/s per Cerebras' docs
-                "qwen-3.8-27b",    # ~1,850 tok/s
             ]
             for model in cerebras_models:
                 providers.append(CerebrasProvider(api_key=cerebras_key, model=model))
