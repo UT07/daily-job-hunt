@@ -271,6 +271,29 @@ class SupabaseClient:
         cleaned = _re.sub(r"[^0-9A-Za-z &\-'+/#]", " ", raw or "")
         return " ".join(cleaned.split())[:80]
 
+    @staticmethod
+    def _all_rows(build_query, page: int = 1000) -> list:
+        """Every row, not the first page of them.
+
+        PostgREST answers at most ~1000 rows and says nothing about it, so a
+        caller that reads `len(response.data)` as a count is reading the page
+        size. That is how the dashboard came to report 1000 total jobs for a
+        user with 1197 (2026-10-08), with the average score computed over an
+        arbitrary slice of them.
+
+        `build_query(lo, hi)` returns a query with `.range(lo, hi)` applied;
+        the caller owns the filters, this owns the walking. Stops on a short
+        page, which is the only reliable end-of-data signal PostgREST gives.
+        """
+        out: list = []
+        lo = 0
+        while True:
+            chunk = build_query(lo, lo + page - 1).execute().data or []
+            out.extend(chunk)
+            if len(chunk) < page:
+                return out
+            lo += page
+
     def get_jobs(
         self,
         user_id: str,
@@ -458,14 +481,20 @@ class SupabaseClient:
         non-funnel status) silently resets the Applied count to 0 — the
         F5 bug from the comprehensive prod-health initiative.
         """
-        all_jobs = (
-            self.client.table("jobs")
+        # PAGINATED. PostgREST caps a response at 1000 rows, and this used to
+        # do `total = len(rows)` on an unpaginated select — so the dashboard's
+        # TOTAL JOBS read exactly 1000 for a user with 1197 live jobs, and
+        # AVG SCORE was the mean over an arbitrary 1000-row slice of them.
+        # A page size reported as a total is the same class of defect as a
+        # status that cannot fail: the number looks right, is stable, and
+        # describes something nobody asked about.
+        rows = self._all_rows(
+            lambda lo, hi: self.client.table("jobs")
             .select("match_score, application_status")
             .eq("user_id", user_id)
             .eq("is_expired", False)
-            .execute()
+            .range(lo, hi)
         )
-        rows = all_jobs.data or []
 
         total = len(rows)
         scores = [r["match_score"] for r in rows if (r.get("match_score") or 0) > 0]
@@ -488,13 +517,15 @@ class SupabaseClient:
         _REJECTED_STAGES = {"Rejected"}
 
         try:
-            timeline = (
-                self.client.table("application_timeline")
+            # Paginated for the same reason as the jobs read above: the funnel
+            # counts distinct jobs that ever reached a stage, and a truncated
+            # event log silently undercounts every stage.
+            events = self._all_rows(
+                lambda lo, hi: self.client.table("application_timeline")
                 .select("job_id, status")
                 .eq("user_id", user_id)
-                .execute()
+                .range(lo, hi)
             )
-            events = timeline.data or []
         except Exception as e:  # pragma: no cover - belt-and-suspenders fallback
             logger.warning("application_timeline read failed: %s; using current-status fallback", e)
             events = None

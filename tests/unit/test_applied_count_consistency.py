@@ -55,6 +55,7 @@ def _stub_update(db, returned):
     chain = MagicMock()
     chain.update.return_value = chain
     chain.eq.return_value = chain
+    chain.range.return_value = chain
     chain.execute.return_value = MagicMock(data=returned)
     db.client.table.return_value = chain
     return chain
@@ -70,12 +71,15 @@ def test_patch_status_writes_timeline_row(client):
     jobs_chain = MagicMock()
     jobs_chain.update.return_value = jobs_chain
     jobs_chain.eq.return_value = jobs_chain
+    # get_stats paginates with .range(lo, hi); a short page ends the walk.
+    jobs_chain.range.return_value = jobs_chain
     jobs_chain.execute.return_value = MagicMock(
         data=[{"job_id": "job-1", "application_status": "Applied"}],
     )
 
     timeline_chain = MagicMock()
     timeline_chain.insert.return_value = timeline_chain
+    timeline_chain.range.return_value = timeline_chain
     timeline_chain.execute.return_value = MagicMock(data=[])
 
     def _table(name):
@@ -101,12 +105,15 @@ def test_patch_non_status_field_skips_timeline(client):
     jobs_chain = MagicMock()
     jobs_chain.update.return_value = jobs_chain
     jobs_chain.eq.return_value = jobs_chain
+    # get_stats paginates with .range(lo, hi); a short page ends the walk.
+    jobs_chain.range.return_value = jobs_chain
     jobs_chain.execute.return_value = MagicMock(
         data=[{"job_id": "job-1", "location": "Dublin"}],
     )
 
     timeline_chain = MagicMock()
     timeline_chain.insert.return_value = timeline_chain
+    timeline_chain.range.return_value = timeline_chain
     timeline_chain.execute.return_value = MagicMock(data=[])
 
     def _table(name):
@@ -158,6 +165,13 @@ def test_get_job_stats_counts_jobs_that_ever_reached_applied():
         def eq(self, *a, **kw):
             return self
 
+        def range(self, *a, **kw):
+            # get_stats paginates with .range(lo, hi) since 2026-10-08 — an
+            # unpaginated select returns at most 1000 rows and the dashboard
+            # was reporting that page size as the job total. These fixtures are
+            # smaller than a page, so the first chunk is short and the walk ends.
+            return self
+
         def execute(self):
             return MagicMock(data=self._data)
 
@@ -201,6 +215,13 @@ def test_get_job_stats_zero_when_no_one_ever_applied():
             return self
 
         def eq(self, *a, **kw):
+            return self
+
+        def range(self, *a, **kw):
+            # get_stats paginates with .range(lo, hi) since 2026-10-08 — an
+            # unpaginated select returns at most 1000 rows and the dashboard
+            # was reporting that page size as the job total. These fixtures are
+            # smaller than a page, so the first chunk is short and the walk ends.
             return self
 
         def execute(self):
