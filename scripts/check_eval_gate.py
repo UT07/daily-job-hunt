@@ -200,10 +200,43 @@ def evaluate_gate(current: dict, baseline: dict,
     if guard_now is not None and guard_was is not None:
         guard_drop = guard_was - guard_now
         if guard_drop > GUARD_TOLERANCE:
+            # The same two caveats tier_accuracy has carried since 2026-10-07,
+            # and for the same reason: this branch had neither, so a real
+            # failure arrived with no way to tell it from a changed reference.
+            #
+            # On 2026-10-08 the gate reported guard_pass_rate 0.92 -> 0.84 on a
+            # PR that touched neither guards nor generation. Two things, not
+            # one, explained it:
+            #
+            #   * the baseline was frozen 2026-09-28 and the `prompt_echo`
+            #     marker family landed 2026-09-30 (#170), so 0.92 was measured
+            #     by a guard SUITE that did not include it. The gate was
+            #     comparing two different suites, not two code states
+            #     (CLAUDE.md #14: both sides must count the same things).
+            #   * the run was served by ["gemini","groq"] against a baseline
+            #     served by ["gemini"] alone.
+            #
+            # A guard is MORE pool-sensitive than a tier score, not less:
+            # guards check output structure, and which model wrote the output
+            # decides that structure. So the age and the pool are named here,
+            # and the verdict still fails -- a safety metric that cannot fail
+            # is not a safety metric.
+            age = baseline_age_days(baseline)
+            vintage = (f" The reference is {age} day(s) old; a guard added "
+                       f"since it was frozen lowers this number without any "
+                       f"change in output quality, so check "
+                       f"`git log -S` for the firing marker before treating "
+                       f"this as a regression."
+                       ) if age is not None else ""
+            differs = pool_differs(current, baseline)
+            mix = (f" This run was {differs}; guards check output structure, "
+                   f"and which model produced the output decides it."
+                   ) if differs else ""
             reasons.append(
                 f"guard_pass_rate fell {guard_drop:.1%} "
                 f"({guard_was:.1%} -> {guard_now:.1%}) — the guardrails layer let "
-                f"more through than the baseline run did"
+                f"more through than the baseline run did."
+                + vintage + mix
             )
 
     if current["fabrication_rate"] > baseline["fabrication_rate"]:
