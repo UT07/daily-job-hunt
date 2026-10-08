@@ -1332,7 +1332,13 @@ def _tailored_tex_key(user_id: str, job_id: str) -> str:
     endpoints had already drifted into hard-coding the same wrong string, so
     fixing one would have left the other broken.
 
-    Falls back to job_id when the hash cannot be read — a wrong key yields the
+    The hash is `resolve_tailor_hash(row)` -- job_hash, else canonical_hash --
+    because that is exactly what the single-job pipeline is started with and
+    what tailor_resume.py names the object after. Manual rows have job_hash
+    NULL; falling straight to job_id only worked where job_id happened to be
+    the canonical hash.
+
+    Falls back to job_id when the row cannot be read — a wrong key yields the
     404 callers already handle, which is a better failure than None raising
     somewhere less obvious.
     """
@@ -1340,11 +1346,11 @@ def _tailored_tex_key(user_id: str, job_id: str) -> str:
     if _db is not None:
         try:
             row = (
-                _db.client.table("jobs").select("job_hash")
+                _db.client.table("jobs").select("job_hash, canonical_hash")
                 .eq("job_id", job_id).eq("user_id", user_id)
                 .maybe_single().execute()
             )
-            job_hash = ((row.data if row else None) or {}).get("job_hash")
+            job_hash = resolve_tailor_hash((row.data if row else None) or {})
         except Exception as e:
             logger.warning("[s3] could not read job_hash for %s: %s", job_id, e)
     return f"users/{user_id}/resumes/{job_hash or job_id}_tailored.tex"
