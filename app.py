@@ -6,7 +6,6 @@ Endpoints:
 - GET  /api/pipeline/status         — latest pipeline metrics
 - GET  /api/pipeline/status/{name}  — poll specific execution
 - POST /api/score                   — score a JD against base resumes
-- POST /api/cover-letter            — generate cover letter PDF
 - POST /api/contacts                — find LinkedIn contacts
 - GET  /api/profile                 — user profile
 - PUT  /api/profile                 — update profile
@@ -77,7 +76,6 @@ from db_client import SupabaseClient
 
 from ai_client import AIClient
 from contact_finder import find_contacts
-from cover_letter import generate_cover_letter
 from latex_compiler import compile_tex_to_pdf
 from lambdas.pipeline.score_batch import score_single_job_deterministic
 # Imported at module scope, not inside the handler: a lazy import of a module
@@ -302,20 +300,6 @@ class TailorResponse(BaseModel):
     hiring_manager_score: int
     tech_recruiter_score: int
     avg_score: int
-    pdf_url: str
-
-
-class CoverLetterRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    job_description: str = Field(..., min_length=20)
-    job_title: str = "Software Engineer"
-    company: str = "Unknown"
-    location: str = Field("", description="Job location (city/country/Remote)")
-    apply_url: str = Field("", description="Direct apply URL (used by auto-apply)")
-    resume_type: str = "sre_devops"
-
-
-class CoverLetterResponse(BaseModel):
     pdf_url: str
 
 
@@ -1217,17 +1201,6 @@ def _dispatch_task(task_type: str, payload: dict, user_id: str = "") -> dict:
         })
         result["job_id"] = job_id
         return result
-    elif task_type == "cover_letter":
-        resume_type = payload.get("resume_type", "sre_devops")
-        resume_tex = _resumes.get(resume_type, "")
-        result = _do_cover_letter(job, resume_tex, payload.get("company", "Unknown"),
-                                  payload.get("job_title", "Software Engineer"), user_id)
-        _update_job_artifacts(user_id, job_id, {
-            "cover_letter_s3_url": result.get("pdf_url", ""),
-            "cover_letter_s3_key": result.get("s3_key", ""),
-        })
-        result["job_id"] = job_id
-        return result
     elif task_type == "contacts":
         result = _do_contacts(job)
         if result.get("contacts"):
@@ -1351,19 +1324,6 @@ def _do_tailor(job, base_tex, resume_type, company, job_title, user_id=""):
             "s3_key": s3_key if pdf_url else "",
             "scoring_failed": scoring_failed,
         }
-
-
-def _do_cover_letter(job, resume_tex, company, job_title, user_id=""):
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tex_path = generate_cover_letter(job, resume_tex, _ai_client, Path(tmpdir))
-        pdf_path = compile_tex_to_pdf(tex_path, tmpdir)
-        if not pdf_path:
-            raise RuntimeError("LaTeX compilation failed")
-
-        bucket = os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt")
-        s3_key = _user_artifact_key(user_id, "cover_letters", company, job_title, "cover_letter.pdf")
-        pdf_url = s3_upload_file(pdf_path, s3_key, bucket) or ""
-        return {"pdf_url": pdf_url, "s3_key": s3_key if pdf_url else ""}
 
 
 def _do_contacts(job):
@@ -1604,32 +1564,12 @@ def _do_rebuild_sections(job_id: str, sections: dict, user_id: str) -> dict:
 # Job uses /api/pipeline/run-single), and it wrote an un-namespaced S3 key,
 # stored only an expiring presigned URL, and tailored the repo-bundled owner
 # résumé whoever asked. See tests/unit/test_legacy_tailor_removed.py.
-
-
-@app.post("/api/cover-letter", status_code=202)
-def cover_letter(req: CoverLetterRequest, user: AuthUser = Depends(get_current_user)):
-    if req.resume_type not in _resumes:
-        raise HTTPException(400, f"Unknown resume type: {req.resume_type}")
-
-    task_id = str(uuid.uuid4())
-    payload = {
-        "job_description": req.job_description,
-        "job_title": req.job_title,
-        "company": req.company,
-        "location": req.location,
-        "resume_type": req.resume_type,
-    }
-    _enqueue_task(task_id, user.id, "cover_letter", payload)
-    if _posthog:
-        _posthog.capture(
-            distinct_id=user.id,
-            event="cover_letter_started",
-            properties={
-                "resume_type": req.resume_type,
-                "jd_length": len(req.job_description),
-            },
-        )
-    return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
+#
+# POST /api/cover-letter was removed the same day for the same reason: it wrote
+# a letter from the repo-bundled owner résumé for any caller, and nothing in
+# web/src called it (Add Job's Cover Letter button posts to run-single). Its
+# "cover_letter" task type went with it. See
+# tests/unit/test_cover_letter_route_removed.py.
 
 
 @app.post("/api/contacts", status_code=202)

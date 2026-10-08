@@ -11,7 +11,8 @@ This test does not hardcode "what the app uses" as a second list next to
 "what is authoritative" — that would just compare two static lists that
 happen to agree by construction and could never fail. Instead it parses the
 real source files that write and read those columns (app.py's on-demand
-artifact writer, and the dashboard's job-detail page) so that switching
+artifact writer, the pipeline's save_job writer, and the dashboard's
+job-detail page) so that switching
 either one to a legacy column breaks this test, the same class of mistake
 the migration documents.
 """
@@ -21,6 +22,7 @@ import re
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 APP_PY = REPO_ROOT / "app.py"
+SAVE_JOB = REPO_ROOT / "lambdas/pipeline/save_job.py"
 JOB_WORKSPACE = REPO_ROOT / "web/src/pages/JobWorkspace.jsx"
 
 # The one hardcoded statement of "what is documented as authoritative" —
@@ -40,9 +42,11 @@ def _update_job_artifacts_keys() -> set:
 
     That helper is the single write path the on-demand (self-service)
     tailoring flow uses to persist a job's score/artifacts to Supabase
-    (tailor, cover_letter and section-rebuild task handlers all funnel
-    through it) — so its call sites are ground truth for "what the app
-    writes", not a second hand-maintained list.
+    (the tailor, contacts and section-rebuild task handlers funnel through
+    it) — so its call sites are ground truth for "what the app writes", not
+    a second hand-maintained list. It no longer writes a cover letter: the
+    on-demand cover-letter worker was removed with /api/cover-letter on
+    2026-10-08, and cover letters are written by save_job (below).
     """
     tree = ast.parse(APP_PY.read_text())
     keys: set = set()
@@ -60,6 +64,27 @@ def _update_job_artifacts_keys() -> set:
                     if isinstance(k, ast.Constant) and isinstance(k.value, str):
                         keys.add(k.value)
     assert keys, "No _update_job_artifacts(..., {...}) call sites found in app.py"
+    return keys
+
+
+def _save_job_update_keys() -> set:
+    """Every literal `update["<column>"] = ...` in the pipeline's save_job.
+
+    save_job is the Step Functions state that persists BOTH artifacts for the
+    daily and single-job (Add Job) pipelines, so it is the cover letter's only
+    writer now that app.py's on-demand worker is gone.
+    """
+    tree = ast.parse(SAVE_JOB.read_text())
+    keys: set = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        for t in node.targets:
+            if (isinstance(t, ast.Subscript) and isinstance(t.value, ast.Name)
+                    and t.value.id == "update" and isinstance(t.slice, ast.Constant)
+                    and isinstance(t.slice.value, str)):
+                keys.add(t.slice.value)
+    assert keys, "No update[\"...\"] = ... assignments found in save_job.py"
     return keys
 
 
@@ -92,13 +117,25 @@ def test_update_job_artifacts_writes_only_authoritative_columns():
 
     assert AUTHORITATIVE_SCORE_COLUMN in keys
     assert AUTHORITATIVE_RESUME_ARTIFACT_COLUMN in keys
-    assert AUTHORITATIVE_COVER_LETTER_ARTIFACT_COLUMN in keys
 
     written_legacy = keys & (LEGACY_SCORE_COLUMNS | LEGACY_ARTIFACT_COLUMNS)
     assert not written_legacy, (
         "app.py's on-demand tailoring flow writes legacy column(s) "
         f"{sorted(written_legacy)} instead of the authoritative "
-        "match_score / resume_s3_url / cover_letter_s3_url."
+        "match_score / resume_s3_url."
+    )
+
+
+def test_save_job_writes_only_authoritative_artifact_columns():
+    keys = _save_job_update_keys()
+
+    assert AUTHORITATIVE_RESUME_ARTIFACT_COLUMN in keys
+    assert AUTHORITATIVE_COVER_LETTER_ARTIFACT_COLUMN in keys
+
+    written_legacy = keys & LEGACY_ARTIFACT_COLUMNS
+    assert not written_legacy, (
+        f"save_job writes legacy column(s) {sorted(written_legacy)} instead of "
+        "the authoritative resume_s3_url / cover_letter_s3_url."
     )
 
 
