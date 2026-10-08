@@ -29,10 +29,20 @@ Usage
 -----
     set -a && . ./.env && set +a
     .venv/bin/python scripts/smoke_prod.py            # all checks
-    .venv/bin/python scripts/smoke_prod.py --quick    # skip the compile check
+    .venv/bin/python scripts/smoke_prod.py --quick    # skip api-alive and compile-roundtrip
 
 Exit code is non-zero if any check fails, so CI can gate a deploy on it.
-Read-only apart from one compile into a dedicated throwaway S3 key.
+A check that could not judge anything (too few rows) is a SKIP: it is printed
+and counted separately and never folded into "passed".
+
+Read-only apart from compile-roundtrip, which writes one tiny .tex under
+smoke/ in the bucket, invokes the deployed CompileLatex `live` alias on it,
+checks the PDF, and deletes both objects. It needs, beyond the read access
+the other checks use: cloudformation:DescribeStackResource on job-hunt-api,
+lambda:InvokeFunction on naukribaba-compile-latex:live, and s3:PutObject /
+GetObject / DeleteObject on utkarsh-job-hunt/smoke/*. deploy.yml runs this
+with the deploy credentials, which create the stack and its functions and so
+should hold all of those; a narrower runner role must be granted them.
 """
 from __future__ import annotations
 
@@ -61,12 +71,23 @@ try:
 except ImportError:
     pass  # CI passes real environment variables; there is no .env there.
 
-RESULTS: list[tuple[str, bool, str]] = []
+# (name, ok, detail). ok is True for PASS, False for FAIL and None for SKIP —
+# a check that ran but had nothing to judge. Three states, because two cannot
+# tell "judged and fine" from "judged nothing" (CLAUDE.md rule 2).
+RESULTS: list[tuple[str, bool | None, str]] = []
+
+
+class Skip(Exception):
+    """Raised by a check that ran but had too little to judge. Never a pass."""
+
 
 # Checks that cannot run without a deployed API URL. Named here rather than
 # hardcoded in main() so adding one cannot silently leave it running against
 # nothing.
 _NEEDS_API = {"api_alive"}
+# What --quick skips: the API-dependent checks, plus the one that costs a
+# Lambda invocation and a tectonic compile.
+_QUICK_SKIPS = _NEEDS_API | {"compile_roundtrip"}
 
 
 def check(name: str, incident: str):
@@ -76,6 +97,8 @@ def check(name: str, incident: str):
             try:
                 detail = fn() or "ok"
                 RESULTS.append((name, True, detail))
+            except Skip as e:
+                RESULTS.append((name, None, str(e)))
             except AssertionError as e:
                 RESULTS.append((name, False, str(e)))
             except Exception as e:
@@ -94,6 +117,27 @@ def _db():
 def _s3():
     import boto3
     return boto3.client("s3", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
+
+
+def _lambda():
+    import boto3
+    from botocore.config import Config
+    # CompileLatex runs up to 420s (a cold container fetches the tectonic
+    # bundle first, ~80s); botocore's default 60s read timeout would report a
+    # healthy slow compile as a failure. No retries: a retried invoke would
+    # compile twice and hide the first failure.
+    return boto3.client(
+        "lambda", region_name=os.environ.get("AWS_REGION", "eu-west-1"),
+        config=Config(read_timeout=450, connect_timeout=10, retries={"max_attempts": 0}),
+    )
+
+
+def _cfn():
+    import boto3
+    return boto3.client("cloudformation", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
+
+
+_STACK = os.environ.get("SMOKE_STACK_NAME", "job-hunt-api")
 
 
 def _bucket() -> str:
@@ -302,9 +346,7 @@ def resumes_are_distinct():
     20% is deliberately loose — the observed failure was 49%, and a bar set just
     under a known-bad reading is a bar nobody trusts.
     """
-    import os as _os
     from collections import Counter
-    import boto3 as _boto3
 
     db = _db()
     # user_id comes off the row, like tex-key-resolves does, rather than
@@ -315,10 +357,12 @@ def resumes_are_distinct():
     want = {f"users/{r['user_id']}/resumes/{r['job_hash']}_tailored.tex"
             for r in rows if r.get("job_hash") and r.get("user_id")}
     if len(want) < 20:
-        return f"only {len(want)} live S/A resume(s); too few to judge"
+        # Not a pass: nothing was judged. Returning a string here, as it used
+        # to, made the runner count it as PASS.
+        raise Skip(f"only {len(want)} live S/A resume(s); too few to judge")
 
-    s3 = _boto3.client("s3", region_name=_os.environ.get("AWS_REGION", "eu-west-1"))
-    bucket = _os.environ.get("S3_BUCKET", "utkarsh-job-hunt")
+    s3 = _s3()
+    bucket = _bucket()
     etags = {}
     for uid in {r["user_id"] for r in rows if r.get("user_id")}:
         for page in s3.get_paginator("list_objects_v2").paginate(
@@ -326,8 +370,14 @@ def resumes_are_distinct():
             for o in page.get("Contents", []):
                 if o["Key"] in want:
                     etags[o["Key"]] = o["ETag"].strip('"')
-    if not etags:
-        return f"no .tex objects found for {len(want)} row(s)"
+    # Zero found is the reading an emptied bucket or a changed key convention
+    # produces (the 0%-hit-rate incident tex-key-resolves exists for). This
+    # used to return a string, i.e. PASS.
+    assert etags, (
+        f"no .tex objects found for {len(want)} live S/A row(s) under "
+        f"users/<id>/resumes/ - either the objects are gone or the key "
+        f"convention changed and this check is measuring nothing"
+    )
 
     counts = Counter(etags.values())
     duplicated = sum(n for n in counts.values() if n > 1)
@@ -343,6 +393,64 @@ def resumes_are_distinct():
     )
     return (f"{len(counts)} distinct documents across {len(etags)} live S/A "
             f"resumes (largest identical group {biggest})")
+
+
+_SMOKE_TEX = r"""\documentclass{article}
+\begin{document}
+NaukriBaba post-deploy smoke compile: 100\% of this sentence must survive.
+\end{document}
+"""
+
+
+@check("compile-roundtrip", "tectonic missing from the deployed function: jobs scored, no PDF")
+def compile_roundtrip():
+    """Invoke the DEPLOYED CompileLatex `live` alias on a throwaway document.
+
+    Every other check reads state that earlier runs left behind; none proves
+    the code serving today can turn LaTeX into a PDF. The `live` alias is what
+    the Step Functions invoke, and it is what the layer trap could leave pinned
+    to old code, so that is what is invoked, not $LATEST.
+
+    The function name is resolved from the stack rather than hardcoded, so a
+    renamed function fails here instead of compiling against a stale one.
+    Writes only under smoke/, and deletes what it wrote even when it fails.
+    """
+    import json
+    import uuid
+
+    fn = _cfn().describe_stack_resource(
+        StackName=_STACK, LogicalResourceId="CompileLatexFunction",
+    )["StackResourceDetail"]["PhysicalResourceId"]
+    s3, bucket = _s3(), _bucket()
+    tex_key = f"smoke/compile-{uuid.uuid4().hex[:12]}.tex"
+    pdf_key = tex_key[:-len(".tex")] + ".pdf"
+    s3.put_object(Bucket=bucket, Key=tex_key, Body=_SMOKE_TEX.encode("utf-8"),
+                  ContentType="application/x-tex")
+    try:
+        t0 = time.time()
+        resp = _lambda().invoke(
+            FunctionName=fn, Qualifier="live", InvocationType="RequestResponse",
+            Payload=json.dumps({"tex_s3_key": tex_key, "job_hash": "smoke",
+                                "user_id": "", "doc_type": "cover_letter", "pages": 1}),
+        )
+        body = json.loads(resp["Payload"].read() or b"null")
+        assert not resp.get("FunctionError"), (
+            f"{fn}:live raised {resp.get('FunctionError')}: {str(body)[:300]}")
+        assert isinstance(body, dict), f"{fn}:live returned {body!r}"
+        assert not body.get("error"), (
+            f"{fn}:live reported {body.get('error')}: {str(body.get('stderr', ''))[:300]}")
+        assert body.get("pdf_s3_key") == pdf_key, (
+            f"{fn}:live returned pdf_s3_key={body.get('pdf_s3_key')!r}, expected {pdf_key!r}")
+        pdf = s3.get_object(Bucket=bucket, Key=pdf_key)["Body"].read()
+        assert pdf, f"{pdf_key} exists but is empty"
+        assert pdf.startswith(b"%PDF"), f"{pdf_key} is not a PDF: {pdf[:20]!r}"
+        return f"{fn}:live compiled {len(pdf)} bytes in {time.time() - t0:.1f}s"
+    finally:
+        for key in (tex_key, pdf_key):
+            try:
+                s3.delete_object(Bucket=bucket, Key=key)
+            except Exception as e:  # cleanup must not mask the verdict
+                print(f"        WARNING: could not delete s3://{bucket}/{key}: {e}")
 
 
 @check("no-pipeline-states-in-user-column", "the pipeline writing into application_status")
@@ -408,7 +516,7 @@ def score_tier_matches_score():
 
 CHECKS = [api_alive, tex_key_resolves, base_resume_tailorable,
           latex_escaping, artifact_completeness, resumes_are_distinct,
-          no_pipeline_states, score_tier_matches_score]
+          compile_roundtrip, no_pipeline_states, score_tier_matches_score]
 
 
 def _unregistered_checks() -> list[str]:
@@ -433,7 +541,8 @@ def _unregistered_checks() -> list[str]:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--quick", action="store_true", help="skip checks that need the deployed API")
+    ap.add_argument("--quick", action="store_true",
+                    help="skip checks that need the deployed API or invoke a Lambda")
     args = ap.parse_args()
 
     import logging
@@ -449,32 +558,37 @@ def main() -> int:
         return 1
     skipped = []
     for fn in CHECKS:
-        if args.quick and fn.__name__ in _NEEDS_API:
+        if args.quick and fn.__name__ in _QUICK_SKIPS:
             skipped.append(fn.__name__)
-            print(f"  SKIP  {fn.__name__:30s}    --quick, no API URL configured")
+            print(f"  SKIP  {fn.__name__:30s}    --quick")
             print(f"        NOT CHECKED: {fn._incident}")
             continue
         t0 = time.time()
         fn()
         name, ok, detail = RESULTS[-1]
-        print(f"  {'PASS' if ok else 'FAIL'}  {name:30s} {time.time()-t0:5.1f}s  {detail}")
-        if not ok:
+        label = {True: "PASS", False: "FAIL", None: "SKIP"}[ok]
+        print(f"  {label}  {name:30s} {time.time()-t0:5.1f}s  {detail}")
+        if ok is False:
             print(f"        would have caught: {fn._incident}")
+        elif ok is None:
+            skipped.append(name)
+            print(f"        NOT CHECKED: {fn._incident}")
 
-    failed = [r for r in RESULTS if not r[1]]
+    failed = [r for r in RESULTS if r[1] is False]
+    passed = [r for r in RESULTS if r[1] is True]
     # A skipped check is NOT a passed check. The old summary printed
     # "5/5 passed" for a run where api-alive never executed, which is the same
     # shape as the Step Function reporting SUCCEEDED on a no-op: a status that
     # cannot distinguish "did the work" from "did not do the work".
     total = len(CHECKS)
-    line = f"\n  {len(RESULTS) - len(failed)} passed"
+    line = f"\n  {len(passed)} passed"
     if failed:
         line += f", {len(failed)} FAILED"
     if skipped:
         line += f", {len(skipped)} SKIPPED ({', '.join(skipped)})"
     print(f"{line}  — of {total} checks")
     if skipped:
-        print("  Skipped checks verified NOTHING. Set SMOKE_API_URL to run them.")
+        print("  NOT a full pass: skipped checks verified NOTHING.")
     return 1 if failed else 0
 
 
