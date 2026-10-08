@@ -1,6 +1,7 @@
 import { useContext } from 'react'
 import { AuthContext } from './AuthProvider'
 import { supabase } from '../lib/supabase'
+import { clearUserScopedStorage } from '../lib/userStorage'
 
 export function useAuth() {
   const { user, session, loading } = useContext(AuthContext)
@@ -43,6 +44,10 @@ export function useAuth() {
   }
 
   async function signOut() {
+    // Cleared first and unconditionally: consent flags and the Add Job draft
+    // (a pasted JD) belong to this user, and a failed server sign-out must
+    // not leave them behind for whoever uses the browser next.
+    clearUserScopedStorage()
     if (noSupabase) return
     const { error } = await supabase.auth.signOut()
     if (error) throw error

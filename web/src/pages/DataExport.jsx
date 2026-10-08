@@ -6,6 +6,7 @@ import Card, { CardHeader, CardBody } from '../components/ui/Card'
 import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import LoginPage from './LoginPage'
+import { hasLocalConsent, clearLocalConsent } from '../lib/userStorage'
 
 export default function DataExport() {
   const { user, loading: authLoading, signOut } = useAuth()
@@ -19,7 +20,7 @@ export default function DataExport() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
 
-  const consentGiven = typeof window !== 'undefined' && localStorage.getItem('gdpr_consent') === 'true'
+  const consentGiven = hasLocalConsent(user?.id)
 
   async function handleExport() {
     setExporting(true)
@@ -48,7 +49,7 @@ export default function DataExport() {
     setDeleteStatus(null)
     try {
       await apiDelete('/api/gdpr/delete')
-      localStorage.removeItem('gdpr_consent')
+      clearLocalConsent(user?.id)
       setDeleteStatus({ type: 'success', message: 'Your account and all data have been permanently deleted.' })
       // Sign out and redirect after a short delay
       setTimeout(async () => {

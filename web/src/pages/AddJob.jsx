@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { apiCall, apiGet, pollPipeline } from '../api';
 import { loadPipelineJob } from './pipelineJobResult';
+import { ADDJOB_DRAFT_KEY } from '../lib/userStorage';
 import Button from '../components/ui/Button';
 import Input, { Textarea, Select } from '../components/ui/Input';
 import ScoreCard from '../components/ScoreCard';
@@ -55,7 +56,8 @@ const LEGACY_MAX_WAIT_MS = { score: 120000, contacts: 600000 };
 // per-tab lifetime matches how the draft is actually used (type here, go
 // check the dashboard, come back and finish) without resurrecting a stale JD
 // in a brand-new tab days later.
-const DRAFT_STORAGE_KEY = 'naukribaba_addjob_draft';
+// Shared with lib/userStorage, which clears it on sign-out.
+const DRAFT_STORAGE_KEY = ADDJOB_DRAFT_KEY;
 
 const DRAFT_DEFAULTS = {
   jd: '',
