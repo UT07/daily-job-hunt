@@ -517,7 +517,17 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
                 "matched_resume": j.matched_resume or req.resume_type,
                 "score_tier": _score_tier(j.match_score),
             }).eq("job_id", job_id).execute()
-            saved = True
+            # saved must mean SAVED. It was set unconditionally, so when
+            # `_find_or_create_job` returned "" the UPDATE ran as `job_id=eq.`,
+            # matched nothing, raised nothing, and this reported success for a
+            # job that does not exist. CLAUDE.md #2: a status that cannot
+            # distinguish "did the work" from "did nothing" is a lie.
+            saved = bool(job_id)
+            if not job_id:
+                logger.error(
+                    "Scored %s/%s but no row was created — the dashboard will "
+                    "not show it", req.company, req.job_title,
+                )
         except Exception as e:
             # Surfaced via saved=False rather than swallowed: a silent warning
             # here is exactly how the 2026-09-28 pipeline lost a day's jobs.
@@ -834,9 +844,21 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
     """Check if job exists in Supabase by canonical hash. Merge if found, create if not. Return job_id."""
     if not _db:
         return ""
-    company = payload.get("company", "Unknown")
-    title = payload.get("job_title", "Software Engineer")
-    description = payload.get("job_description", "")
+    # BOTH spellings, because the two callers disagree and neither is wrong:
+    # /api/score passes {"title", "description"}; _process_task forwards a task
+    # payload using {"job_title", "job_description"}. Reading only the second
+    # meant every Save & Score arrived here with an empty description, tripped
+    # the stub guard below, and returned "" — so the row was never created, the
+    # follow-up UPDATE ran as `job_id=eq.` and matched nothing, and the endpoint
+    # answered HTTP 200.
+    #
+    # Reported 2026-10-08 as "new jobs are not saving". Three attempts to add an
+    # Accenture role were dropped, each logging "Refusing to create a job row
+    # for Accenture/Software Engineer with an empty description" — note the
+    # title ALSO defaulted, which is the same mismatch showing twice.
+    company = payload.get("company") or "Unknown"
+    title = payload.get("job_title") or payload.get("title") or "Software Engineer"
+    description = payload.get("job_description") or payload.get("description") or ""
     location = payload.get("location", "") or ""
 
     # A job with no description cannot be scored or tailored — there is nothing
@@ -3055,6 +3077,51 @@ def re_tailor_job(
         raise HTTPException(404, "Job not found")
     job = job.data[0]
 
+    # The hash the pipeline keys on, and whether it can possibly work.
+    #
+    # Rows created by `_find_or_create_job` carry `canonical_hash` and leave
+    # `job_hash` NULL (it has a foreign key to jobs_raw that a manual job
+    # cannot satisfy at that moment). Regenerate passed that NULL straight
+    # through, so the execution ran for three minutes and died inside
+    # TailorResume with "Job None not found in jobs_raw" — surfaced to the user
+    # as "Pipeline execution failed", because JobFailed is a Fail state with a
+    # constant Cause. Reported 2026-10-08.
+    #
+    # canonical_hash IS the right key for those rows: /api/pipeline/run-single
+    # upserts jobs_raw under exactly that value.
+    #
+    # Resolved AFTER the row is fetched, which is the whole point of where this
+    # sits: the first draft read `job` twelve lines above the query that
+    # defines it, which is a NameError -> HTTP 500 on EVERY regenerate, valid
+    # scope or not. CLAUDE.md #17 -- the null-hash fix stacked a worse bug on
+    # top of the one it fixed, and only the scope test's 500-instead-of-400
+    # caught it.
+    job_hash = job.get("job_hash") or job.get("canonical_hash")
+    if not job_hash:
+        raise HTTPException(
+            409,
+            "This job has no stored posting text, so it cannot be re-tailored. "
+            "Add it again from the job description.",
+        )
+    # Checked HERE rather than discovered three minutes later inside a Lambda.
+    # Six of this user's seven API-created rows predate the jobs_raw upsert and
+    # would still fail — the difference is that they now fail in 50ms with a
+    # sentence that says what to do.
+    try:
+        known = (_db.client.table("jobs_raw").select("job_hash")
+                 .eq("job_hash", job_hash).limit(1).execute().data)
+    except Exception as e:  # noqa: BLE001 — a lookup failure must not block a valid run
+        logger.warning("jobs_raw precheck failed for %s: %s", job_hash, e)
+        known = [{"job_hash": job_hash}]
+    if not known:
+        raise HTTPException(
+            409,
+            "The original posting text for this job was never stored, so there "
+            "is nothing to tailor against. Add the job again by pasting its "
+            "description.",
+        )
+
+
     # Save the current resume/cover letter as a version snapshot BEFORE re-tailoring.
     current_version = job.get("resume_version") or 1
     if job.get("resume_s3_url") or job.get("cover_letter_s3_url"):
@@ -3088,7 +3155,7 @@ def re_tailor_job(
             stateMachineArn=single_arn,
             input=json.dumps({
                 "user_id": user.id,
-                "job_hash": job.get("job_hash"),
+                "job_hash": job_hash,
                 "skip_scoring": True,
                 "job_id": job_id,
                 # scope="resume" skips GenerateCoverLetter, CompileCoverLetter
@@ -3113,7 +3180,7 @@ def re_tailor_job(
         # Local dev fallback: enqueue as an async task
         task_id = str(uuid.uuid4())
         _enqueue_task(task_id, user.id, "tailor", {
-            "job_hash": job.get("job_hash"),
+            "job_hash": job_hash,
             "skip_scoring": True,
             "job_id": job_id,
         })
