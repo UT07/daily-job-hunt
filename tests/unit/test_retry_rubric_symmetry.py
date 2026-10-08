@@ -47,9 +47,19 @@ TREE = ast.parse(SOURCE)
 CHECK_NAMES = {
     "_check_banned_phrases", "_check_weak_openers",
     "_check_textbf_preservation", "_check_fabrication",
-    # added 2026-10-08: Yale's quantified-result term, advisory by measurement
-    "_check_unquantified",
 }
+# _check_unquantified is DELIBERATELY NOT a member. It was added here on
+# 2026-10-08 and removed the same night, on measurement: with it driving the
+# retry, the AI Eval Gate recorded
+#
+#     guard_pass_rate fell 8.0% (92.0% -> 84.0%)
+#     fabrication_rate rose      (0.0% -> 4.0%)
+#
+# Telling a model "this bullet has no measured result" in a corrective prompt
+# is an invitation to invent one, and the instruction not to was not enough.
+# A detector that makes the output worse on the axis the product cares about is
+# worse than no detector (CLAUDE.md #16). It still RUNS and is still reported —
+# it just does not ask the model to act on it.
 
 
 def _function(name):
@@ -179,9 +189,18 @@ def test_the_handler_reports_the_shipped_warnings_not_the_first_attempt():
         "it `unmeasured`, which is how it silently became a log line before"
     )
     value = reported["quality_warnings"]
-    assert isinstance(value, ast.Name) and value.id == "shipped_quality", (
-        "the returned warnings must be `shipped_quality` (the body that ships), "
-        f"not {ast.dump(value)[:60]} — `quality_warnings` holds the FIRST "
+    # Asserted on the NAMES the expression reads, not on its exact shape. It
+    # was a bare `shipped_quality` until 2026-10-08 and is now
+    # `shipped_quality + _check_unquantified(ai_body)` — the quantified-result
+    # finding is reported but kept out of the retry rubric, because driving the
+    # retry with it measured guard_pass_rate 92% -> 84% and fabrication_rate
+    # 0% -> 4%. The invariant is unchanged: whatever is returned must come from
+    # the body that SHIPS, and must not be the first attempt's findings.
+    names = {n.id for n in ast.walk(value) if isinstance(n, ast.Name)}
+    assert "shipped_quality" in names, (
+        f"the returned warnings do not read `shipped_quality`: {ast.unparse(value)[:90]}")
+    assert "quality_warnings" not in names, (
+        "the returned warnings read `quality_warnings`, which holds the FIRST "
         "attempt's findings even when a retry replaced it"
     )
 

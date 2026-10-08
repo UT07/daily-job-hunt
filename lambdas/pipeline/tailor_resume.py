@@ -252,11 +252,6 @@ def _quality_warnings(body: str, base_body: str, fabrication_baseline) -> list[s
     """
     warnings = _check_banned_phrases(body)
     warnings.extend(_check_weak_openers(body))
-    # Yale's third term — the quantified result — is the one that gets dropped.
-    # Advisory by measurement, not by preference: 0 of 100 live résumés have
-    # every bullet quantified, so blocking would reject all of them, and a hard
-    # counter is satisfied by inventing a figure. See check_unquantified_bullets.
-    warnings.extend(_check_unquantified(body))
     warnings.extend(_check_textbf_preservation(base_body, body))
     if fabrication_baseline:
         warnings.extend(_check_fabrication(fabrication_baseline, body))
@@ -1147,13 +1142,25 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         # composition rules and complies. Non-empty means it does not, and the
         # repair above did not fix it — surfaced rather than swallowed.
         "composition_violations": composition_violations,
-        # Writing quality of the SHIPPED body. Until 2026-10-07 this was
+        # Writing quality of the SHIPPED body, PLUS the quantified-result
+        # finding — which is reported but deliberately kept out of the retry
+        # rubric. Measured 2026-10-08: with it driving the retry, the eval gate
+        # recorded guard_pass_rate 92% -> 84% and fabrication_rate 0% -> 4%,
+        # because "this bullet has no measured result" in a corrective prompt
+        # is an invitation to invent one. Reporting and asking are different
+        # jobs; only the second produced fabrication.
+        #
+        # None stays None: on the fallback path nothing was measured, and
+        # appending a finding to "never measured" would claim a measurement. Until 2026-10-07 this was
         # computed, logged at WARNING, used to choose between two attempts and
         # then dropped before the return, so no column, dashboard or alarm
         # could see it. `None` means it was never measured (the fallback path)
         # and is graded as such by shared.resume_verdict -- an empty list is
         # the stronger claim that the shipped body was checked and is clean.
-        "quality_warnings": shipped_quality,
+        "quality_warnings": (
+            None if shipped_quality is None
+            else shipped_quality + _check_unquantified(ai_body)
+        ),
         # What the council's guard still objected to when it gave up. Recorded
         # rather than graded, for now: `shared.resume_verdict` does not take it
         # as a grading input because its false-positive rate at this position
