@@ -98,7 +98,9 @@ def handler(event, context):
     app_key = get_param("/naukribaba/ADZUNA_APP_KEY")
 
     from normalizers import normalize_adzuna
+    from request_tally import RequestTally
     all_raw: list[dict] = []
+    tally = RequestTally("adzuna")
 
     # NOTE: Ireland ("ie") is NOT a supported Adzuna country.
     # Supported: at, au, be, br, ca, ch, de, es, fr, gb, in, it, mx, nl, nz, pl, sg, us, za.
@@ -115,8 +117,16 @@ def handler(event, context):
             "max_days_old": max_days_old,
             "results_per_page": 50,
         }
-        resp = httpx.get(url, params=params, timeout=20)
-        if resp.status_code == 200:
+        # A timeout used to propagate out of the handler: the branch's Retry
+        # then spent two more rounds and its Catch replaced the cause with
+        # "scraper_failed". Counted instead, like every other failure.
+        try:
+            resp = httpx.get(url, params=params, timeout=20)
+        except Exception as e:
+            tally.exception(e)
+            logger.error(f"[adzuna] Query '{query}' ({country}) failed: {e}")
+            continue
+        if tally.record_status(resp.status_code):
             results = resp.json().get("results", [])
             all_raw.extend(results)
             logger.info(f"[adzuna] Query '{query}' ({country}): {len(results)} raw results")
@@ -185,4 +195,6 @@ def handler(event, context):
             job.pop("description_truncated", None)
         db.table("jobs_raw").upsert(all_jobs, on_conflict="job_hash").execute()
 
-    return {"count": len(all_jobs), "source": "adzuna"}
+    if tally.error():
+        logger.error(f"[adzuna] {tally.error()}")
+    return tally.annotate({"count": len(all_jobs), "source": "adzuna"})

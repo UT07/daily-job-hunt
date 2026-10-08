@@ -104,7 +104,12 @@ def test_cache_hit(mock_get_supabase, mock_get_param):
 @patch("scrape_adzuna.get_param")
 @patch("scrape_adzuna.get_supabase")
 def test_api_error(mock_get_supabase, mock_get_param):
-    """HTTP 500 from Adzuna → query is skipped → {count: 0, source: 'adzuna'}."""
+    """HTTP 500 on the only query → count 0 WITH an error.
+
+    This test used to assert there was NO error key, i.e. it pinned the
+    defect: a run where every request failed read exactly like a quiet market
+    in pipeline_metrics. See tests/unit/test_scraper_failure_reporting.py.
+    """
     import scrape_adzuna
 
     mock_get_supabase.return_value = _make_db(count=0)
@@ -118,5 +123,6 @@ def test_api_error(mock_get_supabase, mock_get_param):
 
     assert result["count"] == 0
     assert result["source"] == "adzuna"
-    # No "error" key — the Lambda treats HTTP errors as soft failures per query
-    assert "error" not in result
+    # Still returned, not raised (no Retry burn), but the cause is named.
+    assert result["error"].startswith("all_requests_failed")
+    assert "HTTP 500" in result["error"]

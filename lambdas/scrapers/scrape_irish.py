@@ -6,6 +6,7 @@ Detail pages on IrishJobs return 403 without proxy — routed through
 Bright Data Web Unlocker as fallback.
 """
 import html
+from request_tally import RequestTally
 from shared.scrape_budget import cache_ttl_hours as _ttl, enrichment_budget_left
 import logging
 import re
@@ -138,8 +139,9 @@ def _fetch_detail_page(link, search_url, proxy_url=None):
     return "", "none"
 
 
-def _scrape_stepstone_site(site_key, base_url, queries, client, proxy_url=None, context=None):
+def _scrape_stepstone_site(site_key, base_url, queries, client, proxy_url=None, context=None, tally=None):
     """Scrape Jobs.ie or IrishJobs (StepStone platform). Returns list of job dicts."""
+    tally = tally if tally is not None else RequestTally(site_key)
     jobs = []
     detail_stats = {"full": 0, "none": 0}
     for query in queries:
@@ -163,12 +165,16 @@ def _scrape_stepstone_site(site_key, base_url, queries, client, proxy_url=None, 
             # Proxy FIRST rather than direct-then-fallback: direct is known to
             # hang from the deploy environment, and paying a 20s timeout per
             # query before falling back would cost 160s of a 300s budget.
-            resp = client.get(
-                search_url, headers=HEADERS, timeout=30, follow_redirects=True,
-                **({"proxy": proxy_url} if proxy_url else {}),
-            ) if proxy_url else client.get(
-                search_url, headers=HEADERS, timeout=20, follow_redirects=True)
-            if resp.status_code != 200:
+            try:
+                resp = client.get(
+                    search_url, headers=HEADERS, timeout=30, follow_redirects=True,
+                    **({"proxy": proxy_url} if proxy_url else {}),
+                ) if proxy_url else client.get(
+                    search_url, headers=HEADERS, timeout=20, follow_redirects=True)
+            except Exception as e:
+                tally.exception(e)
+                raise
+            if not tally.record_status(resp.status_code):
                 logger.warning(f"[{site_key}] HTTP {resp.status_code} for {query}")
                 continue
 
@@ -222,7 +228,7 @@ def _scrape_stepstone_site(site_key, base_url, queries, client, proxy_url=None, 
     return jobs
 
 
-def _scrape_gradireland(queries, client):
+def _scrape_gradireland(queries, client, tally=None):
     """Scrape GradIreland via their internal JSON search API.
 
     GradIreland is a Gatsby SPA — HTML scraping returns 0 results because
@@ -307,10 +313,17 @@ def _scrape_gradireland(queries, client):
         }
 
         try:
-            resp = client.post(
-                _API_URL, headers=_API_HEADERS,
-                content=_json.dumps(payload), timeout=20,
-            )
+            try:
+                resp = client.post(
+                    _API_URL, headers=_API_HEADERS,
+                    content=_json.dumps(payload), timeout=20,
+                )
+            except Exception as e:
+                if tally is not None:
+                    tally.exception(e)
+                raise
+            if tally is not None:
+                tally.record_status(resp.status_code)
             if resp.status_code != 200:
                 logger.warning(f"[gradireland] HTTP {resp.status_code} for query '{query}'")
                 continue
@@ -370,9 +383,15 @@ def handler(event, context):
     client = httpx.Client()
 
     # Jobs.ie and IrishJobs use the same StepStone platform
-    all_jobs.extend(_scrape_stepstone_site("jobs_ie", "https://www.jobs.ie", queries, client, proxy_url, context))
-    all_jobs.extend(_scrape_stepstone_site("irishjobs", "https://www.irishjobs.ie", queries, client, proxy_url, context))
-    all_jobs.extend(_scrape_gradireland(queries, client))
+    # One tally per site: the three hosts fail independently (jobs.ie and
+    # irishjobs went dark for 179 days while gradireland kept working), so a
+    # dead site is reported even when another one carries the run.
+    tallies = {k: RequestTally(k) for k in ("jobs_ie", "irishjobs", "gradireland")}
+    all_jobs.extend(_scrape_stepstone_site("jobs_ie", "https://www.jobs.ie", queries, client, proxy_url, context,
+                                           tally=tallies["jobs_ie"]))
+    all_jobs.extend(_scrape_stepstone_site("irishjobs", "https://www.irishjobs.ie", queries, client, proxy_url, context,
+                                           tally=tallies["irishjobs"]))
+    all_jobs.extend(_scrape_gradireland(queries, client, tally=tallies["gradireland"]))
 
     client.close()
 
@@ -397,5 +416,16 @@ def handler(event, context):
             db.table("jobs_raw").upsert(chunk, on_conflict="job_hash").execute()
 
     logger.info(f"[irish_portals] {len(all_jobs)} total jobs across 3 sites")
-    return {"count": len(all_jobs), "source": "irish_portals",
-            "new_job_hashes": [j["job_hash"] for j in all_jobs]}
+    result = {"count": len(all_jobs), "source": "irish_portals",
+              "new_job_hashes": [j["job_hash"] for j in all_jobs],
+              "requests": sum(t.attempted for t in tallies.values()),
+              "failed_requests": sum(t.attempted - t.succeeded for t in tallies.values())}
+    site_errors = {k: t.error() for k, t in tallies.items() if t.error()}
+    if site_errors:
+        result["site_errors"] = site_errors
+        logger.error(f"[irish_portals] sites with every request failed: {site_errors}")
+    attempted = [t for t in tallies.values() if t.attempted]
+    if attempted and all(t.all_failed for t in attempted):
+        kind = "auth_failed" if all(t.auth_failures == t.attempted for t in attempted) else "all_requests_failed"
+        result["error"] = f"{kind}: every Irish portal failed: " + "; ".join(site_errors.values())
+    return result

@@ -15,6 +15,7 @@ import boto3
 import httpx
 
 from shared.location_policy import build_location_policy
+from request_tally import RequestTally
 from shared.scrape_budget import cache_ttl_hours as _ttl, enrichment_budget_left
 
 logger = logging.getLogger()
@@ -253,6 +254,7 @@ def handler(event, context):
     from normalizers import normalize_job
     all_jobs = []
     budget_warned = False
+    tally = RequestTally("indeed")
 
     for query in queries:
         encoded_query = quote_plus(query)
@@ -260,8 +262,12 @@ def handler(event, context):
         url = f"https://www.indeed.com/jobs?q={encoded_query}&l={encoded_location}&start=0"
 
         try:
-            resp = httpx.get(url, proxy=proxy_url, timeout=30, follow_redirects=True, verify=False)
-            if resp.status_code != 200:
+            try:
+                resp = httpx.get(url, proxy=proxy_url, timeout=30, follow_redirects=True, verify=False)
+            except Exception as e:
+                tally.exception(e)
+                raise
+            if not tally.record_status(resp.status_code):
                 logger.warning(f"[indeed] Search returned HTTP {resp.status_code}")
                 continue
 
@@ -335,5 +341,7 @@ def handler(event, context):
         db.table("jobs_raw").upsert(all_jobs, on_conflict="job_hash").execute()
 
     logger.info(f"[indeed] {len(all_jobs)} jobs saved")
-    return {"count": len(all_jobs), "source": "indeed",
-            "new_job_hashes": [j["job_hash"] for j in all_jobs]}
+    if tally.error():
+        logger.error(f"[indeed] {tally.error()}")
+    return tally.annotate({"count": len(all_jobs), "source": "indeed",
+                           "new_job_hashes": [j["job_hash"] for j in all_jobs]})
