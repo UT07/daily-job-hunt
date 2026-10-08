@@ -253,6 +253,24 @@ class SupabaseClient:
         )
         return result.data[0]
 
+    @staticmethod
+    def _safe_search_term(raw: str) -> str:
+        """A search term that cannot alter the PostgREST filter around it.
+
+        Everything outside the whitelist is dropped, including the characters
+        that give `or=` its structure: `,` ends a condition, `.` separates
+        column.operator.value, `(`/`)` group them, `*` and `%` are wildcards,
+        and `\\` escapes. A term carrying any of those could turn a search into
+        a different query entirely -- `x,user_id.neq.me` reads another user's
+        rows -- so none of them survive.
+
+        Kept: letters, digits, space, and the punctuation real names contain
+        (& - ' + / #), e.g. "AT&T", "Jones & Co", "C++", "CI/CD", "C#".
+        """
+        import re as _re
+        cleaned = _re.sub(r"[^0-9A-Za-z &\-'+/#]", " ", raw or "")
+        return " ".join(cleaned.split())[:80]
+
     def get_jobs(
         self,
         user_id: str,
@@ -295,6 +313,21 @@ class SupabaseClient:
                 query = query.ilike("company", f"%{filters['company']}%")
             if "title" in filters:
                 query = query.ilike("title", f"%{filters['title']}%")
+            if filters.get("q"):
+                # One box, both columns. `company` and `title` above are
+                # separate AND-ed filters; a person looking for "stripe" does
+                # not know or care which column it lives in.
+                #
+                # Sanitised, not interpolated. This string reaches PostgREST's
+                # `or=` expression language, where a comma separates conditions
+                # and `.` separates column.operator.value -- so an unescaped
+                # term is a filter-injection surface, not merely a broken
+                # search. Whitelisting is used rather than escaping because the
+                # characters a real company or job title needs are a short,
+                # knowable list, and an escape table that misses one fails open.
+                term = self._safe_search_term(filters["q"])
+                if term:
+                    query = query.or_(f"title.ilike.%{term}%,company.ilike.%{term}%")
             if filters.get("tailored") == "true":
                 query = query.neq("resume_s3_url", None).neq("resume_s3_url", "")
             if "tier" in filters:

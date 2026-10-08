@@ -319,6 +319,38 @@ class TestDashboard:
 
         dashboard.assert_called("GET", "/api/dashboard/jobs", query_contains="status=Applied")
 
+    def test_the_search_box_queries_title_and_company_together(self, page, dashboard):
+        """One box, both columns. Before this the dashboard had only `title`
+        and `company`, which are AND-ed narrowing filters — you had to know
+        which column the word lived in before you could find the job."""
+        box = page.get_by_label("Search jobs by title or company")
+        box.fill("stripe")
+        box.press("Enter")
+
+        dashboard.assert_called("GET", "/api/dashboard/jobs", query_contains="q=stripe")
+
+    def test_the_search_term_survives_a_reload(self, page, dashboard, base_url):
+        """It is a URL filter like every other one, so a link to a search is a
+        link to the same results."""
+        box = page.get_by_label("Search jobs by title or company")
+        box.fill("camunda")
+        box.press("Enter")
+        page.wait_for_url("**/*q=camunda*", timeout=10_000)
+
+    def test_clearing_the_search_drops_the_parameter(self, page, dashboard):
+        """A filter you cannot turn off is a trap — the same reason every other
+        filter here has a chip."""
+        box = page.get_by_label("Search jobs by title or company")
+        box.fill("stripe")
+        box.press("Enter")
+        dashboard.assert_called("GET", "/api/dashboard/jobs", query_contains="q=stripe")
+
+        page.get_by_role("button", name="Clear").first.click()
+        page.wait_for_timeout(600)
+        last = [c for c in dashboard.calls if c["path"] == "/api/dashboard/jobs"][-1]
+        assert "q=" not in (last.get("query") or ""), (
+            f"the search term outlived the Clear button: {last.get('query')}")
+
     def test_filter_by_source(self, page, dashboard):
         page.locator("select:has(option[value='linkedin'])").select_option("linkedin")
         page.get_by_role("button", name="Apply Filters").click()
