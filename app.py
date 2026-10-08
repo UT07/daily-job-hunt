@@ -3104,17 +3104,26 @@ def pipeline_status(user: AuthUser = Depends(get_current_user)):
                 "DAILY_PIPELINE_ARN",
                 "arn:aws:states:eu-west-1:385017713886:stateMachine:naukribaba-daily-pipeline",
             )
-            # Get last 5 executions, pick the most recent SUCCEEDED one (or last overall)
+            # Last few executions, filtered to the CALLER's: the daily pipeline
+            # is started per user (its input carries user_id), and this used to
+            # show whichever user's run was newest to everyone. list_executions
+            # does not return input, so each candidate is described once and the
+            # description is reused for the counts below.
             executions = sfn.list_executions(
-                stateMachineArn=state_machine_arn, maxResults=5
+                stateMachineArn=state_machine_arn, maxResults=10
             ).get("executions", [])
-            ex = None
+            mine = []
             for e in executions:
-                if e["status"] == "SUCCEEDED":
-                    ex = e
-                    break
-            if not ex and executions:
-                ex = executions[0]  # fallback to most recent regardless of status
+                try:
+                    d = sfn.describe_execution(executionArn=e["executionArn"])
+                except Exception as err:  # noqa: BLE001 — unreadable means not shown
+                    logger.warning("describe_execution failed for %s: %s", e.get("executionArn"), err)
+                    continue
+                if _execution_owner(d) == user.id:
+                    mine.append((e, d))
+            # Most recent SUCCEEDED one of the caller's, else their most recent.
+            ex, detail = next(((e, d) for e, d in mine if e["status"] == "SUCCEEDED"),
+                              mine[0] if mine else (None, None))
 
             if ex:
                 latest = {
@@ -3129,7 +3138,6 @@ def pipeline_status(user: AuthUser = Depends(get_current_user)):
 
                 # Try to extract job counts from execution output
                 try:
-                    detail = sfn.describe_execution(executionArn=ex["executionArn"])
                     if detail.get("output"):
                         output = _json.loads(detail["output"])
                         # Scraper results are in scraper_results array
@@ -3165,6 +3173,65 @@ def pipeline_status(user: AuthUser = Depends(get_current_user)):
         "latest_run": latest,
         "today_metrics": metrics,
     }
+
+
+def _execution_owner(desc: dict) -> Optional[str]:
+    """The user_id an execution was started for, read from its INPUT.
+
+    Every start_execution in this file and the EventBridge rules put user_id
+    in the input. Anything unreadable owns nothing, so it is shown to no one.
+    """
+    try:
+        data = json.loads(desc.get("input") or "")
+    except (TypeError, ValueError):
+        return None
+    owner = data.get("user_id") if isinstance(data, dict) else None
+    return owner if isinstance(owner, str) and owner else None
+
+
+_FAILURE_DEFAULTS = {
+    "FAILED": ("PipelineFailed", "The pipeline failed."),
+    "TIMED_OUT": ("TimedOut", "The pipeline exceeded its time limit."),
+    "ABORTED": ("Aborted", "The pipeline was stopped before it finished."),
+}
+
+_REDACTIONS = [
+    (re.compile(r"https?://\S+"), "[url]"),
+    (re.compile(r"arn:aws[\w-]*:\S+"), "[arn]"),
+    (re.compile(r"\busers/\S+"), "[s3-key]"),
+    (re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"), "[email]"),
+    (re.compile(r"\b\d{12}\b"), "[account]"),
+    # API keys, signatures, and UUIDs (36 chars of this class) alike.
+    (re.compile(r"[A-Za-z0-9_+/=-]{32,}"), "[redacted]"),
+]
+
+
+def _sanitised_failure(status: str, error: Optional[str], cause: Optional[str]) -> tuple[str, str]:
+    """`error` and `cause` for a failed execution, safe to show the user.
+
+    Step Functions' cause is frequently a Lambda error JSON carrying a
+    stackTrace, file paths, ARNs, S3 keys and presigned URLs. Only the message
+    is kept, cut at any Python traceback, with identifiers redacted and the
+    length capped. The error name is kept only if it looks like one
+    (States.TaskFailed, JobFailed); anything else becomes the generic name.
+    """
+    default_error, default_cause = _FAILURE_DEFAULTS.get(status, _FAILURE_DEFAULTS["FAILED"])
+    err = error if isinstance(error, str) and re.fullmatch(r"[A-Za-z][\w.\-]{0,79}", error) else default_error
+
+    text = cause if isinstance(cause, str) else ""
+    try:
+        parsed = json.loads(text) if text.strip().startswith("{") else None
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, dict):
+        text = next((str(parsed[k]) for k in ("errorMessage", "Cause", "cause", "message", "Error")
+                     if parsed.get(k)), "")
+    text = text.split("Traceback (most recent call last)")[0]
+    text = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    for pattern, repl in _REDACTIONS:
+        text = pattern.sub(repl, text)
+    text = " ".join(text.split())[:300]
+    return err, text or default_cause
 
 
 def _state_machine_arn_to_execution_arn(state_machine_arn: str, execution_name: str) -> str:
@@ -3237,6 +3304,14 @@ def pipeline_execution_status(execution_name: str, user: AuthUser = Depends(get_
         )
         raise HTTPException(404, f"Execution not found: {execution_name}")
 
+    # Ownership. The output carries user_id, the JD and S3 keys, and this
+    # endpoint used to hand it to any authenticated caller who knew (or
+    # guessed) an execution name. Someone else's execution gets the SAME 404
+    # as a missing one, so the response does not confirm it exists.
+    if _execution_owner(result) != user.id:
+        logger.warning("pipeline_execution_status: %s is not owned by the caller", execution_name)
+        raise HTTPException(404, f"Execution not found: {execution_name}")
+
     output = None
     if result.get("output"):
         try:
@@ -3244,13 +3319,19 @@ def pipeline_execution_status(execution_name: str, user: AuthUser = Depends(get_
         except (json.JSONDecodeError, TypeError):
             output = result["output"]
 
-    return {
+    response = {
         "name": result.get("name"),
         "status": result["status"],  # RUNNING, SUCCEEDED, FAILED, TIMED_OUT, ABORTED
         "startDate": result["startDate"].isoformat(),
         "stopDate": result.get("stopDate", "").isoformat() if result.get("stopDate") else None,
         "output": output,
     }
+    # Why it failed, so the frontend can say something better than "failed".
+    # Only on failure: the success shape is unchanged.
+    if result["status"] in _FAILURE_DEFAULTS:
+        response["error"], response["cause"] = _sanitised_failure(
+            result["status"], result.get("error"), result.get("cause"))
+    return response
 
 
 @app.post("/api/pipeline/re-tailor/{job_id}", status_code=202)

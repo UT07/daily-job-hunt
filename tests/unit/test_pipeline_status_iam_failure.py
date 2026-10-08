@@ -139,6 +139,9 @@ def test_first_candidate_misses_second_succeeds(app_module, monkeypatch):
             "startDate": datetime(2026, 5, 1, 0, 0, 0),
             "stopDate": datetime(2026, 5, 1, 0, 5, 0),
             "output": '{"job_id": "abc"}',
+            # describe_execution always returns the input; the endpoint now
+            # 404s an execution whose input names another user.
+            "input": '{"user_id": "user-123"}',
         },
     ]
 
