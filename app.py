@@ -2786,17 +2786,19 @@ def get_dashboard_skills(user: AuthUser = Depends(get_current_user)):
         return {"skills": []}
 
     from collections import Counter
-    jobs = (
-        _db.client.table("jobs")
+    # Every page, not PostgREST's first 1000 rows: these are frequency counts,
+    # and a truncated read undercounts silently (db_client._all_rows).
+    jobs = _db._all_rows(
+        lambda lo, hi: _db.client.table("jobs")
         .select("key_matches")
         .eq("user_id", user.id)
         .eq("is_expired", False)
         .not_.is_("key_matches", "null")
-        .execute()
+        .range(lo, hi)
     )
 
     counts: Counter = Counter()
-    for j in jobs.data:
+    for j in jobs:
         for s in j.get("key_matches") or []:
             counts[s.strip()] += 1
 
