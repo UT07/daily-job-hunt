@@ -656,7 +656,7 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
                 "match_reasoning": j.match_reasoning,
                 "matched_resume": j.matched_resume or req.resume_type,
                 "score_tier": _score_tier(j.match_score),
-            }).eq("job_id", job_id).execute()
+            }).eq("job_id", job_id).eq("user_id", user.id).execute()
             # saved must mean SAVED. It was set unconditionally, so when
             # `_find_or_create_job` returned "" the UPDATE ran as `job_id=eq.`,
             # matched nothing, raised nothing, and this reported success for a
@@ -1050,7 +1050,7 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
                 "title": merged["title"],
                 "company": merged["company"],
                 "source": merged["source"],
-            }).eq("job_id", existing["job_id"]).execute()
+            }).eq("job_id", existing["job_id"]).eq("user_id", user_id).execute()
             logger.info("Merged manual JD into existing job %s (hash=%s)", existing["job_id"], chash)
             return existing["job_id"]
     except Exception as e:
@@ -1077,12 +1077,23 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
     return chash
 
 
-def _update_job_artifacts(job_id: str, updates: dict):
-    """Update a job row with tailor/cover-letter/contacts results."""
-    if not _db or not job_id:
+def _update_job_artifacts(user_id: str, job_id: str, updates: dict):
+    """Update the CALLER'S job row with tailor/cover-letter/contacts results.
+
+    Scoped by user_id as well as job_id because job_id alone is not a row: the
+    primary key is (job_id, user_id), and a manually added job's job_id is the
+    canonical hash of its company/title/description, so two users who paste
+    the same JD share one. Filtered by job_id only, this wrote one user's
+    résumé link onto the other's row. With no user_id there is no safe scope,
+    so it writes nothing rather than everything.
+    """
+    if not _db or not job_id or not user_id:
+        if job_id and not user_id:
+            logger.error("Refusing an unscoped artifact update for job %s", job_id)
         return
     try:
-        _db.client.table("jobs").update(updates).eq("job_id", job_id).execute()
+        (_db.client.table("jobs").update(updates)
+         .eq("job_id", job_id).eq("user_id", user_id).execute())
     except Exception as e:
         logger.warning(f"Job artifact update failed: {e}")
 
@@ -1105,7 +1116,7 @@ def _dispatch_task(task_type: str, payload: dict, user_id: str = "") -> dict:
         result = _do_tailor(job, base_tex, resume_type, payload.get("company", "Unknown"), payload.get("job_title", "Software Engineer"))
         # Save artifacts to dashboard job — use actual model that won the council vote
         tailoring_model = f"{getattr(job, 'tailoring_provider', 'council')}:{getattr(job, 'tailoring_model', 'consensus')}"
-        _update_job_artifacts(job_id, {
+        _update_job_artifacts(user_id, job_id, {
             "resume_s3_url": result.get("pdf_url", ""),
             "ats_score": result.get("ats_score", 0),
             "hiring_manager_score": result.get("hiring_manager_score", 0),
@@ -1133,14 +1144,14 @@ def _dispatch_task(task_type: str, payload: dict, user_id: str = "") -> dict:
         resume_type = payload.get("resume_type", "sre_devops")
         resume_tex = _resumes.get(resume_type, "")
         result = _do_cover_letter(job, resume_tex, payload.get("company", "Unknown"), payload.get("job_title", "Software Engineer"))
-        _update_job_artifacts(job_id, {"cover_letter_s3_url": result.get("pdf_url", "")})
+        _update_job_artifacts(user_id, job_id, {"cover_letter_s3_url": result.get("pdf_url", "")})
         result["job_id"] = job_id
         return result
     elif task_type == "contacts":
         result = _do_contacts(job)
         if result.get("contacts"):
             import json as _json
-            _update_job_artifacts(job_id, {"linkedin_contacts": _json.dumps(result["contacts"])})
+            _update_job_artifacts(user_id, job_id, {"linkedin_contacts": _json.dumps(result["contacts"])})
         result["job_id"] = job_id
         return result
     elif task_type == "rebuild_sections":
@@ -1474,7 +1485,7 @@ def _do_rebuild_sections(job_id: str, sections: dict, user_id: str) -> dict:
         pdf_url = ""
 
     # Update job row in Supabase
-    _update_job_artifacts(job_id, {"resume_s3_url": pdf_url})
+    _update_job_artifacts(user_id, job_id, {"resume_s3_url": pdf_url})
 
     # Score the document we just produced, so the Studio's number describes
     # what is on screen rather than the resume as it was before the edit.
@@ -3285,7 +3296,7 @@ def re_tailor_job(
     next_version = current_version + 1
     _db.client.table("jobs").update({
         "resume_version": next_version,
-    }).eq("job_id", job_id).execute()
+    }).eq("job_id", job_id).eq("user_id", user.id).execute()
 
     single_arn = os.environ.get("SINGLE_JOB_PIPELINE_ARN")
     if single_arn:
