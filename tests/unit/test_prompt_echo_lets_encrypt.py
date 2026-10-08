@@ -24,6 +24,26 @@ CLAUDE.md #16: measure a detector's false-positive rate before shipping it,
 not after. And #15: the marker WAS measured at 0/738 when it was written — the
 corpus moved underneath it when the skills section grew to include Let's
 Encrypt. A comparison has two sides.
+
+A MEASURED NON-FINDING, recorded because the next inference is the obvious one
+and it is wrong. 139 of the résumés mentioning Traefik have no "Let's Encrypt"
+at all, some rewritten to "Traefik ingress with automated TLS" — which reads
+exactly like the repair loop working around the banned string, since
+repair_node folds violation text into the retry verbatim. It is not. Grouped
+by S3 LastModified:
+
+    date          traefik  intact  lost   lost%
+    2026-09-29          7       4     3     43%
+    2026-09-30         18      10     8     44%   <- the guard lands
+    2026-10-02         12      11     1      8%
+    2026-10-07        111      68    43     39%
+    2026-10-08        152      84    68     45%
+
+The loss rate before the guard existed is the same as after. Composition
+varies that skills line on its own, and the guard is innocent of it. What the
+false positive actually cost is repair rounds and a `guards_passed: False` on
+valid documents — bad, and bounded. Whether any shipped résumé was degraded by
+it is NOT established, and this table is why.
 """
 import pytest
 
