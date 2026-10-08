@@ -128,6 +128,22 @@ def partition_unhashed(jobs: list[dict]) -> tuple[list[dict], list[dict]]:
     return usable, unhashed
 
 
+def _get_rows(httpx, url, params, headers) -> list:
+    """GET a PostgREST collection, raising on anything that is not a list.
+
+    An error answer is a JSON object, and both callers below used to read one
+    as "no rows": the jobs query ended its loop and reported zero jobs, and
+    the jobs_raw query dropped every row and reported each job "not in
+    jobs_raw". An expired key looked like an empty, healthy run.
+    """
+    resp = httpx.get(url, params=params, headers=headers, timeout=60)
+    resp.raise_for_status()
+    body = resp.json()
+    if not isinstance(body, list):
+        raise RuntimeError(f"{url} returned {type(body).__name__}, not a list: {str(body)[:200]}")
+    return body
+
+
 def select_jobs(url, headers, user_id: str, tiers: list[str], max_jobs: int | None):
     """Active, non-expired jobs in `tiers` that the handler can actually read.
 
@@ -139,7 +155,7 @@ def select_jobs(url, headers, user_id: str, tiers: list[str], max_jobs: int | No
 
     jobs, offset = [], 0
     while True:
-        page = httpx.get(f"{url}/rest/v1/jobs", params={
+        page = _get_rows(httpx, f"{url}/rest/v1/jobs", {
             # canonical_hash is NOT optional here: manually added jobs have
             # job_hash NULL and only this column identifies their jobs_raw row.
             # Resolving the fallback while never fetching the column it reads
@@ -149,8 +165,8 @@ def select_jobs(url, headers, user_id: str, tiers: list[str], max_jobs: int | No
             "user_id": f"eq.{user_id}", "is_expired": "eq.false",
             "score_tier": f"in.({','.join(tiers)})",
             "order": "match_score.desc", "limit": 1000, "offset": offset,
-        }, headers=headers, timeout=60).json()
-        if not isinstance(page, list) or not page:
+        }, headers)
+        if not page:
             break
         jobs += page
         if len(page) < 1000:
@@ -168,9 +184,9 @@ def select_jobs(url, headers, user_id: str, tiers: list[str], max_jobs: int | No
     present: set[str] = set()
     for i in range(0, len(hashes), 100):
         chunk = hashes[i:i + 100]
-        rows = httpx.get(f"{url}/rest/v1/jobs_raw", params={
+        rows = _get_rows(httpx, f"{url}/rest/v1/jobs_raw", {
             "select": "job_hash", "job_hash": f"in.({','.join(chunk)})", "limit": 1000,
-        }, headers=headers, timeout=60).json()
+        }, headers)
         present |= {r["job_hash"] for r in rows if isinstance(r, dict)}
 
     usable = [j for j in jobs if j[TAILOR_HASH_KEY] in present]
