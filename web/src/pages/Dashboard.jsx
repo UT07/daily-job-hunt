@@ -389,7 +389,15 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchQuery, statusFilter, sourceFilter, minScore, companySearch, titleSearch, tailoredOnly, tierFilter, hideExpired, archetypeFilter, seniorityFilter, remoteFilter, levelFitFilter, skillFilter, showAdvanced, sortBy, sortOrder, page]);
 
+  // Request-sequence guard, the same pattern useApiMutation uses: only the
+  // most recent fetchJobs may commit. Without it, search "stripe" then clear
+  // the box, and if the first (slower) response lands second it overwrites
+  // the newer list -- the screen shows results for a query no longer typed.
+  const jobsRequestRef = useRef(0);
+
   const fetchJobs = useCallback(async () => {
+    const requestId = ++jobsRequestRef.current;
+    const isLatest = () => jobsRequestRef.current === requestId;
     setLoading(true);
     setError(null);
     try {
@@ -402,12 +410,13 @@ export default function Dashboard() {
       });
 
       const data = await apiGet(`/api/dashboard/jobs?${params.toString()}`);
+      if (!isLatest()) return;
       setJobs(data.jobs || []);
       setTotal(data.total || data.jobs?.length || 0);
     } catch (err) {
-      setError(err.message);
+      if (isLatest()) setError(err.message);
     } finally {
-      setLoading(false);
+      if (isLatest()) setLoading(false);
     }
   }, [filterVersion, page, perPage]);
 
