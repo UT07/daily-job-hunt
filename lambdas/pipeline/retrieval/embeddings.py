@@ -155,7 +155,10 @@ def embed(text: str) -> list[float]:
 
     resp = httpx.post(
         ENDPOINT,
-        params={"key": _api_key()},
+        # Header, not `params={"key": ...}`: httpx's HTTPStatusError message
+        # carries the full request URL, query string included, so the key
+        # went wherever the exception was logged.
+        headers={"x-goog-api-key": _api_key()},
         json={
             "model": MODEL,
             "content": {"parts": [{"text": text}]},
@@ -179,7 +182,10 @@ def embed_batch(texts: list[str]) -> list[list[float]]:
 
     resp = httpx.post(
         BATCH_ENDPOINT,
-        params={"key": _api_key()},
+        # Header, not `params={"key": ...}`: httpx's HTTPStatusError message
+        # carries the full request URL, query string included, so the key
+        # went wherever the exception was logged.
+        headers={"x-goog-api-key": _api_key()},
         json={"requests": [
             {
                 "model": MODEL,

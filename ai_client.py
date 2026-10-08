@@ -293,7 +293,12 @@ class GeminiProvider(AIProvider):
             raise LocalRateLimitError(f"[{self.name}] local rate limiter exhausted")
 
         temp = temperature if temperature is not None else self.temperature
-        url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
+        # The key goes in the x-goog-api-key header, never the URL. requests
+        # copies the request URL into every HTTPError message, AIClient folds
+        # the last error into "All providers exhausted. Last error: ...", and
+        # app.py returns that as `HTTPException(500, f"AI call failed: {e}")`,
+        # so a `?key=` query parameter put the key in logs and API responses.
+        url = f"{self.base_url}/models/{self.model}:generateContent"
 
         contents = []
         if system:
@@ -309,7 +314,10 @@ class GeminiProvider(AIProvider):
             },
         }
 
-        resp = requests.post(url, json=body, timeout=90)
+        resp = requests.post(
+            url, json=body, timeout=90,
+            headers={"x-goog-api-key": self.api_key, "Content-Type": "application/json"},
+        )
 
         if resp.status_code == 429:
             raise RateLimitError(f"[{self.name}] HTTP 429 — rate limited")
