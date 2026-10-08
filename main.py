@@ -418,6 +418,51 @@ def _scrape_single(scraper: BaseScraper, query: str, location: str, days_back: i
         return []
 
 
+def _run_scrape_phase(tasks: list, max_workers: int, deadline: float,
+                      days_back: int, label: str) -> List[Job]:
+    """Run one phase's (scraper, query, location) tasks; return at `deadline`.
+
+    Both phases used to run in `with ThreadPoolExecutor(...)` over
+    `as_completed(futures)` with no timeout, then `future.result(timeout=30)`.
+    That timeout bounded nothing -- as_completed only yields futures that are
+    already done -- and the deadline was checked only when some future
+    finished, so one hung scraper blocked the phase indefinitely. Even after a
+    break, the `with` exit called shutdown(wait=True) and joined the hung
+    thread. Same defect, same fix as ai_client._unwaited_executor.
+
+    Here the WAIT is bounded (as_completed(timeout=...)) and the exit does not
+    join: queued tasks are cancelled, and a thread already inside a request
+    runs to its own HTTP timeout in the background with its result discarded.
+    A local `python main.py` still waits for such threads at interpreter exit
+    (concurrent.futures joins its workers then); the phase itself does not.
+    """
+    import concurrent.futures
+    import time as _time
+
+    jobs: List[Job] = []
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+    try:
+        futures = {
+            executor.submit(_scrape_single, s, q, l, days_back): (s.name, q, l)
+            for s, q, l in tasks
+        }
+        try:
+            for future in concurrent.futures.as_completed(
+                    futures, timeout=max(0.0, deadline - _time.time())):
+                try:
+                    jobs.extend(future.result())
+                except Exception as e:
+                    name, q, _loc = futures[future]
+                    logger.error(f"[{name}] Failed: '{q}' — {e}")
+        except concurrent.futures.TimeoutError:
+            pending = sum(1 for f in futures if not f.done())
+            logger.warning(f"{label} phase exceeded deadline; abandoning {pending} "
+                           f"unfinished task(s) of {len(futures)}")
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+    return jobs
+
+
 def scrape_all_jobs(scrapers: List[BaseScraper], config: dict) -> List[Job]:
     """Run all scrapers with smart query routing.
 
@@ -428,7 +473,6 @@ def scrape_all_jobs(scrapers: List[BaseScraper], config: dict) -> List[Job]:
 
     This keeps total scrape time under 10 minutes instead of 45+.
     """
-    from concurrent.futures import ThreadPoolExecutor, as_completed
     import time as _time
 
     all_jobs = []
@@ -475,44 +519,14 @@ def scrape_all_jobs(scrapers: List[BaseScraper], config: dict) -> List[Job]:
     # Phase 1: Run API scrapers (fast, high parallelism)
     if api_tasks:
         logger.info(f"[Phase 1] Running {len(api_tasks)} API scraper tasks...")
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(_scrape_single, s, q, l, days_back): (s.name, q, l)
-                for s, q, l in api_tasks
-            }
-            for future in as_completed(futures):
-                if _time.time() > deadline:
-                    logger.warning("API phase exceeded deadline, moving on...")
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    break
-                try:
-                    jobs = future.result(timeout=30)
-                    all_jobs.extend(jobs)
-                except Exception as e:
-                    name, q, l = futures[future]
-                    logger.error(f"[{name}] Failed: '{q}' — {e}")
+        all_jobs.extend(_run_scrape_phase(api_tasks, max_workers, deadline, days_back, "API"))
 
     # Phase 2: Run browser scrapers (slow, limited parallelism)
     # Only 2 workers for browser scrapers to avoid overwhelming Playwright
     if browser_tasks and _time.time() < deadline:
         remaining = int(deadline - _time.time())
         logger.info(f"[Phase 2] Running {len(browser_tasks)} browser tasks ({remaining}s remaining)...")
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            futures = {
-                executor.submit(_scrape_single, s, q, l, days_back): (s.name, q, l)
-                for s, q, l in browser_tasks
-            }
-            for future in as_completed(futures):
-                if _time.time() > deadline:
-                    logger.warning("Browser phase exceeded deadline, stopping.")
-                    executor.shutdown(wait=False, cancel_futures=True)
-                    break
-                try:
-                    jobs = future.result(timeout=60)
-                    all_jobs.extend(jobs)
-                except Exception as e:
-                    name, q, l = futures[future]
-                    logger.error(f"[{name}] Failed: '{q}' — {e}")
+        all_jobs.extend(_run_scrape_phase(browser_tasks, 2, deadline, days_back, "Browser"))
     elif browser_tasks:
         logger.info("No time left for browser scrapers, skipping.")
 
