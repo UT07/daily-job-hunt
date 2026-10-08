@@ -6,6 +6,7 @@ import os
 import random
 import time
 import re
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
 
 import boto3
@@ -1250,6 +1251,50 @@ def _council_complete_legacy(
 # ai_complete_cached — with Supabase cache
 # ---------------------------------------------------------------------------
 
+def json_parses(text: str) -> bool:
+    """True if `text` is JSON, allowing one surrounding markdown code fence.
+
+    The `validate` for ai_complete_cached callers whose answer must be JSON.
+    Strips fences the way score_batch.score_single_job does before parsing,
+    so a fenced answer the caller can read is not rejected here.
+    """
+    t = (text or "").strip()
+    if t.startswith("```"):
+        parts = t.split("```")
+        t = parts[1] if len(parts) >= 2 else t
+        if t.startswith("json"):
+            t = t[4:]
+        t = t.strip()
+    try:
+        json.loads(t)
+    except (ValueError, TypeError):
+        return False
+    return True
+
+
+def _passes(validate: Callable[[str], bool] | None, content: str) -> bool:
+    """A validator that raises is a rejection: never cache on a crash."""
+    if validate is None:
+        return True
+    try:
+        return validate(content) is True
+    except Exception as e:  # noqa: BLE001 -- a broken validator must not break the call
+        logger.warning(f"[ai] cache validator raised ({e!r}); treating as invalid")
+        return False
+
+
+def _cache_key(system: str, prompt: str, temperature: float, max_tokens: int) -> str:
+    """Everything that shapes the answer is in the key.
+
+    It used to be md5(system|prompt), so a temperature-0 scoring answer was
+    replayed to a temperature-0.7 caller and a 1024-token answer to a caller
+    who asked for 8192. Changing the format orphans existing entries once;
+    they expire on their own 72h TTL.
+    """
+    raw = f"{system}|{prompt}|temperature={temperature}|max_tokens={max_tokens}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
+
 def ai_complete_cached(
     prompt: str,
     system: str = "",
@@ -1257,6 +1302,7 @@ def ai_complete_cached(
     temperature: float = 0.3,
     max_tokens: int = 4096,
     skip_cache: bool = False,
+    validate: Callable[[str], bool] | None = None,
 ) -> dict:
     """AI complete with Supabase cache. Returns dict with content, provider, model.
 
@@ -1273,8 +1319,16 @@ def ai_complete_cached(
 
     Default stays False: the batch pipeline scores ~58 jobs a run against an 8k
     tokens/minute Groq ceiling that is already the bottleneck.
+
+    `validate`, when given, decides whether an answer is fit to STORE. It used
+    to be stored before the caller parsed it, so one unparseable scoring
+    answer was replayed for 72h and the job could not be re-scored until the
+    entry expired. Now an answer is cached only if `validate(content)` is
+    True, and a cached entry that fails it is ignored and re-asked, which also
+    flushes entries poisoned before this existed. The answer is still
+    RETURNED either way: the caller may be able to salvage it.
     """
-    cache_key = hashlib.md5(f"{system}|{prompt}".encode()).hexdigest()
+    cache_key = _cache_key(system, prompt, temperature, max_tokens)
     db = get_supabase()
 
     if not skip_cache:
@@ -1282,11 +1336,16 @@ def ai_complete_cached(
             .eq("cache_key", cache_key) \
             .gte("expires_at", datetime.utcnow().isoformat()).execute()
         if cached.data:
-            return {
-                "content": cached.data[0]["response"],
-                "provider": cached.data[0].get("provider", "cache"),
-                "model": cached.data[0].get("model", "cache"),
-            }
+            if _passes(validate, cached.data[0]["response"]):
+                return {
+                    "content": cached.data[0]["response"],
+                    "provider": cached.data[0].get("provider", "cache"),
+                    "model": cached.data[0].get("model", "cache"),
+                }
+            logger.warning(
+                "[ai] cached response for cache_key=%s fails validation — "
+                "ignoring it and asking again", cache_key,
+            )
 
     result = ai_complete(prompt, system, temperature=temperature, max_tokens=max_tokens)
 
@@ -1305,6 +1364,13 @@ def ai_complete_cached(
             "[ai] not caching a truncated response for cache_key=%s "
             "(max_tokens=%s) — a fragment must not be replayed for %sh",
             cache_key, max_tokens, cache_hours,
+        )
+        return result
+
+    if not _passes(validate, result.get("content") or ""):
+        logger.warning(
+            "[ai] not caching a response that failed validation for "
+            "cache_key=%s — it would be replayed for %sh", cache_key, cache_hours,
         )
         return result
 

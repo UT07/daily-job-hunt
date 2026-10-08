@@ -111,8 +111,8 @@ def test_unusable_output_fails_over_and_is_never_cached(
     assert info["model"] == "good-model"
     assert len(router.calls) == 2, f"the bad provider must be tried exactly once: {router.calls}"
     # The cache holds the GOOD answer or nothing — never the bad one.
-    cached = cache.get("prompt")
-    assert cached in (None, "good answer")
+    cached = cache.get("prompt", **client._cache_params(None))
+    assert cached == (None if skip_cache else "good answer")
     assert ("groq", "bad-model") not in client._dead_providers, "a bad answer is transient, not a dead provider"
 
 
@@ -125,7 +125,7 @@ def test_a_lone_provider_with_unusable_output_raises_instead_of_returning_it(mon
     client = AIClient([GroqProvider(api_key="k", model="bad-model")], cache=cache)
     with pytest.raises(ai_client.ProviderError):
         client.complete("prompt", skip_cache=True)
-    assert cache.get("prompt") is None
+    assert cache.get("prompt", **client._cache_params(None)) is None
 
 
 def test_a_good_answer_still_passes_through(monkeypatch, cache):
@@ -133,7 +133,7 @@ def test_a_good_answer_still_passes_through(monkeypatch, cache):
     monkeypatch.setattr(requests, "post", _Router("unused", None, None))
     client = AIClient([GroqProvider(api_key="k", model="good-model")], cache=cache)
     assert client.complete("prompt") == "good answer"
-    assert cache.get("prompt") == "good answer"
+    assert cache.get("prompt", **client._cache_params(None)) == "good answer"
 
 
 def test_gemini_good_answer_passes_through(monkeypatch, cache):

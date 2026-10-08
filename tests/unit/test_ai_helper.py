@@ -229,8 +229,12 @@ class TestAiComplete:
 class TestAiCompleteCached:
     """Tests for the ai_complete_cached Supabase-backed cache."""
 
-    def _cache_key(self, system: str, prompt: str) -> str:
-        return hashlib.md5(f"{system}|{prompt}".encode()).hexdigest()
+    def _cache_key(self, system: str, prompt: str, temperature=0.3, max_tokens=4096) -> str:
+        # Temperature and max_tokens joined the key on 2026-10-08; before
+        # that a temperature-0 answer was replayed to a 0.7 caller. Written
+        # out here rather than imported, so this pins the format.
+        raw = f"{system}|{prompt}|temperature={temperature}|max_tokens={max_tokens}"
+        return hashlib.md5(raw.encode()).hexdigest()
 
     def test_returns_cached_response_on_hit(self):
         """When the cache contains a valid (non-expired) entry, it is returned

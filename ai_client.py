@@ -131,12 +131,17 @@ class ResponseCache:
         self._conn.commit()
         self._cleanup()
 
-    def _make_key(self, prompt: str, system: str = "", cache_extra: str = "") -> str:
-        raw = f"{system}|||{prompt}|||{cache_extra}"
+    def _make_key(self, prompt: str, system: str = "", cache_extra: str = "",
+                  temperature: Optional[float] = None, max_tokens: Optional[int] = None) -> str:
+        # Temperature and max_tokens shape the answer, so they are in the key.
+        # Without them a temperature-0 answer was served to a 0.7 caller and a
+        # 1024-token answer to a client configured for 8192.
+        raw = f"{system}|||{prompt}|||{cache_extra}|||t={temperature}|||m={max_tokens}"
         return hashlib.sha256(raw.encode()).hexdigest()
 
-    def get(self, prompt: str, system: str = "", cache_extra: str = "") -> Optional[str]:
-        key = self._make_key(prompt, system, cache_extra)
+    def get(self, prompt: str, system: str = "", cache_extra: str = "",
+            temperature: Optional[float] = None, max_tokens: Optional[int] = None) -> Optional[str]:
+        key = self._make_key(prompt, system, cache_extra, temperature, max_tokens)
         cutoff = time.time() - self.ttl_seconds
         row = self._conn.execute(
             "SELECT response FROM cache WHERE key = ? AND created_at > ?",
@@ -146,12 +151,14 @@ class ResponseCache:
             return row[0]
         return None
 
-    def get_with_info(self, prompt: str, system: str = "", cache_extra: str = "") -> Optional[dict]:
+    def get_with_info(self, prompt: str, system: str = "", cache_extra: str = "",
+                      temperature: Optional[float] = None,
+                      max_tokens: Optional[int] = None) -> Optional[dict]:
         """Like get() but returns provider/model info alongside the response.
 
         Returns: {"response": str, "provider": str, "model": str} or None.
         """
-        key = self._make_key(prompt, system, cache_extra)
+        key = self._make_key(prompt, system, cache_extra, temperature, max_tokens)
         cutoff = time.time() - self.ttl_seconds
         row = self._conn.execute(
             "SELECT response, provider, model FROM cache WHERE key = ? AND created_at > ?",
@@ -161,8 +168,9 @@ class ResponseCache:
             return {"response": row[0], "provider": row[1] or "", "model": row[2] or ""}
         return None
 
-    def put(self, prompt: str, response: str, provider: str = "", model: str = "", system: str = "", cache_extra: str = ""):
-        key = self._make_key(prompt, system, cache_extra)
+    def put(self, prompt: str, response: str, provider: str = "", model: str = "", system: str = "",
+            cache_extra: str = "", temperature: Optional[float] = None, max_tokens: Optional[int] = None):
+        key = self._make_key(prompt, system, cache_extra, temperature, max_tokens)
         self._conn.execute(
             "INSERT OR REPLACE INTO cache (key, response, provider, model, created_at) VALUES (?, ?, ?, ?, ?)",
             (key, response, provider, model, time.time()),
@@ -678,6 +686,18 @@ class AIClient:
         # Track dead providers (permanent errors) — skip them in future calls
         self._dead_providers: set = set()  # Set of (provider.name, provider.model)
 
+    def _cache_params(self, temperature: Optional[float]) -> dict:
+        """The sampling settings that go into the cache key.
+
+        max_tokens is per provider, and the key is looked up before a provider
+        is chosen, so the client's largest budget stands for the configuration:
+        a client built with a different budget gets different keys.
+        """
+        return {
+            "temperature": temperature,
+            "max_tokens": max((getattr(p, "max_tokens", 0) or 0 for p in self.providers), default=0) or None,
+        }
+
     def complete(self, prompt: str, system: str = "", temperature: float = None,
                  skip_cache: bool = False, cache_extra: str = "") -> str:
         """Send a prompt through the provider chain with caching and failover.
@@ -694,7 +714,7 @@ class AIClient:
 
         # Check cache first
         if not skip_cache and self.cache:
-            cached = self.cache.get(prompt, system, cache_extra=cache_extra)
+            cached = self.cache.get(prompt, system, cache_extra=cache_extra, **self._cache_params(temperature))
             if cached:
                 self._stats["cache_hits"] += 1
                 return cached
@@ -724,7 +744,8 @@ class AIClient:
                 # Cache the response
                 if self.cache and not skip_cache:
                     self.cache.put(prompt, response, provider=provider.name,
-                                   model=provider.model, system=system, cache_extra=cache_extra)
+                                   model=provider.model, system=system, cache_extra=cache_extra,
+                                   **self._cache_params(temperature))
 
                 self._stats["provider_calls"][provider.name] = self._stats["provider_calls"].get(provider.name, 0) + 1
                 return response
@@ -760,7 +781,8 @@ class AIClient:
 
         # Check cache first (with provider/model info)
         if not skip_cache and self.cache:
-            cached = self.cache.get_with_info(prompt, system, cache_extra=cache_extra)
+            cached = self.cache.get_with_info(prompt, system, cache_extra=cache_extra,
+                                                **self._cache_params(temperature))
             if cached:
                 self._stats["cache_hits"] += 1
                 return cached
@@ -789,7 +811,8 @@ class AIClient:
                 # Cache the response
                 if self.cache and not skip_cache:
                     self.cache.put(prompt, response, provider=provider.name,
-                                   model=provider.model, system=system, cache_extra=cache_extra)
+                                   model=provider.model, system=system, cache_extra=cache_extra,
+                                   **self._cache_params(temperature))
 
                 self._stats["provider_calls"][provider.name] = self._stats["provider_calls"].get(provider.name, 0) + 1
                 return {"response": response, "provider": provider.name, "model": provider.model}
@@ -1204,7 +1227,8 @@ class AIClient:
         # Check cache first
         council_cache_extra = f"council:{n_generators}x{n_critics}|{cache_extra}"
         if not skip_cache and self.cache:
-            cached = self.cache.get_with_info(prompt, system, cache_extra=council_cache_extra)
+            cached = self.cache.get_with_info(prompt, system, cache_extra=council_cache_extra,
+                                                **self._cache_params(temperature))
             if cached:
                 self._stats["cache_hits"] += 1
                 logger.debug("[Council] Cache hit — returning cached council result")
@@ -1229,7 +1253,8 @@ class AIClient:
             if self.cache and not skip_cache:
                 self.cache.put(prompt, best, provider=candidates[0]["provider"],
                                model=candidates[0]["model"], system=system,
-                               cache_extra=council_cache_extra)
+                               cache_extra=council_cache_extra,
+                               **self._cache_params(temperature))
             self._log_quality({
                 "task": task_description or "council_complete",
                 "generators": [{"provider": c["provider"], "model": c["model"]} for c in candidates],
@@ -1251,7 +1276,8 @@ class AIClient:
         if self.cache and not skip_cache:
             self.cache.put(prompt, best, provider=result["best_provider"],
                            model=result["best_model"], system=system,
-                           cache_extra=council_cache_extra)
+                           cache_extra=council_cache_extra,
+                               **self._cache_params(temperature))
 
         # Log quality data
         self._log_quality({
