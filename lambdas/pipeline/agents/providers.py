@@ -56,14 +56,19 @@ def select_critics(exclude_families: set[str], n: int = 1) -> list[dict]:
     to evaluate two candidates based on criteria..."). The council gave up on
     the first failure and shipped candidate 1 unreviewed.
 
-    Families, not models: a second NVIDIA entry would fail the same way. The
-    fallback to "any provider" when every family has generated is unchanged.
+    Families, not models: a second NVIDIA entry would fail the same way.
+
+    NEVER relaxes. When every live family has generated, this returns [] and
+    critique_node records `no_critic_family`. It used to fall back to "any
+    provider", with no exclusion, so a Gemini critic could judge two Gemini
+    candidates and the run was recorded as `adjudicated` — indistinguishable
+    from an independent verdict. That became routine once `fill_same_family`
+    let a Gemini-only pool field two generators (17b3b48), the commit that
+    states the rule this enforces: a critic from the family that generated is
+    not an independent reviewer, which is the entire purpose of the slot.
     """
-    all_providers = _build_provider_list()
-    picked = _select_diverse_providers(all_providers, n=n, exclude_families=exclude_families)
-    if not picked:
-        picked = _select_diverse_providers(all_providers, n=n)
-    return picked
+    return _select_diverse_providers(_build_provider_list(), n=n,
+                                     exclude_families=exclude_families)
 
 
 def select_critic(exclude_families: set[str]) -> dict | None:
