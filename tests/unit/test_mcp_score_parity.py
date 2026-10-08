@@ -33,7 +33,18 @@ import pytest
 
 sys.path.insert(0, ".")
 
-from mcp_server import server  # noqa: E402
+from mcp_server import identity, server  # noqa: E402
+
+
+TEST_CALLER = "11111111-2222-3333-4444-555555555555"
+
+
+@pytest.fixture(autouse=True)
+def _authenticated_caller():
+    """Tools refuse to run without a caller (mcp_server.identity); act as one.
+    test_mcp_caller_identity.py owns the cross-user and no-caller cases."""
+    with identity.acting_as(TEST_CALLER):
+        yield
 
 # A JD the model scores highly on skills, in a country the single-tenant user
 # needs sponsorship for, with no sponsor language anywhere in it.

@@ -175,7 +175,8 @@ app.add_middleware(AuditMiddleware)
 # applies that same JWT check at the ASGI level instead, so `/mcp/*` isn't
 # an unauthenticated hole onto search_jobs/score_job's private job-hunt
 # data. See mcp_server/http_auth.py for why a mount specifically needs this
-# rather than a route dependency.
+# rather than a route dependency. The gate also passes the verified JWT `sub`
+# to the tools (mcp_server/identity.py), which act as that caller only.
 app.mount("/mcp", RequireSupabaseJWT(build_server().sse_app()))
 
 # Global state (initialized on startup)

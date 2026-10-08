@@ -26,7 +26,18 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from lambdas.pipeline.retrieval.embeddings import EMBED_DIM
-from mcp_server import server
+from mcp_server import identity, server
+
+
+TEST_CALLER = "11111111-2222-3333-4444-555555555555"
+
+
+@pytest.fixture(autouse=True)
+def _authenticated_caller():
+    """Tools refuse to run without a caller (mcp_server.identity); act as one.
+    test_mcp_caller_identity.py owns the cross-user and no-caller cases."""
+    with identity.acting_as(TEST_CALLER):
+        yield
 
 MISSING_FUNCTION = (
     "Could not find the function public.match_jobs_semantic(p_embedding, p_k, "
