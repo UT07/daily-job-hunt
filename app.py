@@ -748,11 +748,21 @@ def _save_task(task_id: str, user_id: str, data: dict):
     _db.client.table("pipeline_tasks").upsert(row, on_conflict="task_id").execute()
 
 
-def _load_task(task_id: str) -> dict | None:
-    """Load task state from Supabase."""
+def _load_task(task_id: str, *, user_id: str) -> dict | None:
+    """Load one of `user_id`'s tasks from Supabase; None if absent OR not theirs.
+
+    Filtered by owner in the query itself. Until 2026-10-08 this selected by
+    task_id alone, so any signed-in user holding another user's task id read
+    its result and error. The service key bypasses RLS, so this filter is the
+    only thing scoping the read. A row with no user_id is nobody's: 404.
+    """
     if not _db:
         return None
-    result = _db.client.table("pipeline_tasks").select("*").eq("task_id", task_id).maybe_single().execute()
+    result = (
+        _db.client.table("pipeline_tasks").select("*")
+        .eq("task_id", task_id).eq("user_id", user_id)
+        .maybe_single().execute()
+    )
     if not result or not result.data:
         return None
     row = result.data
@@ -960,8 +970,12 @@ def _enqueue_task(task_id: str, user_id: str, task_type: str, payload: dict):
 
 @app.get("/api/tasks/{task_id}")
 def get_task(task_id: str, user: AuthUser = Depends(get_current_user)):
-    """Poll for the result of an async task."""
-    task = _load_task(task_id)
+    """Poll for the result of one of the caller's async tasks.
+
+    Another user's task is indistinguishable from a missing one (404), so a
+    task id confirms nothing about tasks the caller does not own.
+    """
+    task = _load_task(task_id, user_id=user.id)
     if not task:
         raise HTTPException(404, "Task not found")
     return task
