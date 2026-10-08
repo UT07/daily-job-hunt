@@ -7,6 +7,17 @@ Verifies that:
 - Special characters in job_title, company fields are handled gracefully
 """
 
+# These tests patch the SCORING ENGINE so the endpoint's input handling can be
+# exercised without an AI call. The target changed on 2026-10-08: /api/score
+# used to score through `matcher.match_jobs` and now uses
+# `score_single_job_deterministic`, because one sample was measured at a
+# fifteen-point spread (70, 85, 75 for one job at temperature=0). The engine
+# returns a dict or None, so "no usable score" is None here, not [].
+#
+# `patch` validating that the attribute exists is what caught the switch: all
+# 29 of these failed loudly with AttributeError rather than silently patching
+# a name nothing calls.
+
 import pytest
 from unittest.mock import patch
 
@@ -35,8 +46,8 @@ def test_xss_in_job_description_does_not_execute(client, auth_headers, xss_paylo
     # Pad the XSS payload to meet the 20-char min_length requirement
     padded = xss_payload + " " * max(0, 25 - len(xss_payload))
 
-    with patch("app.match_jobs") as mock_match:
-        mock_match.return_value = []  # No matches
+    with patch("app.score_single_job_deterministic") as mock_match:
+        mock_match.return_value = None  # No usable score
         resp = client.post("/api/score", headers=auth_headers, json={
             "job_description": padded,
             "job_title": "Software Engineer",
@@ -64,8 +75,8 @@ def test_xss_in_job_description_does_not_execute(client, auth_headers, xss_paylo
                          ids=[f"xss_title_{i}" for i in range(3)])
 def test_xss_in_job_title_handled(client, auth_headers, xss_payload):
     """XSS in job_title should not cause a server error."""
-    with patch("app.match_jobs") as mock_match:
-        mock_match.return_value = []
+    with patch("app.score_single_job_deterministic") as mock_match:
+        mock_match.return_value = None
         resp = client.post("/api/score", headers=auth_headers, json={
             "job_description": "A legitimate job description with enough characters to pass validation.",
             "job_title": xss_payload,
@@ -83,8 +94,8 @@ def test_xss_in_job_title_handled(client, auth_headers, xss_payload):
                          ids=[f"xss_company_{i}" for i in range(3)])
 def test_xss_in_company_handled(client, auth_headers, xss_payload):
     """XSS in company field should not cause a server error."""
-    with patch("app.match_jobs") as mock_match:
-        mock_match.return_value = []
+    with patch("app.score_single_job_deterministic") as mock_match:
+        mock_match.return_value = None
         resp = client.post("/api/score", headers=auth_headers, json={
             "job_description": "A legitimate job description with enough characters to pass validation.",
             "job_title": "Software Engineer",
@@ -203,8 +214,8 @@ SPECIAL_CHAR_STRINGS = [
                          ids=[f"special_{i}" for i in range(len(SPECIAL_CHAR_STRINGS))])
 def test_special_chars_in_job_title(client, auth_headers, special):
     """Special characters in job_title must not crash the API."""
-    with patch("app.match_jobs") as mock_match:
-        mock_match.return_value = []
+    with patch("app.score_single_job_deterministic") as mock_match:
+        mock_match.return_value = None
         resp = client.post("/api/score", headers=auth_headers, json={
             "job_description": "A legitimate job description with enough characters to pass validation.",
             "job_title": special,
@@ -221,8 +232,8 @@ def test_special_chars_in_job_title(client, auth_headers, special):
                          ids=[f"special_{i}" for i in range(len(SPECIAL_CHAR_STRINGS))])
 def test_special_chars_in_company(client, auth_headers, special):
     """Special characters in company must not crash the API."""
-    with patch("app.match_jobs") as mock_match:
-        mock_match.return_value = []
+    with patch("app.score_single_job_deterministic") as mock_match:
+        mock_match.return_value = None
         resp = client.post("/api/score", headers=auth_headers, json={
             "job_description": "A legitimate job description with enough characters to pass validation.",
             "job_title": "Software Engineer",

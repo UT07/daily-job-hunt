@@ -126,10 +126,13 @@ def test_saved_is_false_when_no_row_was_created(monkeypatch):
         # The failure under test: the row could not be created.
         monkeypatch.setattr(app_module, "_find_or_create_job", lambda *a, **k: "")
 
-        scored = MagicMock(match_score=82, ats_score=80, hiring_manager_score=84,
-                           tech_recruiter_score=82, match_reasoning="ok",
-                           matched_resume="sre_devops")
-        monkeypatch.setattr(app_module, "match_jobs", lambda *a, **k: [scored])
+        # /api/score scores through score_single_job_deterministic since
+        # 2026-10-08 (medians, because one sample measured a 15-point spread).
+        monkeypatch.setattr(app_module, "score_single_job_deterministic",
+                            lambda *a, **k: {
+                                "match_score": 82, "ats_score": 80,
+                                "hiring_manager_score": 84,
+                                "tech_recruiter_score": 82, "reasoning": "ok"})
         monkeypatch.setattr(app_module, "_ai_client", MagicMock())
         # _resumes is loaded from config.yaml at import; empty under test,
         # and the handler 400s on an unknown resume_type before it ever

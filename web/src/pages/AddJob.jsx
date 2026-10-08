@@ -347,7 +347,10 @@ export default function AddJob() {
     }
   }, [jd, jobTitle, company, location, applyUrl, resumeType]);
 
-  const runLegacy = useCallback(async (endpoint, key) => {
+  // `extra` is merged over the form payload. Used for { force: true }, which
+  // tells /api/score to re-run the model instead of returning the score it
+  // already has on record.
+  const runLegacy = useCallback(async (endpoint, key, extra) => {
     if (!jd.trim()) return;
     setErrors([]);
     setActionLoading((prev) => ({ ...prev, [key]: true }));
@@ -356,7 +359,7 @@ export default function AddJob() {
     setProgressKey(steps[0]?.key || null);
 
     try {
-      const payload = getPayload();
+      const payload = { ...getPayload(), ...(extra || {}) };
       const data = await apiCall(endpoint, payload, {
         maxWaitMs: LEGACY_MAX_WAIT_MS[key],  // undefined → pollTask default
         onProgress: (status) => {
@@ -552,7 +555,15 @@ export default function AddJob() {
         <div className="space-y-4">
           {results.map((result, i) => {
             if (result.type === 'score') {
-              return <ScoreCard key={i} data={result.data} company={result.company} />;
+              return (
+                <ScoreCard
+                  key={i}
+                  data={result.data}
+                  company={result.company}
+                  onRescore={() => runLegacy('/api/score', 'score', { force: true })}
+                  rescoring={!!actionLoading.score}
+                />
+              );
             }
             if (result.type === 'tailor') {
               return <TailorCard key={i} data={result.data} company={result.company} />;
