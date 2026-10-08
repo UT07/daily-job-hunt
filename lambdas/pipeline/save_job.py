@@ -34,6 +34,40 @@ def _missing_column_name(exc) -> str | None:
     return m.group(1) if m else None
 
 
+# Job hashes are lowercase hex. `or=` is a filter-expression surface, so the
+# hash is validated before it is interpolated into one (same rule as
+# scripts/reconcile_resume_rows.py).
+_HASH_RE = re.compile(r"[0-9a-f]{6,64}")
+
+
+def update_job_row(db, user_id: str, job_hash: str, update: dict) -> int:
+    """UPDATE the user's row for this job; return how many rows it actually hit.
+
+    Matches `job_hash` OR `canonical_hash`. Rows created by
+    app._find_or_create_job (Add Job) carry the hash in canonical_hash with
+    job_hash NULL — jobs.job_hash has a foreign key to jobs_raw that a manually
+    added job cannot satisfy (see score_batch._write_job_row). Matching
+    job_hash alone selected ZERO rows for every such job, PostgREST answered
+    success either way, and the callers reported saved: True for a write that
+    went nowhere — the same shape reconcile_resume_rows.py was fixed for on
+    2026-10-08 (b3026c307c74: PDF in S3, resume_s3_key still NULL).
+
+    The count is read from the returned rows (supabase-py returns the updated
+    representation). Anything that is not a list of rows is counted as zero:
+    "written" must not mean "asked" (CLAUDE.md #2). A non-hex hash is not
+    interpolated into `or=`; it is matched on job_hash alone, by parameter.
+    """
+    q = db.table("jobs").update(update).eq("user_id", user_id)
+    if _HASH_RE.fullmatch(job_hash or ""):
+        q = q.or_(f"job_hash.eq.{job_hash},canonical_hash.eq.{job_hash}")
+    else:
+        logger.warning("[save_job] %r is not a hex job hash — matching job_hash only",
+                       job_hash)
+        q = q.eq("job_hash", job_hash)
+    data = getattr(q.execute(), "data", None)
+    return len(data) if isinstance(data, list) else 0
+
+
 def _compile_failure_reason(compile_result):
     """Extract a human-readable failure reason from a compile_latex error dict.
 
@@ -184,7 +218,7 @@ def handler(event, context):
         }
 
     try:
-        db.table("jobs").update(update).eq("user_id", user_id).eq("job_hash", job_hash).execute()
+        matched = update_job_row(db, user_id, job_hash, update)
     except Exception as e:
         # The cover_letter_s3_key column arrives via a migration applied BY HAND
         # — no workflow runs migrations. If this code ships first, a plain
@@ -201,13 +235,21 @@ def handler(event, context):
             "[save_job] %s: column %r is absent — writing without it. "
             "Apply the migration that adds it.", job_hash, col,
         )
-        db.table("jobs").update(update).eq("user_id", user_id).eq("job_hash", job_hash).execute()
+        matched = update_job_row(db, user_id, job_hash, update)
 
-    logger.info(f"[save_job] Updated {job_hash} with {len(update)} fields: {sorted(update)}")
+    if not matched:
+        # The PDF exists and no row points at it: the dashboard shows nothing.
+        # Reported, not raised -- the artifacts are safely in S3 and
+        # scripts/reconcile_resume_rows.py can relink them -- but never as saved.
+        logger.error("[save_job] %s: the update matched NO jobs row for user %s "
+                     "(by job_hash or canonical_hash) — nothing was saved",
+                     job_hash, user_id)
+    else:
+        logger.info(f"[save_job] Updated {job_hash} with {len(update)} fields: {sorted(update)}")
     return {
         "job_hash": job_hash,
         "user_id": user_id,
-        "saved": True,
+        "saved": bool(matched),
         "has_resume": bool(resume_pdf_key),
         "failed": bool(resume_failure_reason),
     }

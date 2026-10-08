@@ -5,6 +5,9 @@ import re
 import boto3
 
 from ai_helper import ai_complete, council_complete, get_supabase, rewrite_budget
+# Same CodeUri (lambdas/pipeline/). One implementation of "update this job's
+# row and say whether it hit one", shared with save_job.
+from save_job import update_job_row
 
 try:
     from retrieval.bullets import retrieve_evidence
@@ -1326,8 +1329,7 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         "critique_outcome": outcome,
     }
     try:
-        db.table("jobs").update(update).eq("user_id", user_id) \
-            .eq("job_hash", job_hash).execute()
+        job_row_saved = update_job_row(db, user_id, job_hash, update) > 0
     except Exception as exc:
         # PostgREST fails the WHOLE update on an unknown column, with PGRST204
         # and the wording "schema cache" — never "does not exist", which is raw
@@ -1341,8 +1343,11 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
             "supabase/migrations/20260930020000_jobs_critique_outcome.sql"
         )
         update.pop("critique_outcome")
-        db.table("jobs").update(update).eq("user_id", user_id) \
-            .eq("job_hash", job_hash).execute()
+        job_row_saved = update_job_row(db, user_id, job_hash, update) > 0
+    if not job_row_saved:
+        logger.error("[tailor] %s: the jobs update matched no row (by job_hash or "
+                     "canonical_hash); tailoring_model and critique_outcome were "
+                     "not recorded", job_hash)
 
     if outcome != "adjudicated":
         logger.warning("[tailor] %s was NOT adjudicated (outcome=%s)", job_hash, outcome)
@@ -1397,4 +1402,7 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         # Which stage produced the shipped body: "council", "single_call_retry"
         # or "corpus_fallback". The last always coincides with used_fallback.
         "shipped_from": shipped_from,
+        # Whether the jobs row was actually found and updated. A zero-row
+        # update is a success to PostgREST; it is not one here.
+        "job_row_saved": job_row_saved,
     }

@@ -22,7 +22,11 @@ def _make_supabase():
     jobs_chain = MagicMock()
     jobs_chain.update.return_value = jobs_chain
     jobs_chain.eq.return_value = jobs_chain
-    jobs_chain.execute.return_value = MagicMock()
+    jobs_chain.or_.return_value = jobs_chain
+    # A real update returns the rows it changed; save_job reads that count
+    # (2026-10-08) and reports saved False on zero. A bare MagicMock() here
+    # has no row list and would read as "matched nothing".
+    jobs_chain.execute.return_value = MagicMock(data=[{"job_id": "j-1"}])
     mock_client.table.return_value = jobs_chain
     return mock_client
 
@@ -293,8 +297,9 @@ def test_a_missing_cover_letter_key_column_does_not_lose_the_whole_row():
                 "{'message': \"Could not find the 'cover_letter_s3_key' column "
                 "of 'jobs' in the schema cache\", 'code': 'PGRST204'}"
             )
-        return MagicMock()
+        return MagicMock(data=[{"job_id": "j-1"}])
 
+    chain.or_.return_value = chain
     chain.execute.side_effect = execute
     db.table.return_value = chain
 
@@ -420,8 +425,9 @@ def test_the_verdict_column_being_absent_does_not_lose_the_resume():
             raise Exception(
                 "{'code': 'PGRST204', 'message': \"Could not find the "
                 "'resume_verdict' column of 'jobs' in the schema cache\"}")
-        return MagicMock()
+        return MagicMock(data=[{"job_id": "j-1"}])
 
+    chain.or_.return_value = chain
     chain.execute.side_effect = execute
 
     with patch("save_job.boto3", _make_boto3_mock(s3)), \
