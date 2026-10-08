@@ -112,3 +112,10 @@ AGENTS.md
 # them to scripts/assert_suite_ran.py and uploads them as build artifacts; a
 # local run of the same command should not leave them staged.
 test-results/
+
+# Real pasted job descriptions used to calibrate web/src/lib/jdExtract.js.
+# 37 JDs from the user's own search, with the companies applied to. The repo is
+# PUBLIC, so the corpus stays local: jdExtract.test.js measures against it when
+# present and pins the behaviours it taught us either way. Regenerate with
+# scripts/dump_jd_fixture.py.
+web/src/lib/__fixtures__/real_jds.json
