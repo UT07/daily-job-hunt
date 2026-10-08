@@ -43,12 +43,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 3.11, matching test.yml and the Lambda runtime, so the gate below runs
+      # the suite under the same interpreter CI verified it with.
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
       - name: Install SAM CLI
         run: pip install aws-sam-cli
+
+      # The deploy gate. This job used to run only `pytest tests/unit/
+      # tests/contract/` before `sam deploy`, and main has no branch
+      # protection — so a red lint, integration, security or quality suite, a
+      # broken web build, or a template `sam validate --lint` rejects (the
+      # 2026-09-30 E3004 cycle) could all deploy. It now runs the same script
+      # developers run, which is kept identical to test.yml.
+      # VERIFY_REQUIRE_SAM=1 makes a missing sam a failure, not a skip.
+      - name: Verify like CI (blocks the deploy)
+        env:
+          AWS_DEFAULT_REGION: eu-west-1
+          VERIFY_REQUIRE_SAM: "1"
+        run: |
+          set -euo pipefail
+          pip install -r requirements.txt -r tests/requirements-test.txt
+          (cd web && npm ci)
+          bash scripts/verify_like_ci.sh
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -59,15 +84,6 @@ jobs:
 
       - name: Login to ECR
         run: aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin 385017713886.dkr.ecr.eu-west-1.amazonaws.com
-
-      # NOTE: test.yml runs the full test suite on PRs. This gate re-runs unit
-      # and contract tests here to block deploy on main if tests are broken.
-      - name: Run unit tests before deploy
-        run: |
-          pip install -r requirements.txt -r tests/requirements-test.txt
-          pytest tests/unit/ tests/contract/ -v --tb=short -x
-        env:
-          AWS_DEFAULT_REGION: eu-west-1
 
       - name: Build shared-deps layer
         # Layer is gitignored (layer/python/) and must be built before sam build,
