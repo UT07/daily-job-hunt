@@ -111,6 +111,29 @@ def _splice_tex(preamble: str, body: str) -> str:
     return f"{preamble}\n\\begin{{document}}\n{body}\n\\end{{document}}\n"
 
 
+# Common AI LaTeX typos, repaired wherever a body becomes a document.
+_TYPO_FIXES = {
+    "\\emphergencystretch": "\\emergencystretch",
+    "\\emergecystretch": "\\emergencystretch",
+    "\\emergenystretch": "\\emergencystretch",
+}
+
+
+def _assemble(preamble: str, body: str) -> str:
+    """The ONE way a generated body becomes the document that is judged and shipped.
+
+    Splice, repair the known typos, escape the body's specials. Every attempt —
+    the council's, the corrective retry, the quality retry, the composition
+    repair — goes through here, so the text `_validation_errors` judges is the
+    text that would be written to S3, whichever attempt produced it. The typo
+    fixes used to run on the council's body only.
+    """
+    tex = _splice_tex(preamble, body)
+    for typo, fix in _TYPO_FIXES.items():
+        tex = tex.replace(typo, fix)
+    return escape_body_specials(tex)
+
+
 def _count_macro_args(tex: str, start: int) -> int:
     """Count consecutive balanced {...} groups starting at `start`."""
     i = start
@@ -325,7 +348,7 @@ def _recover_past_validation(validation_errors, job_hash, user_prompt, system_pr
     if "\\begin{document}" in fix_body:
         _, fix_body = _split_tex(fix_body)
     fix_body = fix_body.removesuffix("\\end{document}").strip()
-    fix_tex = escape_body_specials(_splice_tex(base_preamble, fix_body))
+    fix_tex = _assemble(base_preamble, fix_body)
 
     still = _validation_errors(fix_tex, fix_body, header_markers)
     # Checked explicitly: a body cut off at max_tokens can lose a section
@@ -360,15 +383,32 @@ def _quality_warnings(body: str, base_body: str, fabrication_baseline) -> list[s
     return warnings
 
 
+# Severity lives in guardrails.output_guards.check_output: of the writing
+# rubric's members, fabrication is the only one raised at "block" for the tailor
+# task. Its findings are prefixed with exactly this (asserted in tests against
+# the real detector, so a reworded message fails CI instead of disarming this).
+_BLOCKING_PREFIX = "fabrication:"
+
+
+def _blocking_findings(warnings) -> list[str]:
+    """The members of a `_quality_warnings` list whose severity is `block`."""
+    return [w for w in (warnings or []) if w.startswith(_BLOCKING_PREFIX)]
+
+
 def _enforce_composition(
     *,
     ai_body: str,
+    quality: list[str] | None,
     policy: dict | None,
     user_prompt: str,
     system_prompt: str,
     max_tokens: int,
     job_hash: str,
-) -> str:
+    base_preamble: str,
+    base_body: str,
+    header_markers,
+    fabrication_baseline,
+) -> tuple[str, list[str] | None]:
     r"""Count the composition rules in the generated body; repair once if broken.
 
     This is the half that was missing. `_validate_macro_arities` checks that
@@ -376,19 +416,27 @@ def _enforce_composition(
     `\jobentry` calls the model emitted, so "EXACTLY 3 PROJECTS" was a request
     the model could decline in silence.
 
-    Returns the body to ship: the repaired one if the repair landed, otherwise
-    the original. A repair is accepted ONLY when it is structurally intact AND
-    fully compliant. Swapping in a body that still breaks the rules would cost
-    the quality-retry work already done on the original for no compliance gain,
-    and a body that complied by being truncated is not a repair at all — the
-    same "structure before style" rule the quality retry applies.
+    Returns `(body, quality)`: the repaired body and ITS writing measurement if
+    the repair landed, otherwise exactly what it was given. Returning the
+    measurement with the body is what keeps the reported warnings describing
+    the document that ships; they used to be measured before this swap.
+
+    A repair is accepted ONLY when it clears every hard gate the body it
+    replaces cleared (`_validation_errors` on the assembled document — braces,
+    arity, sections, header markers, prompt echo, near-empty), is fully
+    compliant, and adds no block-severity writing finding (fabrication). Until
+    2026-10-08 it was checked for braces, arity and sections only, so a repair
+    narrating "Let's start by…" or claiming a tool the corpus never mentions
+    replaced a clean body. Style findings do not reject a repair — composition
+    is a blocking check in shared.resume_verdict and writing style is not — but
+    they are measured and reported.
 
     The caller re-counts whatever ends up being shipped, so the returned body
     is never assumed compliant.
     """
     violations = _check_composition(ai_body, policy)
     if not violations:
-        return ai_body
+        return ai_body, quality
 
     logger.warning(
         "[tailor] composition rules broken for %s (%s) — repairing once",
@@ -404,7 +452,7 @@ def _enforce_composition(
             "[tailor] composition repair call failed for %s (%s); shipping a "
             "document that breaks: %s", job_hash, exc, "; ".join(violations),
         )
-        return ai_body
+        return ai_body, quality
 
     repaired = (repair.get("content") or "").strip()
     if "\\begin{document}" in repaired:
@@ -412,30 +460,33 @@ def _enforce_composition(
     repaired = repaired.removesuffix("\\end{document}").strip()
 
     rejected = ""
+    repaired_quality: list[str] | None = None
     if repair.get("truncated"):
         rejected = "cut off at max_tokens"
     elif not repaired:
         rejected = "empty body"
-    elif not _check_brace_balance(repaired):
-        rejected = "brace imbalance"
-    elif arity_issues := _validate_macro_arities(repaired):
-        rejected = f"arity: {'; '.join(arity_issues[:3])}"
-    elif missing := _check_required_sections(repaired):
-        rejected = f"missing sections {missing}"
+    elif invalid := _validation_errors(
+            _assemble(base_preamble, repaired), repaired, header_markers):
+        rejected = "; ".join(invalid[:3])
     elif remaining := _check_composition(repaired, policy):
         rejected = f"still breaks {'; '.join(remaining)}"
+    else:
+        repaired_quality = _quality_warnings(repaired, base_body, fabrication_baseline)
+        added = len(_blocking_findings(repaired_quality)) - len(_blocking_findings(quality))
+        if added > 0:
+            rejected = "; ".join(_blocking_findings(repaired_quality)[:3])
 
     if rejected:
         logger.error(
             "[tailor] composition repair did not land for %s (%s); shipping a "
             "document that breaks: %s", job_hash, rejected, "; ".join(violations),
         )
-        return ai_body
+        return ai_body, quality
 
     logger.info(
         "[tailor] composition repair fixed %s (was: %s)", job_hash, "; ".join(violations),
     )
-    return repaired
+    return repaired, repaired_quality
 
 
 # ---------------------------------------------------------------------------
@@ -913,28 +964,14 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         logger.error(f"[tailor] AI returned empty body for job {job_hash}")
         raise TailorError(f"AI returned empty body for {job_hash}")
 
-    # Splice: base preamble (known-good) + AI body + \end{document}
-    tailored_tex = _splice_tex(base_preamble, ai_body)
-
-    # Fix common AI LaTeX typos and unescaped special characters
-    _TYPO_FIXES = {
-        "\\emphergencystretch": "\\emergencystretch",
-        "\\emergecystretch": "\\emergencystretch",
-        "\\emergenystretch": "\\emergencystretch",
-    }
-    for typo, fix in _TYPO_FIXES.items():
-        if typo in tailored_tex:
-            tailored_tex = tailored_tex.replace(typo, fix)
-
-    # Escape unescaped special characters in the BODY only (not preamble).
-    # The preamble uses #1, #2 etc as macro parameters — escaping those breaks everything.
-    # (`re` is the module imported at the top of this file -- a redundant
-    # local `import re` used to live on this line. Harmless on its own, but
-    # it makes `re` a local name for the ENTIRE function body per Python's
-    # scoping rules, which broke as soon as this function gained an earlier
-    # module-level `re.search` call above -- see the base_skills_text block
-    # near the top of this function. Removed rather than worked around.)
-    tailored_tex = escape_body_specials(tailored_tex)
+    # Splice: base preamble (known-good) + AI body + \end{document}, with the
+    # typo fixes and BODY-only escaping (the preamble uses #1, #2 as macro
+    # parameters — escaping those breaks everything). `_assemble` is shared
+    # with every retry so all attempts are judged as the document they would
+    # ship as. (`re` is the module imported at the top of this file -- a
+    # redundant local `import re` used to live here; it made `re` a local name
+    # for the ENTIRE function body and broke the earlier `re.search` above.)
+    tailored_tex = _assemble(base_preamble, ai_body)
 
     # REMOVED here: a `word_count < 500` fallback that sat on this line and
     # swapped `tailored_tex = base_tex` WITHOUT appending to the
@@ -1045,18 +1082,25 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
                 retry_body = retry_body.removesuffix("\\end{document}").strip()
                 # Structure before style. "Fewer warnings" is not an
                 # improvement if the retry got there by dropping half the
-                # document: a shorter body trivially contains fewer banned
-                # phrases, so an incomplete retry scores BETTER on the count
-                # below than the complete body it would replace. The hard
-                # gates above already ran on `ai_body`; nothing re-ran them on
-                # `retry_body`, so this is where a truncated retry used to be
-                # able to overwrite a valid tailored resume.
-                retry_missing = _check_required_sections(retry_body)
-                if retry_dict.get("truncated") or retry_missing:
+                # document, or by narrating its plan into it: a shorter body
+                # trivially contains fewer banned phrases, and so does one that
+                # opens "Let's start by reordering the skills". The retry must
+                # clear EVERY hard gate that judged the body it would replace —
+                # the same `_validation_errors` builder, on the document as it
+                # would ship (CLAUDE.md #14). Until 2026-10-08 only sections and
+                # truncation were re-checked here, so a prompt echo, a missing
+                # header or unbalanced braces could replace a valid body and
+                # ship with used_fallback False. Truncation is checked on top:
+                # a body cut off at max_tokens can lose content without
+                # tripping any other gate.
+                retry_tex = _assemble(base_preamble, retry_body)
+                retry_invalid = _validation_errors(retry_tex, retry_body, header_markers)
+                if retry_dict.get("truncated"):
+                    retry_invalid = ["cut off at max_tokens", *retry_invalid]
+                if retry_invalid:
                     logger.warning(
                         f"[tailor] Discarding quality retry for {job_hash}: "
-                        + ("cut off at max_tokens" if retry_dict.get("truncated")
-                           else f"missing sections {retry_missing}")
+                        + "; ".join(retry_invalid[:3])
                     )
                     raise _RetryRejected
                 # Re-check quality. The two sides of this comparison MUST count
@@ -1079,8 +1123,7 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
                     ai_body = retry_body
                     shipped_quality = retry_quality
                     response_dict = retry_dict
-                    tailored_tex = _splice_tex(base_preamble, ai_body)
-                    tailored_tex = escape_body_specials(tailored_tex)
+                    tailored_tex = retry_tex
                 else:
                     logger.info("[tailor] Retry did not improve quality, keeping original")
             except _RetryRejected:
@@ -1095,17 +1138,25 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
     # failed hard gate) already chose the corpus, and re-splicing a repaired
     # body over that deliberate fallback would undo it.
     if tailored_tex is not base_tex:
-        repaired_body = _enforce_composition(
+        repaired_body, repaired_quality = _enforce_composition(
             ai_body=ai_body,
+            quality=shipped_quality,
             policy=composition_policy,
             user_prompt=user_prompt,
             system_prompt=system_prompt,
             max_tokens=tailor_max_tokens,
             job_hash=job_hash,
+            base_preamble=base_preamble,
+            base_body=base_body,
+            header_markers=header_markers,
+            fabrication_baseline=fabrication_baseline,
         )
         if repaired_body != ai_body:
             ai_body = repaired_body
-            tailored_tex = escape_body_specials(_splice_tex(base_preamble, ai_body))
+            # The repair's own measurement, so the reported warnings describe
+            # the body that ships rather than the one it replaced.
+            shipped_quality = repaired_quality
+            tailored_tex = _assemble(base_preamble, ai_body)
 
     # Count the document that is ACTUALLY being shipped, whichever branch
     # produced it. An empty list on the return value is therefore a claim that
