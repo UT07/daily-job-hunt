@@ -192,6 +192,9 @@ def main() -> int:
                     help="skip tailoring; just recompile the existing .tex. No AI "
                          "calls, and it is what fixes a PDF that is older than "
                          "its own source")
+    ap.add_argument("--only-hashes", default=None, metavar="FILE",
+                    help="re-tailor only the job_hashes listed in FILE "
+                         "(whitespace-separated). Unmatched hashes are reported.")
     ap.add_argument("--no-reconcile", action="store_true",
                     help="skip the row update (the PDFs will exist but the "
                          "dashboard cannot link them)")
@@ -208,6 +211,19 @@ def main() -> int:
     tiers = [t.strip().upper() for t in args.tier.split(",") if t.strip()]
 
     jobs = select_jobs(url, headers, user_id, tiers, args.max_jobs)
+    if args.only_hashes:
+        wanted = {h.strip() for h in Path(args.only_hashes).read_text().split() if h.strip()}
+        before = len(jobs)
+        jobs = [j for j in jobs if j.get("job_hash") in wanted]
+        # Reported, never silent: a hash in the file that matched no job is a
+        # job this run will NOT touch, and a caller who asked for 134 and got
+        # 97 needs to know which 37 are missing rather than reading a success.
+        unmatched = wanted - {j.get("job_hash") for j in jobs}
+        print(f"--only-hashes: {len(jobs)} of {before} job(s) selected from "
+              f"{len(wanted)} hash(es)")
+        if unmatched:
+            print(f"  {len(unmatched)} hash(es) matched NO job in tier(s) "
+                  f"{','.join(tiers)}: {', '.join(sorted(h[:12] for h in unmatched)[:8])}")
     if args.missing_only:
         before = len(jobs)
         jobs = [j for j in jobs if not (j.get("resume_s3_url") or "").strip()]
