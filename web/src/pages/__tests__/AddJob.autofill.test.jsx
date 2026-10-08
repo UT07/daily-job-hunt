@@ -21,10 +21,14 @@ const { apiCall, pollPipeline } = vi.hoisted(() => ({
   apiCall: vi.fn(), pollPipeline: vi.fn(),
 }));
 vi.mock('../../api', () => ({ apiCall, pollPipeline }));
+vi.mock('../../auth/useAuth', () => ({
+  useAuth: () => ({ user: { id: 'u1', email: 'a@b.com' }, loading: false }),
+}));
 
 import AddJob from '../AddJob';
 
-const STORAGE_KEY = 'naukribaba_addjob_draft';
+// Drafts are keyed per user (lib/userStorage.addJobDraftKey).
+const STORAGE_KEY = 'naukribaba_addjob_draft:u1';
 const JD = 'About Grinds360\n\nGrinds360 is an education platform hiring engineers to '
          + 'scale our Kubernetes estate and own reliability end to end.';
 

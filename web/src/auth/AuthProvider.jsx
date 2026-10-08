@@ -1,7 +1,7 @@
 import { createContext, useEffect, useMemo, useState } from 'react'
 import { supabase } from '../lib/supabase'
 import { identifyUser, resetUser } from '../lib/posthog'
-import { clearUserScopedStorage } from '../lib/userStorage'
+import { clearConsentStorage } from '../lib/userStorage'
 
 export const AuthContext = createContext({
   user: null,
@@ -86,8 +86,10 @@ export default function AuthProvider({ children }) {
         if (event === 'SIGNED_OUT') {
           resetUser()
           // Sign-outs that bypass useAuth().signOut -- an expired session
-          // cleared by api.js on a 401, or a sign-out in another tab.
-          clearUserScopedStorage()
+          // cleared by api.js on a 401, or a sign-out in another tab. Consent
+          // flags only: the Add Job draft is user-keyed and must survive an
+          // expiry so re-login restores the pasted JD.
+          clearConsentStorage()
         } else {
           identifyUser(newSession?.user)
         }

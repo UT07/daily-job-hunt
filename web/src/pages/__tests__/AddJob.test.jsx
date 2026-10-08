@@ -19,10 +19,14 @@ const { apiCall, pollPipeline, apiGet } = vi.hoisted(() => ({
   apiGet: vi.fn(),
 }));
 vi.mock('../../api', () => ({ apiCall, pollPipeline, apiGet }));
+vi.mock('../../auth/useAuth', () => ({
+  useAuth: () => ({ user: { id: 'u1', email: 'a@b.com' }, loading: false }),
+}));
 
 import AddJob from '../AddJob';
 
-const STORAGE_KEY = 'naukribaba_addjob_draft';
+// Drafts are keyed per user (lib/userStorage.addJobDraftKey).
+const STORAGE_KEY = 'naukribaba_addjob_draft:u1';
 const JD = 'We are hiring a Site Reliability Engineer to own our Kubernetes platform.';
 
 describe('AddJob draft persistence', () => {
