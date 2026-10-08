@@ -395,6 +395,15 @@ def _blocking_findings(warnings) -> list[str]:
     return [w for w in (warnings or []) if w.startswith(_BLOCKING_PREFIX)]
 
 
+def _rank(warnings) -> tuple[int, int]:
+    """Order two `_quality_warnings` lists: blocking findings first, then all.
+
+    Lower is better. One function for both sides of the quality retry's
+    comparison, so neither side can weigh a check the other does not.
+    """
+    return len(_blocking_findings(warnings)), len(warnings or [])
+
+
 def _enforce_composition(
     *,
     ai_body: str,
@@ -1048,13 +1057,12 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
 
     shipped_quality: list[str] | None = None
 
-    if validation_errors:
-        logger.warning(
-            f"[tailor] validation failed for {job_hash}: {'; '.join(validation_errors)} "
-            f"— falling back to base resume"
-        )
-        tailored_tex = base_tex
-    else:
+    # Everything below runs only on a body that cleared the hard gates, and
+    # each stage may ADD to `validation_errors`. The corpus swap happens in
+    # exactly one place afterwards — the `if validation_errors:` branch — so
+    # every reason a generated body is refused reaches `used_fallback` and the
+    # summary line (tests/unit/test_tailor_fallback_is_recorded.py pins that).
+    if not validation_errors:
         # Quality validation — writing quality, not just structure
         quality_warnings = _quality_warnings(ai_body, base_body, fabrication_baseline)
         shipped_quality = quality_warnings
@@ -1118,7 +1126,13 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
                 # reject.
                 retry_quality = _quality_warnings(
                     retry_body, base_body, fabrication_baseline)
-                if len(retry_quality) < len(quality_warnings):
+                # Ranked, not merely counted: a block-severity finding
+                # (fabrication) outweighs any number of style findings, so a
+                # retry that drops a fabricated skill is an improvement even if
+                # it picks up a banned phrase, and one that keeps it is not
+                # rescued by losing two. Both sides go through `_rank` over the
+                # same builder's output.
+                if _rank(retry_quality) < _rank(quality_warnings):
                     logger.info(f"[tailor] Retry improved quality: {len(quality_warnings)} -> {len(retry_quality)} warnings")
                     ai_body = retry_body
                     shipped_quality = retry_quality
@@ -1131,13 +1145,10 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
             except RuntimeError:
                 logger.warning("[tailor] Quality retry failed, keeping original")
 
-    # Composition enforcement — the rules above are COUNTED, not just asked
-    # for. Runs last so it has the final word on whichever body the quality
-    # retry settled on, and only when a generated document is what ships:
-    # `tailored_tex is base_tex` means an earlier fallback (short body, or a
-    # failed hard gate) already chose the corpus, and re-splicing a repaired
-    # body over that deliberate fallback would undo it.
-    if tailored_tex is not base_tex:
+        # Composition enforcement — the rules above are COUNTED, not just
+        # asked for. Runs after the quality retry so it has the final word on
+        # whichever body that settled on. Inside this block, so it never runs
+        # on a body the hard gates already refused.
         repaired_body, repaired_quality = _enforce_composition(
             ai_body=ai_body,
             quality=shipped_quality,
@@ -1157,6 +1168,39 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
             # the body that ships rather than the one it replaced.
             shipped_quality = repaired_quality
             tailored_tex = _assemble(base_preamble, ai_body)
+
+        # FABRICATION BLOCKS. A claimed technology the candidate's resume rows
+        # never mention is the one finding output_guards raises at "block"
+        # for this task, and CLAUDE.md #13 says a block must stop the
+        # document. Until 2026-10-08 nothing did: the council finalizes
+        # best-effort once its repair budget is spent (41% of runs in the
+        # 2026-10-07 batch), and this handler only REPORTED the finding in
+        # `quality_warnings`, which shared.resume_verdict grades as a
+        # non-blocking style note. So a résumé claiming Kotlin shipped as a
+        # warn-grade tailor.
+        #
+        # By here the finding has had every repair this pipeline offers: two
+        # council rounds (the guard folds it into the repair prompt verbatim)
+        # and the quality retry above, which is told "FIX: fabrication: ..."
+        # and now prefers any retry that drops it. What survives all of that
+        # is refused: the reasons join `validation_errors`, the corpus — every
+        # claim in it is the candidate's own — is composed and shipped below,
+        # and `used_fallback` and the summary line say why.
+        #
+        # Same detector, same union baseline as the council's guard
+        # (`_check_fabrication` via `_quality_warnings`); nothing here widens
+        # what counts as a fabrication (CLAUDE.md #16).
+        validation_errors = _blocking_findings(shipped_quality)
+
+    if validation_errors:
+        logger.warning(
+            f"[tailor] validation failed for {job_hash}: {'; '.join(validation_errors)} "
+            f"— falling back to base resume"
+        )
+        tailored_tex = base_tex
+        # Nothing was measured on the corpus: `None`, which the verdict grades
+        # `unmeasured`, never the refused body's findings.
+        shipped_quality = None
 
     # Count the document that is ACTUALLY being shipped, whichever branch
     # produced it. An empty list on the return value is therefore a claim that
