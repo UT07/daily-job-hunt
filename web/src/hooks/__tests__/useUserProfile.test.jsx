@@ -116,3 +116,57 @@ describe('useUserProfile', () => {
     await expect(result.current.refetch()).resolves.toBeUndefined()
   })
 })
+
+// ---------------------------------------------------------------------------
+// A failed fetch is not an absent profile
+// ---------------------------------------------------------------------------
+// Both left `profile = null`, and AppLayout's gate reads only
+// `profile?.onboarding_completed_at`. So any 500, 502 or cold-start timeout on
+// /api/profile sent a fully onboarded user through the wizard — silently, with
+// their real profile intact on the server.
+//
+// The same bug was fixed for the AUTH race on 2026-05-06 ("completed users
+// were being bounced through the wizard"); the comment recording that fix sits
+// directly above the `catch` that still had it.
+
+describe('useUserProfile — a failed fetch is distinguishable', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    useAuth.mockReturnValue({ user: { id: 'u1', email: 'a@b.com' }, loading: false })
+  })
+
+  it('exposes an error when /api/profile fails', async () => {
+    apiGet.mockRejectedValueOnce(new Error('HTTP 503'))
+
+    const { result } = renderHook(() => useUserProfile(), { wrapper })
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    expect(result.current.error).toBeTruthy()
+    expect(result.current.profile).toBeNull()
+  })
+
+  it('reports no error for a signed-out user with no profile', async () => {
+    // The other way `profile` is null, and it must NOT look like a failure —
+    // otherwise the retry screen replaces the login redirect.
+    useAuth.mockReturnValue({ user: null, loading: false })
+
+    const { result } = renderHook(() => useUserProfile(), { wrapper })
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+
+    expect(result.current.profile).toBeNull()
+    expect(result.current.error).toBeFalsy()
+  })
+
+  it('clears the error once a retry succeeds', async () => {
+    apiGet.mockRejectedValueOnce(new Error('HTTP 503'))
+    const { result } = renderHook(() => useUserProfile(), { wrapper })
+    await waitFor(() => expect(result.current.error).toBeTruthy())
+
+    apiGet.mockResolvedValueOnce({ id: 'u1', full_name: 'Utkarsh',
+                                   onboarding_completed_at: '2026-04-13' })
+    await result.current.refetch()
+
+    await waitFor(() => expect(result.current.error).toBeFalsy())
+    expect(result.current.profile.full_name).toBe('Utkarsh')
+  })
+})

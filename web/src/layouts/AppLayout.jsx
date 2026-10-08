@@ -4,11 +4,13 @@ import { useUserProfile } from '../hooks/useUserProfile';
 import Sidebar from '../components/layout/Sidebar';
 import MobileNav from '../components/layout/MobileNav';
 import ConsentBanner from '../components/ConsentBanner';
+import Button from '../components/ui/Button';
 import FinishSetupBanner from '../components/FinishSetupBanner';
 
 export default function AppLayout() {
   const { user, loading } = useAuth();
-  const { profile, isLoading: profileLoading } = useUserProfile();
+  const { profile, isLoading: profileLoading, error: profileError,
+          refetch: refetchProfile } = useUserProfile();
 
   if (loading || (user && profileLoading)) {
     return (
@@ -28,6 +30,29 @@ export default function AppLayout() {
   // Replaces the old 3-field heuristic (full_name && phone && location) which
   // drifted from the backend's 9-field check.
   const profileComplete = !!profile?.profile_complete;
+
+  // A FAILED PROFILE FETCH IS NOT A NEW USER. `profile` is null for both, and
+  // this gate read only `onboardingDone` — so any 500, 502 or cold-start
+  // timeout on /api/profile sent a fully onboarded user through the wizard,
+  // silently, with their real profile intact on the server. The same bug was
+  // fixed for the AUTH race on 2026-05-06 (see useUserProfile.jsx); this is
+  // its sibling cause.
+  if (profileError) {
+    return (
+      <div className="min-h-screen bg-cream flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white border-2 border-black shadow-brutal p-8 text-center">
+          <h2 className="text-lg font-heading font-bold text-black mb-3">
+            Could not load your profile
+          </h2>
+          <p className="text-sm text-stone-500 mb-6">
+            Your account is fine — we just could not reach the server. Nothing
+            has been lost.
+          </p>
+          <Button variant="primary" onClick={refetchProfile}>Try again</Button>
+        </div>
+      </div>
+    );
+  }
 
   // First-time user: redirect to onboarding
   if (!onboardingDone) {

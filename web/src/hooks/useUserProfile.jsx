@@ -9,6 +9,7 @@ const ProfileContext = createContext({ profile: null, isLoading: true, refetch: 
 export function ProfileProvider({ children }) {
   const { user, loading: authLoading } = useAuth()
   const [profile, setProfile] = useState(null)
+  const [error, setError] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
 
   // Stable identity so consumers depending on `refetch` in effect deps
@@ -32,8 +33,21 @@ export function ProfileProvider({ children }) {
     try {
       const data = await apiGet('/api/profile')
       setProfile(data)
-    } catch {
+      setError(null)
+    } catch (err) {
+      // A FAILED FETCH IS NOT AN ABSENT PROFILE. Collapsing both to
+      // `profile = null` makes any 500, 502 or cold-start timeout
+      // indistinguishable from "new user", and AppLayout's gate reads only
+      // `profile?.onboarding_completed_at` — so a fully onboarded user is
+      // redirected through the wizard, silently, with their real profile
+      // intact on the server.
+      //
+      // The comment above records this exact bug being fixed for the AUTH
+      // race on 2026-05-06 ("completed users were being bounced through the
+      // wizard"). Its sibling cause was left in place. CLAUDE.md #10 — the
+      // fix existed and never met the other half of the problem.
       setProfile(null)
+      setError(err)
     } finally {
       setIsLoading(false)
     }
@@ -48,8 +62,8 @@ export function ProfileProvider({ children }) {
   // whenever ProfileProvider did — and any consumer listing `refetch` or the
   // context object in an effect dep array re-ran with it.
   const value = useMemo(
-    () => ({ profile, isLoading, refetch: fetchProfile }),
-    [profile, isLoading, fetchProfile],
+    () => ({ profile, isLoading, error, refetch: fetchProfile }),
+    [profile, isLoading, error, fetchProfile],
   )
 
   return (
