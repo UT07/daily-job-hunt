@@ -48,6 +48,10 @@ def app_mod(monkeypatch):
             getattr(chain, m).return_value = chain
         chain.maybe_single.return_value = chain
         chain.execute.return_value = MagicMock(data=None)   # nothing exists yet
+        # INSERT answers with the row it wrote (returning=representation); an
+        # insert answering data=None is one that wrote nothing.
+        chain.insert.side_effect = lambda row: MagicMock(
+            execute=MagicMock(return_value=MagicMock(data=[row])))
         monkeypatch.setattr(app_module, "_db", db)
         yield app_module, chain
 

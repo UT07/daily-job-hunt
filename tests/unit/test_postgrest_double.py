@@ -82,6 +82,14 @@ def test_pages_cap_at_1000_and_range_is_inclusive():
     assert len(db.table("jobs").select("*").range(0, 0).execute().data) == 1
 
 
+def test_injected_failures_raise_for_that_statement_only():
+    db = _two_users_one_job()
+    db.fail_on[("jobs", "insert")] = RuntimeError("PGRST204")
+    with pytest.raises(RuntimeError):
+        db.table("jobs").insert({"job_id": "z", "user_id": "u"}).execute()
+    assert len(db.table("jobs").select("*").execute().data) == 2  # reads unaffected
+
+
 def test_unknown_methods_raise_rather_than_mock():
     db = _two_users_one_job()
     with pytest.raises(AttributeError):

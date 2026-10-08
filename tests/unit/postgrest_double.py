@@ -127,6 +127,9 @@ class Query:
     def execute(self):
         rows = self._db.tables.setdefault(self._table, [])
         self._db.log.append((self._table, self._op, len(self._filters)))
+        injected = self._db.fail_on.get((self._table, self._op))
+        if injected is not None:
+            raise injected
 
         if self._op == "insert":
             new = self._payload if isinstance(self._payload, list) else [self._payload]
@@ -178,6 +181,9 @@ class FakeSupabase:
     def __init__(self, tables: dict | None = None):
         self.tables = {k: [dict(r) for r in v] for k, v in (tables or {}).items()}
         self.log: list = []
+        # {(table, op): exception} -- a statement PostgREST rejects for a
+        # reason this double does not model (a missing column, RLS, a timeout).
+        self.fail_on: dict = {}
         self.client = self
 
     def table(self, name):

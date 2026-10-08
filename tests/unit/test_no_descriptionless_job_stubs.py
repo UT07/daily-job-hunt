@@ -37,6 +37,12 @@ def _db_with_no_existing_job():
     for m in ("select", "eq", "maybe_single", "update", "insert"):
         getattr(chain, m).return_value = chain
     chain.execute.return_value = MagicMock(data=None)
+    # An INSERT answers with the row it wrote, as supabase-py's default
+    # returning=representation does. Answering data=None here would model an
+    # insert that wrote nothing, and _find_or_create_job now (correctly)
+    # refuses to report a job_id for that.
+    chain.insert.side_effect = lambda row: MagicMock(
+        execute=MagicMock(return_value=MagicMock(data=[row])))
     db.client.table.return_value = chain
     return db, chain
 

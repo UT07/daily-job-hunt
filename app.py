@@ -648,7 +648,7 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
                 "location": req.location,
                 "apply_url": req.apply_url,
             })
-            _db.client.table("jobs").update({
+            written = _db.client.table("jobs").update({
                 "match_score": j.match_score,
                 "ats_score": j.ats_score,
                 "hiring_manager_score": j.hiring_manager_score,
@@ -656,13 +656,15 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
                 "match_reasoning": j.match_reasoning,
                 "matched_resume": j.matched_resume or req.resume_type,
                 "score_tier": _score_tier(j.match_score),
-            }).eq("job_id", job_id).eq("user_id", user.id).execute()
-            # saved must mean SAVED. It was set unconditionally, so when
-            # `_find_or_create_job` returned "" the UPDATE ran as `job_id=eq.`,
-            # matched nothing, raised nothing, and this reported success for a
-            # job that does not exist. CLAUDE.md #2: a status that cannot
-            # distinguish "did the work" from "did nothing" is a lie.
-            saved = bool(job_id)
+            }).eq("job_id", job_id).eq("user_id", user.id).execute() if job_id else None
+            # saved must mean SAVED: the UPDATE returned the row it wrote.
+            # `bool(job_id)` was not enough -- an UPDATE that matches nothing
+            # raises nothing and returns an empty list, so a job_id for a row
+            # that does not exist still read as success. CLAUDE.md #2: a status
+            # that cannot distinguish "did the work" from "did nothing" is a lie.
+            saved = bool(getattr(written, "data", None))
+            if not saved:
+                job_id = None
             if not job_id:
                 logger.error(
                     "Scored %s/%s but no row was created — the dashboard will "
@@ -1070,11 +1072,30 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
         "application_status": "New",
         "first_seen": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
+    # The id is returned only when a row is known to exist. This used to log a
+    # failed INSERT and return chash anyway, so /api/score's follow-up UPDATE
+    # matched zero rows, PostgREST answered 200 with an empty list, and the
+    # endpoint reported saved=True for a job that was never written.
     try:
-        _db.client.table("jobs").insert(row).execute()
+        inserted = _db.client.table("jobs").insert(row).execute()
+        if getattr(inserted, "data", None):
+            return chash
+        logger.error("Job insert for %s/%s returned no row", company, title)
     except Exception as e:
-        logger.warning("Job creation failed: %s", e)
-    return chash
+        logger.error("Job creation failed for %s/%s: %s", company, title, e)
+    # A failed INSERT can still mean the row exists: an identical request won
+    # the race and the primary key collided. Look, rather than guess.
+    try:
+        again = (
+            _db.client.table("jobs").select("job_id")
+            .eq("job_id", chash).eq("user_id", user_id)
+            .maybe_single().execute()
+        )
+        if again and getattr(again, "data", None):
+            return chash
+    except Exception as e:  # noqa: BLE001 — falls through to "not created"
+        logger.warning("Re-check after failed insert failed: %s", e)
+    return ""
 
 
 def _update_job_artifacts(user_id: str, job_id: str, updates: dict):
