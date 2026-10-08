@@ -217,10 +217,31 @@ def artifact_completeness():
     from datetime import datetime, timedelta, timezone
     db = _db()
     cut = (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
+    # A job scored MINUTES ago cannot have a resume: tailoring runs
+    # asynchronously through Step Functions and takes 60-90s on a warm Lambda,
+    # several minutes cold. Measured 2026-10-08: a job scored A at 00:09:56
+    # failed the 00:36 deploy, and the whole gate went red over one manual Add
+    # Job — which is the dangerous shape, because a genuinely broken deploy
+    # then looks identical to it.
+    #
+    # The same reasoning is already applied two blocks below for rows with no
+    # description ("would fail this check on every deploy, forever, with no
+    # action that could clear it"); it was simply never applied to recency.
+    # Two hours is generous against a 90s job and still catches a pipeline that
+    # stopped producing.
+    settled = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
     rows = (db.table("jobs")
             .select("job_id,score_tier,resume_s3_url,is_expired,first_seen,description")
             .in_("score_tier", ["S", "A"]).eq("is_expired", False)
-            .gte("first_seen", cut).limit(500).execute().data)
+            .gte("first_seen", cut)
+        .lte("first_seen", settled)
+        .order("first_seen")
+        .limit(500).execute().data)
+    # The cap was silent: at 500+ rows this judged an arbitrary unordered
+    # subset and still reported a percentage. Ordered now, and the cap is
+    # stated rather than assumed — a check that quietly narrows its own
+    # population is the same lie as one that cannot fail.
+    capped = len(rows) >= 500
 
     # A job with no description cannot be tailored — there is nothing to tailor
     # AGAINST — so it can never acquire a resume and would fail this check on
@@ -246,7 +267,82 @@ def artifact_completeness():
         f"{', '.join(str(r.get('job_id'))[:12] for r in missing[:6])}"
     )
     note = f" ({stubs} descriptionless stub(s) excluded)" if stubs else ""
+    # Every exclusion is stated, including the ones that made this pass. A
+    # check that narrows its own population silently reports a percentage of
+    # something nobody chose.
+    note += " [page cap of 500 reached — this judged a SUBSET]" if capped else ""
+    note += " (jobs newer than 2h excluded: tailoring is async)"
     return f"{len(tailorable)} tailorable active S/A jobs, all have a resume{note}"
+
+
+@check("resumes-are-distinct", "the same document shipped to every employer")
+def resumes_are_distinct():
+    """Tailored resumes must differ from each other.
+
+    Measured 2026-10-08, and this is why the check exists: of 273 live S/A
+    resumes there were only 140 distinct documents, with ONE group of 134
+    byte-identical files. Stripe, Klaviyo, Camunda, Arista, Twilio, Intercom
+    and Meta were all handed the same resume.
+
+    Every other signal called that corpus healthy — the key resolved, the
+    object existed, composition was 273/273 clean, the pages fit, the ATS
+    extraction passed. The cause was that 45% of tailoring runs failed the hard
+    gates (71 of 95 on `prompt echo`) and fell back to the composed corpus,
+    which is one document. CLAUDE.md #2: nothing could tell "tailored for this
+    job" from "shipped the same file 134 times".
+
+    Done on ETags from a single listing — S3 ETag is the MD5 for
+    single-part uploads, and it agreed exactly with sha256 over the downloaded
+    bodies (140 distinct, largest group 134). One call, 1.2s for 273 objects,
+    no downloads, so this is cheap enough to run on every deploy.
+
+    The bar is a RATIO rather than a count because the population grows: some
+    duplication is legitimate (the same role posted twice tailors the same way),
+    and a fixed count would either nag on a small corpus or miss a large one.
+    20% is deliberately loose — the observed failure was 49%, and a bar set just
+    under a known-bad reading is a bar nobody trusts.
+    """
+    import os as _os
+    from collections import Counter
+    import boto3 as _boto3
+
+    db = _db()
+    # user_id comes off the row, like tex-key-resolves does, rather than
+    # assuming a single user — the same listing works per prefix.
+    rows = (db.table("jobs").select("job_hash,user_id")
+            .in_("score_tier", ["S", "A"])
+            .eq("is_expired", False).limit(2000).execute().data)
+    want = {f"users/{r['user_id']}/resumes/{r['job_hash']}_tailored.tex"
+            for r in rows if r.get("job_hash") and r.get("user_id")}
+    if len(want) < 20:
+        return f"only {len(want)} live S/A resume(s); too few to judge"
+
+    s3 = _boto3.client("s3", region_name=_os.environ.get("AWS_REGION", "eu-west-1"))
+    bucket = _os.environ.get("S3_BUCKET", "utkarsh-job-hunt")
+    etags = {}
+    for uid in {r["user_id"] for r in rows if r.get("user_id")}:
+        for page in s3.get_paginator("list_objects_v2").paginate(
+                Bucket=bucket, Prefix=f"users/{uid}/resumes/"):
+            for o in page.get("Contents", []):
+                if o["Key"] in want:
+                    etags[o["Key"]] = o["ETag"].strip('"')
+    if not etags:
+        return f"no .tex objects found for {len(want)} row(s)"
+
+    counts = Counter(etags.values())
+    duplicated = sum(n for n in counts.values() if n > 1)
+    biggest = max(counts.values())
+    ratio = duplicated / len(etags)
+    assert ratio <= 0.20, (
+        f"{duplicated} of {len(etags)} live S/A resumes ({ratio:.0%}) are "
+        f"byte-identical to another; the largest group is {biggest}. A tailored "
+        f"resume that is the same file for every employer passes every other "
+        f"check — composition, pages, ATS — so this is the only thing that "
+        f"catches it. Usually the hard gates are rejecting generated bodies and "
+        f"the run is shipping the composed corpus instead."
+    )
+    return (f"{len(counts)} distinct documents across {len(etags)} live S/A "
+            f"resumes (largest identical group {biggest})")
 
 
 @check("no-pipeline-states-in-user-column", "the pipeline writing into application_status")
@@ -311,8 +407,28 @@ def score_tier_matches_score():
 
 
 CHECKS = [api_alive, tex_key_resolves, base_resume_tailorable,
-          latex_escaping, artifact_completeness, no_pipeline_states,
-          score_tier_matches_score]
+          latex_escaping, artifact_completeness, resumes_are_distinct,
+          no_pipeline_states, score_tier_matches_score]
+
+
+def _unregistered_checks() -> list[str]:
+    """`@check`-decorated functions that CHECKS forgot.
+
+    The decorator registers nothing by itself — it wraps the function and the
+    list above decides what runs. So a new check can be written, reviewed and
+    merged while never executing once, and the suite reports "N passed" with no
+    hint that it skipped one. That is the same lie this file exists to catch,
+    one level up: a check that does not run is indistinguishable from a check
+    that passes.
+
+    Found on 2026-10-08 by adding `resumes-are-distinct` and watching the run
+    still say "7 of 7".
+    """
+    listed = {fn.__name__ for fn in CHECKS}
+    return sorted(
+        name for name, obj in list(globals().items())
+        if callable(obj) and hasattr(obj, "_incident") and name not in listed
+    )
 
 
 def main() -> int:
@@ -324,6 +440,13 @@ def main() -> int:
     logging.disable(logging.INFO)
 
     print("post-deploy smoke test — real infrastructure, no mocks\n")
+    orphans = _unregistered_checks()
+    if orphans:
+        print(f"  ERROR: {len(orphans)} check(s) are defined and never run: "
+              f"{', '.join(orphans)}")
+        print("  Add them to CHECKS. A check that does not run reports nothing,")
+        print("  which is indistinguishable from a check that passes.\n")
+        return 1
     skipped = []
     for fn in CHECKS:
         if args.quick and fn.__name__ in _NEEDS_API:

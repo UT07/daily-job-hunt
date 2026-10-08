@@ -238,6 +238,108 @@ def _surviving_blocking(guard_report) -> list[str] | None:
     return list(guard_report.get("violations") or [])
 
 
+def _validation_errors(tailored_tex: str, ai_body: str, header_markers) -> list[str]:
+    """The HARD gates, in one place. Non-empty means this body must not ship.
+
+    One builder, for the same structural reason `_quality_warnings` is one
+    (CLAUDE.md #14): a retry has to be judged by exactly the checks that
+    rejected the first attempt. Built inline in two places, they drift, and the
+    retry gets scored on an easier rubric than the body it replaces.
+
+    Measured on `ai_body` for the two content checks and on `tailored_tex` for
+    the structural ones, and the split is load-bearing: the spliced document
+    carries ~1.2KB of base preamble identical in every output, which a
+    prompt-echo marker would flag in 100% of documents.
+    """
+    errors: list[str] = []
+    if not _check_brace_balance(tailored_tex):
+        errors.append("brace imbalance")
+    arity_issues = _validate_macro_arities(tailored_tex)
+    if arity_issues:
+        errors.append(f"arity: {'; '.join(arity_issues[:3])}")
+    missing = _check_required_sections(tailored_tex)
+    if missing:
+        errors.append(f"missing sections: {missing}")
+    missing_header = _check_header_present(tailored_tex, header_markers)
+    if missing_header:
+        errors.append(f"missing header markers: {missing_header}")
+    echoed = _check_prompt_echo(ai_body)
+    if echoed:
+        errors.append(f"prompt echo: {'; '.join(echoed[:3])}")
+    near_empty = _check_near_empty(ai_body)
+    if near_empty:
+        errors.append(f"near-empty output: {near_empty[0]}")
+    return errors
+
+
+def _recover_past_validation(validation_errors, job_hash, user_prompt, system_prompt,
+                             max_tokens, base_preamble, header_markers,
+                             ai_body, tailored_tex, response_dict):
+    """One corrective round when the hard gates reject a body.
+
+    Returns the tuple the caller rebinds: recovered, or exactly what it was
+    given. No corpus swap happens here and nothing runs on a discarded body —
+    this is strictly BEFORE the fallback is chosen, and if it does not recover,
+    the caller's single `if validation_errors:` branch reports the fallback
+    exactly as it did before.
+
+    WHY. Measured over the 212-résumé batch of 2026-10-07: 95 runs (45%) failed
+    validation and fell straight back to the composed corpus, and 71 of those
+    were `prompt echo` — the model opening with planning language like "Let's".
+    Every fallback produces the SAME document, which is how 134 of 273 live S/A
+    résumés came to be byte-identical: Stripe, Klaviyo, Camunda and Arista were
+    all handed one résumé, and every existing check passed on it, because the
+    corpus is composition-clean, two pages and ATS-valid.
+
+    A prompt echo is exactly what one corrective round fixes. The retry
+    machinery already existed for mere QUALITY warnings; the hard gates, which
+    cost the entire tailoring, had none.
+
+    Accepted only when the retry is COMPLETELY clean. "Fewer errors" is the
+    right rule for style and the wrong one here: these gates decide whether a
+    document may ship at all, so a retry that still trips one must not ship
+    either. Judged by `_validation_errors` — the same builder that rejected the
+    first attempt, so the two sides cannot drift (CLAUDE.md #14).
+    """
+    if not validation_errors:
+        return ai_body, tailored_tex, response_dict, validation_errors
+
+    logger.warning("[tailor] %s failed validation (%s) — retrying once before "
+                   "falling back", job_hash, "; ".join(validation_errors[:3]))
+    fix_prompt = (
+        user_prompt
+        + "\n\nYour previous attempt was REJECTED for these reasons:\n"
+        + "\n".join(f"- {e}" for e in validation_errors)
+        + "\nReturn ONLY the resume body. No preamble, no commentary, no "
+          "planning language, no explanation of what you are about to do."
+    )
+    try:
+        fix_dict = ai_complete(fix_prompt, system=system_prompt,
+                               temperature=0.3, max_tokens=max_tokens)
+    except RuntimeError as exc:
+        logger.warning("[tailor] %s validation retry could not call: %s", job_hash, exc)
+        return ai_body, tailored_tex, response_dict, validation_errors
+
+    fix_body = (fix_dict.get("content") or "").strip()
+    if "\\begin{document}" in fix_body:
+        _, fix_body = _split_tex(fix_body)
+    fix_body = fix_body.removesuffix("\\end{document}").strip()
+    fix_tex = escape_body_specials(_splice_tex(base_preamble, fix_body))
+
+    still = _validation_errors(fix_tex, fix_body, header_markers)
+    # Checked explicitly: a body cut off at max_tokens can lose a section
+    # without tripping any other gate.
+    if fix_dict.get("truncated"):
+        still = still or ["cut off at max_tokens"]
+    if still:
+        logger.warning("[tailor] %s retry still invalid (%s) — falling back",
+                       job_hash, "; ".join(still[:3]))
+        return ai_body, tailored_tex, response_dict, validation_errors
+
+    logger.info("[tailor] %s recovered on retry; no fallback needed", job_hash)
+    return fix_body, fix_tex, fix_dict, []
+
+
 def _quality_warnings(body: str, base_body: str, fabrication_baseline) -> list[str]:
     """Every writing-quality check, in one place.
 
@@ -878,21 +980,10 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
     # `check_required_sections` already blocks it, and `check_near_empty`
     # below blocks it on the instrument built for the question.
 
-    # Hard gates: fall back to base_tex on validation failure
-    validation_errors = []
-    if not _check_brace_balance(tailored_tex):
-        validation_errors.append("brace imbalance")
-    arity_issues = _validate_macro_arities(tailored_tex)
-    if arity_issues:
-        validation_errors.append(f"arity: {'; '.join(arity_issues[:3])}")
-    missing = _check_required_sections(tailored_tex)
-    if missing:
-        validation_errors.append(f"missing sections: {missing}")
-    missing_header = _check_header_present(tailored_tex, header_markers)
-    if missing_header:
-        validation_errors.append(f"missing header markers: {missing_header}")
-
-    # Two 2026-09-30 defects, both found in SHIPPED resumes, both terminal here
+    # Hard gates: one builder, so the retry below is judged by exactly the
+    # checks that rejected the first attempt. See `_validation_errors`.
+    #
+    # Two 2026-09-30 defects, both found in SHIPPED resumes, are terminal here
     # rather than only in the council's guard. `check_output` blocks on both, so
     # the council gets two bounded repair attempts first — but `quality_gate`
     # routes to `finalize` once `repair_attempts >= 2`, best-effort, with the
@@ -901,30 +992,22 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
     # the gate: a body that still fails here never reaches S3, because
     # `validation_errors` forces the corpus instead and `used_fallback: True`
     # says so in the return value.
-    #
-    # Measured on `ai_body`, not `tailored_tex`, and the difference is
-    # load-bearing for both. The spliced document carries the base preamble,
-    # which is ~1.2KB of \usepackage and \newcommand identical in every output:
-    # it contributes 9 anchors to b45671b7ec5c, whose body is the single word
-    # "and", and it is the one stretch of text a prompt-echo marker firing on it
-    # would flag in 100% of documents. The body is also exactly what
-    # `check_output` sees, so the two gates judge the same string.
-    echoed = _check_prompt_echo(ai_body)
-    if echoed:
-        validation_errors.append(f"prompt echo: {'; '.join(echoed[:3])}")
-    near_empty = _check_near_empty(ai_body)
-    if near_empty:
-        validation_errors.append(f"near-empty output: {near_empty[0]}")
+    validation_errors = _validation_errors(tailored_tex, ai_body, header_markers)
 
-    # The writing warnings belonging to the body that actually SHIPS, which is
-    # not always the body that was first measured. Two ways it diverges:
-    #   * the fallback below ships `base_tex`, which `_quality_warnings` never
-    #     saw -- so the honest value is None (never measured), not []
-    #   * an accepted retry ships `retry_body`, whose warnings are
-    #     `retry_quality`; reporting `quality_warnings` there would describe
-    #     the document we threw away
-    # Same asymmetry as the retry comparison a few lines down (CLAUDE.md #14):
-    # a number is only worth storing if it describes the artefact the user gets.
+    # ONE corrective retry before giving up on the whole document. Expressed
+    # as a plain call, NOT an `if validation_errors:` block: handler() must
+    # contain exactly ONE of those, because
+    # tests/unit/test_tailor_fallback_is_recorded.py identifies the branch that
+    # REPORTS a fallback as the first `if validation_errors:` it finds. A
+    # second one higher up makes the real recording branch unidentifiable and
+    # every corpus swap below it read as unreported. That guard is right; this
+    # is shaped to keep it precise.
+    ai_body, tailored_tex, response_dict, validation_errors = _recover_past_validation(
+        validation_errors, job_hash, user_prompt, system_prompt, tailor_max_tokens,
+        base_preamble, header_markers, ai_body, tailored_tex, response_dict,
+    )
+
+
     shipped_quality: list[str] | None = None
 
     if validation_errors:

@@ -302,10 +302,17 @@ def _db():
 def _ship(council_body: str):
     """Run handler(); return (bytes written to S3, return value, ai_complete).
 
-    `ai_complete` is handed back so a test can assert that NO second
-    generation happened — the quality retry and the composition repair are
-    the two callers, and both are supposed to be unreachable once the corpus
-    has been chosen.
+    `ai_complete` is handed back so a test can assert what generation ran.
+
+    Since 2026-10-08 there are THREE callers, not two: a corrective retry fires
+    when the hard gates reject a body, BEFORE any corpus swap, and recovers 45%
+    of runs that previously fell back (see `_recover_past_validation`). It
+    returns `{"content": ""}` here, which fails validation again, so these
+    scenarios still reach the fallback — deliberately, because that is the
+    state they exist to pin. The quality retry and the composition repair
+    remain unreachable once the corpus has been chosen, and that is what the
+    assertions below check: not the raw call count, which a legitimate
+    pre-fallback attempt now moves.
     """
     with patch.object(tailor_resume, "get_supabase", return_value=_db()), \
          patch.object(tailor_resume, "boto3", MagicMock()) as mock_boto3, \
@@ -460,14 +467,27 @@ class TestNothingRunsOnABodyTheRunAlreadyThrewAway:
     un-fall-back itself.
     """
 
-    def test_no_second_generation_once_the_corpus_has_been_chosen(self):
-        _, out, mock_ai = _ship(
+    def test_nothing_overwrites_the_corpus_once_it_has_been_chosen(self):
+        """Asserted on what SHIPPED, not on a call count.
+
+        The count was a proxy for "no generation ran after the swap", and it
+        stopped meaning that when a corrective retry started running BEFORE the
+        swap. The thing the proxy stood for is checkable directly: the bytes in
+        S3 are the corpus, and the return value says so. CLAUDE.md #13 — a
+        test that cannot tell which call it is counting is not testing the
+        thing it names.
+        """
+        written, out, mock_ai = _ship(
             r"\section*{Summary}Only one section, and a team player at that.")
         assert out["used_fallback"] is True
-        assert mock_ai.call_count == 0, (
-            "ai_complete ran after the corpus was chosen: either the quality "
-            "retry is scoring a body that was thrown away, or composition "
-            "repair is rewriting a document the run already rejected"
+        assert written == _BASE_TEX, (
+            "something overwrote the corpus after it was chosen: either the "
+            "quality retry scored a body that was thrown away, or composition "
+            "repair rewrote a document the run already rejected"
+        )
+        assert mock_ai.call_count <= 1, (
+            f"ai_complete ran {mock_ai.call_count} times; at most ONE corrective "
+            "retry may fire, and only before the corpus is chosen"
         )
 
     def test_the_quality_retry_cannot_overwrite_a_corpus_fallback(self):
@@ -475,11 +495,22 @@ class TestNothingRunsOnABodyTheRunAlreadyThrewAway:
         body, and a retry that would look like an improvement. The corpus must
         still be what lands in S3."""
         improved = realistic_body(summary="A clean rewrite with no filler.")
+        # The FIRST ai_complete is the corrective retry that now fires when the
+        # hard gates reject a body. It must fail too, or the run recovers and
+        # never reaches the fallback this test is about. The SECOND is the
+        # quality retry, handed a body that looks like an improvement — the
+        # thing that must not overwrite the corpus.
+        attempts = iter([
+            {"content": r"\section*{Summary}Still only one section.",
+             "provider": "p", "truncated": False},
+            {"content": improved, "provider": "p", "truncated": False},
+        ])
         with patch.object(tailor_resume, "get_supabase", return_value=_db()), \
              patch.object(tailor_resume, "boto3", MagicMock()) as mock_boto3, \
              patch.object(tailor_resume, "ai_complete",
-                          return_value={"content": improved, "provider": "p",
-                                        "truncated": False}), \
+                          side_effect=lambda *a, **k: next(
+                              attempts, {"content": improved, "provider": "p",
+                                         "truncated": False})), \
              patch.object(tailor_resume, "council_complete",
                           return_value={"content": r"\section*{Summary}A highly "
                                                    r"motivated team player.",
@@ -660,3 +691,87 @@ class TestTailorerStillStopsANearEmptyDocument:
         assert str(NEAR_EMPTY_ANCHOR_FLOOR) in caplog.text, (
             "the message gives a count with nothing to compare it against")
         assert "body too short" not in caplog.text
+
+
+# ===========================================================================
+# The corrective retry (2026-10-08)
+# ===========================================================================
+#
+# Measured over the 212-résumé batch of 2026-10-07: 95 runs (45%) failed the
+# hard gates and fell STRAIGHT to the composed corpus, 71 of them for
+# `prompt echo` — the model opening with planning language like "Let's". Every
+# fallback produces the same document, which is how 134 of 273 live S/A
+# résumés came to be byte-identical: Stripe, Klaviyo, Camunda and Arista all
+# received one résumé, and every check passed on it, because the corpus is
+# composition-clean, two pages and ATS-valid.
+#
+# The retry machinery already existed for mere QUALITY warnings. The hard
+# gates, which cost the entire tailoring, had none.
+
+class TestTheCorrectiveRetry:
+    def test_a_body_that_recovers_does_not_fall_back(self):
+        """The whole point. Without this, deleting the retry breaks nothing
+        that any other test can see — every case above would still pass, since
+        they all assert the fallback path."""
+        good = realistic_body(summary="Site Reliability Engineer with eight years.")
+        with patch.object(tailor_resume, "get_supabase", return_value=_db()), \
+             patch.object(tailor_resume, "boto3", MagicMock()) as mock_boto3, \
+             patch.object(tailor_resume, "ai_complete",
+                          return_value={"content": good, "provider": "p",
+                                        "truncated": False}), \
+             patch.object(tailor_resume, "council_complete",
+                          return_value={"content": r"\section*{Summary}Let's start "
+                                                   r"by tailoring this resume.",
+                                        "provider": "p", "model": "m"}):
+            out = tailor_resume.handler({"job_hash": "abc123", "user_id": "u-1"}, None)
+        written = mock_boto3.client.return_value.put_object.call_args.kwargs["Body"].decode()
+        assert out["used_fallback"] is False, (
+            "a body the retry repaired was still reported as a fallback")
+        assert written != _BASE_TEX, "the corpus shipped despite a clean retry"
+        assert "Site Reliability Engineer with eight years" in written
+
+    def test_a_retry_that_is_still_invalid_falls_back_as_before(self):
+        """The retry must not become a way to ship a body the gates rejected.
+        `_validation_errors` judges both attempts, so 'fewer errors' cannot
+        creep in as acceptance — these gates are pass/fail."""
+        with patch.object(tailor_resume, "get_supabase", return_value=_db()), \
+             patch.object(tailor_resume, "boto3", MagicMock()) as mock_boto3, \
+             patch.object(tailor_resume, "ai_complete",
+                          return_value={"content": r"\section*{Summary}Let's try again.",
+                                        "provider": "p", "truncated": False}), \
+             patch.object(tailor_resume, "council_complete",
+                          return_value={"content": r"\section*{Summary}Let's start.",
+                                        "provider": "p", "model": "m"}):
+            out = tailor_resume.handler({"job_hash": "abc123", "user_id": "u-1"}, None)
+        written = mock_boto3.client.return_value.put_object.call_args.kwargs["Body"].decode()
+        assert out["used_fallback"] is True
+        assert written == _BASE_TEX
+
+    def test_a_truncated_retry_is_refused_even_when_the_gates_pass(self):
+        """A body cut off at max_tokens can lose a section without tripping any
+        other gate — the same asymmetry the quality retry guards against."""
+        good = realistic_body(summary="Complete on its face, but cut off.")
+        with patch.object(tailor_resume, "get_supabase", return_value=_db()), \
+             patch.object(tailor_resume, "boto3", MagicMock()) as mock_boto3, \
+             patch.object(tailor_resume, "ai_complete",
+                          return_value={"content": good, "provider": "p",
+                                        "truncated": True}), \
+             patch.object(tailor_resume, "council_complete",
+                          return_value={"content": r"\section*{Summary}Let's start.",
+                                        "provider": "p", "model": "m"}):
+            out = tailor_resume.handler({"job_hash": "abc123", "user_id": "u-1"}, None)
+        assert out["used_fallback"] is True, "a truncated retry was accepted"
+
+    def test_both_attempts_are_judged_by_the_same_builder(self):
+        """Structural, because this is the drift CLAUDE.md #14 is about: the
+        retry must be scored by the function that rejected the first attempt,
+        not by an inline copy that can lose a check."""
+        src = pathlib.Path(tailor_resume.__file__).read_text()
+        tree = ast.parse(src)
+        fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+                  and n.name == "_recover_past_validation")
+        called = {c.func.id for c in ast.walk(fn)
+                  if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)}
+        assert "_validation_errors" in called, (
+            "the retry does not re-run _validation_errors, so it is judged by "
+            "something other than the gates that rejected the first attempt")

@@ -949,6 +949,19 @@ def _dispatch_task(task_type: str, payload: dict, user_id: str = "") -> dict:
             "hiring_manager_score": result.get("hiring_manager_score", 0),
             "tech_recruiter_score": result.get("tech_recruiter_score", 0),
             "match_score": result.get("avg_score", 0),
+            # score_tier BESIDE score, always. `_score_tier` has existed at
+            # app.py:242 since the dashboard's tier filter was built and is
+            # pinned to the pipeline's bands by
+            # test_score_tier_matches_the_pipeline — it was simply never called
+            # here. CLAUDE.md #10: the guard existed, the data existed, and
+            # they never met.
+            #
+            # The cost was visible on 2026-10-08: a row written here with
+            # avg_score defaulting to 0 and no tier made the deploy's
+            # `score-tier-matches-score` check fail (`None@0`), and
+            # smoke_prod.py's own docstring asserts "the current pipeline
+            # cannot produce this" — a claim this line falsified.
+            "score_tier": _score_tier(result.get("avg_score", 0)),
             "tailoring_model": tailoring_model,
             "matched_resume": resume_type,
         })
@@ -3013,6 +3026,29 @@ def re_tailor_job(
     if _db is None:
         raise HTTPException(503, "Database not configured")
 
+    # The scope is validated, not merely read. `resume_only` is computed as
+    # `scope == "resume"`, so ANY other value — a typo, a renamed button, a
+    # future scope nobody wired up — silently means FALSE and runs the whole
+    # pipeline, re-tailoring and recompiling a resume the caller never asked
+    # to touch. A widening default that looks like a narrowing one.
+    #
+    # KNOWN LIMITATION, stated rather than hidden: scope="cover" is accepted
+    # and still runs the full pipeline, because there is no cover-letter-only
+    # path through the state machine yet. GenerateCoverLetter dereferences
+    # `$.light_touch`, which only the Pass states set, so routing around
+    # TailorResume needs a second Pass — two state-machine edits on the path
+    # that caused both the #126 and #132 outages. The previous resume IS
+    # archived to `resume_versions` first, so the cost is a wasted re-tailor
+    # rather than lost work. Tracked, not silently tolerated.
+    scope = (body or {}).get("scope")
+    if scope is not None and scope not in ("resume", "cover"):
+        raise HTTPException(
+            400,
+            f"unknown scope {scope!r}; expected 'resume' or 'cover'. An "
+            "unrecognised scope used to fall through to the full pipeline, "
+            "which re-tailors the resume as a side effect.",
+        )
+
     # Get the job
     job = _db.client.table("jobs").select("*").eq("job_id", job_id).eq("user_id", user.id).execute()
     if not job.data:
@@ -3061,7 +3097,11 @@ def re_tailor_job(
                 # a request that only asked for a resume. Absent or any other
                 # value runs the full pipeline, so older clients and the daily
                 # run are unaffected.
-                "resume_only": (body or {}).get("scope") == "resume",
+                # Derived from the VALIDATED `scope` above, not re-read from
+                # the body. Two reads of the same field are two expressions
+                # that can drift, and the whole point of the validation is
+                # that this one can only see a value it approved.
+                "resume_only": scope == "resume",
             }),
         )
         return {
