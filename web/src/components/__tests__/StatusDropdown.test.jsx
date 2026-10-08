@@ -69,3 +69,43 @@ describe('StatusDropdown', () => {
     expect(onStatusChange).toHaveBeenCalledWith('job-2', 'Accepted');
   });
 });
+
+/**
+ * A failed PATCH used to be console.error'd only: the badge stayed on the old
+ * status with no message, so a user picking "Applied" during a 503 had no way
+ * to know it was not saved. app.py's update_job answers 400 for an invalid
+ * status, 404 for a missing job and 503 without a DB.
+ */
+describe('StatusDropdown — a failed update is visible', () => {
+  beforeEach(() => {
+    apiPatch.mockReset();
+  });
+
+  const option = (name) => screen.getAllByRole('button').find((b) => b.textContent.includes(name));
+
+  it('shows the error and does not notify the parent', async () => {
+    apiPatch.mockRejectedValue(new Error('Database not configured'));
+    const onStatusChange = vi.fn();
+    render(<StatusDropdown jobId="job-1" currentStatus="New" onStatusChange={onStatusChange} />);
+
+    fireEvent.click(screen.getAllByRole('button')[0]);
+    fireEvent.click(option('Applied'));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(/Couldn't change status.*Database not configured/);
+    expect(onStatusChange).not.toHaveBeenCalled();
+    expect(screen.getAllByRole('button')[0]).toHaveTextContent('New');
+  });
+
+  it('clears the error once a later update succeeds', async () => {
+    apiPatch.mockRejectedValueOnce(new Error('HTTP 503')).mockResolvedValueOnce({});
+    render(<StatusDropdown jobId="job-1" currentStatus="New" onStatusChange={() => {}} />);
+
+    fireEvent.click(screen.getAllByRole('button')[0]);
+    fireEvent.click(option('Applied'));
+    await screen.findByRole('alert');
+
+    fireEvent.click(screen.getAllByRole('button')[0]);
+    fireEvent.click(option('Applied'));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+  });
+});
