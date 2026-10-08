@@ -311,6 +311,11 @@ export default function Dashboard() {
   // in the empty state, and (b) size the "N hidden by filters" message when
   // Hide Expired is off. null until the first fetch resolves.
   const [grandTotal, setGrandTotal] = useState(null);
+  // The active list's population with every clearable filter off: same
+  // lifecycle (active) as fetchJobs, no tier/score/expiry/search filters.
+  // "N hidden by filters" is this minus `total`, so both sides of the
+  // subtraction count the same population. null until it resolves.
+  const [activeUnfilteredTotal, setActiveUnfilteredTotal] = useState(null);
 
   // Filters — initial values hydrated from URL query params so deep links
   // and browser-back restore the prior filter set.
@@ -427,6 +432,13 @@ export default function Dashboard() {
     } catch (err) {
       console.warn('Failed to fetch grand total:', err.message);
     }
+    try {
+      const data = await apiGet('/api/dashboard/jobs?page=1&per_page=1&lifecycle=active');
+      setActiveUnfilteredTotal(typeof data.total === 'number' ? data.total : null);
+    } catch (err) {
+      console.warn('Failed to fetch unfiltered active total:', err.message);
+      setActiveUnfilteredTotal(null);
+    }
   }, []);
 
   // Fetch available skills for filter dropdown.
@@ -466,6 +478,7 @@ export default function Dashboard() {
     setJobs((prev) => prev.filter((j) => j.job_id !== jobId));
     setTotal((t) => Math.max(0, t - 1));
     setGrandTotal((t) => (typeof t === 'number' ? Math.max(0, t - 1) : t));
+    setActiveUnfilteredTotal((t) => (typeof t === 'number' ? Math.max(0, t - 1) : t));
     fetchStats();
   }
 
@@ -549,15 +562,18 @@ export default function Dashboard() {
     activeFilterChips.push({ key: 'skill', label: `Skill: "${skillFilter.trim()}"`, onClear: () => { setSkillFilter(''); handleFilterApply(); } });
   }
 
-  // "N hidden by filters" — baseline depends on whether expired jobs are in
-  // play at all. /api/dashboard/stats (stats.total_jobs) always excludes
-  // expired jobs, so it's the right baseline while Hide Expired is on;
-  // otherwise fall back to the unfiltered grandTotal (null-safe: falls back
-  // to `total` itself, i.e. "nothing hidden," until that request resolves).
-  const nonExpiredTotal = stats.total_jobs ?? 0;
-  const baselineTotal = hideExpired ? nonExpiredTotal : (grandTotal ?? total);
-  const baselineLabel = hideExpired ? 'non-expired jobs' : 'jobs (including expired)';
-  const hiddenCount = Math.max(0, baselineTotal - total);
+  // "N hidden by filters": jobs in the SAME population the list shows
+  // (lifecycle=active) that an active, clearable filter removes. It used to
+  // subtract from /api/dashboard/stats (non-expired rows of ANY age) or from
+  // the not_archived default (< 30 days), so the 14-30 day stale band --
+  // already listed under Past / Outdated -- and, with Hide Expired on, every
+  // 30+ day row were reported as "hidden by filters" though no filter could
+  // bring them back. With no filter active nothing is hidden, whatever the
+  // totals say.
+  const baselineLabel = 'active jobs';
+  const hiddenCount = activeFilterChips.length > 0 && typeof activeUnfilteredTotal === 'number'
+    ? Math.max(0, activeUnfilteredTotal - total)
+    : 0;
   // Only treat this as a genuine "no jobs yet" state once grandTotal has
   // actually loaded and is 0 — default to "assume jobs exist" so we don't
   // flash the onboarding-style empty state before the request resolves.
