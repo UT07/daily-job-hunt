@@ -152,8 +152,14 @@ def test_below_min_score_is_filtered_out():
     assert result["matched_items"] == []
 
 
-def test_no_resume_returns_error():
-    """When user has no resume, returns error key and empty matched_items."""
+def test_no_resume_raises():
+    """When user has no resume, the handler RAISES (2026-10-08).
+
+    It used to return {"error": "no_resume"}, which Step Functions reads as a
+    successful invocation, so no Catch ever saw it.
+    """
+    import pytest
+
     db = _make_supabase(
         jobs_raw_data=[SAMPLE_JOB],
         resume_data=[],  # no resume
@@ -162,14 +168,12 @@ def test_no_resume_returns_error():
     with patch("score_batch.get_supabase", return_value=db), \
          patch("score_batch.ai_complete_cached") as mock_ai:
         import score_batch
-        result = score_batch.handler(
-            {"user_id": "user-1", "new_job_hashes": ["hash-001"]},
-            None,
-        )
+        with pytest.raises(score_batch.ScoreBatchError, match="no_resume"):
+            score_batch.handler(
+                {"user_id": "user-1", "new_job_hashes": ["hash-001"]},
+                None,
+            )
 
-    assert result["error"] == "no_resume"
-    assert result["matched_count"] == 0
-    assert result["matched_items"] == []
     mock_ai.assert_not_called()
 
 
