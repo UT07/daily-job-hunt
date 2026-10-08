@@ -20,8 +20,6 @@ is not a safety metric; the point is that the reader is told where to look.
 """
 import datetime
 
-import pytest
-
 from scripts.check_eval_gate import evaluate_gate
 
 TODAY = datetime.date(2026, 10, 8)
