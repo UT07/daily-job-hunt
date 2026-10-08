@@ -21,6 +21,7 @@ Responses are cached in SQLite to avoid burning quota on repeated requests.
 """
 
 from __future__ import annotations
+import contextlib
 import hashlib
 import json
 import logging
@@ -230,6 +231,12 @@ class AIProvider:
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 return self.complete(prompt, system=system, temperature=temperature)
+            except LocalRateLimitError:
+                # OUR bucket, not the provider's. acquire() has already
+                # blocked up to its timeout; asking again cannot mint a token
+                # faster than the refill rate. Retrying cost 120+2+120+4+120 =
+                # 366s per provider before failover. Fail over now.
+                raise
             except RateLimitError as e:
                 # 429 from rate limiter or provider — retryable
                 last_error = e
@@ -275,7 +282,7 @@ class GeminiProvider(AIProvider):
         import requests
 
         if not self.rate_limiter.acquire():
-            raise RateLimitError(f"[{self.name}] Rate limit exceeded")
+            raise LocalRateLimitError(f"[{self.name}] local rate limiter exhausted")
 
         temp = temperature if temperature is not None else self.temperature
         url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
@@ -333,7 +340,7 @@ class GroqProvider(AIProvider):
         import requests
 
         if not self.rate_limiter.acquire():
-            raise RateLimitError(f"[{self.name}] Rate limit exceeded")
+            raise LocalRateLimitError(f"[{self.name}] local rate limiter exhausted")
 
         temp = temperature if temperature is not None else self.temperature
         messages = []
@@ -398,7 +405,7 @@ class CerebrasProvider(AIProvider):
         import requests
 
         if not self.rate_limiter.acquire():
-            raise RateLimitError(f"[{self.name}] Rate limit exceeded")
+            raise LocalRateLimitError(f"[{self.name}] local rate limiter exhausted")
 
         temp = temperature if temperature is not None else self.temperature
         messages = []
@@ -443,7 +450,7 @@ class OpenRouterProvider(AIProvider):
         import requests
 
         if not self.rate_limiter.acquire():
-            raise RateLimitError(f"[{self.name}] Rate limit exceeded")
+            raise LocalRateLimitError(f"[{self.name}] local rate limiter exhausted")
 
         temp = temperature if temperature is not None else self.temperature
         messages = []
@@ -493,7 +500,7 @@ class NvidiaNIMProvider(AIProvider):
         import requests
 
         if not self.rate_limiter.acquire():
-            raise RateLimitError(f"[{self.name}] Rate limit exceeded")
+            raise LocalRateLimitError(f"[{self.name}] local rate limiter exhausted")
 
         temp = temperature if temperature is not None else self.temperature
         messages = []
@@ -533,7 +540,7 @@ class QwenProvider(AIProvider):
         import requests
 
         if not self.rate_limiter.acquire():
-            raise RateLimitError(f"[{self.name}] Rate limit exceeded")
+            raise LocalRateLimitError(f"[{self.name}] local rate limiter exhausted")
 
         temp = temperature if temperature is not None else self.temperature
         messages = []
@@ -572,7 +579,7 @@ class AnthropicProvider(AIProvider):
         import anthropic
 
         if not self.rate_limiter.acquire():
-            raise RateLimitError(f"[{self.name}] Rate limit exceeded")
+            raise LocalRateLimitError(f"[{self.name}] local rate limiter exhausted")
 
         temp = temperature if temperature is not None else self.temperature
         client = anthropic.Anthropic(api_key=self.api_key)
@@ -585,6 +592,27 @@ class AnthropicProvider(AIProvider):
         resp = client.messages.create(**kwargs)
         text = "".join(getattr(block, "text", "") or "" for block in (resp.content or []))
         return self._usable(text, getattr(resp, "stop_reason", None))
+
+
+@contextlib.contextmanager
+def _unwaited_executor(max_workers: int):
+    """A ThreadPoolExecutor whose exit does not wait for its threads.
+
+    The council's round timeout is `as_completed(..., timeout=...)`, which
+    fires on time. A plain `with ThreadPoolExecutor(...)` then calls
+    `shutdown(wait=True)` on exit and blocks on any thread still stuck in a
+    90-120s HTTP call (plus its retries), so the "hard timeout" bounded
+    nothing. Here the exit cancels anything not yet started and returns; a
+    thread already inside a socket read runs to its own HTTP timeout in the
+    background and its result is discarded.
+    """
+    import concurrent.futures
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+    try:
+        yield executor
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
 
 
 def _http_status(e: BaseException) -> int:
@@ -607,6 +635,9 @@ def _http_status(e: BaseException) -> int:
 
 class RateLimitError(Exception):
     pass
+
+class LocalRateLimitError(RateLimitError):
+    """This process's own token bucket is empty — no request was sent."""
 
 class ProviderError(Exception):
     pass
@@ -792,6 +823,11 @@ class AIClient:
     # e.g. add "groq" here if the dev machine is on a VPN exit Groq blocks.
     _DEPRIORITIZED_PROVIDERS: set = set()
 
+    # Wall-clock bound on one council generation round, in seconds. Bound for
+    # real: the executor is shut down without waiting (see _shutdown_now), so
+    # a provider hung on a slow socket keeps its thread but not the caller.
+    _COUNCIL_TIMEOUT_S: float = 120
+
     def _select_providers(self, n: int, exclude: set = None) -> List[AIProvider]:
         """Pick N distinct providers/models from the pool, preferring alive ones.
 
@@ -910,12 +946,12 @@ class AIClient:
         failures: list[str] = []
 
         # Run generators concurrently with a 60-second hard timeout per provider
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(generators)) as executor:
+        with _unwaited_executor(len(generators)) as executor:
             future_to_provider = {
                 executor.submit(_generate_one, p): p for p in generators
             }
             try:
-                for future in concurrent.futures.as_completed(future_to_provider, timeout=120):
+                for future in concurrent.futures.as_completed(future_to_provider, timeout=self._COUNCIL_TIMEOUT_S):
                     provider = future_to_provider[future]
                     try:
                         result = future.result(timeout=60)
@@ -981,10 +1017,10 @@ class AIClient:
                         len(generators), "; ".join(failures) or "no reason recorded",
                         ", ".join(f"{p.name}:{p.model}" for p in retry_generators),
                     )
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=len(retry_generators)) as executor:
+                    with _unwaited_executor(len(retry_generators)) as executor:
                         future_to_provider = {executor.submit(_generate_one, p): p for p in retry_generators}
                         try:
-                            for future in concurrent.futures.as_completed(future_to_provider, timeout=120):
+                            for future in concurrent.futures.as_completed(future_to_provider, timeout=self._COUNCIL_TIMEOUT_S):
                                 provider = future_to_provider[future]
                                 try:
                                     result = future.result(timeout=60)
