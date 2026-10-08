@@ -930,7 +930,7 @@ def run_pipeline(context: PipelineContext, dry_run: bool = False, scrape_only: b
             logger.warning(f"[DB] Failed to record run start: {e}")
 
     try:
-        _run_pipeline_body(context, config, run_date, run_record, dry_run, scrape_only)
+        _run_pipeline_body(context, config, run_date, run_time, run_record, dry_run, scrape_only)
     except Exception as e:
         logger.error(f"Pipeline failed: {e}", exc_info=True)
         # Mark the run as failed in Supabase so the dashboard doesn't show it as "running"
@@ -942,7 +942,7 @@ def run_pipeline(context: PipelineContext, dry_run: bool = False, scrape_only: b
         raise
 
 
-def _run_pipeline_body(context, config, run_date, run_record, dry_run, scrape_only):
+def _run_pipeline_body(context, config, run_date, run_time, run_record, dry_run, scrape_only):
     """Inner pipeline body — separated so run_pipeline can catch crashes and mark runs as failed."""
     # Create daily output directory using context properties
     base_dir = context.output_dir

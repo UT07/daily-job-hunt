@@ -33,6 +33,10 @@ PY=.venv/bin/python
 
 # lint-and-build
 step "ruff (lambdas/ tests/ app.py)" $PY -m ruff check lambdas/ tests/ app.py
+# Undefined names everywhere, not just the linted trees: an F821 is a NameError
+# waiting for its line to run. main.py carried one for months because CI never
+# looked at it (CLAUDE.md #7 -- scope the check to the population it judges).
+step "ruff F821 (whole repo)" $PY -m ruff check --select F821 .
 step "web build" bash -c 'cd web && npm run build --silent'
 step "web tests" bash -c 'cd web && npx vitest run'
 
