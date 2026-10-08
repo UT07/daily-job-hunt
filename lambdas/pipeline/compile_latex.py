@@ -9,6 +9,7 @@ from shared.composition_policy import resolve
 from shared.ats_extract_check import check_ats_extraction
 from shared.ats_extract_check import log_violations as log_ats_violations
 from shared.fit_to_pages import fit, normalise_separators
+from shared.latex_safety import UnsafeLatex, assert_safe_latex, find_unsafe_latex
 from shared.page_check import check_pdf, log_violations, page_text_lengths
 from utils.pdf_validator import check_file_size
 
@@ -17,6 +18,25 @@ logger.setLevel(logging.INFO)
 
 # tectonic is provided via the TectonicLayer Lambda Layer, which extracts to /opt/.
 # The binary is at /opt/bin/tectonic. We fall back to bare "tectonic" for local runs.
+
+
+def _run_tectonic(tectonic_path: str, tex_path: str, env: dict, timeout: int = 110):
+    """The only way this module runs tectonic.
+
+    Re-reads the exact file about to be compiled and refuses it if it uses a
+    file or IO primitive (shared/latex_safety.py). TeX will \\input any file
+    the process can read; measured 2026-10-08, tectonic only warns, and
+    `--untrusted` (passed below; it disables shell escape) does not stop it.
+    Every compile here -- the first, each page-fit candidate, the final
+    re-compile -- goes through this, so a guard cannot be wired into one call
+    site and missed at the others (CLAUDE.md #10).
+    """
+    with open(tex_path, encoding="utf-8", errors="replace") as fh:
+        assert_safe_latex(fh.read())
+    return subprocess.run(
+        [tectonic_path, "-X", "compile", "--untrusted", tex_path],
+        capture_output=True, text=True, timeout=timeout, env=env,
+    )
 
 
 def handler(event, context):
@@ -48,6 +68,14 @@ def handler(event, context):
             logger.info("[compile] separators for %s: %s",
                         job_hash, "; ".join(sep_actions))
 
+    # Refuse before anything is written or compiled. The .tex comes from S3,
+    # where a tailored resume carries the uploaded preamble and model output.
+    unsafe = find_unsafe_latex(tex_content)
+    if unsafe:
+        logger.error("[compile] refusing unsafe LaTeX for %s: %s", job_hash, "; ".join(unsafe))
+        return {"error": "unsafe_latex", "violations": unsafe, "tex_s3_key": tex_s3_key,
+                "job_hash": job_hash, "user_id": user_id, "doc_type": doc_type}
+
     # Write to temp file and compile
     with tempfile.TemporaryDirectory() as tmpdir:
         tex_path = os.path.join(tmpdir, "document.tex")
@@ -74,11 +102,7 @@ def handler(event, context):
             # cold fetch + compile; CompileLatexFunction's own Timeout in
             # template.yaml is raised alongside this so the Lambda outlives
             # the subprocess instead of being hard-killed first.
-            result = subprocess.run(
-                [tectonic_path, "-X", "compile", tex_path],
-                capture_output=True, text=True, timeout=110,
-                env=env,
-            )
+            result = _run_tectonic(tectonic_path, tex_path, env)
             if result.returncode != 0:
                 logger.error(f"[compile] tectonic failed: {result.stderr}")
                 return {"error": "compilation_failed", "stderr": result.stderr[:500],
@@ -144,10 +168,10 @@ def handler(event, context):
                     cand_tex = os.path.join(tmpdir, f"fit{attempts['n']}.tex")
                     with open(cand_tex, "w") as fh:
                         fh.write(candidate)
-                    r = subprocess.run(
-                        [tectonic_path, "-X", "compile", cand_tex],
-                        capture_output=True, text=True, timeout=110, env=env,
-                    )
+                    try:
+                        r = _run_tectonic(tectonic_path, cand_tex, env)
+                    except UnsafeLatex:
+                        return 10**6
                     cand_pdf = cand_tex.replace(".tex", ".pdf")
                     if r.returncode != 0 or not os.path.exists(cand_pdf):
                         # A candidate that will not compile is not a smaller
@@ -182,8 +206,7 @@ def handler(event, context):
                     tex_content = fitted
                     with open(tex_path, "w") as fh:
                         fh.write(fitted)
-                    subprocess.run([tectonic_path, "-X", "compile", tex_path],
-                                   capture_output=True, text=True, timeout=110, env=env)
+                    _run_tectonic(tectonic_path, tex_path, env)
                     # The .tex is the Studio's source of truth, so it must carry
                     # the document that was actually shipped -- otherwise the
                     # editor opens content that does not match the PDF beside it.

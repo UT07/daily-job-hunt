@@ -16,6 +16,7 @@ from pathlib import Path
 # is the pipeline's own compiler and calls shared.page_check directly.
 from shared.composition_policy import resolve
 from shared.page_check import check_pdf, log_violations
+from shared.latex_safety import find_unsafe_latex
 
 logger = logging.getLogger(__name__)
 
@@ -311,6 +312,15 @@ def compile_tex_to_pdf_with_report(
         raw_tex = work_copy.read_text(encoding="utf-8")
         sanitized = _sanitize_latex(raw_tex)
 
+        # --- Hard gate: no file or IO primitives (shared/latex_safety.py) ---
+        # TeX reads any file the process can; tectonic only warns, and its
+        # --untrusted flag does not stop it. Checked on what will compile.
+        unsafe = find_unsafe_latex(raw_tex) + find_unsafe_latex(sanitized)
+        if unsafe:
+            logger.error(f"[HARD GATE] Unsafe LaTeX in {tex_path.name} — compilation blocked: "
+                         f"{'; '.join(sorted(set(unsafe)))}")
+            return "", []
+
         # --- Hard gate: brace balance ---
         if not check_brace_balance(sanitized):
             logger.error(f"[HARD GATE] Brace imbalance in {tex_path.name} — compilation blocked")
@@ -404,12 +414,32 @@ def _rename_pdf(pdf_path: str, target_stem: str, out_dir: Path) -> str:
     return pdf_path
 
 
+def _refuse_unsafe(tex_path: Path) -> bool:
+    """True (and logged) when the file about to be compiled must not be."""
+    try:
+        unsafe = find_unsafe_latex(Path(tex_path).read_text(encoding="utf-8", errors="replace"))
+    except OSError as exc:
+        logger.error(f"Could not read {tex_path} to check it before compiling: {exc}")
+        return True
+    if unsafe:
+        logger.error(f"[HARD GATE] Refusing to compile {Path(tex_path).name}: {'; '.join(unsafe)}")
+        return True
+    return False
+
+
 def _compile_with_tectonic(tex_path: Path, out_dir: Path) -> str:
     """Compile with tectonic — fast, self-contained LaTeX engine.
 
     Tectonic automatically downloads only the packages your .tex file needs
     and caches them (~50MB for a typical resume vs ~500MB for full texlive).
+
+    Refuses source with file or IO primitives itself, so no caller can reach
+    the engine around compile_tex_to_pdf's gate. `--untrusted` disables shell
+    escape; it does NOT stop \\input of an absolute path (measured), which is
+    why the source check is the control and this flag only a second layer.
     """
+    if _refuse_unsafe(tex_path):
+        return ""
     try:
         # Tectonic needs a writable cache dir. On Lambda, only /tmp is writable.
         env = os.environ.copy()
@@ -419,6 +449,7 @@ def _compile_with_tectonic(tex_path: Path, out_dir: Path) -> str:
             [
                 "tectonic",
                 "-X", "compile",
+                "--untrusted",
                 "--outdir", str(out_dir.resolve()),
                 "--keep-logs",
                 str(tex_path.resolve()),
@@ -456,7 +487,12 @@ def _compile_with_pdflatex(tex_path: Path, out_dir: Path) -> str:
 
     Runs pdflatex from the directory containing the .tex file to avoid
     issues with spaces in paths when using -output-directory.
+
+    pdflatex's default openin_any=a reads any file, so this refuses unsafe
+    source itself, like _compile_with_tectonic.
     """
+    if _refuse_unsafe(tex_path):
+        return ""
     try:
         # Run from the tex file's directory with just the filename
         # This avoids path-with-spaces issues in -output-directory

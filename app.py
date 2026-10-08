@@ -3401,6 +3401,15 @@ async def upload_resume(
                 raise HTTPException(400, "Could not read the .tex file as text")
         if not text.strip():
             raise HTTPException(400, "The .tex file is empty")
+        # TeX can read any file the server can (tectonic only warns), and an
+        # uploaded preamble survives into every tailored resume. Refuse here,
+        # before parsing spends a model call. shared/latex_safety.py.
+        from shared.latex_safety import find_unsafe_latex
+
+        unsafe = find_unsafe_latex(text)
+        if unsafe:
+            raise HTTPException(400, "This .tex file uses commands that are not allowed in an "
+                                     "uploaded resume: " + "; ".join(unsafe))
     else:
         text = extract_text_from_pdf(contents)
         if not text:
@@ -3499,6 +3508,16 @@ async def upload_resume(
         converted_from_pdf = bool(converted)
 
     tailorable = is_latex_document(tex_content)
+    # Whatever is stored as LaTeX gets compiled later, whichever branch made
+    # it: a PDF whose extracted text is itself a LaTeX document is stored
+    # verbatim above, and a conversion reuses an earlier resume's preamble.
+    if tailorable:
+        from shared.latex_safety import find_unsafe_latex
+
+        unsafe = find_unsafe_latex(tex_content)
+        if unsafe:
+            raise HTTPException(400, "This resume contains LaTeX commands that are not allowed: "
+                                     + "; ".join(unsafe))
     resume_data = {
         "resume_key": resume_key,
         "label": label or file.filename,
