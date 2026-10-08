@@ -242,7 +242,17 @@ def test_save_metrics_only_reads_fields_save_job_actually_returns():
     item_states, terminal_names = _process_matched_jobs_terminal_states()
     real_keys = set()
     for name in terminal_names:
-        function_name = _lambda_function_name_for_state(item_states[name])
+        state = item_states[name]
+        if state.get("Type") == "Pass":
+            # A terminal Pass (SaveJobFailed, added 2026-10-08) contributes its
+            # static Result verbatim, so its keys are read straight off the ASL.
+            assert isinstance(state.get("Result"), dict), (
+                f"{name} is a terminal Pass without a static Result; its entry "
+                f"in processed_jobs would be the raw item, not a save_job shape"
+            )
+            real_keys |= set(state["Result"])
+            continue
+        function_name = _lambda_function_name_for_state(state)
         module = _MODULE_FOR_FUNCTION.get(function_name)
         assert module, (
             f"{name} calls {function_name}Function, which this test doesn't "
