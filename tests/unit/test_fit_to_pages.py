@@ -377,3 +377,64 @@ class TestLeverOrder:
         assert "margins" in names
         assert any(n.startswith("bullets<=") for n in names)
         assert any(n.startswith("skills<=") for n in names)
+
+
+# ---------------------------------------------------------------------------
+# A line-break length printing as prose (strip_orphan_spacing)
+# ---------------------------------------------------------------------------
+# `\\[0.08em]` is a line break with extra leading, and the bracketed length is
+# an OPTIONAL ARGUMENT to `\\`. On its own it is ordinary text, and LaTeX sets
+# it as "[0.08em]" in the document.
+#
+# The model rewrites the header subtitle on roughly half of all résumés, and on
+# 2 of 120 sampled it emitted the spacing twice — once correctly, once as text
+# on the next line:
+#
+#     ...Kubernetes, AWS, Terraform, CI/CD}\\[0.08em]
+#     [0.08em] Dublin, Ireland | +353 ... | 254utkarsh@gmail.com
+#
+# printing a literal "[0.08em]" directly above the candidate's phone number, on
+# the most-read line of the document. Reported by the user from a rendered PDF.
+
+class TestStripOrphanSpacing:
+    def test_the_real_defect_is_removed(self):
+        from shared.fit_to_pages import strip_orphan_spacing
+        tex = ("{\\normalsize DevOps Engineer | Kubernetes, AWS}\\\\[0.08em]\n"
+               "[0.08em] Dublin, Ireland | +353 892515620")
+        out, n = strip_orphan_spacing(tex)
+        assert n == 1
+        assert "\\\\[0.08em]" in out, "the REAL line break must survive"
+        assert "\n[0.08em]" not in out
+        assert "Dublin, Ireland" in out
+
+    def test_a_genuine_optional_argument_is_never_touched(self):
+        from shared.fit_to_pages import strip_orphan_spacing
+        tex = "{\\Large \\textbf{Utkarsh Singh}}\\\\[0.04em]\n{\\normalsize Engineer}"
+        assert strip_orphan_spacing(tex) == (tex, 0)
+
+    def test_an_argument_split_across_a_newline_is_still_an_argument(self):
+        r"""LaTeX allows whitespace between `\\` and its optional argument, so
+        anchoring on "starts a line" would delete valid markup. The check looks
+        backwards past whitespace instead, and this is the case that proves it
+        has to."""
+        from shared.fit_to_pages import strip_orphan_spacing
+        tex = "line one\\\\\n[1em]\nline two"
+        assert strip_orphan_spacing(tex) == (tex, 0)
+
+    def test_prose_mid_line_is_removed_too(self):
+        """Not only at line start: wherever it lands without a `\\` before it,
+        it prints."""
+        from shared.fit_to_pages import strip_orphan_spacing
+        out, n = strip_orphan_spacing("Dublin [0.5em] Ireland")
+        assert (n, out) == (1, "Dublin Ireland")
+
+    def test_a_clean_document_is_returned_unchanged(self):
+        from shared.fit_to_pages import strip_orphan_spacing
+        tex = "\\section*{Summary}\nProse with no spacing markup.\n"
+        assert strip_orphan_spacing(tex) == (tex, 0)
+
+    def test_normalise_separators_applies_it_and_says_so(self):
+        from shared.fit_to_pages import normalise_separators
+        out, actions = normalise_separators("A}\\\\[0.08em]\n[0.08em] B")
+        assert "\n[0.08em]" not in out
+        assert any("line-break length" in a for a in actions), actions

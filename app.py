@@ -1986,6 +1986,7 @@ def get_dashboard_jobs(
     source: Optional[str] = None,
     company: Optional[str] = None,
     title: Optional[str] = None,
+    q: Optional[str] = None,
     tailored: Optional[str] = None,
     tier: Optional[str] = None,
     hide_expired: Optional[str] = None,
@@ -2011,6 +2012,8 @@ def get_dashboard_jobs(
         filters["min_score"] = min_score
     if source:
         filters["source"] = source
+    if q:
+        filters["q"] = q
     if company:
         filters["company"] = company
     if title:
