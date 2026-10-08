@@ -81,30 +81,16 @@ def _one_user(url, headers) -> str:
     return rows[0]["id"]
 
 
-# The key handler() looks jobs_raw up by. ONE definition, because this is the
-# third place to get it wrong.
-#
-# `jobs.job_hash` carries a foreign key into jobs_raw that a job being created
-# cannot satisfy, so `_find_or_create_job` leaves it NULL and sets
-# `canonical_hash` instead -- which is exactly what /api/pipeline/run-single
-# upserts jobs_raw under. Every manually added job has that shape.
-#
-# This function's own docstring used to SAY "job_id and canonical_hash set,
-# job_hash NULL" and then skip the row anyway. The regenerate endpoint read
-# `job["job_hash"]` and passed the NULL into the state machine, where it died
-# three minutes later with "Job None not found in jobs_raw". CLAUDE.md #10: the
-# data existed, the knowledge existed, and they never met -- in three separate
-# modules.
+# The key handler() looks jobs_raw up by: job_hash, else canonical_hash. The
+# precedence lives in shared/tailor_hash.py and nowhere else -- this script
+# used to carry its own copy, and three modules spelling it separately is how
+# the regenerate endpoint passed a NULL job_hash into the state machine
+# ("Job None not found in jobs_raw"). CLAUDE.md #10. Re-exported here because
+# reconcile_resume_rows.py and the tests reach it as retailor_bulk.resolve_tailor_hash;
+# tests/unit/test_tailor_hash_resolver.py asserts it IS the shared function.
+from shared.tailor_hash import resolve_tailor_hash  # noqa: E402  (after sys.path setup)
+
 TAILOR_HASH_KEY = "_tailor_hash"
-
-
-def resolve_tailor_hash(job: dict) -> str | None:
-    """The hash to tailor this row under, or None if it has no usable one.
-
-    job_hash wins when present: scraped rows have both, and jobs_raw is keyed
-    by job_hash for those. canonical_hash is the FALLBACK, not an override.
-    """
-    return job.get("job_hash") or job.get("canonical_hash") or None
 
 
 def partition_unhashed(jobs: list[dict]) -> tuple[list[dict], list[dict]]:
