@@ -24,7 +24,13 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+# cancel-in-progress is FALSE on main and true everywhere else. With a
+# plain `true`, `github.ref` is identical for every merge, so two merges
+# landing seconds apart cancel the earlier commit's run. Measured 2026-10-08:
+# commit 4ce5cd2 (#194) is on main with its Test Suite CANCELLED and no re-run,
+# so it has never been verified by anything — and with no branch protection,
+# nothing noticed. On a branch, superseding an in-flight run is exactly right.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   stale-base-check:

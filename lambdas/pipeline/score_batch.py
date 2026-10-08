@@ -61,6 +61,79 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 
+# Fields the USER owns, or that describe when WE first saw the job. An update
+# must never write these: `save_job` once wrote pipeline states into
+# application_status and reverted jobs the user had marked "Applied", and
+# first_seen is the row's age, not this run's timestamp.
+_USER_OWNED = frozenset({
+    "job_id", "user_id", "job_hash", "application_status", "first_seen",
+})
+
+
+def _write_job_row(db, job_record: dict) -> None:
+    """Update the row for this (user_id, job_hash) if one exists, else insert.
+
+    A plain insert with a fresh `job_id = uuid4()` produced a SECOND row for a
+    job the API had already created. Measured 2026-10-08 on a job added through
+    Add Job minutes earlier:
+
+        job_id b3026c307c74   job_hash NULL   canonical_hash b3026c307c74
+                              pending, score 0        <- app._find_or_create_job
+        job_id dedc376d-...   job_hash b3026c307c74   canonical_hash NULL
+                              scored, A/85            <- here
+
+    Same job, two rows, two different key conventions, and nothing could match
+    them because one populates canonical_hash and the other job_hash. The user
+    sees a scored job beside an unscored duplicate of itself, and the deploy's
+    smoke test reports both a missing artifact and a tier that contradicts its
+    own score.
+
+    The lookup matches `job_hash` OR `canonical_hash`, because the two paths
+    store the SAME value in different columns — for the row above, the API's
+    canonical_hash and this record's job_hash are both b3026c307c74.
+
+    The obvious fix, making `_find_or_create_job` write job_hash as well, is
+    WRONG and tests/unit/test_no_descriptionless_job_stubs.py says why:
+    `jobs.job_hash` carries a foreign key to `jobs_raw`, and a manually added
+    job has no jobs_raw row when that insert runs. It would fail the insert and
+    make Add Job silently create nothing — breaking, again, the thing that was
+    just repaired. Matching on either column needs no schema change and no
+    write to the API path.
+
+    The fields this must not touch are in _USER_OWNED: it runs on every scoring
+    pass, and a re-score must not reset a job the user marked Applied, nor
+    claim the job was first seen today.
+
+    A failed lookup falls through to insert rather than raising — scoring a job
+    and losing the result is worse than one duplicate row.
+    """
+    existing = None
+    try:
+        h = job_record["job_hash"]
+        found = (db.table("jobs").select("job_id")
+                 .eq("user_id", job_record["user_id"])
+                 .or_(f"job_hash.eq.{h},canonical_hash.eq.{h}")
+                 .limit(1).execute())
+        rows = found.data if isinstance(found.data, list) else []
+        candidate = rows[0] if rows else None
+        # A REAL row, not merely something truthy. `(found.data or [None])[0]`
+        # accepted anything a client might hand back — and a shape that is not
+        # a row would route a new job into the UPDATE branch, where its
+        # `.eq("job_id", ...)` matches nothing and the score is silently lost.
+        # Losing a score is strictly worse than a duplicate row, which is the
+        # whole failure this function exists to avoid, so the check is strict.
+        if isinstance(candidate, dict) and isinstance(candidate.get("job_id"), str):
+            existing = candidate
+    except Exception:  # noqa: BLE001 — see docstring
+        existing = None
+
+    if not existing:
+        db.table("jobs").insert(job_record).execute()
+        return
+    update = {k: v for k, v in job_record.items() if k not in _USER_OWNED}
+    db.table("jobs").update(update).eq("job_id", existing["job_id"]).execute()
+
+
 def score_to_tier(score: float | None) -> str:
     """Map match_score (0-100) to tier letter (S/A/B/C/D).
 
@@ -362,7 +435,7 @@ def handler(event, context):
             "trace_id": score_result.get("trace_id"),
         }
         try:
-            db.table("jobs").insert(job_record).execute()
+            _write_job_row(db, job_record)
             inserted += 1
         except Exception as e:
             # Retry without the column the error actually names.
@@ -383,7 +456,7 @@ def handler(event, context):
                     job_record.pop(col)
                     dropped.append(col)
                     try:
-                        db.table("jobs").insert(job_record).execute()
+                        _write_job_row(db, job_record)
                         err = None
                         break
                     except Exception as retry_err:

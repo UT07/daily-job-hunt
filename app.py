@@ -949,6 +949,19 @@ def _dispatch_task(task_type: str, payload: dict, user_id: str = "") -> dict:
             "hiring_manager_score": result.get("hiring_manager_score", 0),
             "tech_recruiter_score": result.get("tech_recruiter_score", 0),
             "match_score": result.get("avg_score", 0),
+            # score_tier BESIDE score, always. `_score_tier` has existed at
+            # app.py:242 since the dashboard's tier filter was built and is
+            # pinned to the pipeline's bands by
+            # test_score_tier_matches_the_pipeline — it was simply never called
+            # here. CLAUDE.md #10: the guard existed, the data existed, and
+            # they never met.
+            #
+            # The cost was visible on 2026-10-08: a row written here with
+            # avg_score defaulting to 0 and no tier made the deploy's
+            # `score-tier-matches-score` check fail (`None@0`), and
+            # smoke_prod.py's own docstring asserts "the current pipeline
+            # cannot produce this" — a claim this line falsified.
+            "score_tier": _score_tier(result.get("avg_score", 0)),
             "tailoring_model": tailoring_model,
             "matched_resume": resume_type,
         })

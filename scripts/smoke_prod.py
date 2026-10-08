@@ -217,10 +217,31 @@ def artifact_completeness():
     from datetime import datetime, timedelta, timezone
     db = _db()
     cut = (datetime.now(timezone.utc) - timedelta(days=30)).date().isoformat()
+    # A job scored MINUTES ago cannot have a resume: tailoring runs
+    # asynchronously through Step Functions and takes 60-90s on a warm Lambda,
+    # several minutes cold. Measured 2026-10-08: a job scored A at 00:09:56
+    # failed the 00:36 deploy, and the whole gate went red over one manual Add
+    # Job — which is the dangerous shape, because a genuinely broken deploy
+    # then looks identical to it.
+    #
+    # The same reasoning is already applied two blocks below for rows with no
+    # description ("would fail this check on every deploy, forever, with no
+    # action that could clear it"); it was simply never applied to recency.
+    # Two hours is generous against a 90s job and still catches a pipeline that
+    # stopped producing.
+    settled = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
     rows = (db.table("jobs")
             .select("job_id,score_tier,resume_s3_url,is_expired,first_seen,description")
             .in_("score_tier", ["S", "A"]).eq("is_expired", False)
-            .gte("first_seen", cut).limit(500).execute().data)
+            .gte("first_seen", cut)
+        .lte("first_seen", settled)
+        .order("first_seen")
+        .limit(500).execute().data)
+    # The cap was silent: at 500+ rows this judged an arbitrary unordered
+    # subset and still reported a percentage. Ordered now, and the cap is
+    # stated rather than assumed — a check that quietly narrows its own
+    # population is the same lie as one that cannot fail.
+    capped = len(rows) >= 500
 
     # A job with no description cannot be tailored — there is nothing to tailor
     # AGAINST — so it can never acquire a resume and would fail this check on
@@ -246,6 +267,11 @@ def artifact_completeness():
         f"{', '.join(str(r.get('job_id'))[:12] for r in missing[:6])}"
     )
     note = f" ({stubs} descriptionless stub(s) excluded)" if stubs else ""
+    # Every exclusion is stated, including the ones that made this pass. A
+    # check that narrows its own population silently reports a percentage of
+    # something nobody chose.
+    note += " [page cap of 500 reached — this judged a SUBSET]" if capped else ""
+    note += " (jobs newer than 2h excluded: tailoring is async)"
     return f"{len(tailorable)} tailorable active S/A jobs, all have a resume{note}"
 
 

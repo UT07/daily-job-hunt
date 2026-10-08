@@ -105,7 +105,7 @@ def test_every_scored_job_reaches_the_insert():
     """No `continue` may sit between scoring and the insert except the ones
     that mean 'there is nothing to store' — a None result or a skip."""
     between = HANDLER[HANDLER.index("score_result = score_single_job_deterministic"):
-                      HANDLER.index('db.table("jobs").insert(job_record)')]
+                      HANDLER.index("_write_job_row(db, job_record)")]
     continues = re.findall(r"^\s*continue\s*$", between, re.MULTILINE)
     assert len(continues) <= 1, (
         f"{len(continues)} early exits between scoring and storing; each one is "
