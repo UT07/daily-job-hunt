@@ -52,13 +52,19 @@ def test_rate_limit_windows_differ_by_provider():
 
 
 def test_selection_routes_around_a_cooling_provider():
-    pool = [GROQ, GROQ2, OR1]
-    ai_helper.note_provider_failure(GROQ, 429)      # cools the groq ACCOUNT
-    picked = ai_helper._select_diverse_providers(pool, n=3)
+    # Until 2026-10-08 this cooled GROQ and asserted groq/qwen3.8-27b went with
+    # it ("same account"). Groq's docs meter each model separately, so a Groq
+    # 429 is now model-scoped (tests/unit/test_cooldown_scope.py). OpenRouter
+    # is the provider whose 429 is genuinely account-wide, so it carries the
+    # account half of this assertion now.
+    pool = [GROQ, GROQ2, OR1, OR2]
+    ai_helper.note_provider_failure(GROQ, 429)      # cools that groq MODEL
+    ai_helper.note_provider_failure(OR1, 429)       # cools the openrouter ACCOUNT
+    picked = ai_helper._select_diverse_providers(pool, n=4)
     names = {p["name"] for p in picked}
     assert "groq/gpt-oss-120b" not in names
-    assert "groq/qwen3.8-27b" not in names, "same account"
-    assert names == {"openrouter/gemma-4-31b-it"}
+    assert "openrouter/glm-5.2" not in names, "same OpenRouter account"
+    assert names == {"groq/qwen3.8-27b"}
 
 
 def test_selection_fails_open_when_everything_is_cooling():
