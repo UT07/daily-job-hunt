@@ -7,7 +7,6 @@ Endpoints:
 - GET  /api/pipeline/status/{name}  — poll specific execution
 - POST /api/compile-latex           — compile LaTeX to PDF
 - POST /api/score                   — score a JD against base resumes
-- POST /api/tailor                  — tailor resume + compile PDF
 - POST /api/cover-letter            — generate cover letter PDF
 - POST /api/contacts                — find LinkedIn contacts
 - GET  /api/profile                 — user profile
@@ -296,16 +295,6 @@ class ScoreResponse(BaseModel):
     # True when these numbers came from the stored row rather than a fresh AI
     # call. The UI can then say so instead of implying a re-evaluation.
     reused: bool = False
-
-
-class TailorRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    job_description: str = Field(..., min_length=20)
-    job_title: str = "Software Engineer"
-    company: str = "Unknown"
-    location: str = Field("", description="Job location (city/country/Remote)")
-    apply_url: str = Field("", description="Direct apply URL (used by auto-apply)")
-    resume_type: str = "sre_devops"
 
 
 class TailorResponse(BaseModel):
@@ -1145,11 +1134,16 @@ def _dispatch_task(task_type: str, payload: dict, user_id: str = "") -> dict:
     if task_type == "tailor":
         resume_type = payload.get("resume_type", "sre_devops")
         base_tex = _resumes.get(resume_type, "")
-        result = _do_tailor(job, base_tex, resume_type, payload.get("company", "Unknown"), payload.get("job_title", "Software Engineer"))
+        result = _do_tailor(job, base_tex, resume_type, payload.get("company", "Unknown"),
+                            payload.get("job_title", "Software Engineer"), user_id)
         # Save artifacts to dashboard job — use actual model that won the council vote
         tailoring_model = f"{getattr(job, 'tailoring_provider', 'council')}:{getattr(job, 'tailoring_model', 'consensus')}"
         _update_job_artifacts(user_id, job_id, {
             "resume_s3_url": result.get("pdf_url", ""),
+            # The key, not just the URL: the URL's signature expires in 7
+            # days and the key is what every later reader re-signs from
+            # (CLAUDE.md #9).
+            "resume_s3_key": result.get("s3_key", ""),
             "ats_score": result.get("ats_score", 0),
             "hiring_manager_score": result.get("hiring_manager_score", 0),
             "tech_recruiter_score": result.get("tech_recruiter_score", 0),
@@ -1175,8 +1169,12 @@ def _dispatch_task(task_type: str, payload: dict, user_id: str = "") -> dict:
     elif task_type == "cover_letter":
         resume_type = payload.get("resume_type", "sre_devops")
         resume_tex = _resumes.get(resume_type, "")
-        result = _do_cover_letter(job, resume_tex, payload.get("company", "Unknown"), payload.get("job_title", "Software Engineer"))
-        _update_job_artifacts(user_id, job_id, {"cover_letter_s3_url": result.get("pdf_url", "")})
+        result = _do_cover_letter(job, resume_tex, payload.get("company", "Unknown"),
+                                  payload.get("job_title", "Software Engineer"), user_id)
+        _update_job_artifacts(user_id, job_id, {
+            "cover_letter_s3_url": result.get("pdf_url", ""),
+            "cover_letter_s3_key": result.get("s3_key", ""),
+        })
         result["job_id"] = job_id
         return result
     elif task_type == "contacts":
@@ -1252,7 +1250,20 @@ def _process_sqs_task(event, context):
 # Synchronous worker functions (called from background threads)
 # ---------------------------------------------------------------------------
 
-def _do_tailor(job, base_tex, resume_type, company, job_title):
+def _user_artifact_key(user_id: str, kind: str, company: str, job_title: str, suffix: str) -> str:
+    """S3 key for an on-demand artifact, namespaced by the user who asked.
+
+    These were `web/{date}/{kind}/{company}_{title}_{suffix}`: two users
+    tailoring for the same company and title on the same day wrote the same
+    object, and each got the other's document behind their link.
+    """
+    import datetime
+    date_str = datetime.date.today().isoformat()
+    safe_name = f"{company}_{job_title}_{suffix}".replace(" ", "_").replace("/", "_")
+    return f"users/{user_id or 'anonymous'}/web/{date_str}/{kind}/{safe_name}"
+
+
+def _do_tailor(job, base_tex, resume_type, company, job_title, user_id=""):
     with tempfile.TemporaryDirectory() as tmpdir:
         tex_path = tailor_resume(job, base_tex, _ai_client, Path(tmpdir))
         if not tex_path or not Path(tex_path).exists():
@@ -1275,11 +1286,8 @@ def _do_tailor(job, base_tex, resume_type, company, job_title):
             raise RuntimeError("LaTeX compilation failed")
 
         # Upload to S3
-        import datetime
-        date_str = datetime.date.today().isoformat()
-        safe_name = f"{company}_{job_title}_resume.pdf".replace(" ", "_")
         bucket = os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt")
-        s3_key = f"web/{date_str}/resumes/{safe_name}"
+        s3_key = _user_artifact_key(user_id, "resumes", company, job_title, "resume.pdf")
         pdf_url = s3_upload_file(pdf_path, s3_key, bucket) or ""
 
         ats = scores.get("ats_score", 0)
@@ -1289,24 +1297,22 @@ def _do_tailor(job, base_tex, resume_type, company, job_title):
             "ats_score": ats, "hiring_manager_score": hm,
             "tech_recruiter_score": tr, "avg_score": round((ats + hm + tr) / 3),
             "pdf_url": pdf_url,
+            "s3_key": s3_key if pdf_url else "",
             "scoring_failed": scoring_failed,
         }
 
 
-def _do_cover_letter(job, resume_tex, company, job_title):
+def _do_cover_letter(job, resume_tex, company, job_title, user_id=""):
     with tempfile.TemporaryDirectory() as tmpdir:
         tex_path = generate_cover_letter(job, resume_tex, _ai_client, Path(tmpdir))
         pdf_path = compile_tex_to_pdf(tex_path, tmpdir)
         if not pdf_path:
             raise RuntimeError("LaTeX compilation failed")
 
-        import datetime
-        date_str = datetime.date.today().isoformat()
-        safe_name = f"{company}_{job_title}_cover_letter.pdf".replace(" ", "_")
         bucket = os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt")
-        s3_key = f"web/{date_str}/cover_letters/{safe_name}"
+        s3_key = _user_artifact_key(user_id, "cover_letters", company, job_title, "cover_letter.pdf")
         pdf_url = s3_upload_file(pdf_path, s3_key, bucket) or ""
-        return {"pdf_url": pdf_url}
+        return {"pdf_url": pdf_url, "s3_key": s3_key if pdf_url else ""}
 
 
 def _do_contacts(job):
@@ -1543,30 +1549,10 @@ def _do_rebuild_sections(job_id: str, sections: dict, user_id: str) -> dict:
 # POST endpoints — return 202 Accepted with task_id for long-running ops
 # ---------------------------------------------------------------------------
 
-@app.post("/api/tailor", status_code=202)
-def tailor_job(req: TailorRequest, user: AuthUser = Depends(get_current_user)):
-    if req.resume_type not in _resumes:
-        raise HTTPException(400, f"Unknown resume type: {req.resume_type}")
-
-    task_id = str(uuid.uuid4())
-    payload = {
-        "job_description": req.job_description,
-        "job_title": req.job_title,
-        "company": req.company,
-        "location": req.location,
-        "resume_type": req.resume_type,
-    }
-    _enqueue_task(task_id, user.id, "tailor", payload)
-    if _posthog:
-        _posthog.capture(
-            distinct_id=user.id,
-            event="resume_tailor_started",
-            properties={
-                "resume_type": req.resume_type,
-                "jd_length": len(req.job_description),
-            },
-        )
-    return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
+# POST /api/tailor was removed 2026-10-08. Nothing in web/src called it (Add
+# Job uses /api/pipeline/run-single), and it wrote an un-namespaced S3 key,
+# stored only an expiring presigned URL, and tailored the repo-bundled owner
+# résumé whoever asked. See tests/unit/test_legacy_tailor_removed.py.
 
 
 @app.post("/api/cover-letter", status_code=202)

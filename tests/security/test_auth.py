@@ -25,11 +25,6 @@ PROTECTED_ENDPOINTS = [
         "job_title": "Software Engineer",
         "company": "TestCo",
     }),
-    ("POST", "/api/tailor", {
-        "job_description": "We need a Python developer with 5 years experience in AWS and Docker.",
-        "job_title": "Software Engineer",
-        "company": "TestCo",
-    }),
     ("POST", "/api/cover-letter", {
         "job_description": "We need a Python developer with 5 years experience in AWS and Docker.",
         "job_title": "Software Engineer",

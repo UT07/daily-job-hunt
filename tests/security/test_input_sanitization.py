@@ -180,11 +180,15 @@ def test_oversized_job_description_rejected(client, auth_headers):
     )
 
 
-def test_oversized_payload_tailor_rejected(client, auth_headers):
-    """A 1MB+ job_description to /api/tailor should not crash."""
+def test_oversized_payload_cover_letter_rejected(client, auth_headers):
+    """A 1MB+ job_description to an async artifact endpoint should not crash.
+
+    Was /api/tailor, removed 2026-10-08; /api/cover-letter is the remaining
+    endpoint with the same request shape.
+    """
     huge_description = "B" * (1024 * 1024 + 1)
 
-    resp = client.post("/api/tailor", headers=auth_headers, json={
+    resp = client.post("/api/cover-letter", headers=auth_headers, json={
         "job_description": huge_description,
         "job_title": "Software Engineer",
         "company": "TestCo",
