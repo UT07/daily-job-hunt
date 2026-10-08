@@ -6,7 +6,7 @@ The wizard has completed a deep integration of PostHog analytics into NaukriBaba
 | Event | Description | File |
 |---|---|---|
 | `job_scored` | User scores a JD against a base resume via `/api/score` | `app.py` |
-| `resume_tailor_started` | User queues a resume tailoring task via `/api/tailor` | `app.py` |
+| `resume_tailor_started` | Retired 2026-10-08 with `POST /api/tailor`; on-demand tailoring is now `pipeline_single_job_started` | `app.py` |
 | `cover_letter_started` | User queues a cover letter generation task via `/api/cover-letter` | `app.py` |
 | `contacts_search_started` | User queues a LinkedIn contacts search via `/api/contacts` | `app.py` |
 | `pipeline_started` | User triggers the daily job-hunting pipeline via `/api/pipeline/run` | `app.py` |

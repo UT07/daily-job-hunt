@@ -210,14 +210,25 @@ try:
             r = http.get(f"{API}/api/quality-stats", headers=headers, timeout=10)
             test("GET /api/quality-stats", r.status_code == 200)
 
-            # Tailor (async)
-            r = http.post(f"{API}/api/tailor", headers=headers,
-                          json={"job_description": "Senior SRE at Stripe. Kubernetes, Terraform, Python. 5+ years.",
-                                "resume_key": "sre_devops"}, timeout=10)
-            test("POST /api/tailor returns 202", r.status_code == 202)
-            if r.status_code == 202:
-                task_id = r.json().get("task_id")
-                test(f"  task_id returned", bool(task_id))
+            # On-demand tailoring. POST /api/tailor was removed 2026-10-08;
+            # Add Job (web/src/pages/AddJob.jsx) posts to
+            # /api/pipeline/run-single, which starts a real Step Functions
+            # execution, writes a jobs_raw row and spends LLM calls. So it is
+            # opt-in, and a skip is reported as a WARN, never as a pass.
+            if os.environ.get("VERIFY_RUN_SINGLE") == "1":
+                r = http.post(f"{API}/api/pipeline/run-single", headers=headers,
+                              json={"job_description": "Senior SRE at Stripe. Kubernetes, Terraform, Python. 5+ years.",
+                                    "job_title": "Senior SRE", "company": "Stripe",
+                                    "resume_type": "sre_devops"}, timeout=30)
+                test("POST /api/pipeline/run-single returns 202", r.status_code == 202,
+                     r.text[:200])
+                if r.status_code == 202:
+                    body = r.json()
+                    test("  executionArn returned", bool(body.get("executionArn")))
+                    test("  pollUrl returned", str(body.get("pollUrl", "")).startswith("/api/pipeline/status/"))
+            else:
+                warn("Skipped POST /api/pipeline/run-single",
+                     "starts a real execution; set VERIFY_RUN_SINGLE=1 to run it")
 
         else:
             warn("Skipping authenticated endpoints — no JWT secret or user_id")
