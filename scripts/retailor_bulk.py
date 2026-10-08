@@ -81,17 +81,51 @@ def _one_user(url, headers) -> str:
     return rows[0]["id"]
 
 
+# The key handler() looks jobs_raw up by. ONE definition, because this is the
+# third place to get it wrong.
+#
+# `jobs.job_hash` carries a foreign key into jobs_raw that a job being created
+# cannot satisfy, so `_find_or_create_job` leaves it NULL and sets
+# `canonical_hash` instead -- which is exactly what /api/pipeline/run-single
+# upserts jobs_raw under. Every manually added job has that shape.
+#
+# This function's own docstring used to SAY "job_id and canonical_hash set,
+# job_hash NULL" and then skip the row anyway. The regenerate endpoint read
+# `job["job_hash"]` and passed the NULL into the state machine, where it died
+# three minutes later with "Job None not found in jobs_raw". CLAUDE.md #10: the
+# data existed, the knowledge existed, and they never met -- in three separate
+# modules.
+TAILOR_HASH_KEY = "_tailor_hash"
+
+
+def resolve_tailor_hash(job: dict) -> str | None:
+    """The hash to tailor this row under, or None if it has no usable one.
+
+    job_hash wins when present: scraped rows have both, and jobs_raw is keyed
+    by job_hash for those. canonical_hash is the FALLBACK, not an override.
+    """
+    return job.get("job_hash") or job.get("canonical_hash") or None
+
+
 def partition_unhashed(jobs: list[dict]) -> tuple[list[dict], list[dict]]:
     """Split rows into (tailorable, unhashed). Pure, so it is testable directly.
 
-    A NULL job_hash cannot go into PostgREST's `in.(...)` filter -- `,`.join
-    raises TypeError on it -- and there is nothing for handler() to look up
-    anyway. Manually-added jobs have produced these: job_id and canonical_hash
-    set, job_hash NULL (one A-tier row, 2026-09-29, which also had an empty
-    description and no jobs_raw row at all).
+    A row with neither hash cannot go into PostgREST's `in.(...)` filter --
+    `,`.join raises TypeError on a None -- and there is nothing for handler()
+    to look up anyway.
+
+    Tailorable rows come back with `_tailor_hash` set, so no caller downstream
+    has to repeat the precedence and none can read `job_hash` by habit and get
+    a None.
     """
-    return ([j for j in jobs if j.get("job_hash")],
-            [j for j in jobs if not j.get("job_hash")])
+    usable, unhashed = [], []
+    for j in jobs:
+        h = resolve_tailor_hash(j)
+        if h:
+            usable.append({**j, TAILOR_HASH_KEY: h})
+        else:
+            unhashed.append(j)
+    return usable, unhashed
 
 
 def select_jobs(url, headers, user_id: str, tiers: list[str], max_jobs: int | None):
@@ -106,7 +140,12 @@ def select_jobs(url, headers, user_id: str, tiers: list[str], max_jobs: int | No
     jobs, offset = [], 0
     while True:
         page = httpx.get(f"{url}/rest/v1/jobs", params={
-            "select": "job_hash,title,company,score_tier,resume_s3_url",
+            # canonical_hash is NOT optional here: manually added jobs have
+            # job_hash NULL and only this column identifies their jobs_raw row.
+            # Resolving the fallback while never fetching the column it reads
+            # is how the fix below looked applied and still skipped every such
+            # job (CLAUDE.md #12 — check the instrument).
+            "select": "job_hash,canonical_hash,title,company,score_tier,resume_s3_url",
             "user_id": f"eq.{user_id}", "is_expired": "eq.false",
             "score_tier": f"in.({','.join(tiers)})",
             "order": "match_score.desc", "limit": 1000, "offset": offset,
@@ -122,10 +161,10 @@ def select_jobs(url, headers, user_id: str, tiers: list[str], max_jobs: int | No
     # population is the same lie as a status that cannot fail.
     jobs, unhashed = partition_unhashed(jobs)
     for j in unhashed:
-        print(f"  {j.get('score_tier')} SKIPPED, no job_hash to look up: "
-              f"{str(j.get('title'))[:40]} @ {j.get('company')}")
+        print(f"  {j.get('score_tier')} SKIPPED, neither job_hash nor "
+              f"canonical_hash: {str(j.get('title'))[:40]} @ {j.get('company')}")
 
-    hashes = [j["job_hash"] for j in jobs]
+    hashes = [j[TAILOR_HASH_KEY] for j in jobs]
     present: set[str] = set()
     for i in range(0, len(hashes), 100):
         chunk = hashes[i:i + 100]
@@ -134,7 +173,7 @@ def select_jobs(url, headers, user_id: str, tiers: list[str], max_jobs: int | No
         }, headers=headers, timeout=60).json()
         present |= {r["job_hash"] for r in rows if isinstance(r, dict)}
 
-    usable = [j for j in jobs if j["job_hash"] in present]
+    usable = [j for j in jobs if j[TAILOR_HASH_KEY] in present]
     skipped = len(jobs) - len(usable)
     if skipped:
         print(f"  {skipped} job(s) skipped: not in jobs_raw, handler would raise")
@@ -214,11 +253,16 @@ def main() -> int:
     if args.only_hashes:
         wanted = {h.strip() for h in Path(args.only_hashes).read_text().split() if h.strip()}
         before = len(jobs)
-        jobs = [j for j in jobs if j.get("job_hash") in wanted]
+        jobs = [j for j in jobs
+                if wanted & {j.get("job_hash"), j.get("canonical_hash"),
+                             j.get(TAILOR_HASH_KEY)} - {None}]
         # Reported, never silent: a hash in the file that matched no job is a
         # job this run will NOT touch, and a caller who asked for 134 and got
         # 97 needs to know which 37 are missing rather than reading a success.
-        unmatched = wanted - {j.get("job_hash") for j in jobs}
+        matched = {h for j in jobs
+                   for h in (j.get("job_hash"), j.get("canonical_hash"),
+                             j.get(TAILOR_HASH_KEY)) if h}
+        unmatched = wanted - matched
         print(f"--only-hashes: {len(jobs)} of {before} job(s) selected from "
               f"{len(wanted)} hash(es)")
         if unmatched:
@@ -231,7 +275,7 @@ def main() -> int:
               f"resume and are left alone")
     print(f"{len(jobs)} job(s) in tier(s) {','.join(tiers)} for user {user_id[:8]}")
     for j in jobs[:10]:
-        print(f"  {j['score_tier']}  {j['job_hash'][:12]}  "
+        print(f"  {j['score_tier']}  {j[TAILOR_HASH_KEY][:12]}  "
               f"{str(j['title'])[:38]:40s} {str(j['company'])[:22]}")
     if len(jobs) > 10:
         print(f"  ... and {len(jobs) - 10} more")
@@ -249,7 +293,7 @@ def main() -> int:
     s3 = boto3.client("s3", region_name=REGION)
     bucket = os.environ.get("S3_BUCKET", "utkarsh-job-hunt")
     started = datetime.datetime.now(datetime.timezone.utc)
-    keys = [tex_key(user_id, j["job_hash"]) for j in jobs]
+    keys = [tex_key(user_id, j[TAILOR_HASH_KEY]) for j in jobs]
 
     sent = failed = 0
     if args.compile_only:
@@ -263,22 +307,22 @@ def main() -> int:
                 # for work that succeeds.
                 resp = lam.invoke(
                     FunctionName=FUNCTION, InvocationType="Event",
-                    Payload=json.dumps({"job_hash": j["job_hash"],
+                    Payload=json.dumps({"job_hash": j[TAILOR_HASH_KEY],
                                         "user_id": user_id,
                                         "tailoring_depth": args.depth}).encode(),
                 )
                 code = resp.get("StatusCode")
                 if code == 202:
                     sent += 1
-                    print(f"  [{i}/{len(jobs)}] tailor queued {j['job_hash'][:12]} "
+                    print(f"  [{i}/{len(jobs)}] tailor queued {j[TAILOR_HASH_KEY][:12]} "
                           f"{str(j['title'])[:34]}", flush=True)
                 else:
                     failed += 1
                     print(f"  [{i}/{len(jobs)}] UNEXPECTED StatusCode {code} "
-                          f"for {j['job_hash'][:12]}", flush=True)
+                          f"for {j[TAILOR_HASH_KEY][:12]}", flush=True)
             except Exception as exc:  # noqa: BLE001 — one bad job must not stop the batch
                 failed += 1
-                print(f"  [{i}/{len(jobs)}] FAILED to queue {j['job_hash'][:12]}: {exc}",
+                print(f"  [{i}/{len(jobs)}] FAILED to queue {j[TAILOR_HASH_KEY][:12]}: {exc}",
                       flush=True)
             if i < len(jobs):
                 time.sleep(args.stagger)
