@@ -10,13 +10,15 @@
  * no business in browser history.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { MemoryRouter } from 'react-router-dom';
 
-const { apiCall, pollPipeline } = vi.hoisted(() => ({
+const { apiCall, pollPipeline, apiGet } = vi.hoisted(() => ({
   apiCall: vi.fn(),
   pollPipeline: vi.fn(),
+  apiGet: vi.fn(),
 }));
-vi.mock('../../api', () => ({ apiCall, pollPipeline }));
+vi.mock('../../api', () => ({ apiCall, pollPipeline, apiGet }));
 
 import AddJob from '../AddJob';
 
@@ -95,5 +97,133 @@ describe('AddJob draft persistence', () => {
 
     expect(screen.getByLabelText('Job Description')).toHaveValue('');
     expect(screen.getByLabelText('Company')).toHaveValue('Stripe');
+  });
+});
+
+/**
+ * What Tailor Resume / Cover Letter show when the pipeline finishes.
+ *
+ * pollPipeline resolves with the Step Function's output, and the single-job
+ * machine ends in SaveJobComplete / SaveJobWithoutCL (template.yaml), so the
+ * output IS save_job.handler's return value:
+ *
+ *     {job_hash, user_id, saved, has_resume, failed}
+ *
+ * (lambdas/pipeline/save_job.py, both return statements). The cards used to
+ * read pdf_url / drive_url / ats_score straight off that object; none of
+ * those keys exist in it, so every run rendered "--" scores and "PDF
+ * generation in progress..." forever, and `failed: true` read the same as
+ * success. These tests use the real shape; the earlier suite never resolved
+ * pollPipeline at all, which is how this went unseen.
+ */
+const SAVE_JOB_OK = {
+  job_hash: 'b3026c307c74', user_id: 'u1', saved: true, has_resume: true, failed: false,
+};
+
+// A row as GET /api/dashboard/jobs returns it (JOB_LIST_COLUMNS, after
+// _refresh_s3_urls has set the presigned urls).
+const JOB_ROW = {
+  job_id: 'job-uuid-1',
+  job_hash: 'b3026c307c74',
+  company: 'Grinds360',
+  title: 'DevOps Engineer',
+  ats_score: 70, hiring_manager_score: 72, tech_recruiter_score: 68,
+  tailored_ats_score: 91, tailored_hm_score: 88, tailored_tr_score: 86,
+  resume_s3_key: 'u1/b3026c307c74/resume.pdf',
+  resume_s3_url: 'https://s3.test/resume.pdf?sig=inline',
+  resume_s3_download_url: 'https://s3.test/resume.pdf?sig=attachment',
+  cover_letter_s3_url: 'https://s3.test/cl.pdf?sig=inline',
+  failure_reason: null,
+};
+
+function fillAndRun(button) {
+  render(<MemoryRouter><AddJob /></MemoryRouter>);
+  fireEvent.change(screen.getByLabelText('Job Description'), { target: { value: JD } });
+  fireEvent.change(screen.getByLabelText('Job Title'), { target: { value: 'DevOps Engineer' } });
+  fireEvent.change(screen.getByLabelText('Company'), { target: { value: 'Grinds360' } });
+  fireEvent.click(screen.getByRole('button', { name: button }));
+}
+
+describe('AddJob pipeline result cards read the real SaveJob output', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    sessionStorage.clear();
+    apiCall.mockResolvedValue({ pollUrl: '/api/pipeline/status/exec-1' });
+  });
+
+  it('fetches the saved job and links its résumé PDF and tailored scores', async () => {
+    pollPipeline.mockResolvedValue(SAVE_JOB_OK);
+    apiGet.mockResolvedValue({ jobs: [{ ...JOB_ROW, job_hash: 'other' }, JOB_ROW], total: 2 });
+
+    fillAndRun('Tailor Resume');
+
+    const link = await screen.findByRole('link', { name: /download resume pdf/i });
+    expect(link).toHaveAttribute('href', JOB_ROW.resume_s3_download_url);
+    expect(screen.getByText('91')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /view in dashboard/i }))
+      .toHaveAttribute('href', '/jobs/job-uuid-1');
+    expect(screen.queryByText(/in progress/i)).not.toBeInTheDocument();
+    // Looked up through the dashboard list endpoint, all lifecycles.
+    expect(apiGet.mock.calls[0][0]).toMatch(/^\/api\/dashboard\/jobs\?/);
+    expect(apiGet.mock.calls[0][0]).toContain('lifecycle=all');
+  });
+
+  it('shows failure, not "in progress", when SaveJob reports failed: true', async () => {
+    pollPipeline.mockResolvedValue({ ...SAVE_JOB_OK, has_resume: false, failed: true });
+    apiGet.mockResolvedValue({
+      jobs: [{ ...JOB_ROW, resume_s3_url: null, resume_s3_download_url: null,
+        failure_reason: 'tectonic: Undefined control sequence' }],
+      total: 1,
+    });
+
+    fillAndRun('Tailor Resume');
+
+    expect(await screen.findByText(/résumé failed/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Undefined control sequence/)).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /download resume pdf/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/in progress/i)).not.toBeInTheDocument();
+  });
+
+  it('shows failure when SaveJob reports saved: false', async () => {
+    pollPipeline.mockResolvedValue({
+      job_hash: 'b3026c307c74', user_id: 'u1', saved: false, has_resume: false, failed: false,
+    });
+    apiGet.mockResolvedValue({ jobs: [], total: 0 });
+
+    fillAndRun('Tailor Resume');
+
+    expect(await screen.findByText(/nothing was saved/i)).toBeInTheDocument();
+    expect(screen.queryByText(/in progress/i)).not.toBeInTheDocument();
+  });
+
+  it('cover letter card links the stored cover letter', async () => {
+    pollPipeline.mockResolvedValue(SAVE_JOB_OK);
+    apiGet.mockResolvedValue({ jobs: [JOB_ROW], total: 1 });
+
+    fillAndRun('Cover Letter');
+
+    const link = await screen.findByRole('link', { name: /download cover letter pdf/i });
+    expect(link).toHaveAttribute('href', JOB_ROW.cover_letter_s3_url);
+  });
+
+  it('cover letter card says so when the run produced no cover letter', async () => {
+    // SaveJobWithoutCL: the CL step failed non-fatally; the row has a résumé only.
+    pollPipeline.mockResolvedValue(SAVE_JOB_OK);
+    apiGet.mockResolvedValue({ jobs: [{ ...JOB_ROW, cover_letter_s3_url: null }], total: 1 });
+
+    fillAndRun('Cover Letter');
+
+    expect(await screen.findByText(/no cover letter was produced/i)).toBeInTheDocument();
+    expect(screen.queryByText(/in progress/i)).not.toBeInTheDocument();
+  });
+
+  it('a FAILED execution surfaces its error and cause', async () => {
+    const err = new Error('JobProcessingFailed: Failed to process job');
+    pollPipeline.mockRejectedValue(err);
+
+    fillAndRun('Tailor Resume');
+
+    await waitFor(() =>
+      expect(screen.getByText(/JobProcessingFailed: Failed to process job/)).toBeInTheDocument());
   });
 });

@@ -18,7 +18,7 @@ vi.mock('../lib/supabase', () => ({
   supabase: { auth: { signOut, getSession } },
 }))
 
-import { formatErrorDetail, apiGet, apiCall } from '../api'
+import { formatErrorDetail, apiGet, apiCall, pollPipeline } from '../api'
 
 describe('formatErrorDetail', () => {
   it('returns empty string for null/undefined', () => {
@@ -144,5 +144,36 @@ describe('api 401 session-expiry handling', () => {
     })
     await expect(apiGet('/x')).rejects.toThrow('boom')
     expect(signOut).not.toHaveBeenCalled()
+  })
+})
+
+describe('pollPipeline on a FAILED execution', () => {
+  beforeEach(() => {
+    getSession.mockResolvedValue({ data: { session: { access_token: 't' } } })
+  })
+
+  function statusResponse(body) {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => body }))
+  }
+
+  it('shows both error and cause from GET /api/pipeline/status/{name}', async () => {
+    statusResponse({
+      name: 'exec-1', status: 'FAILED', startDate: '2026-10-08T10:00:00', stopDate: null, output: null,
+      error: 'JobProcessingFailed', cause: 'Failed to process job',
+    })
+    await expect(pollPipeline('/api/pipeline/status/exec-1', { intervalMs: 1 }))
+      .rejects.toThrow('JobProcessingFailed: Failed to process job')
+  })
+
+  it('degrades to a generic message when the backend sends neither', async () => {
+    statusResponse({ name: 'exec-1', status: 'FAILED', startDate: '2026-10-08T10:00:00', output: null })
+    await expect(pollPipeline('/api/pipeline/status/exec-1', { intervalMs: 1 }))
+      .rejects.toThrow('Pipeline execution failed')
+  })
+
+  it('resolves with the SaveJob output on SUCCEEDED', async () => {
+    const out = { job_hash: 'h', user_id: 'u', saved: true, has_resume: true, failed: false }
+    statusResponse({ name: 'exec-1', status: 'SUCCEEDED', startDate: '2026-10-08T10:00:00', output: out })
+    await expect(pollPipeline('/api/pipeline/status/exec-1', { intervalMs: 1 })).resolves.toEqual(out)
   })
 })

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { apiCall, pollPipeline } from '../api';
+import { apiCall, apiGet, pollPipeline } from '../api';
+import { loadPipelineJob } from './pipelineJobResult';
 import Button from '../components/ui/Button';
 import Input, { Textarea, Select } from '../components/ui/Input';
 import ScoreCard from '../components/ScoreCard';
@@ -328,16 +329,13 @@ export default function AddJob() {
 
       setProgressKey('SUCCEEDED');
 
-      // The pipeline output contains the full results.
-      // Determine what to show based on the action and what's in the output.
-      if (action === 'tailor') {
-        addResult('tailor', output);
-      } else if (action === 'cover-letter') {
-        addResult('cover-letter', output);
-      } else {
-        // Generic: show whatever came back
-        addResult(action, output);
-      }
+      // The execution output is save_job's {job_hash, saved, has_resume,
+      // failed} and carries no document or score; those are on the saved job
+      // row. Resolve the row and let the card render the real outcome --
+      // including failed / not saved, which the old "read pdf_url off the
+      // output" path rendered as "in progress" forever.
+      const outcome = await loadPipelineJob(output, { company, title: jobTitle }, apiGet);
+      addResult(action, outcome);
     } catch (err) {
       setErrors((prev) => [...prev, err.message]);
     } finally {
