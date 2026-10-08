@@ -821,6 +821,35 @@ def _prefilter_job(
     return True, "pass"
 
 
+_PAGE = 1000
+
+
+def _all_rows(build_query, page: int = _PAGE) -> list:
+    """Every row, not the first page of them.
+
+    PostgREST answers at most ~1000 rows and says nothing about truncating. The
+    selects below were unpaginated, so on a `jobs` table of ~1,400 rows for one
+    user the "already scored" set silently lost ~400 hashes and their
+    company+title keys — those jobs then looked new and were re-scored and
+    re-tailored — and a backfill window over 1000 raw rows dropped the rest.
+
+    Same contract as db_client.SupabaseClient._all_rows (17b3b48):
+    `build_query(lo, hi)` returns the query with `.range(lo, hi)` applied, and a
+    short page is the end — the only end-of-data signal PostgREST gives. A
+    local copy because db_client.py is a repo-root module that neither the
+    pipeline's CodeUri nor the shared layer ships. Callers order by a unique
+    key, because `.range()` over an unordered result is not a stable walk.
+    """
+    out: list = []
+    lo = 0
+    while True:
+        chunk = build_query(lo, lo + page - 1).execute().data or []
+        out.extend(chunk)
+        if len(chunk) < page:
+            return out
+        lo += page
+
+
 def handler(event, context):
     db = get_supabase()
     pipeline_run_id = event.get("pipeline_run_id", "")
@@ -838,10 +867,10 @@ def handler(event, context):
         logger.info(f"[merge_dedup] scrape_runs: {len(fargate_hashes)} hashes from Fargate tasks")
 
     # --- Source 2: Get today's scraped jobs from jobs_raw ---
-    result = db.table("jobs_raw").select("job_hash, title, company, source, description, location, posted_date") \
-        .gte("scraped_at", today).execute()
-
-    all_jobs = result.data or []
+    _RAW_COLUMNS = "job_hash, title, company, source, description, location, posted_date"
+    all_jobs = _all_rows(
+        lambda lo, hi: db.table("jobs_raw").select(_RAW_COLUMNS)
+        .gte("scraped_at", today).order("job_hash").range(lo, hi))
 
     # --- Source 3: Catch unscored jobs from recent days (backfill) ---
     # If the pipeline failed mid-run or was offline, jobs sit in jobs_raw
@@ -849,11 +878,13 @@ def handler(event, context):
     # BACKFILL_LOOKBACK_DAYS (see its own comment above for why 30, not 7,
     # and why widening this doesn't let stale postings through).
     lookback = (datetime.now(timezone.utc).date() - timedelta(days=BACKFILL_LOOKBACK_DAYS)).isoformat()
-    recent = db.table("jobs_raw").select("job_hash, title, company, source, description, location, posted_date") \
-        .gte("scraped_at", lookback).lt("scraped_at", today).execute()
-    if recent.data:
+    recent = _all_rows(
+        lambda lo, hi: db.table("jobs_raw").select(_RAW_COLUMNS)
+        .gte("scraped_at", lookback).lt("scraped_at", today)
+        .order("job_hash").range(lo, hi))
+    if recent:
         today_hashes = {j["job_hash"] for j in all_jobs}
-        backfill = [j for j in recent.data if j["job_hash"] not in today_hashes]
+        backfill = [j for j in recent if j["job_hash"] not in today_hashes]
         if backfill:
             all_jobs.extend(backfill)
             logger.info(f"[merge_dedup] Backfill: {len(backfill)} unscored jobs from last {BACKFILL_LOOKBACK_DAYS} days")
@@ -966,9 +997,11 @@ def handler(event, context):
     existing_hashes = set()
     existing_dedup_keys: set[str] = set()
     if user_id:
-        existing = db.table("jobs").select("job_hash, company, title").eq("user_id", user_id) \
-            .not_.is_("job_hash", "null").execute()
-        for j in (existing.data or []):
+        existing = _all_rows(
+            lambda lo, hi: db.table("jobs").select("job_hash, company, title")
+            .eq("user_id", user_id).not_.is_("job_hash", "null")
+            .order("job_hash").range(lo, hi))
+        for j in existing:
             existing_hashes.add(j["job_hash"])
             # Build cross-query dedup key: same company+title already in jobs table
             norm_co = normalize_company(j.get("company", ""))

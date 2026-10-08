@@ -66,6 +66,10 @@ def _make_supabase(jobs_raw_data=None, existing_jobs_data=None, scrape_runs_data
     raw_chain = MagicMock()
     raw_chain.select.return_value = raw_chain
     raw_chain.gte.return_value = raw_chain
+    # Paginated since 2026-10-08 (merge_dedup._all_rows); fixtures are under
+    # a page, so one short page ends each walk.
+    raw_chain.order.return_value = raw_chain
+    raw_chain.range.return_value = raw_chain
     raw_chain.execute.return_value = raw_result
 
     existing_chain = MagicMock()
@@ -73,6 +77,8 @@ def _make_supabase(jobs_raw_data=None, existing_jobs_data=None, scrape_runs_data
     existing_chain.eq.return_value = existing_chain
     existing_chain.not_ = existing_chain
     existing_chain.is_.return_value = existing_chain
+    existing_chain.order.return_value = existing_chain
+    existing_chain.range.return_value = existing_chain
     existing_chain.execute.return_value = existing_result
 
     runs_chain = MagicMock()
@@ -652,6 +658,10 @@ def _make_supabase_for_backfill(today_data, backfill_data, existing_jobs_data=No
     raw_chain = MagicMock()
     raw_chain.select.return_value = raw_chain
     raw_chain.gte.return_value = raw_chain
+    # Paginated since 2026-10-08 (merge_dedup._all_rows); fixtures are under
+    # a page, so one short page ends each walk.
+    raw_chain.order.return_value = raw_chain
+    raw_chain.range.return_value = raw_chain
     raw_chain.lt.return_value = raw_chain
     calls = {"n": 0}
 
@@ -668,6 +678,8 @@ def _make_supabase_for_backfill(today_data, backfill_data, existing_jobs_data=No
     existing_chain.eq.return_value = existing_chain
     existing_chain.not_ = existing_chain
     existing_chain.is_.return_value = existing_chain
+    existing_chain.order.return_value = existing_chain
+    existing_chain.range.return_value = existing_chain
     existing_result = MagicMock()
     existing_result.data = existing_jobs_data or []
     existing_chain.execute.return_value = existing_result
