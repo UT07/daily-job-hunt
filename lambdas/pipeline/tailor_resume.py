@@ -35,12 +35,15 @@ from guardrails.output_guards import check_textbf_preservation as _check_textbf_
 
 # The user's resume-composition rules (how many experience entries, how many
 # projects, how many pages) and the counting that enforces them. `shared` is a
-# repo-root package that reaches zip Lambdas via /opt/python (layer/build.sh
-# FIRST_PARTY) and the container image via Dockerfile.lambda's `COPY shared/`,
-# so the qualified `shared.*` spelling resolves in every deploy path — same as
-# score_batch.py's `from shared.work_auth import ...`. `check_output` is
-# aliased because guardrails/output_guards.py exports a different function of
-# the same name.
+# repo-root package that reaches zip Lambdas through the committed symlink
+# lambdas/pipeline/shared -> ../../shared, which `sam build` copies in as real
+# files, so it lands at /var/task/shared inside this function's own artifact
+# (it is NOT in the layer: since 2026-10-08 layer/build.sh ships third-party
+# deps only). The container image gets it via Dockerfile.lambda's
+# `COPY shared/`. So the qualified `shared.*` spelling resolves in every
+# deploy path — same as score_batch.py's `from shared.work_auth import ...`.
+# `check_output` is aliased because guardrails/output_guards.py exports a
+# different function of the same name.
 from shared.composition_policy import check_output as _check_composition
 from shared.composition_policy import check_preferences as _check_preferences
 from shared.composition_policy import (

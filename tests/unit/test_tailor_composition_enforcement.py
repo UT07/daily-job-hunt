@@ -524,20 +524,20 @@ class TestFlagDescribesTheShippedDocument:
 # ---------------------------------------------------------------------------
 
 def test_shared_import_resolves_in_the_zip_lambda_shape(tmp_path):
-    r"""`shared/` reaches zip Lambdas at /opt/python, not via the repo root.
+    r"""`shared/` reaches zip Lambdas inside their own CodeUri, not via the repo root.
 
     pytest puts the repo root on sys.path, so `from shared.composition_policy
     import ...` resolves there whether or not it would resolve in production.
-    A zip-based pipeline Lambda sees only its flattened CodeUri
-    (lambdas/pipeline/ -> /var/task) plus the layer mount (/opt/python). This
-    reproduces that path shape and imports the real module.
+    A zip-based pipeline Lambda sees its flattened CodeUri (lambdas/pipeline/
+    -> /var/task) plus the layer (/opt/python), and since 2026-10-08 the layer
+    carries third-party deps only: `shared` arrives as /var/task/shared via
+    the committed symlink lambdas/pipeline/shared -> ../../shared, which
+    `sam build` copies in as real files. So this puts ONLY lambdas/pipeline on
+    the path -- it used to add a simulated /opt/python/shared, which kept the
+    test green for a layout production no longer has.
     """
-    opt_python = tmp_path / "opt_python"
-    opt_python.mkdir()
-    (opt_python / "shared").symlink_to(REPO / "shared", target_is_directory=True)
-
     env = dict(os.environ)
-    env["PYTHONPATH"] = os.pathsep.join([str(opt_python), str(REPO / "lambdas" / "pipeline")])
+    env["PYTHONPATH"] = str(REPO / "lambdas" / "pipeline")
     env["AWS_DEFAULT_REGION"] = "eu-west-1"
 
     proc = subprocess.run(
