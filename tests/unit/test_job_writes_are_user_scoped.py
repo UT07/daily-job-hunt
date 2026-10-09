@@ -119,7 +119,7 @@ def test_studio_rebuild_writes_only_the_callers_row(db, monkeypatch):
     s3 = MagicMock()
     s3.get_object.return_value = {"Body": MagicMock(read=lambda: b"\\documentclass{x}\\begin{document}\\end{document}")}
     s3.generate_presigned_url.return_value = "https://signed/alice.pdf"
-    monkeypatch.setattr(app_module.boto3, "client", lambda *a, **k: s3)
+    monkeypatch.setattr(app_module, "_get_s3", lambda: s3)
 
     def _compile(path, out):
         p = pathlib.Path(out) / "r.pdf"

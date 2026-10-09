@@ -20,6 +20,7 @@ logging.basicConfig(
 log = logging.getLogger('batch')
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from shared.s3_presign import presign_get  # noqa: E402
 
 # Load .env
 for line in Path(__file__).parent.parent.joinpath('.env').read_text().splitlines():
@@ -123,8 +124,7 @@ for i, job_row in enumerate(all_jobs):
         pdf_filename = Path(pdf_path).name
         s3_key = f"users/{user_id}/{run_date}/resumes/{pdf_filename}"
         s3.upload_file(pdf_path, bucket, s3_key, ExtraArgs={'ContentType': 'application/pdf'})
-        resume_url = s3.generate_presigned_url('get_object',
-            Params={'Bucket': bucket, 'Key': s3_key}, ExpiresIn=2592000)
+        resume_url = presign_get(s3_key, bucket=bucket, client=s3)
 
         cl_tex = generate_cover_letter(job, base_tex, ai_client, out_cl)
         cl_url = ''
@@ -135,8 +135,7 @@ for i, job_row in enumerate(all_jobs):
                 cl_filename = Path(cl_pdf).name
                 cl_s3_key = f"users/{user_id}/{run_date}/cover_letters/{cl_filename}"
                 s3.upload_file(cl_pdf, bucket, cl_s3_key, ExtraArgs={'ContentType': 'application/pdf'})
-                cl_url = s3.generate_presigned_url('get_object',
-                    Params={'Bucket': bucket, 'Key': cl_s3_key}, ExpiresIn=2592000)
+                cl_url = presign_get(cl_s3_key, bucket=bucket, client=s3)
 
         update = {'resume_s3_url': resume_url, 'tailored_pdf_path': pdf_filename}
         if cl_url:

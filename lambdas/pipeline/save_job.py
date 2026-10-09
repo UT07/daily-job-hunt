@@ -7,6 +7,7 @@ import boto3
 from ai_helper import get_supabase
 from shared.job_hash_filter import is_job_hash
 from shared.resume_verdict import from_step_results
+from shared.s3_presign import presign_get
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -113,20 +114,12 @@ def handler(event, context):
     update = {}
 
     if resume_pdf_key:
-        resume_url = s3.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": bucket, "Key": resume_pdf_key},
-            ExpiresIn=2592000,
-        )
+        resume_url = presign_get(resume_pdf_key, bucket=bucket, client=s3)
         update["resume_s3_url"] = resume_url
         update["resume_s3_key"] = resume_pdf_key
 
     if cover_letter_pdf_key:
-        cl_url = s3.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": bucket, "Key": cover_letter_pdf_key},
-            ExpiresIn=2592000,
-        )
+        cl_url = presign_get(cover_letter_pdf_key, bucket=bucket, client=s3)
         update["cover_letter_s3_url"] = cl_url
         # Persist the KEY too, exactly as the resume branch above does.
         # _refresh_s3_urls re-signs from cover_letter_s3_key; without it the

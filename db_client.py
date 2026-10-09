@@ -207,8 +207,10 @@ class SupabaseClient:
 
         Degrades gracefully when `data` includes a column that doesn't exist
         in the live schema yet -- e.g. enabled_sources before
-        supabase/migrations/20260506_user_search_configs_enabled_sources.sql
-        is applied via the dashboard. Without this, PUT /api/search-config
+        supabase/migrations/20261009150000_user_search_configs_enabled_sources.sql
+        is applied via the dashboard. The returned row then lacks that column;
+        PUT /api/search-config compares it with the request and reports what
+        was not stored rather than answering a plain 200. Without this, PUT /api/search-config
         500s on every "Save Sources" click because the upsert raises and
         nothing catches it. Retries without the offending column instead,
         matching the retry-without-optional-columns pattern already used in

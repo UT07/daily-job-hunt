@@ -773,8 +773,15 @@ function JobSourcesSection() {
     setSaving(true)
     setStatus(null)
     try {
-      await apiPut('/api/search-config', { enabled_sources: enabledSources })
-      setStatus({ type: 'success', message: 'Job sources saved.' })
+      const res = await apiPut('/api/search-config', { enabled_sources: enabledSources })
+      // A 200 can still carry `not_saved`: the server stored the rest of the
+      // request but had no column for these. "Saved." over that is the lie
+      // the 2026-10-09 live run caught.
+      if (res?.not_saved?.includes('enabled_sources')) {
+        setStatus({ type: 'error', message: res.warning || 'Job sources were not saved.' })
+      } else {
+        setStatus({ type: 'success', message: 'Job sources saved.' })
+      }
     } catch (e) {
       setStatus({ type: 'error', message: `Save failed: ${e.message}` })
     } finally {

@@ -28,6 +28,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from scrapers.base import Job
+from shared.s3_presign import presign_get
 
 logger = logging.getLogger(__name__)
 
@@ -71,11 +72,7 @@ def upload_file(local_path: str, s3_key: str, bucket: str) -> Optional[str]:
             s3_key,
             ExtraArgs={"ContentType": "application/pdf"},
         )
-        url = client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": bucket, "Key": s3_key},
-            ExpiresIn=PRESIGN_EXPIRY,
-        )
+        url = presign_get(s3_key, bucket=bucket, expires=PRESIGN_EXPIRY, client=client)
         logger.info(f"[S3] Uploaded {Path(local_path).name} -> s3://{bucket}/{s3_key}")
         return url
     except ClientError as e:
@@ -188,11 +185,7 @@ def upload_tracker(
             ExtraArgs={"ContentType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
         )
 
-        url = client.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": bucket, "Key": latest_key},
-            ExpiresIn=PRESIGN_EXPIRY,
-        )
+        url = presign_get(latest_key, bucket=bucket, expires=PRESIGN_EXPIRY, client=client)
         logger.info(f"[S3] Tracker uploaded -> s3://{bucket}/{latest_key}")
         return url
     except ClientError as e:

@@ -1758,6 +1758,14 @@ Resources:
               Effect: Allow
               Action:
                 - states:StartExecution
+                # /api/pipeline/status falls back to listing the daily
+                # pipeline's executions when pipeline_runs is empty. Without
+                # this, fixing its boto3 service name ('states' ->
+                # 'stepfunctions', 2026-10-09) would only have turned an
+                # UnknownServiceError into an AccessDenied, swallowed by the
+                # same broad except (CLAUDE.md #17). ListExecutions is scoped
+                # to the state machine, unlike the execution-level actions.
+                - states:ListExecutions
               Resource:
                 - !GetAtt DailyPipelineStateMachine.Arn
                 - !GetAtt SingleJobPipelineStateMachine.Arn
