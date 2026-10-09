@@ -1320,6 +1320,16 @@ def _upsert_jobs_raw(job_hash: str, title: str, company: str, description: str) 
     """
     if _db is None or not job_hash or not (description or "").strip():
         return False
+    # The key must be derived from the content it stores. "must be" above was
+    # a docstring; this is the check. The re-tailor repair writes from a
+    # user's own `jobs` row, whose text is editable while its canonical_hash is
+    # not -- so without this a user could plant arbitrary text under the hash
+    # of a real JD and, insert-if-absent, have every later user of that JD
+    # tailor against it (security review 2026-10-09, cross-tenant poisoning).
+    if canonical_hash(company, title, description) != job_hash:
+        logger.error(
+            "Refusing jobs_raw write: hash %s does not match its content", job_hash)
+        return False
     try:
         _db.client.table("jobs_raw").upsert({
             "job_hash": job_hash,
