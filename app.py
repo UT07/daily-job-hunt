@@ -2347,6 +2347,27 @@ def update_search_config(body: dict, user: AuthUser = Depends(get_current_user))
         raise HTTPException(400, f"No valid fields. Accepted: {list(_FIELD_MAP.keys())}")
 
     result = _db.upsert_search_config(user.id, clean)
+
+    # upsert_search_config drops a column the live schema lacks and retries,
+    # so "it returned" does not mean "it stored what was asked". PostgREST
+    # returns the whole row, so a requested column missing from it was not
+    # written. Until 2026-10-09 this answered 200 regardless, and Settings
+    # said "Job sources saved." over a database with no column to save them
+    # in (CLAUDE.md #2).
+    not_saved = sorted(col for col in clean if col not in (result or {}))
+    if not_saved and len(not_saved) == len(clean):
+        raise HTTPException(
+            409,
+            f"Not saved: {', '.join(not_saved)}. The database has no column for "
+            f"{'it' if len(not_saved) == 1 else 'them'} yet (a migration is pending).",
+        )
+    if not_saved:
+        return {
+            **result,
+            "not_saved": not_saved,
+            "warning": f"Saved, except {', '.join(not_saved)}: the database has no column for "
+                       f"{'it' if len(not_saved) == 1 else 'them'} yet.",
+        }
     return result
 
 
