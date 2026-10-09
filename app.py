@@ -71,7 +71,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from auth import AuthUser, get_current_user
+from auth import AuthUser
+from auth import get_current_user as _authenticated_user
 from audit_middleware import AuditMiddleware, set_db as set_audit_db
 from db_client import SupabaseClient
 
@@ -201,6 +202,48 @@ def require_db() -> SupabaseClient:
     if _db is None:
         raise HTTPException(503, "Database not configured")
     return _db
+
+
+def get_current_user(user: AuthUser = Depends(_authenticated_user)) -> AuthUser:
+    """The JWT check, plus: refuse an account whose deletion is pending.
+
+    DELETE /api/gdpr/delete only stamps users.gdpr_deletion_requested_at; the
+    hard delete is scripts/data_retention.py after a 30-day grace. Sign-in is
+    Supabase's and keeps working, so without this the account went on working
+    exactly as before -- the deletion changed nothing visible, and every Save
+    & Score or Add Job in the grace period created data the deletion was
+    meant to remove. Every route's `Depends(get_current_user)` now goes
+    through here; tests that override `auth.get_current_user` override the
+    layer below, so the gate still runs under them.
+
+    Deliberate bypasses, on `_authenticated_user` directly and pinned by
+    tests/unit/test_deletion_requested_blocks_api.py: GET /api/gdpr/export
+    (the right of access lasts until the data is gone) and DELETE
+    /api/gdpr/delete. NOT covered: the /mcp mount (RequireSupabaseJWT, an
+    ASGI gate) and the WebSocket Lambdas, which authenticate on their own.
+
+    Only a real timestamp string blocks. A failed lookup is logged and lets
+    the request through: one PK read per request is not worth turning every
+    database blip into a 403 on every route, and the routes that need the
+    database fail on their own.
+    """
+    if _db is None:
+        return user
+    try:
+        res = (_db.client.table("users").select("gdpr_deletion_requested_at")
+               .eq("id", user.id).maybe_single().execute())
+    except Exception as e:  # noqa: BLE001 -- see docstring
+        logger.error("Deletion-request check failed for %s: %s", user.id, e)
+        return user
+    row = getattr(res, "data", None)
+    requested = row.get("gdpr_deletion_requested_at") if isinstance(row, dict) else None
+    if isinstance(requested, str) and requested.strip():
+        raise HTTPException(
+            403,
+            f"This account is scheduled for deletion (requested {requested[:10]}) "
+            "and can no longer be used. Contact support to cancel the deletion.",
+        )
+    return user
 
 
 def _resolve_env(value: str) -> str:
@@ -3941,8 +3984,11 @@ def gdpr_consent(user: AuthUser = Depends(get_current_user)):
     return {"status": "consent_recorded", "gdpr_consent_at": result.get("gdpr_consent_at")}
 
 
+# Both GDPR routes below take the raw JWT check, not the deletion gate: the
+# right of access lasts until the data is gone, and repeating a deletion
+# request must not lock the user out of the page that made it.
 @app.get("/api/gdpr/export")
-def gdpr_export(user: AuthUser = Depends(get_current_user)):
+def gdpr_export(user: AuthUser = Depends(_authenticated_user)):
     """Export all user data as a ZIP file (GDPR Article 15)."""
     if not _db:
         raise HTTPException(503, "Database not configured")
@@ -3957,7 +4003,7 @@ def gdpr_export(user: AuthUser = Depends(get_current_user)):
 
 
 @app.delete("/api/gdpr/delete")
-def gdpr_delete(user: AuthUser = Depends(get_current_user)):
+def gdpr_delete(user: AuthUser = Depends(_authenticated_user)):
     """Request account deletion (soft-delete, hard-delete after 30 days)."""
     if not _db:
         raise HTTPException(503, "Database not configured")
