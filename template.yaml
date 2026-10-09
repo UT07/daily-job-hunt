@@ -1964,16 +1964,50 @@ Resources:
         cleanly, score writes ~50 jobs, but ArtifactsCompiled=0 because
         compile_latex silently fell back to "tectonic_not_available". The
         alarm fires regardless of execution-success/fail status.
-      Namespace: Naukribaba/Pipeline
-      MetricName: ArtifactsCompiled
-      Dimensions:
-        - Name: DocType
-          Value: resume
-      Statistic: Sum
-      Period: 86400  # 24h
+      Metrics:
+        - Id: m1
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: Naukribaba/Pipeline
+              MetricName: ArtifactsCompiled
+              Dimensions:
+                - Name: DocType
+                  Value: resume
+            Period: 86400  # 24h
+            Stat: Sum
+        - Id: weekday
+          Label: ArtifactsCompiled on 24h windows that should contain a weekday run (1 = not judged)
+          ReturnData: true
+          Expression: "IF(HOUR(m1) < 12 OR DAY(m1) == 5 OR DAY(m1) == 6, 1, FILL(m1, 0))"
       EvaluationPeriods: 1
       Threshold: 1
       ComparisonOperator: LessThanThreshold
+      # Weekday-aware. The schedule is cron(0 7 ? * MON-FRI *), so a plain
+      # Sum < 1 either pages every weekend (missing = breaching) or misses a
+      # weekday on which the schedule never fired (missing = notBreaching).
+      # The expression judges only the 24h windows that should contain a run:
+      #
+      #   IF(HOUR(m1) < 12 OR DAY(m1) == 5 OR DAY(m1) == 6, 1, FILL(m1, 0))
+      #
+      # Alarms use a SLIDING 24h window, not midnight-to-midnight ("the
+      # boundaries of the window are not aligned to the wall clock"), and
+      # the datapoint is stamped with the window's START. A window starting
+      # at or after 12:00 UTC on day D runs to D+1 12:00 and so contains
+      # exactly D+1's run; it is judged only when D+1 is Mon-Fri, i.e. D is
+      # not Fri (5) or Sat (6). Windows starting before 12:00 straddle the
+      # run time and are not judged. FILL turns "no datapoint" into 0, so a
+      # weekday with no run breaches on its value rather than on
+      # TreatMissingData. Assumes a run publishes its metrics within 5h of
+      # the 07:00 start; a later publish is reported, which is also signal.
+      # A plain DAY() guard is not enough: the window starting Fri 10:00
+      # holds no run and is stamped Friday, so it would page every Friday.
+      # TreatMissingData stays breaching: HOUR/DAY/FILL make the series
+      # non-sparse, so a missing datapoint means the expression itself
+      # broke, and that must be loud, not silent.
+      # EvaluationWindow: WallClockWindow (midnight-aligned) would allow a
+      # DAY()-only guard, but cfn-lint 1.43.4 rejects the property (E3002).
+      # Pinned by tests/unit/test_weekday_daily_alarms.py.
       TreatMissingData: breaching
       AlarmActions: [!Ref PipelineAlarmTopicArn]
 
@@ -2013,23 +2047,27 @@ Resources:
         these are genuinely different failure points (34 matched, 0
         artifacts that day, due to the ArtifactsCompiled bug fixed
         alongside this alarm).
-      Namespace: Naukribaba/Pipeline
-      MetricName: JobsMatched
-      Statistic: Sum
-      Period: 86400  # 24h
+      Metrics:
+        - Id: m1
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: Naukribaba/Pipeline
+              MetricName: JobsMatched
+            Period: 86400  # 24h
+            Stat: Sum
+        - Id: weekday
+          Label: JobsMatched on 24h windows that should contain a weekday run (1 = not judged)
+          ReturnData: true
+          Expression: "IF(HOUR(m1) < 12 OR DAY(m1) == 5 OR DAY(m1) == 6, 1, FILL(m1, 0))"
       EvaluationPeriods: 1
       Threshold: 1
       ComparisonOperator: LessThanThreshold
-      # notBreaching, not breaching. The schedule is MON-FRI, so missing data
-      # is every Saturday and Sunday, and `breaching` paged every weekend for
-      # a pipeline that was correctly not running. This is safe because
-      # save_metrics ALWAYS emits JobsMatched when a run reaches
-      # SavePipelineMetrics, including Value 0, so a weekday that matched
-      # nothing still breaches. A weekday with no run at all is left to
-      # DailyPipelineNoArtifactsAlarm (still breaching) and a run that dies
-      # early to the ExecutionsFailed alarm. Pinned by
-      # tests/unit/test_no_jobs_matched_alarm.py.
-      TreatMissingData: notBreaching
+      # Same weekday-aware expression and reasoning as
+      # DailyPipelineNoArtifactsAlarm above. Replaces the 2026-10-08
+      # notBreaching fix, which stopped the weekend pages but let a weekday
+      # with no run at all pass silently.
+      TreatMissingData: breaching
       AlarmActions: [!Ref PipelineAlarmTopicArn]
 
   DailyPipelinePartialArtifactFailureAlarm:
