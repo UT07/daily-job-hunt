@@ -195,8 +195,17 @@ def test_pool_is_wide_enough_to_rotate():
     # were marked unsuitable for scoring (a code model, a 2.6B model, and a 7B
     # Arabic-focused model). Raising these numbers by re-admitting models that
     # cannot score a JD would make the assertion actively harmful.
+    #
+    # Families 5 -> 4 on 2026-10-09. The fifth was `inclusionai`, held up by a
+    # single model -- ling-3.0-flash-sante -- that answered 404 "id withdrawn"
+    # on every call from the production API. So the LIVE pool had four families
+    # well before this line changed; the old floor was being met by a dead
+    # entry, a check that could not tell "diverse" from "configured" (CLAUDE.md
+    # #2). Keeping the corpse to stay above 5 is exactly the harm the paragraph
+    # above warns about. Restoring a fifth family needs a newly PROBED model
+    # (scripts/probe_models.py), not a lower bar or an old ID.
     assert len(pool) >= 8, f"only {len(pool)} providers — too few to rotate"
-    assert len(fams) >= 5, f"only {len(fams)} families — critic choice too narrow"
+    assert len(fams) >= 4, f"only {len(fams)} families — critic choice too narrow"
 
 
 def test_metered_qwen_stays_opt_in(monkeypatch):

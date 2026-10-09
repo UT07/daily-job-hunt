@@ -180,14 +180,14 @@ def _build_provider_list() -> list[dict]:
     #   ling-3.0-flash-fin         45   <- REMOVED 2026-09-28, withdrawn from
     #                                      OpenRouter; absent from the live
     #                                      /models listing, 404 on every call
-    #   ling-3.0-flash-sante       40
+    #   ling-3.0-flash-sante       40   <- REMOVED 2026-10-09, 404 "id withdrawn"
+    #                                      on every call from the production API
     #   north-mini-code            30   <- dropped, code model
     #   lfm-2.5-2.6b               25   <- dropped, 2.6B and 63s
     openrouter_models = [
         "nvidia/nemotron-3.5-lightning:free",
         "nvidia/nemotron-3-ultra-550b-a55b:free",
         "nvidia/nemotron-3-super-120b-a12b:free",
-        "inclusionai/ling-3.0-flash-sante:free",
     ]
 
     # Groq is the primary provider — its own free tier is not shared with the

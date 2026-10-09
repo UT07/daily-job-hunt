@@ -2,10 +2,9 @@
   "_README": "Verified model registry. Every entry was proved by a LIVE call at ~2900 chars (a realistic scoring-shaped prompt) that had to return parseable JSON with a numeric score -- not merely HTTP 200. Regenerate with scripts/probe_models.py. Free-model IDs rot silently, so re-probe before trusting this file: see ai_council_model_rot in project memory.",
   "_CAVEAT": "These are verified model ENDPOINTS, not proven-distinct weights. Some vendor IDs may be snapshots or aliases of one another; that cannot be determined from the API. An attempt to discriminate them by comparing temperature=0 outputs was invalid -- the control showed one model giving three different answers to the same prompt at temperature=0, because hosted MoE serving is nondeterministic regardless of temperature.",
   "verified_on": "2026-09-28",
-  "count": 33,
+  "count": 32,
   "families": [
     "gemini",
-    "inclusionai",
     "nvidia",
     "openai",
     "qwen"
@@ -103,21 +102,6 @@
       "min_output_tokens": 1024,
       "suitable_for_scoring": false,
       "unsuitable_reason": "36s probe for a score of 40 \u2014 slow and weak. Same profile as meta/muse-glimmer-30b, which timed out twice in one eval run and was dropped. A pool slot has to earn its latency."
-    },
-    {
-      "name": "openrouter/ling-3.0-flash-sante",
-      "provider": "openrouter",
-      "model": "inclusionai/ling-3.0-flash-sante:free",
-      "family": "inclusionai",
-      "url": "https://openrouter.ai/api/v1/chat/completions",
-      "key_param": "/naukribaba/OPENROUTER_API_KEY",
-      "verified_on": "2026-09-28",
-      "probe_latency_s": 6.0,
-      "probe_score": 40,
-      "timeout": 60,
-      "reasoning": false,
-      "min_output_tokens": 1024,
-      "suitable_for_scoring": true
     },
     {
       "name": "openrouter/lfm-2.5-2.6b",
