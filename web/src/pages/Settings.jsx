@@ -887,8 +887,13 @@ export default function Settings() {
   const [profileLoad, setProfileLoad] = useState('loading')
   const [prefsLoad, setPrefsLoad] = useState('loading')
 
+  // The form's loaders key on the id/email, not the `user` object: a
+  // password change fires USER_UPDATED, which gives `user` a new identity
+  // (updated_at moves) without changing anything these requests depend on.
+  const userId = user?.id
+  const userEmail = user?.email
   const loadProfile = useCallback(() => {
-    if (!user) return
+    if (!userId) return
     apiGet('/api/profile')
       .then((data) => {
         // Hydration FILLS BLANKS; it must never overwrite. Every field above
@@ -915,7 +920,7 @@ export default function Settings() {
         setProfile((prev) => ({
           ...prev,
           name: keep(prev.name, data.full_name),
-          email: keep(prev.email, data.email ?? user.email),
+          email: keep(prev.email, data.email ?? userEmail),
           phone: keep(prev.phone, data.phone),
           location: keep(prev.location, data.location),
           github_url: keep(prev.github_url, data.github_url),
@@ -937,10 +942,10 @@ export default function Settings() {
         console.warn('Failed to load profile:', e)
         setProfileLoad({ error: e?.message || 'request failed' })
       })
-  }, [user])
+  }, [userId, userEmail])
 
   const loadPrefs = useCallback(() => {
-    if (!user) return
+    if (!userId) return
     apiGet('/api/search-config')
       .then((data) => {
         setPrefsLoad('loaded')
@@ -968,7 +973,7 @@ export default function Settings() {
         console.warn('Failed to load search config:', e)
         setPrefsLoad({ error: e?.message || 'request failed' })
       })
-  }, [user, setPrefs])
+  }, [userId, setPrefs])
 
   useEffect(() => {
     loadProfile()

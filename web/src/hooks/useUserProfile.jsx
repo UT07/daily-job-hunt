@@ -10,6 +10,15 @@ const ProfileContext = createContext({
 
 export function ProfileProvider({ children }) {
   const { user, loading: authLoading } = useAuth()
+  // Keyed on the id, not the `user` object. AuthProvider hands out a new
+  // object whenever Supabase changes the user record (USER_UPDATED: password
+  // change, email change -- `updated_at` moves), which is right for consumers
+  // that read those fields, and wrong here: the profile row is keyed by id and
+  // did not change. Re-running fetchProfile on that event set isLoading, and
+  // AppLayout swaps the page for a spinner while `user && profileLoading` --
+  // unmounting Settings mid password change, so "Password updated
+  // successfully" landed on a dead component (live E2E, 2026-10-09).
+  const userId = user?.id ?? null
   const [profile, setProfile] = useState(null)
   const [error, setError] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -26,7 +35,7 @@ export function ProfileProvider({ children }) {
       setIsLoading(true)
       return
     }
-    if (!user) {
+    if (!userId) {
       setProfile(null)
       setIsLoading(false)
       return
@@ -53,7 +62,7 @@ export function ProfileProvider({ children }) {
     } finally {
       setIsLoading(false)
     }
-  }, [user, authLoading])
+  }, [userId, authLoading])
 
   useEffect(() => {
     fetchProfile()
@@ -66,7 +75,7 @@ export function ProfileProvider({ children }) {
   // setting `error`, which would replace the page with "Could not load your
   // profile" over a save that succeeded. Returns true when it refreshed.
   const refresh = useCallback(async () => {
-    if (authLoading || !user) return false
+    if (authLoading || !userId) return false
     try {
       const data = await apiGet('/api/profile')
       setProfile(data)
@@ -76,7 +85,7 @@ export function ProfileProvider({ children }) {
       console.warn('Profile refresh failed; keeping the current profile:', err?.message)
       return false
     }
-  }, [user, authLoading])
+  }, [userId, authLoading])
 
   // Same class of bug AuthProvider had: an object literal here is a new
   // identity on every render, so every useUserProfile() consumer re-rendered
