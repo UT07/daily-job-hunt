@@ -122,6 +122,9 @@ function statusToStepKey(rawStatus) {
   return null;
 }
 
+// app.py: job_description = Field(..., min_length=20) on every Add Job action.
+const MIN_JD_CHARS = 20;
+
 // How a detected value was arrived at, in the user's terms. "from the apply
 // link" is a fact read out of a URL -- 26 of 26 were right when measured
 // against real pastes. "from the description" is a guess at prose and is worth
@@ -138,7 +141,8 @@ function DetectedHint({ source }) {
   return (
     <p className="mt-1 flex items-center gap-1 font-mono text-[10px] font-bold uppercase tracking-wide text-stone-500">
       <span aria-hidden="true">{'\u2728'}</span>
-      <span>auto-filled {DETECTED_LABEL[source] || 'from your paste'} \u2014 edit if wrong</span>
+      {/* A literal character: JSX text does not process \u escapes. */}
+      <span>auto-filled {DETECTED_LABEL[source] || 'from your paste'} — edit if wrong</span>
     </p>
   );
 }
@@ -214,6 +218,11 @@ export default function AddJob() {
   const abortRef = useRef(null);
 
   const jdTooShort = jd.trim().length > 0 && jd.trim().length < 100;
+  // Below the backend's minimum every action 422s: ScoreRequest,
+  // SingleJobRunRequest, CoverLetterRequest and ContactsRequest all declare
+  // job_description Field(..., min_length=20). Counted on the trimmed text,
+  // which is stricter than pydantic's raw length -- padding is not content.
+  const jdBelowMinimum = jd.trim().length < MIN_JD_CHARS;
 
   // Mirrors Dashboard's URL-sync effect: runs on every field change and
   // persists only what differs from the defaults. `results` is intentionally
@@ -437,8 +446,9 @@ export default function AddJob() {
           <div className="mb-4 mt-2 flex items-start gap-2 border-2 border-yellow-dark bg-yellow-light px-3 py-2">
             <span className="text-yellow-dark font-bold text-sm mt-0.5">{'\u26A0'}</span>
             <p className="text-xs font-bold text-yellow-dark leading-relaxed">
-              Job description seems too short. AI matching works best with a detailed JD
-              (responsibilities, requirements, tech stack).
+              {jdBelowMinimum
+                ? `The job description must be at least ${MIN_JD_CHARS} characters before it can be scored or tailored.`
+                : 'Job description seems too short. AI matching works best with a detailed JD (responsibilities, requirements, tech stack).'}
             </p>
           </div>
         )}
@@ -524,7 +534,7 @@ export default function AddJob() {
           <Button
             variant="secondary"
             loading={actionLoading.score}
-            disabled={!jd.trim() || !!activeKey}
+            disabled={jdBelowMinimum || !!activeKey}
             onClick={() => runLegacy('/api/score', 'score')}
             title="Score this JD against your base resume — also saves the job to your dashboard."
           >
@@ -533,7 +543,7 @@ export default function AddJob() {
           <Button
             variant="accent"
             loading={actionLoading.tailor}
-            disabled={!jd.trim() || !!activeKey}
+            disabled={jdBelowMinimum || !!activeKey}
             onClick={() => runPipeline('tailor')}
           >
             Tailor Resume
@@ -541,7 +551,7 @@ export default function AddJob() {
           <Button
             variant="secondary"
             loading={actionLoading['cover-letter']}
-            disabled={!jd.trim() || !!activeKey}
+            disabled={jdBelowMinimum || !!activeKey}
             onClick={() => runPipeline('cover-letter')}
           >
             Cover Letter
@@ -549,7 +559,7 @@ export default function AddJob() {
           <Button
             variant="secondary"
             loading={actionLoading.contacts}
-            disabled={!jd.trim() || !!activeKey}
+            disabled={jdBelowMinimum || !!activeKey}
             onClick={() => runLegacy('/api/contacts', 'contacts')}
           >
             Find Contacts
