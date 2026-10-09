@@ -82,6 +82,26 @@ def test_pages_cap_at_1000_and_range_is_inclusive():
     assert len(db.table("jobs").select("*").range(0, 0).execute().data) == 1
 
 
+def test_counted_range_past_the_end_is_a_416_like_postgrest():
+    """Measured against production 2026-10-09 on `jobs`, offset=100, limit=100:
+    with `Prefer: count=exact` PostgREST answers 416 PGRST103; without a count
+    it answers 200 []. Offset 0 on an empty set is 200 either way."""
+    from postgrest.exceptions import APIError
+
+    db = FakeSupabase({"jobs": [{"job_id": "a", "user_id": "u"}]})
+    with pytest.raises(APIError) as exc:
+        db.table("jobs").select("*", count="exact").range(100, 199).execute()
+    assert exc.value.code == "PGRST103"
+    assert db.table("jobs").select("*").range(100, 199).execute().data == []
+    assert FakeSupabase().table("jobs").select("*", count="exact").range(0, 99).execute().data == []
+
+
+def test_exact_count_is_the_total_not_the_page():
+    db = FakeSupabase({"jobs": [{"job_id": str(i), "user_id": "u"} for i in range(30)]})
+    res = db.table("jobs").select("*", count="exact").range(0, 9).execute()
+    assert (len(res.data), res.count) == (10, 30)
+
+
 def test_injected_failures_raise_for_that_statement_only():
     db = _two_users_one_job()
     db.fail_on[("jobs", "insert")] = RuntimeError("PGRST204")

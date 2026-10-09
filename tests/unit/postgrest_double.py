@@ -14,6 +14,11 @@ silently accepting them:
   written", exactly as in production;
 * `insert` enforces the table's primary key and raises on a duplicate;
 * `range(lo, hi)` is inclusive and pages are capped at 1000, like PostgREST;
+* with `select(count="exact")`, `count` is the total BEFORE the range, and a
+  range starting past the last row raises PGRST103 "Requested range not
+  satisfiable" (HTTP 416), as PostgREST does. Without a count it is an empty
+  page. Both verified against production 2026-10-09; the 416 is what broke
+  GET /api/gdpr/export for a user with one job;
 * an unknown method raises AttributeError instead of returning a mock.
 
 `test_postgrest_double.py` proves each of these before any other test leans on
@@ -61,10 +66,12 @@ class Query:
         self._limit = None
         self._range = None
         self._single = None
+        self._count = None
 
     # ── statement kind ────────────────────────────────────────────
     def select(self, *_cols, count=None):
         self._op = "select"
+        self._count = count
         return self
 
     def update(self, values):
@@ -207,8 +214,16 @@ class Query:
         if self._order:
             col, desc = self._order
             hit = sorted(hit, key=lambda r: (r.get(col) is None, r.get(col)), reverse=desc)
+        total = len(hit)
         if self._range:
             lo, hi = self._range
+            if self._count and lo > 0 and lo >= total:
+                from postgrest.exceptions import APIError
+                raise APIError({
+                    "message": "Requested range not satisfiable", "code": "PGRST103",
+                    "hint": None,
+                    "details": f"An offset of {lo} was requested, but there are only {total} rows.",
+                })
             hit = hit[lo:hi + 1]
         hit = hit[:PAGE_CAP]
         if self._limit is not None:
@@ -221,7 +236,8 @@ class Query:
             if len(hit) != 1:
                 raise ValueError(f"single matched {len(hit)} rows")
             return SimpleNamespace(data=copy.deepcopy(hit[0]), count=None)
-        return SimpleNamespace(data=copy.deepcopy(hit), count=len(hit))
+        return SimpleNamespace(data=copy.deepcopy(hit),
+                               count=total if self._count else len(hit))
 
 
 class FakeSupabase:

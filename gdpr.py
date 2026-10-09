@@ -15,6 +15,20 @@ def record_consent(db, user_id: str) -> dict:
     return db.update_user(user_id, {"gdpr_consent_at": datetime.utcnow().isoformat()})
 
 
+def _all_user_rows(db, table: str, user_id: str, columns: str = "*", order: str = "created_at") -> list:
+    """Every row of `table` owned by `user_id`, walked a page at a time.
+
+    Uncounted on purpose. A `count="exact"` range that starts past the last
+    row is a 416 PGRST103 from PostgREST, not an empty page -- which is how
+    the export 500'd for a user with one job (2026-10-09). `_all_rows` stops
+    on a short page, so it never asks for a range beyond the end.
+    """
+    return db._all_rows(
+        lambda lo, hi: db.client.table(table).select(columns)
+        .eq("user_id", user_id).order(order).range(lo, hi)
+    )
+
+
 def export_user_data(db, user_id: str) -> bytes:
     """Export all user data as a ZIP file (GDPR Article 15 - Right of Access).
 
@@ -22,9 +36,17 @@ def export_user_data(db, user_id: str) -> bytes:
     - profile.json (user profile)
     - resumes.json (all resumes)
     - search_config.json
-    - jobs.json (all jobs)
+    - jobs.json (every job, archived ones included)
+    - timeline.json (application status history)
+    - resume_versions.json
     - runs.json (all pipeline runs)
+
+    Jobs are NOT read through `db.get_jobs`: that is the dashboard query. It
+    returns `(rows, total)`, counts exactly (so paging past the end raises),
+    and hides jobs older than 30 days by default. An export is none of those.
     """
+    from db_client import JOB_LIST_COLUMNS
+
     zip_buffer = io.BytesIO()
 
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -44,23 +66,24 @@ def export_user_data(db, user_id: str) -> bytes:
         if config:
             zf.writestr("search_config.json", json.dumps(config, indent=2, default=str))
 
-        # Jobs (paginate to avoid memory issues)
-        all_jobs = []
-        page = 1
-        while True:
-            batch = db.get_jobs(user_id, page=page, per_page=100)
-            if not batch:
-                break
-            all_jobs.extend(batch)
-            page += 1
-        zf.writestr("jobs.json", json.dumps(all_jobs, indent=2, default=str))
+        # Every column except the embedding vector (internal, ~1 MB/100 rows).
+        jobs = _all_user_rows(db, "jobs", user_id, JOB_LIST_COLUMNS, order="first_seen")
+        zf.writestr("jobs.json", json.dumps(jobs, indent=2, default=str))
 
-        # Runs
-        runs = db.get_runs(user_id, limit=1000)
+        timeline = _all_user_rows(db, "application_timeline", user_id)
+        zf.writestr("timeline.json", json.dumps(timeline, indent=2, default=str))
+
+        versions = _all_user_rows(db, "resume_versions", user_id)
+        zf.writestr("resume_versions.json", json.dumps(versions, indent=2, default=str))
+
+        runs = _all_user_rows(db, "runs", user_id, order="run_date")
         zf.writestr("runs.json", json.dumps(runs, indent=2, default=str))
 
     zip_buffer.seek(0)
-    logger.info(f"[GDPR] Exported data for user {user_id}")
+    logger.info(
+        "[GDPR] Exported data for user %s: %d jobs, %d timeline events, %d resume versions, %d runs",
+        user_id, len(jobs), len(timeline), len(versions), len(runs),
+    )
     return zip_buffer.read()
 
 
