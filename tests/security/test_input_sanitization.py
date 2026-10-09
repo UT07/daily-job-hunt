@@ -199,15 +199,16 @@ def test_oversized_job_description_rejected(client, auth_headers, inline_tasks):
     )
 
 
-def test_oversized_payload_cover_letter_rejected(client, auth_headers):
-    """A 1MB+ job_description to an async artifact endpoint should not crash.
+def test_oversized_payload_async_task_endpoint(client, auth_headers):
+    """A 1MB+ job_description to an async task endpoint should not crash.
 
-    Was /api/tailor, removed 2026-10-08; /api/cover-letter is the remaining
-    endpoint with the same request shape.
+    Was /api/tailor, then /api/cover-letter; both were removed 2026-10-08.
+    /api/contacts is the remaining endpoint that takes the same body and
+    enqueues a task, which is the path this test exists to exercise.
     """
     huge_description = "B" * (1024 * 1024 + 1)
 
-    resp = client.post("/api/cover-letter", headers=auth_headers, json={
+    resp = client.post("/api/contacts", headers=auth_headers, json={
         "job_description": huge_description,
         "job_title": "Software Engineer",
         "company": "TestCo",
@@ -215,7 +216,7 @@ def test_oversized_payload_cover_letter_rejected(client, auth_headers):
     })
 
     assert resp.status_code != 500, (
-        f"Oversized tailor payload caused a 500: {resp.text[:200]}"
+        f"Oversized contacts payload caused a 500: {resp.text[:200]}"
     )
 
 

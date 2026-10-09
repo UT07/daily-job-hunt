@@ -48,7 +48,7 @@ def app_module():
 
 @pytest.mark.parametrize("model_name,endpoint", [
     ("ScoreRequest", "/api/score"),
-    ("CoverLetterRequest", "/api/cover-letter"),
+    ("SingleJobRunRequest", "/api/pipeline/run-single"),
     ("ContactsRequest", "/api/contacts"),
 ])
 def test_addjob_payload_validates_against_request_model(app_module, model_name, endpoint):

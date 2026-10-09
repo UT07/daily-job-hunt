@@ -25,11 +25,14 @@ PROTECTED_ENDPOINTS = [
         "job_title": "Software Engineer",
         "company": "TestCo",
     }),
-    ("POST", "/api/cover-letter", {
+    # Add Job's route for both Tailor Resume and Cover Letter, which replaced
+    # the removed /api/tailor and /api/cover-letter (2026-10-08).
+    ("POST", "/api/pipeline/run-single", {
         "job_description": "We need a Python developer with 5 years experience in AWS and Docker.",
         "job_title": "Software Engineer",
         "company": "TestCo",
     }),
+    ("GET", "/api/pipeline/status/some-execution", None),
     ("POST", "/api/contacts", {
         "job_description": "We need a Python developer with 5 years experience in AWS and Docker.",
         "job_title": "Software Engineer",

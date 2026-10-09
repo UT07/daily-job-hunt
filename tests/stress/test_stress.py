@@ -101,7 +101,8 @@ class TestAPIStress:
         ...
 
     def test_tailor_endpoint_with_10_concurrent_requests(self):
-        # TODO: Send 10 POST /api/tailor requests concurrently
+        # TODO: Send 10 POST /api/pipeline/run-single requests concurrently
+        #       (on-demand tailoring; POST /api/tailor was removed 2026-10-08)
         # TODO: Verify all queue correctly (no request dropped)
         # TODO: Verify Step Functions handles concurrent triggers
         ...

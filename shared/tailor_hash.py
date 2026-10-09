@@ -15,9 +15,8 @@ Every caller used to spell this precedence inline, and they drifted: the bulk
 re-tailor read `job["job_hash"][:12]` (TypeError on every manual row) and the
 Studio key fell back to job_id. CLAUDE.md #10.
 
-scripts/retailor_bulk.py carries an identical `resolve_tailor_hash`;
-tests/unit/test_tailor_hash_resolver.py pins the two to the same answers until
-the script imports this one.
+scripts/retailor_bulk.py imports this one (it used to keep a copy);
+tests/unit/test_tailor_hash_resolver.py asserts this is the only definition.
 """
 from __future__ import annotations
 

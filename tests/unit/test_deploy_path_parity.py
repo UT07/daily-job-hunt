@@ -546,21 +546,15 @@ def test_mcp_server_not_in_layer_build_first_party_list():
 
 
 # ---------------------------------------------------------------------------
-# A zip Lambda that imports `shared` needs the layer that carries it.
+# A zip Lambda that imports `shared` must carry it in its own CodeUri.
 #
-# The checks above assert that `shared/` reaches both deploy paths at all.
-# This asserts the per-function half: the layer mounts at /opt/python only
-# for functions that actually attach it, and two zip functions in this
-# template (ChunkHashesFunction, AggregateScoresFunction) deliberately do
-# not. Adding `from shared.x import y` to one of those -- or to a new
-# function written without the layer -- is a green deploy and a runtime
-# ModuleNotFoundError, the same shape as the 2026-09-23 incident this file
-# is named for.
-#
-# Direct module-level imports in the handler's own file only: that is where
-# the risk lives (a lazily imported `shared` at least fails inside a Task
-# the state machine can Catch), and it is checkable without resolving the
-# whole import graph.
+# Until 2026-10-08 `shared/` reached zip Lambdas only through the layer at
+# /opt/python, so a function that did not attach the layer (two in this
+# template deliberately do not) had no `shared` at all. It now ships inside
+# each CodeUri through the committed symlinks lambdas/{pipeline,scrapers}/shared
+# -> ../../shared, which `sam build` copies in as real files. The checks below
+# assert that every zip CodeUri whose code imports `shared` carries that link,
+# and that walking it the way SAM zips yields real module files.
 # ---------------------------------------------------------------------------
 
 

@@ -58,10 +58,11 @@ from typing import NamedTuple
 from guardrails.policy import policy_for
 from guardrails.types import GuardResult, Violation
 
-# `shared` is a repo-root package that reaches zip Lambdas via /opt/python
-# (layer/build.sh FIRST_PARTY="shared") and the container image via
-# Dockerfile.lambda's `COPY shared/`, both pinned by
-# tests/unit/test_deploy_path_parity.py. This is the first `shared.*` import
+# `shared` is a repo-root package that reaches zip Lambdas through the
+# committed symlink lambdas/pipeline/shared -> ../../shared (copied in as real
+# files by `sam build`, so it lands at /var/task/shared in the function's own
+# artifact, not in the layer) and the container image via Dockerfile.lambda's
+# `COPY shared/`, both pinned by tests/unit/test_deploy_path_parity.py. This is the first `shared.*` import
 # inside the guardrails package; it is safe in every deploy path for the same
 # reason tailor_resume.py's module-level `from shared.composition_policy
 # import ...` is, and `extract_anchors` itself needs nothing but `re`.

@@ -42,10 +42,6 @@ class TestRequestModelSchemas:
         )
         assert fields["location"].default == ""
 
-    def test_cover_letter_request_has_location(self):
-        from app import CoverLetterRequest
-        assert "location" in CoverLetterRequest.model_fields
-
     def test_contacts_request_has_location(self):
         from app import ContactsRequest
         assert "location" in ContactsRequest.model_fields

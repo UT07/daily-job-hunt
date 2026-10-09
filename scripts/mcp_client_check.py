@@ -11,7 +11,9 @@ library Claude Desktop and Claude Code speak:
 
   stdio  spawns `python -m mcp_server.server` and talks over its pipes. This
          is what a local Claude Code / Claude Desktop entry uses. No auth:
-         the client owns the process.
+         the client owns the process, and NAUKRIBABA_MCP_USER_ID names the
+         Supabase user it acts as. Required: the server will not start
+         without it, and this script exits up front if it is unset.
 
   sse    starts uvicorn on 127.0.0.1, mints an HS256 Supabase JWT from
          SUPABASE_JWT_SECRET (the pattern tests/unit/test_mcp_http_auth.py
@@ -62,6 +64,32 @@ def load_env() -> None:
         if line and not line.startswith("#") and "=" in line:
             key, _, value = line.partition("=")
             os.environ.setdefault(key.strip(), value.strip())
+
+
+# Same name the server reads (mcp_server/server.py STDIO_USER_ENV), pinned by
+# tests/unit/test_mcp_client_check_stdio_user.py. A literal, not an import:
+# importing mcp_server.server here would pull in Supabase and model clients
+# before the check that is meant to fail fast.
+STDIO_USER_ENV = "NAUKRIBABA_MCP_USER_ID"
+
+
+def require_stdio_user() -> str:
+    """The user the stdio server will act as, or exit naming what is missing.
+
+    The server refuses to start without it. Spawning it anyway showed the
+    operator a closed pipe from a child that had already exited, with nothing
+    naming the variable; this says so before any work starts.
+    """
+    user_id = os.environ.get(STDIO_USER_ENV, "").strip()
+    if not user_id:
+        raise SystemExit(
+            f"{STDIO_USER_ENV} is not set, and the stdio transport needs it: the "
+            "MCP server acts as exactly that Supabase user and refuses to start "
+            "without one. Put it in .env (this script loads .env and passes it to "
+            "the child), export it, or run with --sse only. "
+            "See docs/runbooks/mcp-client-setup.md."
+        )
+    return user_id
 
 
 def mint_jwt() -> str:
@@ -201,9 +229,11 @@ def main() -> None:
     args = parser.parse_args()
 
     load_env()
-    job_hash = args.job_hash or first_job_hash()
     run_stdio = args.stdio or not args.sse
     run_sse = args.sse or not args.stdio
+    if run_stdio:
+        require_stdio_user()
+    job_hash = args.job_hash or first_job_hash()
 
     if run_stdio:
         asyncio.run(over_stdio(job_hash, args.score))

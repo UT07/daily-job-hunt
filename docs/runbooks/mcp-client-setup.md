@@ -55,6 +55,11 @@ This drives the real `mcp` client SDK — the same library Claude Desktop and
 Claude Code speak — against the real Supabase tables. It reads
 `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` and `SUPABASE_JWT_SECRET` from `.env`.
 
+The stdio transport (the default run, and `--stdio`) also needs
+`NAUKRIBABA_MCP_USER_ID`, from `.env` or the environment. Without it the
+script exits before doing anything, with a message naming the variable;
+`--sse` alone does not need it, because SSE acts as the minted JWT's `sub`.
+
 Last run, 2026-09-30, on this branch:
 
 | transport | tools/list | search_jobs | get_job | score_job |
