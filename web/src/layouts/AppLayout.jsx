@@ -1,4 +1,5 @@
-import { Outlet, Navigate } from 'react-router-dom';
+import { Outlet, Navigate, useLocation } from 'react-router-dom';
+import ErrorBoundary from '../components/ErrorBoundary';
 import { useAuth } from '../auth/useAuth';
 import { useUserProfile } from '../hooks/useUserProfile';
 import Sidebar from '../components/layout/Sidebar';
@@ -10,6 +11,7 @@ import { isOnboarded } from '../lib/onboarding';
 
 export default function AppLayout() {
   const { user, loading } = useAuth();
+  const location = useLocation();
   const { profile, isLoading: profileLoading, error: profileError,
           refetch: refetchProfile } = useUserProfile();
 
@@ -73,7 +75,11 @@ export default function AppLayout() {
       <div className="flex-1 flex flex-col min-w-0">
         {!profileComplete && <FinishSetupBanner />}
         <main className="flex-1 p-6 pb-20 md:pb-6 overflow-auto">
-          <Outlet />
+          {/* Inside the shell, so the nav stays usable when a page throws;
+              keyed on the path so navigating away clears the error. */}
+          <ErrorBoundary resetKey={location.pathname}>
+            <Outlet />
+          </ErrorBoundary>
         </main>
       </div>
       <MobileNav />
