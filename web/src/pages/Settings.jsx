@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
 import { useAuth } from '../auth/useAuth'
 import { apiGet, apiPut, apiUpload, apiDelete } from '../api'
 import Card, { CardHeader, CardBody } from '../components/ui/Card'
@@ -79,7 +79,29 @@ function StatusMessage({ status }) {
   )
 }
 
-function ProfileSection({ profile, setProfile }) {
+// A section whose GET failed renders blanks or component defaults, not the
+// user's data. Saving that would overwrite the real row with them (PUT
+// /api/profile drops only None, so '' is written), so the section says so and
+// its Save stays disabled until a reload succeeds.
+function LoadFailed({ what, error, onRetry }) {
+  return (
+    <div role="alert" className="mb-4 p-3 text-sm bg-error-light border-2 border-error text-error flex items-center justify-between gap-3">
+      <span>
+        Couldn't load your {what}{error ? ` (${error})` : ''}. Saving is disabled so the
+        blank form can't overwrite what is stored.
+      </span>
+      <Button size="sm" variant="secondary" onClick={onRetry} aria-label={`Retry loading ${what}`}>
+        Retry
+      </Button>
+    </div>
+  )
+}
+
+// 'loading' | 'loaded' | { error: string }
+const isLoaded = (state) => state === 'loaded'
+const loadError = (state) => (state && typeof state === 'object' ? state.error : null)
+
+function ProfileSection({ profile, setProfile, loadState = 'loaded', onRetry }) {
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState(null)
 
@@ -110,6 +132,7 @@ function ProfileSection({ profile, setProfile }) {
   }
 
   async function handleSave() {
+    if (!isLoaded(loadState)) return
     setSaving(true)
     setStatus(null)
     try {
@@ -145,6 +168,9 @@ function ProfileSection({ profile, setProfile }) {
         </div>
       </CardHeader>
       <CardBody>
+        {loadError(loadState) && (
+          <LoadFailed what="profile" error={loadError(loadState)} onRetry={onRetry} />
+        )}
         <div className="space-y-4">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
@@ -279,7 +305,7 @@ function ProfileSection({ profile, setProfile }) {
         </div>
 
         <div className="mt-5 flex items-center gap-3">
-          <Button onClick={handleSave} disabled={saving}>
+          <Button onClick={handleSave} disabled={saving || !isLoaded(loadState)}>
             {saving && <span className="spinner" />}
             Save Changes
           </Button>
@@ -498,7 +524,7 @@ export function ResumeSection() {
   )
 }
 
-function PreferencesSection({ prefs, setPrefs }) {
+function PreferencesSection({ prefs, setPrefs, loadState = 'loaded', onRetry }) {
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState(null)
 
@@ -516,6 +542,7 @@ function PreferencesSection({ prefs, setPrefs }) {
   }
 
   async function handleSave() {
+    if (!isLoaded(loadState)) return
     setSaving(true)
     setStatus(null)
     try {
@@ -537,6 +564,9 @@ function PreferencesSection({ prefs, setPrefs }) {
         </div>
       </CardHeader>
       <CardBody>
+        {loadError(loadState) && (
+          <LoadFailed what="search preferences" error={loadError(loadState)} onRetry={onRetry} />
+        )}
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-bold text-black mb-1">Search Queries</label>
@@ -623,7 +653,7 @@ function PreferencesSection({ prefs, setPrefs }) {
         </div>
 
         <div className="mt-5 flex items-center gap-3">
-          <Button onClick={handleSave} disabled={saving}>
+          <Button onClick={handleSave} disabled={saving || !isLoaded(loadState)}>
             {saving && <span className="spinner" />}
             Save Changes
           </Button>
@@ -658,16 +688,25 @@ function JobSourcesSection() {
   // silently undoing the toggle.
   const sourcesDirty = useRef(false)
 
-  useEffect(() => {
+  // Same rule as the profile: if the stored list never arrived, the toggles
+  // show the hard-coded defaults, and saving them would replace the real list.
+  const [loadState, setLoadState] = useState('loading')
+  const load = useCallback(() => {
     apiGet('/api/search-config')
       .then((data) => {
+        setLoadState('loaded')
         if (sourcesDirty.current) return
         if (data.enabled_sources && Array.isArray(data.enabled_sources)) {
           setEnabledSources(data.enabled_sources)
         }
       })
-      .catch((e) => console.warn('Failed to load enabled sources:', e))
+      .catch((e) => {
+        console.warn('Failed to load enabled sources:', e)
+        setLoadState({ error: e?.message || 'request failed' })
+      })
   }, [])
+
+  useEffect(() => { load() }, [load])
 
   function toggleSource(sourceId) {
     sourcesDirty.current = true
@@ -679,6 +718,7 @@ function JobSourcesSection() {
   }
 
   async function handleSave() {
+    if (!isLoaded(loadState)) return
     setSaving(true)
     setStatus(null)
     try {
@@ -700,6 +740,9 @@ function JobSourcesSection() {
         </div>
       </CardHeader>
       <CardBody>
+        {loadError(loadState) && (
+          <LoadFailed what="job sources" error={loadError(loadState)} onRetry={() => { setLoadState('loading'); load() }} />
+        )}
         <div className="space-y-3">
           {JOB_SOURCES.map((source) => {
             const active = enabledSources.includes(source.id)
@@ -742,7 +785,7 @@ function JobSourcesSection() {
         </div>
 
         <div className="mt-5 flex items-center gap-3">
-          <Button onClick={handleSave} disabled={saving}>
+          <Button onClick={handleSave} disabled={saving || !isLoaded(loadState)}>
             {saving && <span className="spinner" />}
             Save Sources
           </Button>
@@ -788,7 +831,12 @@ export default function Settings() {
     min_match_score: 60,
   })
 
-  useEffect(() => {
+  // Per-section load state. A section is saveable only once its GET has
+  // succeeded: before that the form holds blanks/defaults, not the user's data.
+  const [profileLoad, setProfileLoad] = useState('loading')
+  const [prefsLoad, setPrefsLoad] = useState('loading')
+
+  const loadProfile = useCallback(() => {
     if (!user) return
     apiGet('/api/profile')
       .then((data) => {
@@ -832,11 +880,19 @@ export default function Settings() {
           salary_expectation_notes: keep(prev.salary_expectation_notes, data.salary_expectation_notes),
           notice_period_text: keep(prev.notice_period_text, data.notice_period_text),
         }))
+        setProfileLoad('loaded')
       })
-      .catch((e) => console.warn('Failed to load profile:', e))
+      .catch((e) => {
+        console.warn('Failed to load profile:', e)
+        setProfileLoad({ error: e?.message || 'request failed' })
+      })
+  }, [user])
 
+  const loadPrefs = useCallback(() => {
+    if (!user) return
     apiGet('/api/search-config')
       .then((data) => {
+        setPrefsLoad('loaded')
         // Same race as the profile hydration above, sibling state. `prefs`
         // defaults are NOT blank (min_match_score 60, days_back 7,
         // max_jobs_per_run 15), so the "fill blanks" test that works for the
@@ -857,8 +913,16 @@ export default function Settings() {
           min_match_score: data.min_match_score ?? prev.min_match_score,
         }))
       })
-      .catch((e) => console.warn('Failed to load search config:', e))
-  }, [user])
+      .catch((e) => {
+        console.warn('Failed to load search config:', e)
+        setPrefsLoad({ error: e?.message || 'request failed' })
+      })
+  }, [user, setPrefs])
+
+  useEffect(() => {
+    loadProfile()
+    loadPrefs()
+  }, [loadProfile, loadPrefs])
 
   if (loading) {
     return (
@@ -876,11 +940,11 @@ export default function Settings() {
     <div>
       <h1 className="text-2xl font-heading font-bold text-black tracking-tight mb-6">Settings</h1>
       <div className="space-y-6">
-        <ProfileSection profile={profile} setProfile={setProfile} />
+        <ProfileSection profile={profile} setProfile={setProfile} loadState={profileLoad} onRetry={() => { setProfileLoad('loading'); loadProfile() }} />
         <PasswordSection />
         <ResumeSection />
         <JobSourcesSection />
-        <PreferencesSection prefs={prefs} setPrefs={editPrefs} />
+        <PreferencesSection prefs={prefs} setPrefs={editPrefs} loadState={prefsLoad} onRetry={() => { setPrefsLoad('loading'); loadPrefs() }} />
       </div>
     </div>
   )

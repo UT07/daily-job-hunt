@@ -1,27 +1,32 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { apiCall, apiGet } from '../api'
+import { useAuth } from '../auth/useAuth'
+import { hasLocalConsent, setLocalConsent } from '../lib/userStorage'
 import Button from './ui/Button'
 
-const CONSENT_KEY = 'gdpr_consent'
-
 export default function ConsentBanner() {
+  const { user } = useAuth()
+  const userId = user?.id
   const [visible, setVisible] = useState(false)
   const [accepting, setAccepting] = useState(false)
+  const [error, setError] = useState(null)
 
   useEffect(() => {
-    // Fast path: localStorage says already consented
-    if (localStorage.getItem(CONSENT_KEY) === 'true') return
+    if (!userId) return
+    // Fast path: THIS user already consented in this browser. Keyed by user
+    // id -- the old global key let the next person on a shared browser
+    // inherit someone else's consent.
+    if (hasLocalConsent(userId)) return
 
-    // Slow path: check backend — user may have consented on another device,
-    // or localStorage was cleared on logout. Backend persists the timestamp.
+    // Slow path: the server's record (they may have consented on another
+    // device, or storage was cleared on sign-out).
     let cancelled = false
     apiGet('/api/profile')
       .then((profile) => {
         if (cancelled) return
         if (profile?.gdpr_consent_at) {
-          // Already consented — sync to localStorage and hide banner
-          localStorage.setItem(CONSENT_KEY, 'true')
+          setLocalConsent(userId)
           setVisible(false)
         } else {
           setVisible(true)
@@ -32,17 +37,21 @@ export default function ConsentBanner() {
         if (!cancelled) setVisible(true)
       })
     return () => { cancelled = true }
-  }, [])
+  }, [userId])
 
   async function handleAccept() {
     setAccepting(true)
+    setError(null)
     try {
       await apiCall('/api/gdpr/consent', { consent: true })
     } catch (e) {
-      // Record consent locally even if API is unavailable
-      console.warn('Consent API:', e.message)
+      // Not recorded. Recording it locally anyway (as this used to) hid the
+      // banner for good while the server had no consent on file.
+      setError(e?.message || 'request failed')
+      setAccepting(false)
+      return
     }
-    localStorage.setItem(CONSENT_KEY, 'true')
+    setLocalConsent(userId)
     setVisible(false)
     setAccepting(false)
   }
@@ -72,6 +81,11 @@ export default function ConsentBanner() {
           Accept
         </Button>
       </div>
+      {error && (
+        <p role="alert" className="max-w-4xl mx-auto px-4 pb-3 text-sm font-bold text-error">
+          Couldn't record your consent ({error}). Please try again.
+        </p>
+      )}
     </div>
   )
 }

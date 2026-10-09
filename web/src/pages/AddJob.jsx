@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
-import { apiCall, pollPipeline } from '../api';
+import { apiCall, apiGet, pollPipeline } from '../api';
+import { loadPipelineJob } from './pipelineJobResult';
+import { addJobDraftKey, dropLegacyAddJobDraft } from '../lib/userStorage';
+import { useAuth } from '../auth/useAuth';
 import Button from '../components/ui/Button';
 import Input, { Textarea, Select } from '../components/ui/Input';
 import ScoreCard from '../components/ScoreCard';
@@ -54,7 +57,9 @@ const LEGACY_MAX_WAIT_MS = { score: 120000, contacts: 600000 };
 // per-tab lifetime matches how the draft is actually used (type here, go
 // check the dashboard, come back and finish) without resurrecting a stale JD
 // in a brand-new tab days later.
-const DRAFT_STORAGE_KEY = 'naukribaba_addjob_draft';
+// The storage key is per user (lib/userStorage.addJobDraftKey), so another
+// user on the same browser never restores this one's JD, and a session that
+// expired mid-draft gets it back after signing in again.
 
 const DRAFT_DEFAULTS = {
   jd: '',
@@ -65,9 +70,12 @@ const DRAFT_DEFAULTS = {
   resume_type: 'sre_devops',
 };
 
-function readDraft() {
+function readDraft(storageKey) {
+  // The unscoped key predates per-user drafts and cannot be attributed to
+  // anyone, so it is discarded rather than restored.
+  dropLegacyAddJobDraft();
   try {
-    const raw = sessionStorage.getItem(DRAFT_STORAGE_KEY);
+    const raw = sessionStorage.getItem(storageKey);
     if (!raw) return {};
     const parsed = JSON.parse(raw);
     return parsed && typeof parsed === 'object' ? parsed : {};
@@ -84,7 +92,7 @@ function readDraftField(draft, key, fallback) {
   return typeof raw === 'string' ? raw : fallback;
 }
 
-function writeDraft(values) {
+function writeDraft(storageKey, values) {
   try {
     const next = {};
     for (const [key, value] of Object.entries(values)) {
@@ -95,9 +103,9 @@ function writeDraft(values) {
     // visit starts clean instead of restoring an empty draft over the
     // defaults.
     if (Object.keys(next).length === 0) {
-      sessionStorage.removeItem(DRAFT_STORAGE_KEY);
+      sessionStorage.removeItem(storageKey);
     } else {
-      sessionStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(next));
+      sessionStorage.setItem(storageKey, JSON.stringify(next));
     }
   } catch {
     // Persistence is a convenience; never let it break typing.
@@ -169,7 +177,9 @@ function ProgressIndicator({ steps, currentKey }) {
 export default function AddJob() {
   // One parse at mount, shared by the six lazy initialisers below — the role
   // `searchParams` plays for Dashboard's readFilterFromParams calls.
-  const [draft] = useState(readDraft);
+  const { user } = useAuth();
+  const draftKey = addJobDraftKey(user?.id);
+  const [draft] = useState(() => readDraft(draftKey));
 
   const [jd, setJd] = useState(() => readDraftField(draft, 'jd', DRAFT_DEFAULTS.jd));
   const [jobTitle, setJobTitle] = useState(() => readDraftField(draft, 'job_title', DRAFT_DEFAULTS.job_title));
@@ -210,7 +220,7 @@ export default function AddJob() {
   // not persisted — the payloads are large and each one is re-derivable by
   // re-running the action against the restored JD.
   useEffect(() => {
-    writeDraft({
+    writeDraft(draftKey, {
       jd,
       job_title: jobTitle,
       company,
@@ -218,7 +228,7 @@ export default function AddJob() {
       apply_url: applyUrl,
       resume_type: resumeType,
     });
-  }, [jd, jobTitle, company, location, applyUrl, resumeType]);
+  }, [draftKey, jd, jobTitle, company, location, applyUrl, resumeType]);
 
   // Read what we can off the paste. Depends on the JD and the apply URL only:
   // those are the two things the user supplies; the rest is derived from them.
@@ -273,7 +283,7 @@ export default function AddJob() {
       // the store in the same tick as the click rather than on the next
       // commit, and noted here so the next reader does not take the surviving
       // mutant for dead code.
-      sessionStorage.removeItem(DRAFT_STORAGE_KEY);
+      sessionStorage.removeItem(draftKey);
     } catch { /* storage disabled; the state reset above is what matters */ }
   }
 
@@ -328,16 +338,13 @@ export default function AddJob() {
 
       setProgressKey('SUCCEEDED');
 
-      // The pipeline output contains the full results.
-      // Determine what to show based on the action and what's in the output.
-      if (action === 'tailor') {
-        addResult('tailor', output);
-      } else if (action === 'cover-letter') {
-        addResult('cover-letter', output);
-      } else {
-        // Generic: show whatever came back
-        addResult(action, output);
-      }
+      // The execution output is save_job's {job_hash, saved, has_resume,
+      // failed} and carries no document or score; those are on the saved job
+      // row. Resolve the row and let the card render the real outcome --
+      // including failed / not saved, which the old "read pdf_url off the
+      // output" path rendered as "in progress" forever.
+      const outcome = await loadPipelineJob(output, { company, title: jobTitle }, apiGet);
+      addResult(action, outcome);
     } catch (err) {
       setErrors((prev) => [...prev, err.message]);
     } finally {

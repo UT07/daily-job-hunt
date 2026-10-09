@@ -130,8 +130,18 @@ export async function pollPipeline(pollUrl, { intervalMs = 5000, maxWaitMs = 900
         }
         return data.output;
       }
-      case 'FAILED':
-        throw new Error(formatErrorDetail(data.error || data.cause) || 'Pipeline execution failed');
+      case 'FAILED': {
+        // The status endpoint returns the execution's `error` (e.g.
+        // "JobProcessingFailed") and `cause` for a FAILED run. Show both:
+        // the error names the failure, the cause says what happened. Either
+        // may be absent (older backend), in which case fall back cleanly.
+        const errText = formatErrorDetail(data.error);
+        const causeText = formatErrorDetail(data.cause);
+        const msg = [errText, causeText].filter(Boolean).join(': ');
+        const e = new Error(msg || 'Pipeline execution failed');
+        e.pipelineStatus = 'FAILED';
+        throw e;
+      }
       case 'TIMED_OUT':
         throw new Error('Pipeline execution timed out on the server');
       case 'ABORTED':

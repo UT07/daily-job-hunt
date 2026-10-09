@@ -2,6 +2,10 @@ import { useState, useEffect, useRef } from 'react';
 import { apiGet, apiCall } from '../api';
 import Button from './ui/Button';
 
+// Consecutive failed status polls before giving up. One failure is often a
+// cold start or a blip; three in a row (15s) is not going to fix itself.
+const MAX_POLL_FAILURES = 3;
+
 const STATUS_COLORS = {
   RUNNING: 'bg-yellow border-yellow-dark',
   SUCCEEDED: 'bg-success-light border-success',
@@ -24,6 +28,9 @@ export default function PipelineStatus({ onComplete }) {
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState(null);
   const [pollStatus, setPollStatus] = useState(null);
+  // Shown while polling is failing; separate from runError so a transient
+  // failure that later recovers can be cleared without touching run errors.
+  const [pollError, setPollError] = useState(null);
   // User's configured search queries — fetched from /api/search-config so we
   // don't ship hardcoded keywords that have nothing to do with the user's
   // profile. Empty array means "let the backend pick up the user's saved
@@ -64,6 +71,7 @@ export default function PipelineStatus({ onComplete }) {
   async function handleRunPipeline() {
     setRunning(true);
     setRunError(null);
+    setPollError(null);
     setPollStatus('STARTING');
 
     try {
@@ -76,20 +84,44 @@ export default function PipelineStatus({ onComplete }) {
 
       // Poll every 5s
       setPollStatus('RUNNING');
+      let failures = 0;
       pollRef.current = setInterval(async () => {
         try {
           const result = await apiGet(`/api/pipeline/status/${execName}`);
+          failures = 0;
+          setPollError(null);
           setPollStatus(result.status);
 
           if (result.status !== 'RUNNING') {
             clearInterval(pollRef.current);
             pollRef.current = null;
             setRunning(false);
+            if (result.status !== 'SUCCEEDED') {
+              // The status endpoint carries the execution's `error` and
+              // `cause` for a failed run; either may be absent.
+              const detail = [result.error, result.cause].filter(Boolean).join(': ');
+              setRunError(`Pipeline ${STATUS_LABELS[result.status] || result.status}${detail ? ` — ${detail}` : ''}`);
+            }
             fetchStatus();
             if (onComplete) onComplete();
           }
         } catch (err) {
           console.error('Poll error:', err);
+          failures += 1;
+          const msg = err?.message || 'request failed';
+          if (failures >= MAX_POLL_FAILURES) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+            setRunning(false);
+            setPollStatus(null);
+            setPollError(null);
+            setRunError(
+              `Stopped checking the pipeline after ${failures} failed status checks (${msg}). ` +
+              'It may still be running; reload the page to check again.'
+            );
+          } else {
+            setPollError(`Couldn't check pipeline status (${msg}). Retrying...`);
+          }
         }
       }, 5000);
     } catch (err) {
@@ -186,8 +218,13 @@ export default function PipelineStatus({ onComplete }) {
 
       {/* Error */}
       {runError && (
-        <div className="px-4 py-2 bg-error-light text-error text-xs font-bold">
+        <div role="alert" className="px-4 py-2 bg-error-light text-error text-xs font-bold">
           {runError}
+        </div>
+      )}
+      {!runError && pollError && (
+        <div role="alert" className="px-4 py-2 bg-yellow-light text-stone-700 text-xs font-bold">
+          {pollError}
         </div>
       )}
       {!runError && !running && userQueries.length === 0 && !loading && (

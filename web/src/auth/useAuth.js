@@ -1,6 +1,7 @@
 import { useContext } from 'react'
 import { AuthContext } from './AuthProvider'
 import { supabase } from '../lib/supabase'
+import { clearOnExplicitSignOut } from '../lib/userStorage'
 
 export function useAuth() {
   const { user, session, loading } = useContext(AuthContext)
@@ -43,6 +44,11 @@ export function useAuth() {
   }
 
   async function signOut() {
+    // Cleared first and unconditionally: the user chose to leave, so their
+    // consent flag and Add Job draft go with them even if the server
+    // sign-out fails. (An expired session does not come through here and
+    // keeps the draft -- see lib/userStorage.js.)
+    clearOnExplicitSignOut(user?.id)
     if (noSupabase) return
     const { error } = await supabase.auth.signOut()
     if (error) throw error

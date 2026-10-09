@@ -21,6 +21,9 @@ const STATUS_STYLES = {
 export default function StatusDropdown({ jobId, currentStatus, onStatusChange }) {
   const [open, setOpen] = useState(false);
   const [updating, setUpdating] = useState(false);
+  // A failed PATCH leaves the badge on the old status, which is correct --
+  // but without a message it reads as "the click did nothing".
+  const [error, setError] = useState(null);
   const ref = useRef(null);
 
   // Close on outside click
@@ -38,6 +41,7 @@ export default function StatusDropdown({ jobId, currentStatus, onStatusChange })
     setOpen(false);
     if (newStatus === currentStatus) return;
     setUpdating(true);
+    setError(null);
     try {
       await apiPatch(`/api/dashboard/jobs/${encodeURIComponent(jobId)}`, {
         application_status: newStatus,
@@ -45,6 +49,7 @@ export default function StatusDropdown({ jobId, currentStatus, onStatusChange })
       onStatusChange(jobId, newStatus);
     } catch (err) {
       console.error('Failed to update status:', err);
+      setError(err?.message || 'request failed');
     } finally {
       setUpdating(false);
     }
@@ -67,6 +72,16 @@ export default function StatusDropdown({ jobId, currentStatus, onStatusChange })
         {updating ? '…' : currentStatus}
         <span className="text-[8px] leading-none opacity-60">▼</span>
       </button>
+
+      {error && (
+        <span
+          role="alert"
+          title={error}
+          className="block mt-1 max-w-[220px] font-mono text-[10px] font-bold text-error break-words"
+        >
+          Couldn't change status: {error}
+        </span>
+      )}
 
       {/* Dropdown panel */}
       {open && (
