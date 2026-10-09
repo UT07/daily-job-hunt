@@ -5,6 +5,8 @@ import {
   FolderOpen,
   PlusCircle,
   Settings,
+  Shield,
+  FileText,
   LogOut,
   ChevronLeft,
   ChevronRight,
@@ -22,8 +24,12 @@ const NAV_ITEMS = [
   { to: '/artifacts', icon: FolderOpen, label: 'Artifacts' },
 ];
 
+// Data & Privacy (export, delete account, consent) and the policy were routed
+// but linked from nowhere in the navigation.
 const ACCOUNT_ITEMS = [
   { to: '/settings', icon: Settings, label: 'Settings' },
+  { to: '/data-export', icon: Shield, label: 'Data & Privacy' },
+  { to: '/privacy', icon: FileText, label: 'Privacy Policy' },
 ];
 
 function NavItem({ to, icon: Icon, label, collapsed }) {

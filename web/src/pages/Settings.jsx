@@ -997,6 +997,13 @@ export default function Settings() {
         <JobSourcesSection />
         <PreferencesSection prefs={prefs} setPrefs={editPrefs} loadState={prefsLoad} onRetry={() => { setPrefsLoad('loading'); loadPrefs() }} />
       </div>
+      {/* On mobile, "More" lands here and the Sidebar's Account links are
+          hidden, so the data pages need a way in from this page too. Plain
+          anchors: Settings is also rendered outside a router (its tests). */}
+      <footer className="mt-8 pt-4 border-t-2 border-black flex flex-wrap gap-4 text-sm font-bold">
+        <a href="/data-export" className="underline hover:no-underline">Data &amp; Privacy (export or delete my data)</a>
+        <a href="/privacy" className="underline hover:no-underline">Privacy Policy</a>
+      </footer>
     </div>
   )
 }
