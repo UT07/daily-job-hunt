@@ -194,9 +194,16 @@ def _load_base_resume() -> str:
     return tex
 
 
-def _uncached_ai_complete(prompt, system="", cache_hours=72, temperature=0.3, max_tokens=4096):
+def _uncached_ai_complete(prompt, system="", cache_hours=72, temperature=0.3, max_tokens=4096,
+                          skip_cache=False, validate=None):
     """Drop-in replacement for ai_complete_cached, patched in only for the
-    duration of a repeats>1 case (see module docstring point 2)."""
+    duration of a repeats>1 case (see module docstring point 2).
+
+    Its signature must match the real one. It lacked `skip_cache`, which
+    score_single_job passes, so every repeated eval call raised TypeError,
+    was logged as "AI scoring failed", and the case reported zero scores.
+    `skip_cache` and `validate` are accepted and ignored: nothing is cached
+    here."""
     return ai_complete(prompt, system=system, temperature=temperature, max_tokens=max_tokens)
 
 

@@ -20,9 +20,9 @@ from datetime import datetime
 # "ModuleNotFoundError: No module named 'ai_helper'" at container start —
 # invisible locally, because conftest puts lambdas/pipeline on sys.path.
 try:
-    from ai_helper import ai_complete_cached, get_supabase
+    from ai_helper import ai_complete_cached, get_supabase, json_parses
 except ImportError:  # container-image shape only
-    from lambdas.pipeline.ai_helper import ai_complete_cached, get_supabase
+    from lambdas.pipeline.ai_helper import ai_complete_cached, get_supabase, json_parses
 
 # Same two shapes, one extra wrinkle: guardrails/input_guards.py imports its
 # own siblings unqualified (`from guardrails.policy import policy_for`), so the
@@ -769,6 +769,7 @@ Resume: {resume_text}"""
         response_dict = ai_complete_cached(
             prompt, system=system, temperature=temperature,
             max_tokens=SCORE_MAX_TOKENS, skip_cache=skip_cache,
+            validate=json_parses,
         )
         text = response_dict["content"].strip()
         if text.startswith("```"):

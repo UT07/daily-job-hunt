@@ -201,8 +201,12 @@ google_drive:
 
 # --- AI Provider Settings ---
 ai:
-  groq_model: "openai/gpt-oss-120b"   # was llama-3.3-70b-versatile (retired by Groq, 404 as of 2026-08-31)
-  openrouter_model: "meta-llama/llama-3.3-70b-instruct:free"
+  # No model keys here, deliberately. `groq_model` and `openrouter_model` used
+  # to sit in this block and NOTHING read either one: the model lists live in
+  # ai_client.AIClient.from_config and lambdas/pipeline/ai_helper.py. The
+  # openrouter value had been a retired id (404) since 2026-08-31, which is
+  # what an unread setting does — it rots without anyone noticing. Removed
+  # 2026-10-08 so a reader is not misled into editing a dead knob.
   cache:
     path: "output/.ai_cache.db"
     ttl_hours: 72

@@ -21,6 +21,7 @@ Responses are cached in SQLite to avoid burning quota on repeated requests.
 """
 
 from __future__ import annotations
+import contextlib
 import hashlib
 import json
 import logging
@@ -130,12 +131,17 @@ class ResponseCache:
         self._conn.commit()
         self._cleanup()
 
-    def _make_key(self, prompt: str, system: str = "", cache_extra: str = "") -> str:
-        raw = f"{system}|||{prompt}|||{cache_extra}"
+    def _make_key(self, prompt: str, system: str = "", cache_extra: str = "",
+                  temperature: Optional[float] = None, max_tokens: Optional[int] = None) -> str:
+        # Temperature and max_tokens shape the answer, so they are in the key.
+        # Without them a temperature-0 answer was served to a 0.7 caller and a
+        # 1024-token answer to a client configured for 8192.
+        raw = f"{system}|||{prompt}|||{cache_extra}|||t={temperature}|||m={max_tokens}"
         return hashlib.sha256(raw.encode()).hexdigest()
 
-    def get(self, prompt: str, system: str = "", cache_extra: str = "") -> Optional[str]:
-        key = self._make_key(prompt, system, cache_extra)
+    def get(self, prompt: str, system: str = "", cache_extra: str = "",
+            temperature: Optional[float] = None, max_tokens: Optional[int] = None) -> Optional[str]:
+        key = self._make_key(prompt, system, cache_extra, temperature, max_tokens)
         cutoff = time.time() - self.ttl_seconds
         row = self._conn.execute(
             "SELECT response FROM cache WHERE key = ? AND created_at > ?",
@@ -145,12 +151,14 @@ class ResponseCache:
             return row[0]
         return None
 
-    def get_with_info(self, prompt: str, system: str = "", cache_extra: str = "") -> Optional[dict]:
+    def get_with_info(self, prompt: str, system: str = "", cache_extra: str = "",
+                      temperature: Optional[float] = None,
+                      max_tokens: Optional[int] = None) -> Optional[dict]:
         """Like get() but returns provider/model info alongside the response.
 
         Returns: {"response": str, "provider": str, "model": str} or None.
         """
-        key = self._make_key(prompt, system, cache_extra)
+        key = self._make_key(prompt, system, cache_extra, temperature, max_tokens)
         cutoff = time.time() - self.ttl_seconds
         row = self._conn.execute(
             "SELECT response, provider, model FROM cache WHERE key = ? AND created_at > ?",
@@ -160,8 +168,9 @@ class ResponseCache:
             return {"response": row[0], "provider": row[1] or "", "model": row[2] or ""}
         return None
 
-    def put(self, prompt: str, response: str, provider: str = "", model: str = "", system: str = "", cache_extra: str = ""):
-        key = self._make_key(prompt, system, cache_extra)
+    def put(self, prompt: str, response: str, provider: str = "", model: str = "", system: str = "",
+            cache_extra: str = "", temperature: Optional[float] = None, max_tokens: Optional[int] = None):
+        key = self._make_key(prompt, system, cache_extra, temperature, max_tokens)
         self._conn.execute(
             "INSERT OR REPLACE INTO cache (key, response, provider, model, created_at) VALUES (?, ?, ?, ?, ?)",
             (key, response, provider, model, time.time()),
@@ -194,6 +203,29 @@ class AIProvider:
     def complete(self, prompt: str, system: str = "", temperature: float = None) -> str:
         raise NotImplementedError
 
+    def _usable(self, content: Optional[str], finish_reason: Optional[str]) -> str:
+        """Return `content` only if it is a complete, non-empty answer.
+
+        Every complete() used to return the message content unexamined, so
+        three unusable shapes came back as success: `null` (a reasoning model
+        that spent its whole budget thinking), `""`, and a fragment cut off
+        at max_tokens. The fragment was then cached for 72 hours and replayed
+        to every identical prompt. Raising here makes each one an ordinary
+        provider failure: AIClient fails over, and the cache, which is written
+        only after a successful return, never sees it. ai_helper's
+        _call_provider and ai_complete_cached already refuse the same cases.
+        """
+        if finish_reason in _TRUNCATION_REASONS:
+            raise TruncatedResponseError(
+                f"[{self.name}:{self.model}] hit max_tokens={self.max_tokens} mid-answer "
+                f"(finish_reason={finish_reason}, {len(content or '')} chars) — not using a fragment"
+            )
+        if content is None or not content.strip():
+            raise EmptyResponseError(
+                f"[{self.name}:{self.model}] returned empty content (finish_reason={finish_reason})"
+            )
+        return content
+
     def complete_with_retry(self, prompt: str, system: str = "", temperature: float = None) -> str:
         """Call complete() with exponential backoff retry for transient errors.
 
@@ -207,11 +239,17 @@ class AIProvider:
         for attempt in range(_MAX_RETRIES + 1):
             try:
                 return self.complete(prompt, system=system, temperature=temperature)
+            except LocalRateLimitError:
+                # OUR bucket, not the provider's. acquire() has already
+                # blocked up to its timeout; asking again cannot mint a token
+                # faster than the refill rate. Retrying cost 120+2+120+4+120 =
+                # 366s per provider before failover. Fail over now.
+                raise
             except RateLimitError as e:
                 # 429 from rate limiter or provider — retryable
                 last_error = e
             except _requests.exceptions.HTTPError as e:
-                status = e.response.status_code if e.response is not None else 0
+                status = _http_status(e)
                 if status in _RETRYABLE_STATUS_CODES:
                     last_error = e
                 else:
@@ -252,10 +290,15 @@ class GeminiProvider(AIProvider):
         import requests
 
         if not self.rate_limiter.acquire():
-            raise RateLimitError(f"[{self.name}] Rate limit exceeded")
+            raise LocalRateLimitError(f"[{self.name}] local rate limiter exhausted")
 
         temp = temperature if temperature is not None else self.temperature
-        url = f"{self.base_url}/models/{self.model}:generateContent?key={self.api_key}"
+        # The key goes in the x-goog-api-key header, never the URL. requests
+        # copies the request URL into every HTTPError message, AIClient folds
+        # the last error into "All providers exhausted. Last error: ...", and
+        # app.py returns that as `HTTPException(500, f"AI call failed: {e}")`,
+        # so a `?key=` query parameter put the key in logs and API responses.
+        url = f"{self.base_url}/models/{self.model}:generateContent"
 
         contents = []
         if system:
@@ -271,7 +314,10 @@ class GeminiProvider(AIProvider):
             },
         }
 
-        resp = requests.post(url, json=body, timeout=90)
+        resp = requests.post(
+            url, json=body, timeout=90,
+            headers={"x-goog-api-key": self.api_key, "Content-Type": "application/json"},
+        )
 
         if resp.status_code == 429:
             raise RateLimitError(f"[{self.name}] HTTP 429 — rate limited")
@@ -283,7 +329,8 @@ class GeminiProvider(AIProvider):
             raise ProviderError(f"[{self.name}] No candidates in response")
 
         parts = candidates[0].get("content", {}).get("parts", [])
-        return "".join(p.get("text", "") for p in parts)
+        text = "".join(p.get("text", "") for p in parts)
+        return self._usable(text, candidates[0].get("finishReason"))
 
 
 class GroqProvider(AIProvider):
@@ -309,7 +356,7 @@ class GroqProvider(AIProvider):
         import requests
 
         if not self.rate_limiter.acquire():
-            raise RateLimitError(f"[{self.name}] Rate limit exceeded")
+            raise LocalRateLimitError(f"[{self.name}] local rate limiter exhausted")
 
         temp = temperature if temperature is not None else self.temperature
         messages = []
@@ -328,8 +375,8 @@ class GroqProvider(AIProvider):
             raise RateLimitError(f"[{self.name}] HTTP 429 — rate limited")
         resp.raise_for_status()
 
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        choice = resp.json()["choices"][0]
+        return self._usable(choice.get("message", {}).get("content"), choice.get("finish_reason"))
 
 
 class CerebrasProvider(AIProvider):
@@ -374,7 +421,7 @@ class CerebrasProvider(AIProvider):
         import requests
 
         if not self.rate_limiter.acquire():
-            raise RateLimitError(f"[{self.name}] Rate limit exceeded")
+            raise LocalRateLimitError(f"[{self.name}] local rate limiter exhausted")
 
         temp = temperature if temperature is not None else self.temperature
         messages = []
@@ -393,8 +440,8 @@ class CerebrasProvider(AIProvider):
             raise RateLimitError(f"[{self.name}] HTTP 429 — rate limited")
         resp.raise_for_status()
 
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        choice = resp.json()["choices"][0]
+        return self._usable(choice.get("message", {}).get("content"), choice.get("finish_reason"))
 
 
 class OpenRouterProvider(AIProvider):
@@ -419,7 +466,7 @@ class OpenRouterProvider(AIProvider):
         import requests
 
         if not self.rate_limiter.acquire():
-            raise RateLimitError(f"[{self.name}] Rate limit exceeded")
+            raise LocalRateLimitError(f"[{self.name}] local rate limiter exhausted")
 
         temp = temperature if temperature is not None else self.temperature
         messages = []
@@ -442,8 +489,8 @@ class OpenRouterProvider(AIProvider):
             raise RateLimitError(f"[{self.name}] HTTP 429 — rate limited")
         resp.raise_for_status()
 
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        choice = resp.json()["choices"][0]
+        return self._usable(choice.get("message", {}).get("content"), choice.get("finish_reason"))
 
 
 class NvidiaNIMProvider(AIProvider):
@@ -469,7 +516,7 @@ class NvidiaNIMProvider(AIProvider):
         import requests
 
         if not self.rate_limiter.acquire():
-            raise RateLimitError(f"[{self.name}] Rate limit exceeded")
+            raise LocalRateLimitError(f"[{self.name}] local rate limiter exhausted")
 
         temp = temperature if temperature is not None else self.temperature
         messages = []
@@ -488,8 +535,8 @@ class NvidiaNIMProvider(AIProvider):
             raise RateLimitError(f"[{self.name}] HTTP 429 — rate limited")
         resp.raise_for_status()
 
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        choice = resp.json()["choices"][0]
+        return self._usable(choice.get("message", {}).get("content"), choice.get("finish_reason"))
 
 
 class QwenProvider(AIProvider):
@@ -509,7 +556,7 @@ class QwenProvider(AIProvider):
         import requests
 
         if not self.rate_limiter.acquire():
-            raise RateLimitError(f"[{self.name}] Rate limit exceeded")
+            raise LocalRateLimitError(f"[{self.name}] local rate limiter exhausted")
 
         temp = temperature if temperature is not None else self.temperature
         messages = []
@@ -528,8 +575,8 @@ class QwenProvider(AIProvider):
             raise RateLimitError(f"[{self.name}] HTTP 429 — rate limited")
         resp.raise_for_status()
 
-        data = resp.json()
-        return data["choices"][0]["message"]["content"]
+        choice = resp.json()["choices"][0]
+        return self._usable(choice.get("message", {}).get("content"), choice.get("finish_reason"))
 
 
 class AnthropicProvider(AIProvider):
@@ -548,7 +595,7 @@ class AnthropicProvider(AIProvider):
         import anthropic
 
         if not self.rate_limiter.acquire():
-            raise RateLimitError(f"[{self.name}] Rate limit exceeded")
+            raise LocalRateLimitError(f"[{self.name}] local rate limiter exhausted")
 
         temp = temperature if temperature is not None else self.temperature
         client = anthropic.Anthropic(api_key=self.api_key)
@@ -559,7 +606,45 @@ class AnthropicProvider(AIProvider):
             kwargs["system"] = system
 
         resp = client.messages.create(**kwargs)
-        return resp.content[0].text
+        text = "".join(getattr(block, "text", "") or "" for block in (resp.content or []))
+        return self._usable(text, getattr(resp, "stop_reason", None))
+
+
+@contextlib.contextmanager
+def _unwaited_executor(max_workers: int):
+    """A ThreadPoolExecutor whose exit does not wait for its threads.
+
+    The council's round timeout is `as_completed(..., timeout=...)`, which
+    fires on time. A plain `with ThreadPoolExecutor(...)` then calls
+    `shutdown(wait=True)` on exit and blocks on any thread still stuck in a
+    90-120s HTTP call (plus its retries), so the "hard timeout" bounded
+    nothing. Here the exit cancels anything not yet started and returns; a
+    thread already inside a socket read runs to its own HTTP timeout in the
+    background and its result is discarded.
+    """
+    import concurrent.futures
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+    try:
+        yield executor
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def _http_status(e: BaseException) -> int:
+    """The HTTP status carried by a requests exception, or 0 if it has none.
+
+    Tests the response for PRESENCE, never for truth. `requests.Response`
+    defines `__bool__` as `self.ok`, so every 4xx/5xx response is falsy. The
+    previous idiom, `... if hasattr(e, 'response') and e.response else 0`,
+    therefore read 0 for exactly the 401/402/403/404/410 responses
+    `_DEAD_CODES` exists to catch, and a retired model was retried on every
+    request for the life of the process.
+    """
+    response = getattr(e, "response", None)
+    if response is None:
+        return 0
+    return getattr(response, "status_code", 0) or 0
 
 
 # ── Errors ───────────────────────────────────────────────────────────────
@@ -567,8 +652,22 @@ class AnthropicProvider(AIProvider):
 class RateLimitError(Exception):
     pass
 
+class LocalRateLimitError(RateLimitError):
+    """This process's own token bucket is empty — no request was sent."""
+
 class ProviderError(Exception):
     pass
+
+class EmptyResponseError(ProviderError):
+    """The provider answered 200 with no usable content."""
+
+class TruncatedResponseError(ProviderError):
+    """The provider stopped at its output budget; the content is a fragment."""
+
+
+# Finish reasons meaning "stopped at the output budget", per wire format:
+# OpenAI-compatible `length`, Gemini `MAX_TOKENS`, Anthropic `max_tokens`.
+_TRUNCATION_REASONS = frozenset({"length", "MAX_TOKENS", "max_tokens"})
 
 
 # ── Main Client (Failover + Cache) ──────────────────────────────────────
@@ -595,6 +694,18 @@ class AIClient:
         # Track dead providers (permanent errors) — skip them in future calls
         self._dead_providers: set = set()  # Set of (provider.name, provider.model)
 
+    def _cache_params(self, temperature: Optional[float]) -> dict:
+        """The sampling settings that go into the cache key.
+
+        max_tokens is per provider, and the key is looked up before a provider
+        is chosen, so the client's largest budget stands for the configuration:
+        a client built with a different budget gets different keys.
+        """
+        return {
+            "temperature": temperature,
+            "max_tokens": max((getattr(p, "max_tokens", 0) or 0 for p in self.providers), default=0) or None,
+        }
+
     def complete(self, prompt: str, system: str = "", temperature: float = None,
                  skip_cache: bool = False, cache_extra: str = "") -> str:
         """Send a prompt through the provider chain with caching and failover.
@@ -611,7 +722,7 @@ class AIClient:
 
         # Check cache first
         if not skip_cache and self.cache:
-            cached = self.cache.get(prompt, system, cache_extra=cache_extra)
+            cached = self.cache.get(prompt, system, cache_extra=cache_extra, **self._cache_params(temperature))
             if cached:
                 self._stats["cache_hits"] += 1
                 return cached
@@ -641,7 +752,8 @@ class AIClient:
                 # Cache the response
                 if self.cache and not skip_cache:
                     self.cache.put(prompt, response, provider=provider.name,
-                                   model=provider.model, system=system, cache_extra=cache_extra)
+                                   model=provider.model, system=system, cache_extra=cache_extra,
+                                   **self._cache_params(temperature))
 
                 self._stats["provider_calls"][provider.name] = self._stats["provider_calls"].get(provider.name, 0) + 1
                 return response
@@ -652,7 +764,7 @@ class AIClient:
                 continue
             except _req.HTTPError as e:
                 # Detect permanent failures (402 payment required, 404 model not found, etc.)
-                status = e.response.status_code if hasattr(e, 'response') and e.response else 0
+                status = _http_status(e)
                 if status in self._DEAD_CODES:
                     key = (provider.name, provider.model)
                     self._dead_providers.add(key)
@@ -677,7 +789,8 @@ class AIClient:
 
         # Check cache first (with provider/model info)
         if not skip_cache and self.cache:
-            cached = self.cache.get_with_info(prompt, system, cache_extra=cache_extra)
+            cached = self.cache.get_with_info(prompt, system, cache_extra=cache_extra,
+                                                **self._cache_params(temperature))
             if cached:
                 self._stats["cache_hits"] += 1
                 return cached
@@ -706,7 +819,8 @@ class AIClient:
                 # Cache the response
                 if self.cache and not skip_cache:
                     self.cache.put(prompt, response, provider=provider.name,
-                                   model=provider.model, system=system, cache_extra=cache_extra)
+                                   model=provider.model, system=system, cache_extra=cache_extra,
+                                   **self._cache_params(temperature))
 
                 self._stats["provider_calls"][provider.name] = self._stats["provider_calls"].get(provider.name, 0) + 1
                 return {"response": response, "provider": provider.name, "model": provider.model}
@@ -716,7 +830,7 @@ class AIClient:
                 last_error = e
                 continue
             except _req.HTTPError as e:
-                status = e.response.status_code if hasattr(e, 'response') and e.response else 0
+                status = _http_status(e)
                 if status in self._DEAD_CODES:
                     key = (provider.name, provider.model)
                     self._dead_providers.add(key)
@@ -739,6 +853,11 @@ class AIClient:
     # when a provider is reachable but unreliable from the current network —
     # e.g. add "groq" here if the dev machine is on a VPN exit Groq blocks.
     _DEPRIORITIZED_PROVIDERS: set = set()
+
+    # Wall-clock bound on one council generation round, in seconds. Bound for
+    # real: the executor is shut down without waiting (see _shutdown_now), so
+    # a provider hung on a slow socket keeps its thread but not the caller.
+    _COUNCIL_TIMEOUT_S: float = 120
 
     def _select_providers(self, n: int, exclude: set = None) -> List[AIProvider]:
         """Pick N distinct providers/models from the pool, preferring alive ones.
@@ -858,12 +977,12 @@ class AIClient:
         failures: list[str] = []
 
         # Run generators concurrently with a 60-second hard timeout per provider
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(generators)) as executor:
+        with _unwaited_executor(len(generators)) as executor:
             future_to_provider = {
                 executor.submit(_generate_one, p): p for p in generators
             }
             try:
-                for future in concurrent.futures.as_completed(future_to_provider, timeout=120):
+                for future in concurrent.futures.as_completed(future_to_provider, timeout=self._COUNCIL_TIMEOUT_S):
                     provider = future_to_provider[future]
                     try:
                         result = future.result(timeout=60)
@@ -883,7 +1002,7 @@ class AIClient:
                         failures.append(f"{provider.name}:{provider.model} {type(e).__name__}: {e}")
                         # Mark permanently dead providers (402, 403, etc.)
                         if isinstance(e, _req.HTTPError):
-                            status = e.response.status_code if hasattr(e, "response") and e.response else 0
+                            status = _http_status(e)
                             if status in self._DEAD_CODES:
                                 self._dead_providers.add((provider.name, provider.model))
                                 logger.warning(f"[Council] Marked {provider.name}:{provider.model} dead ({status})")
@@ -929,10 +1048,10 @@ class AIClient:
                         len(generators), "; ".join(failures) or "no reason recorded",
                         ", ".join(f"{p.name}:{p.model}" for p in retry_generators),
                     )
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=len(retry_generators)) as executor:
+                    with _unwaited_executor(len(retry_generators)) as executor:
                         future_to_provider = {executor.submit(_generate_one, p): p for p in retry_generators}
                         try:
-                            for future in concurrent.futures.as_completed(future_to_provider, timeout=120):
+                            for future in concurrent.futures.as_completed(future_to_provider, timeout=self._COUNCIL_TIMEOUT_S):
                                 provider = future_to_provider[future]
                                 try:
                                     result = future.result(timeout=60)
@@ -945,7 +1064,7 @@ class AIClient:
                                 except Exception as e:
                                     logger.warning(f"[Council] retry {provider.name}:{provider.model} failed: {e}")
                                     if isinstance(e, _req.HTTPError):
-                                        status = e.response.status_code if hasattr(e, "response") and e.response else 0
+                                        status = _http_status(e)
                                         if status in self._DEAD_CODES:
                                             self._dead_providers.add((provider.name, provider.model))
                         except concurrent.futures.TimeoutError:
@@ -1116,7 +1235,8 @@ class AIClient:
         # Check cache first
         council_cache_extra = f"council:{n_generators}x{n_critics}|{cache_extra}"
         if not skip_cache and self.cache:
-            cached = self.cache.get_with_info(prompt, system, cache_extra=council_cache_extra)
+            cached = self.cache.get_with_info(prompt, system, cache_extra=council_cache_extra,
+                                                **self._cache_params(temperature))
             if cached:
                 self._stats["cache_hits"] += 1
                 logger.debug("[Council] Cache hit — returning cached council result")
@@ -1141,7 +1261,8 @@ class AIClient:
             if self.cache and not skip_cache:
                 self.cache.put(prompt, best, provider=candidates[0]["provider"],
                                model=candidates[0]["model"], system=system,
-                               cache_extra=council_cache_extra)
+                               cache_extra=council_cache_extra,
+                               **self._cache_params(temperature))
             self._log_quality({
                 "task": task_description or "council_complete",
                 "generators": [{"provider": c["provider"], "model": c["model"]} for c in candidates],
@@ -1163,7 +1284,8 @@ class AIClient:
         if self.cache and not skip_cache:
             self.cache.put(prompt, best, provider=result["best_provider"],
                            model=result["best_model"], system=system,
-                           cache_extra=council_cache_extra)
+                           cache_extra=council_cache_extra,
+                               **self._cache_params(temperature))
 
         # Log quality data
         self._log_quality({
@@ -1396,18 +1518,20 @@ class AIClient:
         # 4. OpenRouter — free model aggregator (shared daily quota)
         or_key = get_key("openrouter", "OPENROUTER_API_KEY")
         if or_key:
-            # Verified-working free models on OpenRouter (2026-04-05).
-            # Includes Meta Llama (rate-limited sometimes), NVIDIA Nemotron,
-            # OpenAI GPT-OSS, Qwen, Minimax, Arcee, z-ai GLM.
             # Re-verified live 2026-08-31: every previous entry returned 404
-            # (models moved off the free tier). These four are the current
-            # free pool. NOTE: OpenRouter free shares ONE per-account daily
-            # quota, so these return 429 once it's spent regardless of model —
-            # treat them as depth behind Groq, never as the primary path.
+            # (models moved off the free tier). NOTE: OpenRouter free shares
+            # ONE per-account daily quota, so these return 429 once it's spent
+            # regardless of model — treat them as depth behind Groq, never as
+            # the primary path.
+            #
+            # minimax/minimax-m3:free and z-ai/glm-5.2:free REMOVED 2026-10-08.
+            # Both were recorded "404 -- model id no longer exists" in
+            # lambdas/pipeline/ai_helper.py by the 2026-09-28 probe and sat here
+            # for ten more days, because the retired-model guard only read
+            # ai_helper and this module's class defaults. It now scans the
+            # whole repo (tests/unit/test_ai_council_models.py).
             or_models = [
-                "minimax/minimax-m3:free",
                 "nvidia/nemotron-3-ultra-550b-a55b:free",
-                "z-ai/glm-5.2:free",
                 "google/gemma-4-31b-it:free",
             ]
             for model in or_models:

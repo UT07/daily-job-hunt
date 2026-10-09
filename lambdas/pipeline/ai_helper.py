@@ -6,7 +6,8 @@ import os
 import random
 import time
 import re
-from datetime import UTC, datetime, timedelta
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta, timezone
 
 import boto3
 import httpx
@@ -458,10 +459,18 @@ def _model_family(model: str) -> str:
 # Cooldown scope is not the same for every failure, and getting it wrong is
 # what makes rotation useless:
 #
-#   429  -> cool the ACCOUNT, not the model. OpenRouter's free pool shares one
-#           daily quota across every model on it, so a 429 on gemma means glm
-#           is equally unavailable. Groq's is a per-minute token budget, so it
-#           recovers in a minute; OpenRouter's is daily, so it does not.
+#   429  -> scope depends on how the VENDOR meters, read from its docs
+#           (2026-10-08) rather than assumed. OpenRouter's free pool shares
+#           one daily quota across every model on the account, so a 429 on
+#           gemma means glm is equally unavailable: ACCOUNT. Groq and Gemini
+#           meter each model separately: MODEL. See
+#           _PER_MODEL_RATE_LIMIT_ACCOUNTS for the quotes.
+#   401
+#   402
+#   403  -> the KEY is missing, invalid or unfunded: cool the ACCOUNT for
+#           hours and log at ERROR. Every model on it is equally dead and it
+#           does not recover in two minutes. Except a moderation 403, which
+#           is about one request.
 #   404
 #   410  -> cool the MODEL, for a long time. Free model ids are withdrawn
 #           without notice (minimax-m3, glm-5.2) and hosted ones are retired on
@@ -502,6 +511,48 @@ _RATE_LIMIT_COOLDOWN_S = {
 }
 _MODEL_GONE_COOLDOWN_S = 6 * 3600   # a withdrawn model id is not coming back today
 _TRANSIENT_COOLDOWN_S = 120
+# A bad, unfunded or missing key. It used to take the 120s transient window,
+# so a dead key was re-probed thirty times an hour per model, and logged at
+# WARNING alongside every ordinary failover. A key does not fix itself; a
+# human has to, so the cooldown spans most of a warm container's life.
+_CREDENTIAL_COOLDOWN_S = 6 * 3600
+
+# Accounts whose rate limits are metered PER MODEL, so a 429 cools only the
+# model that returned it. Each entry is here on a vendor's own documentation,
+# read 2026-10-08:
+#
+#   groq    console.groq.com/docs/rate-limits: "Rate limits apply at the
+#           organization level, not individual users", with the limits table
+#           keyed by MODEL ID (openai/gpt-oss-120b and qwen/qwen3.8-27b each
+#           have their own 30 RPM / 1K RPD / 8K TPM / 200K TPD row). Its 429
+#           body names the model: "Rate limit reached for model `...` in
+#           organization `...`".
+#   gemini  ai.google.dev/gemini-api/docs/rate-limits: "Rate limits are
+#           applied per project, not per API key" and "Limits vary depending
+#           on the specific model being used"; the quota ids say it outright,
+#           e.g. GenerateRequestsPerDayPerProjectPerModel.
+#
+# NOT here, deliberately:
+#   openrouter  docs/api-reference/limits: free-model limits are per ACCOUNT
+#               (one `free_model_daily_requests` counter, 50/day under 10
+#               credits). A 429 on one free model is a 429 on all of them.
+#   cerebras    support/rate-limits says "Rate limits apply at the
+#               organization level, not the user level, and vary based on the
+#               model" — Groq's ambiguity without the per-model table or error
+#               format that settles it. One Cerebras model is in the pool, so
+#               the scope changes nothing today; revisit on measurement.
+#
+# This does not contradict the 2026-10-07 measurement (17b3b48: Groq took 41
+# account-wide cooldowns and the live pool collapsed to Gemini). That
+# measurement shows the ACCOUNT scope is what benched Groq's other models; it
+# never showed that those models were themselves throttled. Groq's own docs
+# say they are not. If they were, the cost is one fast 429 per sibling, which
+# then cools that sibling too.
+_PER_MODEL_RATE_LIMIT_ACCOUNTS = frozenset({"groq", "gemini"})
+
+# Gemini documents that "Requests per day (RPD) quotas reset at midnight
+# Pacific time", not UTC.
+_PACIFIC_RESET_ACCOUNTS = frozenset({"gemini"})
 
 
 def _account_of(provider: dict) -> str:
@@ -518,7 +569,12 @@ def _cool_down(key: str, seconds: int) -> None:
 # Markers for a PER-DAY quota, matched on the kind of limit rather than on who
 # sent it. The phrasing is OpenRouter's today; hard-coding the account would
 # silently mistreat the next provider to adopt the same wording.
-_DAILY_LIMIT_MARKERS = ("per-day", "per day", "daily limit", "requests/day")
+#
+# Compared against the casefolded body. "perday" is Gemini's: its quota ids run
+# words together (GenerateRequestsPerDayPerProjectPerModel), so an exhausted
+# daily project quota matched none of the spaced or hyphenated forms and took
+# the 300s default — re-probed ~250 times before the quota reset.
+_DAILY_LIMIT_MARKERS = ("per-day", "per day", "perday", "daily limit", "requests/day")
 
 
 def _seconds_to_utc_midnight(now: datetime | None = None) -> int:
@@ -527,6 +583,26 @@ def _seconds_to_utc_midnight(now: datetime | None = None) -> int:
     nxt = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
     # Floor at a minute so a call landing a hair before midnight still backs off.
     return max(60, int((nxt - now).total_seconds()))
+
+
+def _seconds_to_pacific_midnight(now: datetime | None = None) -> int:
+    """Seconds until the next midnight in America/Los_Angeles (DST-aware)."""
+    now = now or datetime.now(UTC)
+    try:
+        from zoneinfo import ZoneInfo
+
+        local = now.astimezone(ZoneInfo("America/Los_Angeles"))
+    except Exception:  # no tz database in this runtime: assume PST, which
+        # resets an hour LATER than PDT, so the error is a longer wait, never
+        # an early re-probe of a spent quota.
+        local = now.astimezone(timezone(timedelta(hours=-8)))
+    nxt = (local + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    return max(60, int((nxt - local).total_seconds()))
+
+
+def _is_daily_limit(detail: str) -> bool:
+    folded = (detail or "").casefold()
+    return any(m in folded for m in _DAILY_LIMIT_MARKERS)
 
 
 def _rate_limit_cooldown_seconds(account: str, detail: str) -> int:
@@ -548,9 +624,17 @@ def _rate_limit_cooldown_seconds(account: str, detail: str) -> int:
     the only live failover the council has. So the body decides, and an absent
     or unrecognised body takes the conservative short cooldown.
     """
-    if detail and any(m in detail.lower() for m in _DAILY_LIMIT_MARKERS):
+    if _is_daily_limit(detail):
+        if account in _PACIFIC_RESET_ACCOUNTS:
+            return _seconds_to_pacific_midnight()
         return _seconds_to_utc_midnight()
     return _RATE_LIMIT_COOLDOWN_S.get(account, 300)
+
+
+# OpenRouter documents 403 as "insufficient permissions, guardrail block, or
+# moderation flag". The last two are about the REQUEST, so they must not bench
+# the account the way a bad key does.
+_REQUEST_SCOPED_403_MARKERS = ("moderation", "flagged", "guardrail")
 
 
 def note_provider_failure(provider: dict, status: int | None, detail: str = "") -> None:
@@ -562,8 +646,23 @@ def note_provider_failure(provider: dict, status: int | None, detail: str = "") 
     account = _account_of(provider)
     if status == 429:
         secs = _rate_limit_cooldown_seconds(account, detail)
-        _cool_down(f"account:{account}", secs)
-        logger.info(f"[ai] cooling account '{account}' for {secs}s after 429")
+        if account in _PER_MODEL_RATE_LIMIT_ACCOUNTS:
+            _cool_down(f"model:{provider['name']}", secs)
+            logger.info(f"[ai] cooling model '{provider['name']}' for {secs}s after 429 "
+                        f"({account} meters each model separately)")
+        else:
+            _cool_down(f"account:{account}", secs)
+            logger.info(f"[ai] cooling account '{account}' for {secs}s after 429")
+    elif status == 403 and any(m in (detail or "").casefold() for m in _REQUEST_SCOPED_403_MARKERS):
+        _cool_down(f"model:{provider['name']}", _TRANSIENT_COOLDOWN_S)
+        logger.warning(f"[ai] {provider['name']} refused this request (403, moderation/guardrail)")
+    elif status in (401, 402, 403):
+        _cool_down(f"account:{account}", _CREDENTIAL_COOLDOWN_S)
+        logger.error(
+            f"[ai] {account} rejected the API key ({status}) — missing, invalid or "
+            f"unfunded. Every {account} model is benched for {_CREDENTIAL_COOLDOWN_S}s; "
+            f"fix the key, this will not recover on its own."
+        )
     elif status in (404, 410):
         _cool_down(f"model:{provider['name']}", _MODEL_GONE_COOLDOWN_S)
         logger.info(
@@ -835,7 +934,9 @@ def _call_provider(
             note_provider_failure(provider, 429, resp.text)
         else:
             logger.warning(f"[ai] {provider['name']} returned {resp.status_code}")
-            note_provider_failure(provider, resp.status_code)
+            # The body decides scope for a 403 (moderation vs bad key), so it
+            # is forwarded on every failure, not only on 429.
+            note_provider_failure(provider, resp.status_code, resp.text)
         return None
     except Exception as e:
         logger.warning(f"[ai] {provider['name']} failed: {e}")
@@ -1150,6 +1251,50 @@ def _council_complete_legacy(
 # ai_complete_cached — with Supabase cache
 # ---------------------------------------------------------------------------
 
+def json_parses(text: str) -> bool:
+    """True if `text` is JSON, allowing one surrounding markdown code fence.
+
+    The `validate` for ai_complete_cached callers whose answer must be JSON.
+    Strips fences the way score_batch.score_single_job does before parsing,
+    so a fenced answer the caller can read is not rejected here.
+    """
+    t = (text or "").strip()
+    if t.startswith("```"):
+        parts = t.split("```")
+        t = parts[1] if len(parts) >= 2 else t
+        if t.startswith("json"):
+            t = t[4:]
+        t = t.strip()
+    try:
+        json.loads(t)
+    except (ValueError, TypeError):
+        return False
+    return True
+
+
+def _passes(validate: Callable[[str], bool] | None, content: str) -> bool:
+    """A validator that raises is a rejection: never cache on a crash."""
+    if validate is None:
+        return True
+    try:
+        return validate(content) is True
+    except Exception as e:  # noqa: BLE001 -- a broken validator must not break the call
+        logger.warning(f"[ai] cache validator raised ({e!r}); treating as invalid")
+        return False
+
+
+def _cache_key(system: str, prompt: str, temperature: float, max_tokens: int) -> str:
+    """Everything that shapes the answer is in the key.
+
+    It used to be md5(system|prompt), so a temperature-0 scoring answer was
+    replayed to a temperature-0.7 caller and a 1024-token answer to a caller
+    who asked for 8192. Changing the format orphans existing entries once;
+    they expire on their own 72h TTL.
+    """
+    raw = f"{system}|{prompt}|temperature={temperature}|max_tokens={max_tokens}"
+    return hashlib.md5(raw.encode()).hexdigest()
+
+
 def ai_complete_cached(
     prompt: str,
     system: str = "",
@@ -1157,6 +1302,7 @@ def ai_complete_cached(
     temperature: float = 0.3,
     max_tokens: int = 4096,
     skip_cache: bool = False,
+    validate: Callable[[str], bool] | None = None,
 ) -> dict:
     """AI complete with Supabase cache. Returns dict with content, provider, model.
 
@@ -1173,8 +1319,16 @@ def ai_complete_cached(
 
     Default stays False: the batch pipeline scores ~58 jobs a run against an 8k
     tokens/minute Groq ceiling that is already the bottleneck.
+
+    `validate`, when given, decides whether an answer is fit to STORE. It used
+    to be stored before the caller parsed it, so one unparseable scoring
+    answer was replayed for 72h and the job could not be re-scored until the
+    entry expired. Now an answer is cached only if `validate(content)` is
+    True, and a cached entry that fails it is ignored and re-asked, which also
+    flushes entries poisoned before this existed. The answer is still
+    RETURNED either way: the caller may be able to salvage it.
     """
-    cache_key = hashlib.md5(f"{system}|{prompt}".encode()).hexdigest()
+    cache_key = _cache_key(system, prompt, temperature, max_tokens)
     db = get_supabase()
 
     if not skip_cache:
@@ -1182,11 +1336,16 @@ def ai_complete_cached(
             .eq("cache_key", cache_key) \
             .gte("expires_at", datetime.utcnow().isoformat()).execute()
         if cached.data:
-            return {
-                "content": cached.data[0]["response"],
-                "provider": cached.data[0].get("provider", "cache"),
-                "model": cached.data[0].get("model", "cache"),
-            }
+            if _passes(validate, cached.data[0]["response"]):
+                return {
+                    "content": cached.data[0]["response"],
+                    "provider": cached.data[0].get("provider", "cache"),
+                    "model": cached.data[0].get("model", "cache"),
+                }
+            logger.warning(
+                "[ai] cached response for cache_key=%s fails validation — "
+                "ignoring it and asking again", cache_key,
+            )
 
     result = ai_complete(prompt, system, temperature=temperature, max_tokens=max_tokens)
 
@@ -1205,6 +1364,13 @@ def ai_complete_cached(
             "[ai] not caching a truncated response for cache_key=%s "
             "(max_tokens=%s) — a fragment must not be replayed for %sh",
             cache_key, max_tokens, cache_hours,
+        )
+        return result
+
+    if not _passes(validate, result.get("content") or ""):
+        logger.warning(
+            "[ai] not caching a response that failed validation for "
+            "cache_key=%s — it would be replayed for %sh", cache_key, cache_hours,
         )
         return result
 
