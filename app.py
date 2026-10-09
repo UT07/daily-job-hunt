@@ -3343,7 +3343,7 @@ def pipeline_status(user: AuthUser = Depends(get_current_user)):
         try:
             import boto3
             import json as _json
-            sfn = boto3.client("states", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
+            sfn = boto3.client("stepfunctions", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
             state_machine_arn = os.environ.get(
                 "DAILY_PIPELINE_ARN",
                 "arn:aws:states:eu-west-1:385017713886:stateMachine:naukribaba-daily-pipeline",
