@@ -53,6 +53,8 @@ except ImportError:  # container-image shape only
         maybe_scrub_pii,
     )
 from shared.apply_platform import classify_apply_platform, extract_platform_ids
+from shared.job_hash_filter import is_job_hash
+from shared.jobs_raw_trust import strip_untrusted_raw_fields
 from shared.score_caps import apply_anti_inflation_caps
 from shared.work_auth import apply_geo_score_cap
 from shared.tex_utils import tex_to_plaintext
@@ -86,7 +88,13 @@ def _user_job_row(db, user_id: str, job_hash: str) -> dict | None:
 
     Returns {"job_id", "apply_url", "location"} for a REAL row, else None.
     Raises if the lookup itself fails; callers decide what that means.
+
+    `job_hash` goes into a PostgREST `or=` expression, a filter language in
+    which `,` starts a new condition: `000000,user_id.eq.<id>` would match
+    every row the user has. Anything that is not a job hash is "no row".
     """
+    if not is_job_hash(job_hash):
+        return None
     found = (db.table("jobs").select("job_id, apply_url, location")
              .eq("user_id", user_id)
              .or_(f"job_hash.eq.{job_hash},canonical_hash.eq.{job_hash}")
@@ -108,8 +116,13 @@ def _prefer_users_own(job: dict, own: dict | None) -> dict:
     The user's non-empty value wins; jobs_raw's is the fallback, which is how a
     scraped job still reaches the user with the scraper's link. Used for the
     record AND for the geo cap, so the cap judges the location the user sees.
+
+    The fallback is only ever a SCRAPED row's value. A manual row's apply_url
+    and location were typed by whoever first pasted that JD, and rows written
+    before 2026-10-09 still carry them; falling back to those served one
+    user's link and location to another (security review, third pass).
     """
-    view = dict(job)
+    view = strip_untrusted_raw_fields(job)
     for field in _NEVER_BLANK:
         mine = (own or {}).get(field)
         if mine:

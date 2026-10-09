@@ -5,6 +5,7 @@ import re
 import boto3
 
 from ai_helper import get_supabase
+from shared.job_hash_filter import is_job_hash
 from shared.resume_verdict import from_step_results
 
 logger = logging.getLogger()
@@ -35,9 +36,8 @@ def _missing_column_name(exc) -> str | None:
 
 
 # Job hashes are lowercase hex. `or=` is a filter-expression surface, so the
-# hash is validated before it is interpolated into one (same rule as
-# scripts/reconcile_resume_rows.py).
-_HASH_RE = re.compile(r"[0-9a-f]{6,64}")
+# hash is validated before it is interpolated into one: shared.job_hash_filter,
+# the one rule score_batch uses too.
 
 
 def update_job_row(db, user_id: str, job_hash: str, update: dict) -> int:
@@ -58,7 +58,7 @@ def update_job_row(db, user_id: str, job_hash: str, update: dict) -> int:
     interpolated into `or=`; it is matched on job_hash alone, by parameter.
     """
     q = db.table("jobs").update(update).eq("user_id", user_id)
-    if _HASH_RE.fullmatch(job_hash or ""):
+    if is_job_hash(job_hash):
         q = q.or_(f"job_hash.eq.{job_hash},canonical_hash.eq.{job_hash}")
     else:
         logger.warning("[save_job] %r is not a hex job hash — matching job_hash only",

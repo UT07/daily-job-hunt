@@ -286,7 +286,12 @@ def handler(event, context):
     job_row = db.table("jobs_raw").select("*").eq("job_hash", job_hash).execute()
     if not job_row.data:
         return {"error": f"Job {job_hash} not found"}
-    job = job_row.data[0]
+    # A manual row's location was typed by whoever first pasted this JD, not
+    # by this user; it is not put into THIS user's letter. See
+    # shared/jobs_raw_trust.py.
+    from shared.jobs_raw_trust import strip_untrusted_raw_fields
+
+    job = strip_untrusted_raw_fields(job_row.data[0])
 
     # Same shared accessor as tailor_resume and score_batch. A local limit(1)
     # here meant the letter could describe achievements from a document the
