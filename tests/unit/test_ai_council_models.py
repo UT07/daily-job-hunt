@@ -59,6 +59,9 @@ RETIRED_MODEL_IDS = {
     "minimax/minimax-m3:free",
     "z-ai/glm-5.2:free",
     "inclusionai/ling-3.0-flash-fin:free",
+    # 2026-10-09: 404 "id withdrawn" from inside the production API, on every
+    # call of a Save & Score task that then failed all providers.
+    "inclusionai/ling-3.0-flash-sante:free",
 }
 
 

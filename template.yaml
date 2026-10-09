@@ -1730,6 +1730,13 @@ Resources:
             QueueName: !GetAtt TaskQueue.QueueName
         - SQSPollerPolicy:
             QueueName: !GetAtt TaskQueue.QueueName
+        # ai_helper reads every provider key it has no env var for -- Gemini's,
+        # notably -- from SSM. Without this the API got AccessDenied on every
+        # Gemini call (2026-10-09), so interactive scoring ran on Groq's free
+        # daily quota alone and failed outright once it was spent.
+        # tests/unit/test_ssm_read_where_keys_are_read.py.
+        - SSMParameterReadPolicy:
+            ParameterName: naukribaba/*
         - S3CrudPolicy:
             BucketName: utkarsh-job-hunt
         # NOTE: SAM's `StepFunctionsExecutionPolicy` is misleadingly named —

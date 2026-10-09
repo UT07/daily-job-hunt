@@ -39,7 +39,9 @@ const LEGACY_PROGRESS_STEPS = {
 // dies, so we set the timeout per-key here instead. Defined at module
 // scope so the object identity stays stable across renders (otherwise it
 // would be a new dep on the runLegacy useCallback every render).
-const LEGACY_MAX_WAIT_MS = { score: 120000, contacts: 600000 };
+// score: the worker can spend ~4 min failing over before it reports an error;
+// a client that gives up first shows "Task timed out" instead of that error.
+const LEGACY_MAX_WAIT_MS = { score: 300000, contacts: 600000 };
 
 // ---- Draft persistence ----
 //
