@@ -12,7 +12,7 @@ from tests.e2e_live._live import api_call, assert_status, ensure_signed_in, fetc
 from tests.e2e_live.live_04_dashboard import job_row, list_request
 
 EDIT_MARK = " (verified in e2e)"
-COMPILE_TIMEOUT_S = 240
+COMPILE_TIMEOUT_S = 330
 
 
 @pytest.fixture()

@@ -62,6 +62,14 @@ def pytest_collection_modifyitems(session, config, items):
     live = [i for i in items if _is_live(i)]
     if not live:
         return
+    # A SIGTERM (CI cancel, `kill`) would otherwise end the process without
+    # running fixture teardown, leaving the test account in production.
+    import signal
+
+    def _term(signum, frame):
+        raise KeyboardInterrupt(f"signal {signum}")
+
+    signal.signal(signal.SIGTERM, _term)
     try:
         _SESSION["cfg"] = LiveConfig.from_env()
     except LiveConfigError as e:

@@ -1,9 +1,11 @@
 """Journey 14 (last): Delete My Account in the UI.
 
-The page tells the user "Your account and all data have been permanently
-deleted." This test holds the system to that sentence: after the request, the
-data must actually be gone and the account must not sign in. Whatever it finds,
-the session fixture's admin cleanup then removes everything."""
+Since #217 the page says "Deletion requested. Your account and data are marked
+for permanent deletion after a 30-day grace period ... You are being signed
+out." (DELETE /api/gdpr/delete is a soft delete; scripts/data_retention.py does
+the hard delete later.) This test holds the system to exactly those claims: the
+request is recorded server-side and the browser is signed out. The session
+fixture's admin cleanup then removes everything."""
 
 from __future__ import annotations
 
@@ -11,7 +13,7 @@ import re
 
 from playwright.sync_api import expect
 
-from tests.e2e_live._live import api_call, assert_status, ensure_signed_in, require, sign_in
+from tests.e2e_live._live import api_call, assert_status, ensure_signed_in, has_session, require, sign_in
 
 
 def test_delete_account(live, fresh_page):
@@ -28,18 +30,17 @@ def test_delete_account(live, fresh_page):
     with live.rec.step("Confirm Delete -> DELETE /api/gdpr/delete -> success, signed out"):
         resp = api_call(live, "DELETE", r"^/api/gdpr/delete$", confirm.click)
         assert_status(resp, 200, "delete account")
-        msg = page.get_by_text("Your account and all data have been permanently deleted.")
+        msg = page.get_by_text(re.compile(r"^Deletion requested\. Your account and data are marked"))
         expect(msg).to_be_visible()
         expect(page).to_have_url(re.compile(r"/login$"), timeout=20_000)
         live.rec.note(f"DELETE /api/gdpr/delete body: {resp.text()[:200]}")
-    with live.rec.step("'permanently deleted' is true: no jobs/résumés remain and the account cannot sign in"):
+    with live.rec.step("deletion is recorded server-side and the browser is signed out"):
         users = live.admin.select("users", {"id": f"eq.{uid}", "select": "id,gdpr_deletion_requested_at"})
+        assert users and users[0].get("gdpr_deletion_requested_at"), f"no deletion request recorded: {users}"
+        assert not has_session(page), "still signed in after 'You are being signed out.'"
         jobs = live.admin.count("jobs", {"user_id": f"eq.{uid}"})
-        resumes = live.admin.count("user_resumes", {"user_id": f"eq.{uid}"})
-        fresh_page.net.allow(400, r"SUPABASE /auth/v1/token$", "a deleted account is expected to be refused")
+        fresh_page.net.allow(400, r"SUPABASE /auth/v1/token$", "a deleted account may be refused")
         login = sign_in(fresh_page.page, live.cfg, live.account["email"], live.state["password"])
-        evidence = (f"after the UI said 'permanently deleted': users row={'present' if users else 'gone'}"
-                    f"{' (gdpr_deletion_requested_at=' + str(users[0].get('gdpr_deletion_requested_at')) + ')' if users else ''}, "
-                    f"jobs={jobs}, user_resumes={resumes}, sign-in with the same password -> HTTP {login.status}")
-        live.rec.note(evidence)
-        assert not users and jobs == 0 and resumes == 0 and login.status != 200, evidence
+        live.rec.note(f"after 'Deletion requested': gdpr_deletion_requested_at="
+                      f"{users[0]['gdpr_deletion_requested_at']}, jobs still stored={jobs} (expected during the "
+                      f"grace period), same password signs in -> HTTP {login.status}")

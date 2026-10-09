@@ -80,7 +80,7 @@ def _await_score_card(live, resp, n_cards: int) -> None:
     form, the UI gives up after 120s with "Task timed out"; the evidence that
     matters is the task's own final status, read here from the poll URL."""
     page = live.page
-    banner = page.locator("text=/Task timed out|failed|Error/i")
+    banner = page.locator("div.bg-error-light.border-error")  # ErrorBanner
     try:
         expect(_score_card(page).nth(n_cards - 1).or_(banner.first)).to_be_visible(timeout=240_000)
         if _score_card(page).count() >= n_cards:

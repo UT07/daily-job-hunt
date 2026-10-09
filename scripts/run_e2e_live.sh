@@ -67,4 +67,23 @@ printf 'e2e_live: site=%s api=%s supabase=%s bucket=%s\n' \
   "$E2E_LIVE_SITE_URL" "${E2E_LIVE_API_URL%%.*}..." "${E2E_LIVE_SUPABASE_URL%%.*}..." "$E2E_LIVE_S3_BUCKET"
 printf 'e2e_live: config from %s and %s\n' "$ENV_FILE" "$WEB_ENV_FILE"
 
-exec "$PY" -m pytest tests/e2e_live -o python_files='live_*.py' -p no:cacheprovider -rA "$@"
+# Belt and braces: the session fixture's teardown deletes the account even when
+# tests fail, and conftest turns SIGTERM into a normal interrupt so teardown
+# still runs. If the process dies harder than that, this trap re-runs the
+# (idempotent) cleanup for the account the run recorded.
+ACCOUNT_FILE="$ROOT/tests/e2e_live/artifacts/last_account.json"
+rm -f "$ACCOUNT_FILE"
+final_cleanup() {
+  [ -f "$ACCOUNT_FILE" ] || return 0
+  uid="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["id"])' "$ACCOUNT_FILE")"
+  marker="$("$PY" -c 'import json,sys; print(json.load(open(sys.argv[1]))["marker"])' "$ACCOUNT_FILE")"
+  printf 'e2e_live: final cleanup check for %s: ' "$uid"
+  "$PY" -m tests.e2e_live.cleanup --user-id "$uid" --marker "$marker" | tail -1
+}
+trap final_cleanup EXIT
+
+set +e
+"$PY" -m pytest tests/e2e_live -o python_files='live_*.py' -p no:cacheprovider -rA "$@"
+rc=$?
+set -e
+exit "$rc"

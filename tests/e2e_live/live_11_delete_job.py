@@ -44,6 +44,7 @@ def test_delete_throwaway_job(live):
         expect(row).to_have_count(0)
     with live.rec.step("delete: row gone from the DB and stays gone after reload"):
         assert live.admin.count("jobs", {"user_id": f"eq.{uid}", "job_id": f"eq.{job_id}"}) == 0
+        page.wait_for_load_state("networkidle")
         list_request(live, page.reload)
         expect(page.locator("table tbody tr").filter(has_text=company)).to_have_count(0)
         if live.state.get("job_id"):
