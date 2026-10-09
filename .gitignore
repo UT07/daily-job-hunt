@@ -119,3 +119,6 @@ test-results/
 # present and pins the behaviours it taught us either way. Regenerate with
 # scripts/dump_jd_fixture.py.
 web/src/lib/__fixtures__/real_jds.json
+
+# tests/e2e_live failure screenshots, HTML, export.zip and report.json (per run)
+tests/e2e_live/artifacts/
