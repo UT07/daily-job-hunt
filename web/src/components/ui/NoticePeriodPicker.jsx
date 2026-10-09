@@ -25,13 +25,20 @@ const CUSTOM = '__custom__'
  *   label:     optional label override (default: "Notice Period")
  */
 export function NoticePeriodPicker({ value, onChange, label = 'Notice Period' }) {
-  // The dropdown is in custom-mode whenever value is non-empty AND not one of the presets.
-  const startsCustom = value != null && value !== '' && !NOTICE_PERIOD_PRESETS.includes(value)
-  const [mode, setMode] = useState(startsCustom ? CUSTOM : (value || ''))
+  // The select's value is DERIVED from `value` on every render, not captured
+  // once. Settings and Onboarding mount this with '' and fill it in when
+  // GET /api/profile resolves; a mode computed in useState's initialiser
+  // never saw that, so a stored "1 month" displayed as "Select…" (live E2E,
+  // 2026-10-09). The only thing kept locally is the one fact `value` cannot
+  // express: the user picked "Custom…" and the text is empty, or happens to
+  // equal a preset while they type.
+  const [customChosen, setCustomChosen] = useState(false)
+  const isCustomValue = !!value && !NOTICE_PERIOD_PRESETS.includes(value)
+  const mode = customChosen || isCustomValue ? CUSTOM : (value || '')
 
   function handleSelect(e) {
     const next = e.target.value
-    setMode(next)
+    setCustomChosen(next === CUSTOM)
     if (next === CUSTOM) {
       // Switching to custom: clear so user types fresh; preserve current
       // value in case they cancel by re-selecting a preset.
