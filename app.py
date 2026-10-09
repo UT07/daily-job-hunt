@@ -1226,15 +1226,27 @@ def _upsert_jobs_raw(job_hash: str, title: str, company: str, description: str,
     what `_find_or_create_job` stores as `jobs.canonical_hash` and what
     `resolve_tailor_hash` falls back to for a manual row.
 
-    Returns whether the write was acknowledged. A failure is logged at ERROR
-    and does not raise: the caller's own work (starting the pipeline, saving a
+    INSERT-IF-ABSENT, never overwrite. `jobs_raw` is SHARED -- no user_id --
+    and the hash covers only company, title and description, so two users
+    pasting the same JD, or a user pasting a JD the scrapers already stored,
+    land on one row. A merge upsert (the default, ON CONFLICT DO UPDATE) let
+    the second submitter rewrite location, apply_url and source on the row the
+    first user's tailoring and geo cap read: cross-tenant tampering, flagged by
+    a security review on 2026-10-09. `ignore_duplicates=True` is ON CONFLICT
+    DO NOTHING. Nothing is lost by it: a matching hash means the same company,
+    title and description up to case and whitespace. The caller's own
+    location and apply_url still live on their own `jobs` row.
+
+    Returns True when the row exists afterwards -- inserted now, or already
+    there (DO NOTHING returns no representation for a skipped row, so an empty
+    `data` is not a failure). A failure is logged at ERROR and does not raise: the caller's own work (starting the pipeline, saving a
     score) is still worth doing, and the re-tailor precheck turns the missing
     row into a 409 that says what to do instead of a three-minute failure.
     """
     if _db is None or not job_hash or not (description or "").strip():
         return False
     try:
-        res = _db.client.table("jobs_raw").upsert({
+        _db.client.table("jobs_raw").upsert({
             "job_hash": job_hash,
             "title": (title or "")[:500],
             "company": (company or "")[:200],
@@ -1242,8 +1254,8 @@ def _upsert_jobs_raw(job_hash: str, title: str, company: str, description: str,
             "location": location or "",
             "apply_url": apply_url or "",
             "source": "manual",
-        }, on_conflict="job_hash").execute()
-        return bool(getattr(res, "data", None))
+        }, on_conflict="job_hash", ignore_duplicates=True).execute()
+        return True
     except Exception as e:  # noqa: BLE001 -- see docstring
         logger.error(
             "jobs_raw upsert failed for job_hash=%s: %s; this job cannot be "

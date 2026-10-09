@@ -94,3 +94,44 @@ def test_unknown_methods_raise_rather_than_mock():
     db = _two_users_one_job()
     with pytest.raises(AttributeError):
         db.table("jobs").ilike("title", "%x%")
+
+
+# ── upsert: PostgREST's two resolutions ─────────────────────────────────────
+# supabase-py's upsert sends `Prefer: resolution=merge-duplicates` by default
+# and `resolution=ignore-duplicates` with ignore_duplicates=True
+# (postgrest/base_request_builder.py pre_upsert). Merge is INSERT ... ON
+# CONFLICT DO UPDATE; ignore is ON CONFLICT DO NOTHING, and with
+# return=representation PostgREST returns only the rows it actually inserted.
+
+def _raw(**over):
+    return {"job_hash": "h1", "location": "Dublin", "apply_url": "https://a", **over}
+
+
+def test_upsert_merge_overwrites_the_conflicting_row():
+    db = FakeSupabase({"jobs_raw": [_raw()]})
+    res = db.table("jobs_raw").upsert(_raw(location="Cork"), on_conflict="job_hash").execute()
+    assert db.rows("jobs_raw")[0]["location"] == "Cork"
+    assert res.data and res.data[0]["location"] == "Cork"
+
+
+def test_upsert_ignore_duplicates_leaves_the_existing_row_untouched():
+    db = FakeSupabase({"jobs_raw": [_raw()]})
+    res = (db.table("jobs_raw")
+           .upsert(_raw(location="Cork", apply_url="https://evil"),
+                   on_conflict="job_hash", ignore_duplicates=True).execute())
+    assert db.rows("jobs_raw") == [_raw()]
+    assert res.data == [], "DO NOTHING returns no representation for a skipped row"
+
+
+def test_upsert_ignore_duplicates_still_inserts_a_new_row():
+    db = FakeSupabase({"jobs_raw": []})
+    res = (db.table("jobs_raw")
+           .upsert(_raw(), on_conflict="job_hash", ignore_duplicates=True).execute())
+    assert db.rows("jobs_raw") == [_raw()]
+    assert res.data == [_raw()]
+
+
+def test_upsert_rejects_keywords_supabase_py_does_not_have():
+    db = FakeSupabase({"jobs_raw": []})
+    with pytest.raises(TypeError):
+        db.table("jobs_raw").upsert(_raw(), on_conflict="job_hash", ignoreDuplicates=True)
