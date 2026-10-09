@@ -3921,19 +3921,33 @@ async def upload_resume(
         except Exception as exc:
             logger.warning("Bullet indexing failed for user %s: %s", user.id, exc)
 
-    # Auto-populate profile from parsed resume sections (best-effort)
-    profile_updates = {}
-    if sections.get("name"):
-        profile_updates["name"] = sections["name"]
-    if sections.get("phone"):
-        profile_updates["phone"] = sections["phone"]
-    if sections.get("location"):
-        profile_updates["location"] = sections["location"]
-    if sections.get("skills"):
-        profile_updates["candidate_context"] = (
-            sections["skills"] if isinstance(sections["skills"], str)
-            else json.dumps(sections["skills"])
-        )
+    # Fill the profile from the parsed resume -- the EMPTY fields only.
+    #
+    # This wrote every parsed field unconditionally, so re-uploading a resume
+    # replaced the name, phone and location the user had typed in Settings
+    # with whatever the parser read (live run, 2026-10-09). Onboarding still
+    # needs the fill: a new user's profile is empty and this is what
+    # populates it. What the user typed wins.
+    parsed = {
+        "name": sections.get("name"),
+        "phone": sections.get("phone"),
+        "location": sections.get("location"),
+        "candidate_context": (
+            sections["skills"] if isinstance(sections.get("skills"), str)
+            else json.dumps(sections["skills"]) if sections.get("skills") else None
+        ),
+    }
+    try:
+        current = _db.get_user(user.id) or {}
+    except Exception as e:
+        # Unknown is not empty: without the current profile there is no way
+        # to tell a blank field from a typed one, so write nothing.
+        logger.warning("Profile auto-fill skipped, could not read the profile: %s", e)
+        current, parsed = {}, {}
+    profile_updates = {
+        field: value for field, value in parsed.items()
+        if value and not str(current.get(field) or "").strip()
+    }
     if profile_updates:
         try:
             _db.update_user(user.id, profile_updates)
