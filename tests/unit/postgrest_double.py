@@ -79,12 +79,21 @@ class Query:
         self._op = "delete"
         return self
 
-    def upsert(self, row, on_conflict=None):
-        # PostgREST `Prefer: resolution=merge-duplicates`: a row whose
-        # on_conflict columns match an existing row UPDATES it (only the keys
-        # sent are written); any other row is INSERTED. Returns what it wrote.
+    def upsert(self, row, *, on_conflict=None, ignore_duplicates=False):
+        # Keyword-only, like supabase-py's upsert, so a misspelled keyword
+        # raises TypeError here exactly as it would in production.
+        #
+        # ignore_duplicates=False -- `Prefer: resolution=merge-duplicates`,
+        # ON CONFLICT DO UPDATE: a row whose on_conflict columns match an
+        # existing row UPDATES it (only the keys sent are written); any other
+        # row is INSERTED. Returns every row it wrote.
+        #
+        # ignore_duplicates=True -- `resolution=ignore-duplicates`, ON CONFLICT
+        # DO NOTHING: a conflicting row is skipped and the existing row is left
+        # byte-identical; only rows actually INSERTED come back in `data`.
         self._op, self._payload = "upsert", row
         self._conflict = tuple(c.strip() for c in (on_conflict or "").split(",") if c.strip())
+        self._ignore_duplicates = bool(ignore_duplicates)
         return self
 
     # ── filters ───────────────────────────────────────────────────
@@ -101,6 +110,20 @@ class Query:
         target = None if val in (None, "null") else val
         self._filters.append(lambda r: r.get(col) is target if target is None
                              else r.get(col) == target)
+        return self
+
+    def or_(self, expr):
+        # Only the shape the app sends: "colA.eq.v1,colB.eq.v2" (no nesting,
+        # no other operators). Anything else is refused rather than guessed,
+        # so a new filter cannot silently match everything.
+        terms = []
+        for part in expr.split(","):
+            col, op, val = (part.split(".", 2) + ["", ""])[:3]
+            if op != "eq" or not col or val == "":
+                raise NotImplementedError(f"or_ term not modelled: {part!r}")
+            terms.append((col, val))
+        self._filters.append(lambda r: any(str(r.get(c)) == v for c, v in terms
+                                           if r.get(c) is not None))
         return self
 
     @property
@@ -160,6 +183,8 @@ class Query:
                 if existing is None:
                     existing = copy.deepcopy(r)
                     rows.append(existing)
+                elif self._ignore_duplicates:
+                    continue  # DO NOTHING: untouched, and not in the representation
                 else:
                     existing.update(copy.deepcopy(r))
                 written.append(copy.deepcopy(existing))

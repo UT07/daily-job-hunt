@@ -36,6 +36,7 @@ All endpoints except /api/health and /api/templates require a valid Supabase JWT
 This includes /mcp/* (RequireSupabaseJWT wraps the mounted MCP transport).
 """
 
+import hashlib
 import io
 import json
 import logging
@@ -70,7 +71,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from auth import AuthUser, get_current_user
+from auth import AuthUser
+from auth import get_current_user as _authenticated_user
 from audit_middleware import AuditMiddleware, set_db as set_audit_db
 from db_client import SupabaseClient
 
@@ -202,6 +204,48 @@ def require_db() -> SupabaseClient:
     return _db
 
 
+def get_current_user(user: AuthUser = Depends(_authenticated_user)) -> AuthUser:
+    """The JWT check, plus: refuse an account whose deletion is pending.
+
+    DELETE /api/gdpr/delete only stamps users.gdpr_deletion_requested_at; the
+    hard delete is scripts/data_retention.py after a 30-day grace. Sign-in is
+    Supabase's and keeps working, so without this the account went on working
+    exactly as before -- the deletion changed nothing visible, and every Save
+    & Score or Add Job in the grace period created data the deletion was
+    meant to remove. Every route's `Depends(get_current_user)` now goes
+    through here; tests that override `auth.get_current_user` override the
+    layer below, so the gate still runs under them.
+
+    Deliberate bypasses, on `_authenticated_user` directly and pinned by
+    tests/unit/test_deletion_requested_blocks_api.py: GET /api/gdpr/export
+    (the right of access lasts until the data is gone) and DELETE
+    /api/gdpr/delete. NOT covered: the /mcp mount (RequireSupabaseJWT, an
+    ASGI gate) and the WebSocket Lambdas, which authenticate on their own.
+
+    Only a real timestamp string blocks. A failed lookup is logged and lets
+    the request through: one PK read per request is not worth turning every
+    database blip into a 403 on every route, and the routes that need the
+    database fail on their own.
+    """
+    if _db is None:
+        return user
+    try:
+        res = (_db.client.table("users").select("gdpr_deletion_requested_at")
+               .eq("id", user.id).maybe_single().execute())
+    except Exception as e:  # noqa: BLE001 -- see docstring
+        logger.error("Deletion-request check failed for %s: %s", user.id, e)
+        return user
+    row = getattr(res, "data", None)
+    requested = row.get("gdpr_deletion_requested_at") if isinstance(row, dict) else None
+    if isinstance(requested, str) and requested.strip():
+        raise HTTPException(
+            403,
+            f"This account is scheduled for deletion (requested {requested[:10]}) "
+            "and can no longer be used. Contact support to cancel the deletion.",
+        )
+    return user
+
+
 def _resolve_env(value: str) -> str:
     """Resolve ${ENV_VAR} references in config values."""
     if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
@@ -293,6 +337,12 @@ class ScoreResponse(BaseModel):
     # True when these numbers came from the stored row rather than a fresh AI
     # call. The UI can then say so instead of implying a re-evaluation.
     reused: bool = False
+    # Which document was scored: "upload" (the caller's own tailorable
+    # résumé, the one Generate Resume tailors from -- matched_resume is then
+    # "<resume_key>@<sha256[:8]>") or "bundled" (they have none, so the
+    # repo-bundled résumé for resume_type was used -- matched_resume is then
+    # resume_type). See `_score_base_resume`.
+    resume_source: str = "bundled"
 
 
 class TailorResponse(BaseModel):
@@ -355,6 +405,12 @@ class ProfileResponse(BaseModel):
     notice_period_text: str = ""
     onboarding_completed_at: Optional[str] = None
     profile_complete: bool = False  # NEW — set by handlers via check_profile_completeness()
+    # WHICH required fields are missing, in the names the frontend uses. Before
+    # this the API said only `profile_complete: false`, and a one-word full
+    # name (last_name derives empty, and auto-apply needs a surname) left the
+    # profile incomplete forever with the UI re-deriving why from a mirror of
+    # the split rule. See `_missing_profile_fields`.
+    missing_required_fields: list[str] = Field(default_factory=list)
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -492,6 +548,51 @@ def get_templates():
 # the request, so scores remain comparable within a job and only roughly
 # comparable across jobs. Fixing that needs the response cache moved off
 # per-container disk, which is infrastructure, not a patch.
+def _score_base_resume(user_id: str, resume_type: str) -> tuple[str, str, str]:
+    """The résumé Save & Score scores against: (tex, matched_resume, source).
+
+    The CALLER'S résumé, chosen by the same validated selector every generator
+    uses (`fetch_tailorable_resume`: newest row that is real LaTeX). Until
+    2026-10-09 this endpoint scored `_resumes[resume_type]` -- the .tex files
+    bundled in the repo, which are the owner's résumé -- while Generate Resume
+    tailored from the caller's upload, so every other user's score described
+    someone else's CV. CLAUDE.md #10: the validated reader existed and this was
+    the fourth module not using it.
+
+    FALLBACK, deliberate and labelled: a user with no tailorable upload is
+    scored against the bundled résumé for `resume_type`, and `source` says
+    "bundled" so the response and the stored row are honest about it.
+
+    `matched_resume` is the reuse key `_stored_score` compares, so it must
+    identify the DOCUMENT, not just the slot. An upload is
+    "<resume_key>@<sha256[:8]>": upload_resume upserts on (user_id,
+    resume_key), so re-uploading an edited résumé keeps resume_key='default',
+    and a key-only label would reuse the old résumé's score forever.
+
+    A failure to READ the résumé raises 503. Falling back to the bundled
+    résumé on a DB blip would silently produce the exact wrong answer this
+    function exists to stop.
+    """
+    from shared.resume_format import fetch_tailorable_resume
+
+    if _db is not None and user_id:
+        try:
+            base = fetch_tailorable_resume(_db.client, user_id)
+        except Exception as e:  # noqa: BLE001 -- surfaced as 503, see docstring
+            logger.error("Could not read the base résumé for %s: %s", user_id, e)
+            raise HTTPException(
+                503, "Could not read your résumé to score against. Try again shortly.")
+        if base.row is not None and base.tex:
+            if base.skipped:
+                logger.warning(
+                    "[score] skipped %d newer resume(s) that are not LaTeX -- scoring "
+                    "the same row the tailorer will use", base.skipped)
+            key = base.row.get("resume_key") or "default"
+            digest = hashlib.sha256(base.tex.encode("utf-8")).hexdigest()[:8]
+            return base.tex, f"{key}@{digest}", "upload"
+    return _resumes[resume_type], resume_type, "bundled"
+
+
 def _stored_score(user_id: str, chash: str, resume_type: str) -> Optional[dict]:
     """The score already on record for this job, if it can be reused as-is.
 
@@ -514,8 +615,11 @@ def _stored_score(user_id: str, chash: str, resume_type: str) -> Optional[dict]:
         return None
     if data.get("match_score") is None:
         return None
-    # A row scored against another resume, or before matched_resume was
-    # recorded, is not interchangeable with this request.
+    # A row scored against another resume is not interchangeable with this
+    # request. `resume_type` here is `_score_base_resume`'s matched_resume,
+    # which names the document (an upload carries its content hash), so a
+    # score against the bundled résumé, or against an earlier upload, is not
+    # reused after the caller's résumé changes.
     if (data.get("matched_resume") or resume_type) != resume_type:
         return None
     return data
@@ -531,8 +635,19 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
 
     # Same job, same resume, already scored -> the stored numbers, every time.
     chash = canonical_hash(req.company, req.job_title, req.job_description)
+    # Which résumé "same resume" means: the caller's, as tailoring reads it.
+    _, matched_resume, resume_source = _score_base_resume(user.id, req.resume_type)
+
+    # Store the posting where the generators read it, on BOTH paths. Before
+    # this, a Save-&-Score'd job had a `jobs` row and no `jobs_raw` row, so
+    # Generate Resume / Regenerate / Cover Letter on it answered 409 "never
+    # stored". Done here rather than in `_score_fresh` so that pressing Save &
+    # Score again on a job saved before the fix (a reuse, no model call) also
+    # repairs it. Same key as the `jobs` row: `_find_or_create_job` stores
+    # canonical_hash of these same three fields.
+    _upsert_jobs_raw(chash, req.job_title, req.company, req.job_description)
     if not req.force:
-        prior = _stored_score(user.id, chash, req.resume_type)
+        prior = _stored_score(user.id, chash, matched_resume)
         if prior:
             logger.info("Reusing the stored score for %s/%s", req.company, req.job_title)
             return ScoreResponse(
@@ -541,10 +656,11 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
                 tech_recruiter_score=prior.get("tech_recruiter_score") or 0,
                 avg_score=prior.get("match_score") or 0,
                 reasoning=prior.get("match_reasoning") or "",
-                matched_resume=prior.get("matched_resume") or req.resume_type,
+                matched_resume=prior.get("matched_resume") or matched_resume,
                 job_id=prior.get("job_id"),
                 saved=bool(prior.get("job_id")),
                 reused=True,
+                resume_source=resume_source,
             )
 
     # A FRESH score is a background task, never an in-request one.
@@ -574,6 +690,10 @@ def _score_fresh(user_id: str, req: ScoreRequest) -> dict:
     /api/tasks/{id} hands the browser as `result`.
     """
     chash = canonical_hash(req.company, req.job_title, req.job_description)
+    # Re-read here, not carried in the task payload: the résumé may have
+    # changed between the request and the task, and what is scored must be
+    # what is labelled.
+    resume_tex, matched_resume, resume_source = _score_base_resume(user_id, req.resume_type)
     # Scored as the MEDIAN of three calls, not one.
     #
     # Measured 2026-10-08 by tests/quality/test_score_determinism.py, which had
@@ -604,7 +724,7 @@ def _score_fresh(user_id: str, req: ScoreRequest) -> dict:
                 "description": req.job_description,
                 "location": req.location,
             },
-            _resumes[req.resume_type],
+            resume_tex,
             num_calls=3,
             skip_cache=True,
         )
@@ -615,7 +735,8 @@ def _score_fresh(user_id: str, req: ScoreRequest) -> dict:
     if not scored:
         return ScoreResponse(
             ats_score=0, hiring_manager_score=0, tech_recruiter_score=0,
-            avg_score=0, reasoning="Job did not match any criteria.", matched_resume=req.resume_type,
+            avg_score=0, reasoning="Job did not match any criteria.",
+            matched_resume=matched_resume, resume_source=resume_source,
         ).model_dump()
 
     # `_Job`-shaped view of the result, so the persistence block below is
@@ -626,7 +747,7 @@ def _score_fresh(user_id: str, req: ScoreRequest) -> dict:
         hiring_manager_score=scored.get("hiring_manager_score") or 0,
         tech_recruiter_score=scored.get("tech_recruiter_score") or 0,
         match_reasoning=scored.get("reasoning") or "",
-        matched_resume=req.resume_type,
+        matched_resume=matched_resume,
     )
     if _posthog:
         _posthog.capture(
@@ -634,6 +755,7 @@ def _score_fresh(user_id: str, req: ScoreRequest) -> dict:
             event="job_scored",
             properties={
                 "resume_type": req.resume_type,
+                "resume_source": resume_source,
                 "avg_score": j.match_score,
                 "jd_length": len(req.job_description),
             },
@@ -658,7 +780,7 @@ def _score_fresh(user_id: str, req: ScoreRequest) -> dict:
                 "hiring_manager_score": j.hiring_manager_score,
                 "tech_recruiter_score": j.tech_recruiter_score,
                 "match_reasoning": j.match_reasoning,
-                "matched_resume": j.matched_resume or req.resume_type,
+                "matched_resume": j.matched_resume,
                 "score_tier": _score_tier(j.match_score),
             }).eq("job_id", job_id).eq("user_id", user_id).execute() if job_id else None
             # saved must mean SAVED: the UPDATE returned the row it wrote.
@@ -685,9 +807,10 @@ def _score_fresh(user_id: str, req: ScoreRequest) -> dict:
         tech_recruiter_score=j.tech_recruiter_score,
         avg_score=j.match_score,
         reasoning=j.match_reasoning,
-        matched_resume=j.matched_resume or req.resume_type,
+        matched_resume=j.matched_resume,
         job_id=job_id,
         saved=saved,
+        resume_source=resume_source,
     ).model_dump()
 
 
@@ -1047,25 +1170,32 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
     # Compute canonical hash for dedup
     chash = canonical_hash(company, title, description)
 
-    # Look up by canonical_hash for this user
+    # Look up this user's row by EITHER key. Rows this function creates carry
+    # the hash in canonical_hash; rows score_batch creates (scraped jobs, and
+    # Add Job before 2026-10-09) carry the same value in job_hash. Matching
+    # canonical_hash alone missed the second kind and inserted a duplicate of
+    # a job the user already had. chash is hex from canonical_hash, so it is
+    # safe inside the or= expression.
     try:
         result = (
             _db.client.table("jobs")
             .select("*")
             .eq("user_id", user_id)
-            .eq("canonical_hash", chash)
-            .maybe_single()
+            .or_(f"job_hash.eq.{chash},canonical_hash.eq.{chash}")
+            .limit(1)
             .execute()
         )
-        if result and result.data:
+        found = getattr(result, "data", None) if result else None
+        existing = found[0] if isinstance(found, list) and found else None
+        if isinstance(existing, dict) and existing.get("job_id"):
             # Found existing job — merge manual data (manual wins)
-            existing = result.data
             manual_data = {
                 "description": description,
                 "title": title,
                 "company": company,
                 "source": "manual",
                 "apply_url": apply_url,
+                "location": location,
             }
             merged = merge_manual_job(existing, manual_data)
             # Update the existing row with merged data
@@ -1079,6 +1209,9 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
             # the new URL, or the stored one, and never "" over a real link.
             if merged.get("apply_url"):
                 merged_update["apply_url"] = merged["apply_url"]
+            # Same rule for location: the caller's own value, on their own row.
+            if merged.get("location"):
+                merged_update["location"] = merged["location"]
             _db.client.table("jobs").update(merged_update).eq("job_id", existing["job_id"]).eq("user_id", user_id).execute()
             logger.info("Merged manual JD into existing job %s (hash=%s)", existing["job_id"], chash)
             return existing["job_id"]
@@ -1124,6 +1257,69 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
     except Exception as e:  # noqa: BLE001 — falls through to "not created"
         logger.warning("Re-check after failed insert failed: %s", e)
     return ""
+
+
+def _upsert_jobs_raw(job_hash: str, title: str, company: str, description: str) -> bool:
+    """Store a manually supplied posting in `jobs_raw` under `job_hash`.
+
+    Every generator (TailorResume, GenerateCoverLetter, ScoreSingleJob) reads
+    the posting text from `jobs_raw` by hash, never from `jobs`. A job that has
+    a `jobs` row and no `jobs_raw` row therefore cannot be tailored, and the
+    re-tailor endpoints answer 409 "never stored".
+
+    ONE writer for both manual entry points -- /api/pipeline/run-single and
+    /api/score -- so they cannot drift on the key or the columns. Before
+    2026-10-09 only run-single wrote it, and every job created by Save & Score
+    was permanently untailorable (CLAUDE.md #10: the code existed, in the
+    wrong one of two places).
+
+    `job_hash` must be `canonical_hash(company, title, description)`, which is
+    what `_find_or_create_job` stores as `jobs.canonical_hash` and what
+    `resolve_tailor_hash` falls back to for a manual row.
+
+    INSERT-IF-ABSENT, never overwrite. `jobs_raw` is SHARED -- no user_id --
+    and the hash covers only company, title and description, so two users
+    pasting the same JD, or a user pasting a JD the scrapers already stored,
+    land on one row. A merge upsert (the default, ON CONFLICT DO UPDATE) let
+    the second submitter rewrite location, apply_url and source on the row the
+    first user's tailoring and geo cap read: cross-tenant tampering, flagged by
+    a security review on 2026-10-09. `ignore_duplicates=True` is ON CONFLICT
+    DO NOTHING. Nothing is lost by it: a matching hash means the same company,
+    title and description up to case and whitespace.
+
+    And ONLY hash-bound content is stored: job_hash, title, company,
+    description, source. Never the submitter's location or apply_url. The
+    same review re-flagged insert-if-absent alone as incomplete: the hash does
+    not cover those two fields, and score_batch copied jobs_raw's apply_url and
+    location into the scoring user's own row -- so the FIRST submitter of a JD
+    chose the Apply link (phishing) and the location (the geo score cap) for
+    every later user who added it. A submitter's own location and apply_url go
+    to THEIR `jobs` row only (`_find_or_create_job`), and score_batch prefers
+    that row's values over jobs_raw's.
+
+    Returns True when the row exists afterwards -- inserted now, or already
+    there (DO NOTHING returns no representation for a skipped row, so an empty
+    `data` is not a failure). A failure is logged at ERROR and does not raise: the caller's own work (starting the pipeline, saving a
+    score) is still worth doing, and the re-tailor precheck turns the missing
+    row into a 409 that says what to do instead of a three-minute failure.
+    """
+    if _db is None or not job_hash or not (description or "").strip():
+        return False
+    try:
+        _db.client.table("jobs_raw").upsert({
+            "job_hash": job_hash,
+            "title": (title or "")[:500],
+            "company": (company or "")[:200],
+            "description": description,
+            "source": "manual",
+        }, on_conflict="job_hash", ignore_duplicates=True).execute()
+        return True
+    except Exception as e:  # noqa: BLE001 -- see docstring
+        logger.error(
+            "jobs_raw upsert failed for job_hash=%s: %s; this job cannot be "
+            "tailored until its posting is stored", job_hash, e,
+        )
+        return False
 
 
 def _update_job_artifacts(user_id: str, job_id: str, updates: dict):
@@ -1975,19 +2171,31 @@ def find_contacts_for_job(job_id: str, user: AuthUser = Depends(get_current_user
     return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
 
 
+# check_profile_completeness speaks in `users` columns; ProfileResponse in
+# form fields. Only linkedin differs. first_name/last_name have no input of
+# their own (PUT derives both from full_name), so they are reported as
+# themselves: "last_name" is the precise fact for a one-word name, and the UI
+# can say "add your last name" rather than "full name is missing".
+_PROFILE_FIELD_NAMES = {"linkedin": "linkedin_url"}
+
+
+def _missing_profile_fields(row: Optional[dict]) -> list[str]:
+    from shared.profile_completeness import check_profile_completeness
+
+    return [_PROFILE_FIELD_NAMES.get(f, f) for f in check_profile_completeness(row)]
+
+
 @app.get("/api/profile", response_model=ProfileResponse)
 def get_profile(
     user: AuthUser = Depends(get_current_user),
     db: SupabaseClient = Depends(require_db),
 ):
-    from shared.profile_completeness import check_profile_completeness
-
     row = db.get_user(user.id)
     if row is None:
         # Auto-create user on first profile fetch (just-in-time provisioning)
         row = db.create_user({"id": user.id, "email": user.email})
 
-    missing = check_profile_completeness(row)
+    missing = _missing_profile_fields(row)
     return ProfileResponse(
         id=row["id"],
         email=row["email"],
@@ -2007,6 +2215,7 @@ def get_profile(
         notice_period_text=row.get("notice_period_text") or "",
         onboarding_completed_at=row.get("onboarding_completed_at"),
         profile_complete=not missing,
+        missing_required_fields=missing,
     )
 
 
@@ -2016,8 +2225,6 @@ def update_profile(
     user: AuthUser = Depends(get_current_user),
     db: SupabaseClient = Depends(require_db),
 ):
-    from shared.profile_completeness import check_profile_completeness
-
     # Ensure user row exists (JIT provisioning for first-time users)
     existing = db.get_user(user.id)
     if existing is None:
@@ -2034,6 +2241,12 @@ def update_profile(
             # answer generator reads these directly per shared/answer_generator.py).
             # Without this, only pre-migration rows have first_name/last_name and
             # every NEW user has profile_complete=False forever.
+            #
+            # A one-word name leaves last_name "" ON PURPOSE. Auto-apply puts
+            # last_name into ATS "Last name" fields, so inventing one (the
+            # first name again, a placeholder) would send a false surname to
+            # employers. The profile stays incomplete and
+            # `missing_required_fields` says ["last_name"] so the UI can ask.
             if v and isinstance(v, str):
                 parts = v.strip().split(" ", 1)
                 update_data["first_name"] = parts[0] if parts else ""
@@ -2062,7 +2275,7 @@ def update_profile(
             event="profile_updated",
             properties={"fields_updated": list(update_data.keys())},
         )
-    missing = check_profile_completeness(row)
+    missing = _missing_profile_fields(row)
     return ProfileResponse(
         id=row["id"],
         email=row["email"],
@@ -2082,6 +2295,7 @@ def update_profile(
         notice_period_text=row.get("notice_period_text") or "",
         onboarding_completed_at=row.get("onboarding_completed_at"),
         profile_complete=not missing,
+        missing_required_fields=missing,
     )
 
 
@@ -2909,22 +3123,26 @@ def run_single_job(req: SingleJobRunRequest, user: AuthUser = Depends(get_curren
     # Upsert into jobs_raw so ScoreBatchFunction can find the row.
     # Without this, ScoreSingleJob queries jobs_raw by job_hash and gets 0 rows,
     # which collapses to matched_count=0 and CheckScoreExists routes to JobFailed.
-    if _db is not None:
-        try:
-            _db.client.table("jobs_raw").upsert({
-                "job_hash": job_hash,
-                "title": req.job_title[:500],
-                "company": req.company[:200],
-                "description": req.job_description,
-                "location": req.location or "",
-                "apply_url": req.apply_url or "",
-                "source": "manual",
-            }, on_conflict="job_hash").execute()
-        except Exception as e:
-            logger.warning(
-                "jobs_raw upsert failed for job_hash=%s: %s; SFN will likely fail at ScoreSingleJob",
-                job_hash, e,
-            )
+    _upsert_jobs_raw(job_hash, req.job_title, req.company, req.job_description)
+
+    # The caller's OWN apply_url and location go on the caller's OWN row, never
+    # on the shared jobs_raw row above (see _upsert_jobs_raw). Created here,
+    # before the execution, because the state machine cannot carry them: its
+    # ScoreSingleJob Parameters name only user_id/job_hash, and naming a new
+    # field in a Pass/Task state makes it mandatory for every caller (two
+    # outages, test_single_job_sfn_contract.py). score_batch._write_job_row
+    # then finds this row by canonical_hash and updates it -- no second row --
+    # and score_batch prefers this row's apply_url/location over jobs_raw's.
+    if not _find_or_create_job(user.id, {
+        "title": req.job_title, "company": req.company,
+        "description": req.job_description, "location": req.location,
+        "apply_url": req.apply_url,
+    }):
+        logger.error(
+            "run-single: could not create the job row for %s/%s; the pipeline "
+            "will create it without the caller's apply_url and location",
+            req.company, req.job_title,
+        )
 
     sfn = _get_sfn()
     execution = sfn.start_execution(
@@ -3799,8 +4017,11 @@ def gdpr_consent(user: AuthUser = Depends(get_current_user)):
     return {"status": "consent_recorded", "gdpr_consent_at": result.get("gdpr_consent_at")}
 
 
+# Both GDPR routes below take the raw JWT check, not the deletion gate: the
+# right of access lasts until the data is gone, and repeating a deletion
+# request must not lock the user out of the page that made it.
 @app.get("/api/gdpr/export")
-def gdpr_export(user: AuthUser = Depends(get_current_user)):
+def gdpr_export(user: AuthUser = Depends(_authenticated_user)):
     """Export all user data as a ZIP file (GDPR Article 15)."""
     if not _db:
         raise HTTPException(503, "Database not configured")
@@ -3815,7 +4036,7 @@ def gdpr_export(user: AuthUser = Depends(get_current_user)):
 
 
 @app.delete("/api/gdpr/delete")
-def gdpr_delete(user: AuthUser = Depends(get_current_user)):
+def gdpr_delete(user: AuthUser = Depends(_authenticated_user)):
     """Request account deletion (soft-delete, hard-delete after 30 days)."""
     if not _db:
         raise HTTPException(503, "Database not configured")

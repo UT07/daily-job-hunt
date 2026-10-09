@@ -43,7 +43,10 @@ def _db(existing=None):
     return db, chain
 
 
-RECORD = {"job_id": "new-uuid", "user_id": "u1", "job_hash": "h1",
+# A real (hex) job hash: since 2026-10-09 anything else is refused before it
+# reaches the or= lookup (shared/job_hash_filter.py), so "h1" would never
+# find the existing row these tests are about.
+RECORD = {"job_id": "new-uuid", "user_id": "u1", "job_hash": "a1b2c3d4e5f6",
           "title": "DevOps Engineer", "match_score": 85, "score_tier": "A"}
 
 
