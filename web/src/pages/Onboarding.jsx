@@ -376,8 +376,16 @@ function OnboardingWizard() {
   // briefly, isLoading=false) triggers a redirect to /onboarding before the
   // profile fetch completes. Without this, completed users see the wizard
   // step 0 and have no way out.
+  //
+  // But NOT for the user who just finished here. handleComplete refetches the
+  // context so AppLayout will let them in, and that refetch is exactly what
+  // makes this effect see an onboarded profile -- so it raced next() and sent
+  // the user to the Dashboard instead of the Done step whenever the profile
+  // update committed (live E2E, 2026-10-09). Set before the refetch starts,
+  // so no ordering of the two updates can trip it.
+  const completedHere = useRef(false)
   useEffect(() => {
-    if (ctxLoading) return
+    if (ctxLoading || completedHere.current) return
     // Not `full_name`: step 1's résumé upload writes it, so a reload
     // mid-wizard used to bounce the user out to the Dashboard half set up.
     if (isOnboarded(ctxProfile)) {
@@ -492,6 +500,7 @@ function OnboardingWizard() {
       // updated profile_complete flag. Without this, `navigate('/')` from the
       // Done screen bounces back to /onboarding (stale ProfileContext). Don't
       // let a refetch failure block the user — proceed regardless.
+      completedHere.current = true
       try {
         await refetchProfile()
       } catch { /* swallow — Done screen still navigates */ }
