@@ -28,8 +28,20 @@ def all_providers() -> list[dict]:
 
 
 def select_generators(n: int) -> list[dict]:
-    """Pick n providers from distinct model families."""
-    return _select_diverse_providers(_build_provider_list(), n=n)
+    """Pick n providers, preferring distinct model families.
+
+    `fill_same_family=True` is set HERE and nowhere else. When the pool has
+    fewer live families than generators requested — routine on a fast batch,
+    where account-wide 429 cooldowns collapse it to Gemini alone — the strict
+    rule returned ONE provider, and one candidate means nothing to adjudicate.
+    Measured 2026-10-07: 415 single_candidate against 129 adjudicated.
+
+    Two models from one family is weaker than two families and far stronger
+    than no comparison. `select_critics` deliberately does NOT pass it: a
+    critic from the family that generated is not an independent reviewer.
+    """
+    return _select_diverse_providers(_build_provider_list(), n=n,
+                                     fill_same_family=True)
 
 
 def select_critics(exclude_families: set[str], n: int = 1) -> list[dict]:

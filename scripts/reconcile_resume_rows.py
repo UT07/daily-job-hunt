@@ -49,6 +49,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import re
 import sys
 import tempfile
 from collections import Counter
@@ -70,7 +71,24 @@ _spec = importlib.util.spec_from_file_location("_rb", ROOT / "scripts/retailor_b
 _rb = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_rb)
 
+# Job hashes are hex digests. Validated before going into an `or=` filter
+# expression, which is a query-language surface, not a value slot.
+_HASH_RE = re.compile(r"[0-9a-f]{6,64}")
+
 PRESIGN_SECONDS = 2592000   # 30 days, matching save_job exactly
+
+_CONTENT_RANGE_TOTAL = re.compile(r"^(?:\*|\d+-\d+)/(\d+)$")
+
+
+def _rows_patched(resp):
+    """Rows the PATCH's filter hit, from Content-Range; None if it cannot say.
+
+    Only meaningful with `Prefer: count=exact`. PostgREST answers `*/N` (or
+    `0-0/N`); `*/*` means it did not count. None is NOT zero and NOT "probably
+    fine" -- a caller that cannot confirm a write must not report one.
+    """
+    m = _CONTENT_RANGE_TOTAL.match((resp.headers.get("Content-Range") or "").strip())
+    return int(m.group(1)) if m else None
 
 
 def _quality_checker():
@@ -148,7 +166,7 @@ def _reconcile(rows, *, url, headers, user_id, commit, verbose,
 
     grades = Counter()
     reasons = Counter()
-    linked = skipped = written = failed = 0
+    linked = skipped = written = failed = unmatched = 0
     verdict_column_missing = [False]   # a list so the inner patch helper can set it
 
     for i, row in enumerate(rows, 1):
@@ -216,12 +234,41 @@ def _reconcile(rows, *, url, headers, user_id, commit, verbose,
             update["resume_s3_url"] = s3.generate_presigned_url(
                 "get_object", Params={"Bucket": bucket, "Key": pdf_key},
                 ExpiresIn=PRESIGN_SECONDS)
+        # Match on EITHER hash column, and count what was actually changed.
+        #
+        # This matched `job_hash=eq.{h}` alone. Rows created by
+        # `_find_or_create_job` have job_hash NULL and carry the hash in
+        # canonical_hash, so for every manually added job the filter selected
+        # ZERO rows, PostgREST answered 204, and the run reported
+        # "rows written: 1". Measured 2026-10-08 on b3026c307c74 (DevOps
+        # Engineer @ Grinds360, S-tier, 90): the .tex and .pdf were both in S3
+        # and `resume_s3_key` was still NULL, so the dashboard showed nothing
+        # and the deploy gate's artifact-completeness check failed on it.
+        #
+        # Fourth place in this codebase to read job_hash without the fallback,
+        # after the regenerate endpoint, the score endpoint and
+        # retailor_bulk's selection. CLAUDE.md #10: search the whole repo for a
+        # guard before trusting it.
+        #
+        # `or=` is a filter-expression surface, so the hash is validated as hex
+        # rather than interpolated raw -- it arrives from an S3 key here, which
+        # is not a trusted source.
+        if not _HASH_RE.fullmatch(h):
+            print(f"  ! refusing to patch on a non-hex hash: {h!r}")
+            continue
+
         def _patch(body):
-            return httpx.patch(f"{url}/rest/v1/jobs",
-                               params={"user_id": f"eq.{user_id}", "job_hash": f"eq.{h}"},
-                               headers={**headers, "Content-Type": "application/json",
-                                        "Prefer": "return=minimal"},
-                               json=body, timeout=60)
+            return httpx.patch(
+                f"{url}/rest/v1/jobs",
+                params={"user_id": f"eq.{user_id}",
+                        "or": f"(job_hash.eq.{h},canonical_hash.eq.{h})"},
+                headers={**headers, "Content-Type": "application/json",
+                         # count=exact so the Content-Range header says how
+                         # many rows the filter actually hit. A PATCH that
+                         # matches nothing is a 204 either way, and "written"
+                         # must not mean "asked" (CLAUDE.md #2).
+                         "Prefer": "return=minimal,count=exact"},
+                json=body, timeout=60)
 
         if not update:
             continue
@@ -240,14 +287,31 @@ def _reconcile(rows, *, url, headers, user_id, commit, verbose,
                 verdict_column_missing[0] = True
             stripped = {k: v for k, v in update.items() if k != "resume_verdict"}
             resp = _patch(stripped) if stripped else resp
+        # The count, not the status, decides "written": a filter that matches
+        # nothing is a 204 too. A zero-match is a FAILURE as well as
+        # `unmatched`, so both this script's and retailor_bulk's exit codes go
+        # non-zero on it -- an unlinked résumé is the outcome being prevented.
         if resp.status_code < 300:
-            written += 1
+            n = _rows_patched(resp)
+            if n:
+                written += 1
+            elif n == 0:
+                unmatched += 1
+                failed += 1
+                print(f"  [{i}] PATCH matched NO jobs row for {h[:12]} "
+                      f"(user {user_id[:8]}); nothing was linked")
+            else:
+                failed += 1
+                print(f"  [{i}] PATCH {resp.status_code} for {h[:12]} returned no row "
+                      f"count (Content-Range {resp.headers.get('Content-Range')!r}); "
+                      "cannot confirm it wrote anything")
         else:
             failed += 1
             print(f"  [{i}] PATCH {resp.status_code} for {h[:12]}: {resp.text[:160]}")
 
     summary = {"measured": sum(grades.values()), "written": written, "failed": failed,
-               "skipped": skipped, "needs_link": linked, "grades": dict(grades)}
+               "unmatched": unmatched, "skipped": skipped, "needs_link": linked,
+               "grades": dict(grades)}
 
     if verbose and links_only:
         # Deliberately NOT the grade table here. In this mode nothing was
@@ -270,7 +334,8 @@ def _reconcile(rows, *, url, headers, user_id, commit, verbose,
     if verbose:
         print(f"\n  rows needing resume_s3_key/url: {linked}")
         if commit:
-            print(f"  rows written: {written}, failed: {failed}")
+            print(f"  rows written: {written}, failed: {failed} "
+                  f"(of which matched no row: {unmatched})")
             print("\nVerify the thing that actually matters -- the deploy's own check:")
             print("  SMOKE_API_URL=$(grep -hoE '^VITE_API_URL=.+' web/.env.production | "
                   "cut -d= -f2-) .venv/bin/python scripts/smoke_prod.py")
@@ -293,7 +358,8 @@ def reconcile_hashes(job_hashes, *, user_id=None, commit=False, verbose=True) ->
     user_id = user_id or _rb._one_user(url, headers)
     hashes = [h for h in dict.fromkeys(job_hashes) if h]
     if not hashes:
-        return {"measured": 0, "written": 0, "failed": 0, "skipped": 0, "grades": {}}
+        return {"measured": 0, "written": 0, "failed": 0, "unmatched": 0,
+                "skipped": 0, "grades": {}}
     rows = [{"job_hash": h, "company": "", "resume_s3_key": None} for h in hashes]
     return _reconcile([*rows], url=url, headers=headers, user_id=user_id,
                       commit=commit, verbose=verbose, relink_always=True,
@@ -321,7 +387,11 @@ def main() -> int:
     user_id = args.user_id or _rb._one_user(url, headers)
 
     rows = httpx.get(f"{url}/rest/v1/jobs", params={
-        "select": "job_hash,title,company,score_tier,resume_s3_key",
+        # canonical_hash is required, not cosmetic: a manually added job has
+        # job_hash NULL and only this column names its artefacts. Without it
+        # the filter below dropped the row entirely, so a résumé already in S3
+        # was never linked and this script reported nothing to do.
+        "select": "job_hash,canonical_hash,title,company,score_tier,resume_s3_key",
         "user_id": f"eq.{user_id}", "is_expired": "eq.false",
         "score_tier": f"in.({args.tier})", "limit": 2000,
     }, headers=headers, timeout=60).json()
@@ -329,7 +399,15 @@ def main() -> int:
         print(f"query failed: {str(rows)[:300]}")
         return 1
 
-    rows = [r for r in rows if r.get("job_hash")]
+    # The artefact key is built from whichever hash the row actually has, and
+    # the rest of this script reads `job_hash`, so normalise here rather than
+    # teaching every later line the precedence.
+    hashless = [r for r in rows if not _rb.resolve_tailor_hash(r)]
+    for r in hashless:
+        print(f"  skipping {str(r.get('title'))[:40]} @ {r.get('company')}: "
+              f"neither job_hash nor canonical_hash")
+    rows = [{**r, "job_hash": _rb.resolve_tailor_hash(r)}
+            for r in rows if _rb.resolve_tailor_hash(r)]
     if args.only_missing:
         rows = [r for r in rows if not r.get("resume_s3_key")]
     if args.max_jobs:

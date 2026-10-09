@@ -7,6 +7,7 @@ import TailorCard from '../components/TailorCard';
 import CoverLetterCard from '../components/CoverLetterCard';
 import ContactsCard from '../components/ContactsCard';
 import ErrorBanner from '../components/ErrorBanner';
+import { extractJobFields } from '../lib/jdExtract';
 
 // Step Functions pipeline progress steps
 const PIPELINE_STEPS = [
@@ -113,6 +114,27 @@ function statusToStepKey(rawStatus) {
   return null;
 }
 
+// How a detected value was arrived at, in the user's terms. "from the apply
+// link" is a fact read out of a URL -- 26 of 26 were right when measured
+// against real pastes. "from the description" is a guess at prose and is worth
+// a second look, which is why the two are not worded the same.
+const DETECTED_LABEL = {
+  'ats-url': 'from the apply link',
+  domain: 'from the apply link',
+  body: 'from the description',
+  label: 'from the description',
+};
+
+function DetectedHint({ source }) {
+  if (!source) return null;
+  return (
+    <p className="mt-1 flex items-center gap-1 font-mono text-[10px] font-bold uppercase tracking-wide text-stone-500">
+      <span aria-hidden="true">{'\u2728'}</span>
+      <span>auto-filled {DETECTED_LABEL[source] || 'from your paste'} \u2014 edit if wrong</span>
+    </p>
+  );
+}
+
 function ProgressIndicator({ steps, currentKey }) {
   const currentIdx = steps.findIndex((s) => s.key === currentKey);
   const doneKey = steps[steps.length - 1]?.key;
@@ -155,6 +177,25 @@ export default function AddJob() {
   const [location, setLocation] = useState(() => readDraftField(draft, 'location', DRAFT_DEFAULTS.location));
   const [applyUrl, setApplyUrl] = useState(() => readDraftField(draft, 'apply_url', DRAFT_DEFAULTS.apply_url));
   const [resumeType, setResumeType] = useState(() => readDraftField(draft, 'resume_type', DRAFT_DEFAULTS.resume_type));
+  // What the paste told us, and which fields the user has taken over.
+  //
+  // Auto-fill only ever writes into a field that is still empty (or still the
+  // default) AND that the user has not edited. Overwriting typed input would
+  // be worse than filling nothing: nobody re-reads a box they already filled,
+  // so a clobbered company would ship silently.
+  const [detected, setDetected] = useState({});
+  const touched = useRef({});
+  const markTouched = (key) => { touched.current[key] = true; };
+  const forget = (key) => setDetected((d) => {
+    if (!(key in d)) return d;
+    const next = { ...d };
+    delete next[key];
+    return next;
+  });
+
+  const [draftRestored, setDraftRestored] = useState(
+    () => Object.keys(draft).length > 0);
+
   const [results, setResults] = useState([]);
   const [actionLoading, setActionLoading] = useState({});
   const [progressKey, setProgressKey] = useState(null);   // current step key for progress indicator
@@ -178,6 +219,63 @@ export default function AddJob() {
       resume_type: resumeType,
     });
   }, [jd, jobTitle, company, location, applyUrl, resumeType]);
+
+  // Read what we can off the paste. Depends on the JD and the apply URL only:
+  // those are the two things the user supplies; the rest is derived from them.
+  useEffect(() => {
+    if (!jd.trim() && !applyUrl.trim()) return;
+    const { fields, sources } = extractJobFields(jd, applyUrl);
+    const filled = {};
+
+    if (fields.company && !company.trim() && !touched.current.company) {
+      setCompany(fields.company);
+      filled.company = sources.company;
+    }
+    // Title's "empty" is the DEFAULT, not ''. The form ships with
+    // "Software Engineer" pre-filled, so treating only '' as empty would mean
+    // a detected title could never land.
+    if (fields.title
+        && (!jobTitle.trim() || jobTitle === DRAFT_DEFAULTS.job_title)
+        && !touched.current.job_title) {
+      setJobTitle(fields.title);
+      filled.job_title = sources.title;
+    }
+    if (fields.location && !location.trim() && !touched.current.location) {
+      setLocation(fields.location);
+      filled.location = sources.location;
+    }
+    if (Object.keys(filled).length) setDetected((prev) => ({ ...prev, ...filled }));
+    // company/jobTitle/location are read to decide "is this field empty", but
+    // listing them would re-run this on our own setState and fight the user's
+    // typing. jd + applyUrl are the real inputs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jd, applyUrl]);
+
+
+  // Reset to a pristine form, store included, so navigating away and back
+  // does not restore what the user just dismissed.
+  function clearDraft() {
+    setJd(DRAFT_DEFAULTS.jd);
+    setJobTitle(DRAFT_DEFAULTS.job_title);
+    setCompany(DRAFT_DEFAULTS.company);
+    setLocation(DRAFT_DEFAULTS.location);
+    setApplyUrl(DRAFT_DEFAULTS.apply_url);
+    setResumeType(DRAFT_DEFAULTS.resume_type);
+    setResults([]);
+    setErrors([]);
+    setDetected({});
+    touched.current = {};
+    setDraftRestored(false);
+    try {
+      // Belt and braces, and known to be so: the write-back effect also
+      // removes the key once every field is back to its default, so a
+      // mutation deleting this line survives the suite. Kept because it clears
+      // the store in the same tick as the click rather than on the next
+      // commit, and noted here so the next reader does not take the surviving
+      // mutant for dead code.
+      sessionStorage.removeItem(DRAFT_STORAGE_KEY);
+    } catch { /* storage disabled; the state reset above is what matters */ }
+  }
 
   function getPayload() {
     return {
@@ -249,7 +347,10 @@ export default function AddJob() {
     }
   }, [jd, jobTitle, company, location, applyUrl, resumeType]);
 
-  const runLegacy = useCallback(async (endpoint, key) => {
+  // `extra` is merged over the form payload. Used for { force: true }, which
+  // tells /api/score to re-run the model instead of returning the score it
+  // already has on record.
+  const runLegacy = useCallback(async (endpoint, key, extra) => {
     if (!jd.trim()) return;
     setErrors([]);
     setActionLoading((prev) => ({ ...prev, [key]: true }));
@@ -258,7 +359,7 @@ export default function AddJob() {
     setProgressKey(steps[0]?.key || null);
 
     try {
-      const payload = getPayload();
+      const payload = { ...getPayload(), ...(extra || {}) };
       const data = await apiCall(endpoint, payload, {
         maxWaitMs: LEGACY_MAX_WAIT_MS[key],  // undefined → pollTask default
         onProgress: (status) => {
@@ -292,6 +393,27 @@ export default function AddJob() {
 
       {/* Form card */}
       <div className="bg-white border-2 border-black shadow-brutal p-6 mb-6">
+        {/* A restored draft has to announce itself.
+            Reported 2026-10-08: the user opened Add Job to enter a new job and
+            the previous night's Grinds360 description was still in the box.
+            sessionStorage lives as long as the TAB, so a tab left open
+            overnight restores in silence -- they typed over it and could not
+            tell what had been kept. The draft is still worth keeping, because
+            a pasted JD is unrecoverable work. What was missing is this line. */}
+        {draftRestored && (
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-2 border-stone-400 bg-stone-100 px-3 py-2">
+            <p className="font-mono text-[11px] font-bold text-stone-600">
+              {'\u21BB'} Restored the draft you left in this tab.
+            </p>
+            <button
+              type="button"
+              onClick={clearDraft}
+              className="border-2 border-black bg-white px-2 py-0.5 font-mono text-[11px] font-bold uppercase hover:bg-stone-200"
+            >
+              Start fresh
+            </button>
+          </div>
+        )}
         {/* Job description */}
         <div className="mb-1">
           <Textarea
@@ -317,20 +439,30 @@ export default function AddJob() {
 
         {/* Core metadata: title, company, resume type */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-          <Input
-            label="Job Title"
-            id="job-title"
-            placeholder="e.g. Senior Engineer"
-            value={jobTitle}
-            onChange={(e) => setJobTitle(e.target.value)}
-          />
-          <Input
-            label="Company"
-            id="company"
-            placeholder="e.g. Stripe"
-            value={company}
-            onChange={(e) => setCompany(e.target.value)}
-          />
+          {/* field + hint share one grid cell; as siblings of the grid they
+              would each become a column and push Resume Type onto a new row */}
+          <div>
+            <Input
+              label="Job Title"
+              id="job-title"
+              placeholder="e.g. Senior Engineer"
+              value={jobTitle}
+              onChange={(e) => { markTouched('job_title'); setJobTitle(e.target.value); forget('job_title'); }}
+            />
+            <DetectedHint source={detected.job_title} />
+          </div>
+          {/* field + hint share one grid cell; as siblings of the grid they
+              would each become a column and push Resume Type onto a new row */}
+          <div>
+            <Input
+              label="Company"
+              id="company"
+              placeholder="e.g. Stripe"
+              value={company}
+              onChange={(e) => { markTouched('company'); setCompany(e.target.value); forget('company'); }}
+            />
+            <DetectedHint source={detected.company} />
+          </div>
           <Select
             label="Resume Type"
             id="resume-type"
@@ -344,13 +476,16 @@ export default function AddJob() {
 
         {/* Optional fields: location, apply URL */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-          <Input
-            label="Location (optional)"
-            id="location"
-            placeholder="e.g. Dublin, Ireland or Remote"
-            value={location}
-            onChange={(e) => setLocation(e.target.value)}
-          />
+          <div>
+            <Input
+              label="Location (optional)"
+              id="location"
+              placeholder="e.g. Dublin, Ireland or Remote"
+              value={location}
+              onChange={(e) => { markTouched('location'); setLocation(e.target.value); forget('location'); }}
+            />
+            <DetectedHint source={detected.location} />
+          </div>
           <Input
             label="Apply URL (optional)"
             id="apply-url"
@@ -420,7 +555,15 @@ export default function AddJob() {
         <div className="space-y-4">
           {results.map((result, i) => {
             if (result.type === 'score') {
-              return <ScoreCard key={i} data={result.data} company={result.company} />;
+              return (
+                <ScoreCard
+                  key={i}
+                  data={result.data}
+                  company={result.company}
+                  onRescore={() => runLegacy('/api/score', 'score', { force: true })}
+                  rescoring={!!actionLoading.score}
+                />
+              );
             }
             if (result.type === 'tailor') {
               return <TailorCard key={i} data={result.data} company={result.company} />;

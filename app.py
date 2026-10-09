@@ -89,11 +89,12 @@ from lambdas.pipeline.score_batch import score_single_job_deterministic
 # bound rather than the function so the seam stays patchable in tests.
 from lambdas.pipeline import suggest_sections
 from s3_uploader import upload_file as s3_upload_file
-from matcher import match_jobs
 from mcp_server.http_auth import RequireSupabaseJWT
 from mcp_server.server import build_server
 from resume_scorer import score_and_improve
 from tailorer import tailor_resume
+from types import SimpleNamespace
+
 from utils.canonical_hash import canonical_hash
 
 logger = logging.getLogger(__name__)
@@ -272,6 +273,9 @@ class ScoreRequest(BaseModel):
     # 422 every Save & Score click without this field declared.
     apply_url: str = Field("", description="Direct apply URL (used by auto-apply)")
     resume_type: str = Field("sre_devops", description="Resume key from config")
+    # Scoring the same JD again returns the score already stored for it. Set
+    # this to score it afresh -- after editing the base resume, say.
+    force: bool = Field(False, description="Re-run the AI instead of reusing a stored score")
 
 
 class ScoreResponse(BaseModel):
@@ -288,6 +292,9 @@ class ScoreResponse(BaseModel):
     # UI must be able to tell apart from success.
     job_id: Optional[str] = None
     saved: bool = False
+    # True when these numbers came from the stored row rather than a fresh AI
+    # call. The UI can then say so instead of implying a re-evaluation.
+    reused: bool = False
 
 
 class TailorRequest(BaseModel):
@@ -463,27 +470,160 @@ def get_templates():
     return {"templates": list_templates()}
 
 
+# ---------------------------------------------------------------------------
+# Score stability
+# ---------------------------------------------------------------------------
+# "if I press save and score on a job multiple times the scores are different
+# we need to fix that. The scores need to be consistent otherwise it is AI
+# slop" -- 2026-10-08.
+#
+# Two causes, and the first one is the surprising half.
+#
+# temperature=0 does NOT make a model deterministic. Measured 2026-09-28 and
+# recorded in `score_single_job_deterministic`'s docstring: one model, one
+# identical prompt, three consecutive calls, three different answers --
+# temperature controls sampling, not mixture-of-experts routing or request
+# batching. So even a single pinned provider drifts.
+#
+# On top of that, a DIFFERENT MODEL tends to answer each time:
+#
+#   * the AI response cache is a SQLite file under /tmp (ai_client.py forces it
+#     there on Lambda), so it belongs to ONE execution environment and is gone
+#     on a cold start;
+#   * `_dead_providers` and the rate-limit cooldowns are in-memory on the same
+#     object, so each container has its own idea of which providers are usable;
+#   * on a cache miss `complete_with_info` walks `alive_providers` in order and
+#     takes the first that answers.
+#
+# So a container with Groq cooling down scores with Cerebras, a fresh container
+# scores with Groq, and Lambda runs as many containers as it likes. Same JD,
+# same temperature, different model, different number. Nothing about this is
+# visible to the caller, which is why it reads as slop.
+#
+# Fixing the cache properly means moving it off per-container disk, which is a
+# real piece of infrastructure. What makes the user-visible behaviour correct
+# today is cheaper and stricter: the same job scored again returns the score
+# already stored for it. Deterministic by construction, no AI call, instant.
+# `force: true` re-rolls deliberately.
+#
+# WHAT THIS DOES NOT FIX, stated rather than implied:
+#
+# The fresh path below now scores as the median of three calls rather than
+# one, because a single sample was measured at a fifteen-point spread. Reuse
+# then freezes that median, so what gets frozen is a measurement rather than a
+# roll of the dice.
+#
+# WHAT THIS DOES NOT FIX, stated rather than implied: two DIFFERENT jobs are
+# still scored by whichever model answers first in whichever container takes
+# the request, so scores remain comparable within a job and only roughly
+# comparable across jobs. Fixing that needs the response cache moved off
+# per-container disk, which is infrastructure, not a patch.
+def _stored_score(user_id: str, chash: str, resume_type: str) -> Optional[dict]:
+    """The score already on record for this job, if it can be reused as-is.
+
+    Read-only, and deliberately narrow. Returns None unless there is a real row
+    carrying a real score for the SAME resume: a score against a different base
+    resume answers a different question, and reusing it would be worse than
+    re-rolling.
+    """
+    if not _db or not user_id or not chash:
+        return None
+    try:
+        row = (_db.client.table("jobs").select("*")
+               .eq("user_id", user_id).eq("canonical_hash", chash)
+               .maybe_single().execute())
+    except Exception as e:  # noqa: BLE001 — a lookup failure must not block scoring
+        logger.warning("Could not read a stored score for %s: %s", chash, e)
+        return None
+    data = getattr(row, "data", None)
+    if not isinstance(data, dict):
+        return None
+    if data.get("match_score") is None:
+        return None
+    # A row scored against another resume, or before matched_resume was
+    # recorded, is not interchangeable with this request.
+    if (data.get("matched_resume") or resume_type) != resume_type:
+        return None
+    return data
+
+
 @app.post("/api/score", response_model=ScoreResponse)
 def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
     if req.resume_type not in _resumes:
         raise HTTPException(400, f"Unknown resume type: {req.resume_type}. Available: {list(_resumes.keys())}")
 
-    job = _Job(req.job_title, req.company, req.job_description, location=req.location)
-    resumes = {req.resume_type: _resumes[req.resume_type]}
+    # Same job, same resume, already scored -> the stored numbers, every time.
+    chash = canonical_hash(req.company, req.job_title, req.job_description)
+    if not req.force:
+        prior = _stored_score(user.id, chash, req.resume_type)
+        if prior:
+            logger.info("Reusing the stored score for %s/%s", req.company, req.job_title)
+            return ScoreResponse(
+                ats_score=prior.get("ats_score") or 0,
+                hiring_manager_score=prior.get("hiring_manager_score") or 0,
+                tech_recruiter_score=prior.get("tech_recruiter_score") or 0,
+                avg_score=prior.get("match_score") or 0,
+                reasoning=prior.get("match_reasoning") or "",
+                matched_resume=prior.get("matched_resume") or req.resume_type,
+                job_id=prior.get("job_id"),
+                saved=bool(prior.get("job_id")),
+                reused=True,
+            )
 
+    # Scored as the MEDIAN of three calls, not one.
+    #
+    # Measured 2026-10-08 by tests/quality/test_score_determinism.py, which had
+    # never run before that day because its skip was `skipif(True)`: the same
+    # job, the same resume, the same prompt, temperature=0, and the same model
+    # answering produced ATS scores of **70, 85 and 75**. A fifteen-point
+    # spread crosses tier boundaries, so a single sample decides A-tier versus
+    # B-tier by chance.
+    #
+    # That is why this endpoint no longer scores through `match_jobs`: it has
+    # no multi-call mode, and one sample is not a measurement.
+    # `score_single_job_deterministic` was built for exactly this -- medians at
+    # temperature=0 with skip_cache=True, plus the observed spread so the
+    # result can be read as a band. app.py already used it for rebuilds; the
+    # endpoint the user actually presses did not (CLAUDE.md #10: the guard
+    # existed, the need existed, and they never met).
+    #
+    # Three calls, not thirty: this is one interactive job, not the 58-job batch
+    # that has to live under an 8k tokens/minute ceiling. skip_cache is
+    # essential -- without it calls two and three return the cached first
+    # answer and the median of three is the median of one.
     try:
-        matched = match_jobs([job], resumes, _ai_client, min_score=0, batch_size=1)
+        scored = score_single_job_deterministic(
+            {
+                "job_hash": chash,
+                "title": req.job_title,
+                "company": req.company,
+                "description": req.job_description,
+                "location": req.location,
+            },
+            _resumes[req.resume_type],
+            num_calls=3,
+            skip_cache=True,
+        )
     except Exception as e:
         logger.error("Scoring failed: %s", e)
         raise HTTPException(500, f"AI scoring failed: {e}")
 
-    if not matched:
+    if not scored:
         return ScoreResponse(
             ats_score=0, hiring_manager_score=0, tech_recruiter_score=0,
             avg_score=0, reasoning="Job did not match any criteria.", matched_resume=req.resume_type,
         )
 
-    j = matched[0]
+    # `_Job`-shaped view of the result, so the persistence block below is
+    # unchanged. Attribute access is what it already expected from match_jobs.
+    j = SimpleNamespace(
+        match_score=scored.get("match_score") or 0,
+        ats_score=scored.get("ats_score") or 0,
+        hiring_manager_score=scored.get("hiring_manager_score") or 0,
+        tech_recruiter_score=scored.get("tech_recruiter_score") or 0,
+        match_reasoning=scored.get("reasoning") or "",
+        matched_resume=req.resume_type,
+    )
     if _posthog:
         _posthog.capture(
             distinct_id=user.id,
@@ -517,7 +657,17 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
                 "matched_resume": j.matched_resume or req.resume_type,
                 "score_tier": _score_tier(j.match_score),
             }).eq("job_id", job_id).execute()
-            saved = True
+            # saved must mean SAVED. It was set unconditionally, so when
+            # `_find_or_create_job` returned "" the UPDATE ran as `job_id=eq.`,
+            # matched nothing, raised nothing, and this reported success for a
+            # job that does not exist. CLAUDE.md #2: a status that cannot
+            # distinguish "did the work" from "did nothing" is a lie.
+            saved = bool(job_id)
+            if not job_id:
+                logger.error(
+                    "Scored %s/%s but no row was created — the dashboard will "
+                    "not show it", req.company, req.job_title,
+                )
         except Exception as e:
             # Surfaced via saved=False rather than swallowed: a silent warning
             # here is exactly how the 2026-09-28 pipeline lost a day's jobs.
@@ -834,9 +984,21 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
     """Check if job exists in Supabase by canonical hash. Merge if found, create if not. Return job_id."""
     if not _db:
         return ""
-    company = payload.get("company", "Unknown")
-    title = payload.get("job_title", "Software Engineer")
-    description = payload.get("job_description", "")
+    # BOTH spellings, because the two callers disagree and neither is wrong:
+    # /api/score passes {"title", "description"}; _process_task forwards a task
+    # payload using {"job_title", "job_description"}. Reading only the second
+    # meant every Save & Score arrived here with an empty description, tripped
+    # the stub guard below, and returned "" — so the row was never created, the
+    # follow-up UPDATE ran as `job_id=eq.` and matched nothing, and the endpoint
+    # answered HTTP 200.
+    #
+    # Reported 2026-10-08 as "new jobs are not saving". Three attempts to add an
+    # Accenture role were dropped, each logging "Refusing to create a job row
+    # for Accenture/Software Engineer with an empty description" — note the
+    # title ALSO defaulted, which is the same mismatch showing twice.
+    company = payload.get("company") or "Unknown"
+    title = payload.get("job_title") or payload.get("title") or "Software Engineer"
+    description = payload.get("job_description") or payload.get("description") or ""
     location = payload.get("location", "") or ""
 
     # A job with no description cannot be scored or tailored — there is nothing
@@ -3055,6 +3217,51 @@ def re_tailor_job(
         raise HTTPException(404, "Job not found")
     job = job.data[0]
 
+    # The hash the pipeline keys on, and whether it can possibly work.
+    #
+    # Rows created by `_find_or_create_job` carry `canonical_hash` and leave
+    # `job_hash` NULL (it has a foreign key to jobs_raw that a manual job
+    # cannot satisfy at that moment). Regenerate passed that NULL straight
+    # through, so the execution ran for three minutes and died inside
+    # TailorResume with "Job None not found in jobs_raw" — surfaced to the user
+    # as "Pipeline execution failed", because JobFailed is a Fail state with a
+    # constant Cause. Reported 2026-10-08.
+    #
+    # canonical_hash IS the right key for those rows: /api/pipeline/run-single
+    # upserts jobs_raw under exactly that value.
+    #
+    # Resolved AFTER the row is fetched, which is the whole point of where this
+    # sits: the first draft read `job` twelve lines above the query that
+    # defines it, which is a NameError -> HTTP 500 on EVERY regenerate, valid
+    # scope or not. CLAUDE.md #17 -- the null-hash fix stacked a worse bug on
+    # top of the one it fixed, and only the scope test's 500-instead-of-400
+    # caught it.
+    job_hash = job.get("job_hash") or job.get("canonical_hash")
+    if not job_hash:
+        raise HTTPException(
+            409,
+            "This job has no stored posting text, so it cannot be re-tailored. "
+            "Add it again from the job description.",
+        )
+    # Checked HERE rather than discovered three minutes later inside a Lambda.
+    # Six of this user's seven API-created rows predate the jobs_raw upsert and
+    # would still fail — the difference is that they now fail in 50ms with a
+    # sentence that says what to do.
+    try:
+        known = (_db.client.table("jobs_raw").select("job_hash")
+                 .eq("job_hash", job_hash).limit(1).execute().data)
+    except Exception as e:  # noqa: BLE001 — a lookup failure must not block a valid run
+        logger.warning("jobs_raw precheck failed for %s: %s", job_hash, e)
+        known = [{"job_hash": job_hash}]
+    if not known:
+        raise HTTPException(
+            409,
+            "The original posting text for this job was never stored, so there "
+            "is nothing to tailor against. Add the job again by pasting its "
+            "description.",
+        )
+
+
     # Save the current resume/cover letter as a version snapshot BEFORE re-tailoring.
     current_version = job.get("resume_version") or 1
     if job.get("resume_s3_url") or job.get("cover_letter_s3_url"):
@@ -3088,7 +3295,7 @@ def re_tailor_job(
             stateMachineArn=single_arn,
             input=json.dumps({
                 "user_id": user.id,
-                "job_hash": job.get("job_hash"),
+                "job_hash": job_hash,
                 "skip_scoring": True,
                 "job_id": job_id,
                 # scope="resume" skips GenerateCoverLetter, CompileCoverLetter
@@ -3113,7 +3320,7 @@ def re_tailor_job(
         # Local dev fallback: enqueue as an async task
         task_id = str(uuid.uuid4())
         _enqueue_task(task_id, user.id, "tailor", {
-            "job_hash": job.get("job_hash"),
+            "job_hash": job_hash,
             "skip_scoring": True,
             "job_id": job_id,
         })

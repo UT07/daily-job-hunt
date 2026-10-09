@@ -86,9 +86,21 @@ def test_an_unknown_scope_is_rejected_not_widened(client, scope):
 
 @pytest.mark.parametrize("scope", ["resume", "cover"])
 def test_the_scopes_the_ui_sends_are_accepted(client, scope):
-    """JobWorkspace.jsx sends exactly these two; rejecting one breaks a button."""
+    """JobWorkspace.jsx sends exactly these two; rejecting one breaks a button.
+
+    Asserts 202, not `!= 400`. The original `!= 400` is satisfied by a 500,
+    and on 2026-10-08 that is exactly what it let through: a null-hash fix
+    read `job` twelve lines above the query that defines it, so EVERY
+    regenerate raised NameError -> 500. 1847 tests passed. The only red was
+    this file's invalid-scope case returning 500 where it wanted 400 — the bug
+    was caught by the wrong test, by accident.
+
+    CLAUDE.md #2: a check that cannot distinguish "did the work" from "crashed"
+    is not a check.
+    """
     r = client.post("/api/pipeline/re-tailor/j-1", json={"scope": scope})
-    assert r.status_code != 400, f"scope={scope!r} was rejected: {r.text[:200]}"
+    assert r.status_code == 202, (
+        f"scope={scope!r} returned {r.status_code}, not 202: {r.text[:300]}")
 
 
 def test_no_scope_at_all_is_still_the_full_pipeline(client):

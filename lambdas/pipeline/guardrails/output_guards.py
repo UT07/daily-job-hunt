@@ -478,8 +478,57 @@ _ECHO_MARKERS: dict[str, re.Pattern] = {
     "fabrication_ref": re.compile(
         r"\bfabricat(?:e|ed|ing|ion)\b|\bdo not invent\b", re.I),
     # the model narrating its own process instead of producing the document
+    #
+    # The `(?!\s+Encrypt\b)` is not a nicety. Measured 2026-10-08 over all
+    # 1,333 tailored resumes in S3, this marker fired on 177 of them — 13.3%,
+    # where every other marker in this table sits at 0.1–0.2% — and 175 of the
+    # 177 matches were the string "Let's", every one of them inside
+    # "Traefik ingress with Let's Encrypt" in the Technical Skills section.
+    # Re-measured with the exclusion in place: 2 of 1,333, or 0.2%.
+    #
+    # Let's Encrypt is a certificate authority. On an SRE resume it is a
+    # correct, expected technical term, and this marker's severity is `block`,
+    # so the guard was rejecting one resume in eight for naming it and spending
+    # repair rounds telling the model to delete "Let's" — from a skills line
+    # where the only thing it could delete is the technology.
+    #
+    # It also accounted for 4 of 5 failing tailor cases in the AI eval and so
+    # for most of guard_pass_rate's fall from 0.92 to 0.84.
+    #
+    # The two survivors are genuine, and worth reading as proof the marker
+    # earns its place — both are the model's planning text shipped verbatim
+    # into a resume:
+    #
+    #     "Let's examine base resume sections to see what bold formatting
+    #      exists"
+    #     "Let's craft: IT Support / Sysadmin with \textbf{3+ years} of exper..."
+    #
+    # So the fix removes 175 false positives and keeps both true ones.
+    #
+    # The exclusion is CASE-SENSITIVE — `(?-i:Encrypt)` inside an otherwise
+    # case-insensitive pattern. Every one of the 190 product-name occurrences
+    # is written "Let's Encrypt" with a capital E, while every lowercase form
+    # in the corpus is planning voice: rewrite, look, examine, go, check, list,
+    # craft, reorder, put, reword. Both variants fire on the same 2 documents,
+    # so this costs nothing measured and exonerates strictly less — it still
+    # catches "Let's encrypt the database at rest", which a case-insensitive
+    # lookahead cleared.
+    #
+    # KNOWN BLIND SPOT, found while measuring this and left alone deliberately:
+    # the apostrophe class is `'` only, so the curly form U+2019 never matches.
+    # 223 resumes contain "Let's Encrypt" with either apostrophe and only 177
+    # reached this marker, meaning 46 used the curly one. Widening to ['\u2019]
+    # would need the same Encrypt exclusion widened with it, and since the
+    # genuine leaks both use a straight apostrophe there is nothing measured to
+    # gain. Recorded rather than silently tolerated.
+    #
+    # The comment above says candidate markers were kept only at 0/738 false
+    # positives. This one was not re-measured after the skills section grew to
+    # include Let's Encrypt, which is CLAUDE.md #15: the corpus is the other
+    # side of the comparison and it moved.
     "planning_voice": re.compile(
-        r"\bwe (?:must|cannot|can|should|need to|have|will|are given)\b|\blet'?s\b",
+        r"\bwe (?:must|cannot|can|should|need to|have|will|are given)\b"
+        r"|\blet'?s\b(?!\s+(?-i:Encrypt)\b)",
         re.I),
     "instruction_ref": re.compile(
         r"\bthe instructions?\b|\breminder:|\bthe rules? says?\b", re.I),

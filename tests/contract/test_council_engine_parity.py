@@ -14,6 +14,16 @@ WHAT IS ESTABLISHED
       * with the REAL, unstubbed _select_diverse_providers running in both
         engines rather than a canned stub (test_engines_agree_with_real_unstubbed_provider_selection)
 
+KEEPING THESE DOUBLES HONEST
+    The stubs below spell out _select_diverse_providers' full signature instead
+    of absorbing the tail in **kwargs. On 2026-10-08 adding a
+    `fill_same_family` keyword broke all four with
+    "lambda() got an unexpected keyword argument" -- which is the double doing
+    its job. A **kwargs stub would have swallowed the new argument and silently
+    asserted parity between two engines that were no longer being asked the
+    same question (CLAUDE.md #6). When the real signature changes, update these
+    four; do not widen them.
+
 WHAT IS DELIBERATELY NOT ESTABLISHED
     * Critic IDENTITY parity. The two engines choose their critic from a
       DIFFERENT excluded-family set when a fallback has occurred:
@@ -83,14 +93,14 @@ def test_both_engines_select_the_same_winner(winner_content, monkeypatch):
     with patch.object(ai_helper, "_build_provider_list", return_value=[P1, P2, P3]), \
          patch.object(ai_helper, "_call_provider", side_effect=_fake_call), \
          patch.object(ai_helper, "_select_diverse_providers",
-                      side_effect=lambda ps, n, exclude_families=None: (
+                      side_effect=lambda ps, n, exclude_families=None, fill_same_family=False: (
                           [P3] if exclude_families else [P1, P2][:n])):
         legacy = ai_helper.council_complete("p", "s", "desc", n_generators=2)
 
     with patch("agents.providers._build_provider_list", return_value=[P1, P2, P3]), \
          patch("agents.providers._call_provider", side_effect=_fake_call), \
          patch("agents.providers._select_diverse_providers",
-               side_effect=lambda ps, n, exclude_families=None: (
+               side_effect=lambda ps, n, exclude_families=None, fill_same_family=False: (
                    [P3] if exclude_families else [P1, P2][:n])):
         modern = graph_mod.council_complete_langgraph("p", "s", "desc", n_generators=2)
 
@@ -147,7 +157,7 @@ def test_both_engines_agree_when_a_generator_falls_back(monkeypatch):
     with patch.object(ai_helper, "_build_provider_list", return_value=provider_list), \
          patch.object(ai_helper, "_call_provider", side_effect=_make_fallback_fake(legacy_log)), \
          patch.object(ai_helper, "_select_diverse_providers",
-                      side_effect=lambda ps, n, exclude_families=None: (
+                      side_effect=lambda ps, n, exclude_families=None, fill_same_family=False: (
                           [P3] if exclude_families else [P1, P2][:n])):
         legacy = ai_helper.council_complete("p", "s", "desc", n_generators=2)
 
@@ -155,7 +165,7 @@ def test_both_engines_agree_when_a_generator_falls_back(monkeypatch):
     with patch("agents.providers._build_provider_list", return_value=provider_list), \
          patch("agents.providers._call_provider", side_effect=_make_fallback_fake(modern_log)), \
          patch("agents.providers._select_diverse_providers",
-               side_effect=lambda ps, n, exclude_families=None: (
+               side_effect=lambda ps, n, exclude_families=None, fill_same_family=False: (
                    [P3] if exclude_families else [P1, P2][:n])):
         modern = graph_mod.council_complete_langgraph("p", "s", "desc", n_generators=2)
 

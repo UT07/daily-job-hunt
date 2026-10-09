@@ -595,12 +595,38 @@ def _select_diverse_providers(
     providers: list[dict],
     n: int,
     exclude_families: set[str] | None = None,
+    fill_same_family: bool = False,
 ) -> list[dict]:
     """Pick N providers from distinct model families.
 
     Shuffles before selection so different runs get different subsets.
     Excludes any families in exclude_families (used to pick critics that
     didn't generate).
+
+    `fill_same_family` relaxes the one-per-family rule ONLY when distinct
+    families cannot fill the request, and only for callers that ask. Measured
+    over the 212-résumé batch of 2026-10-07:
+
+        single_candidate   415
+        adjudicated        129
+
+    A 429 cools the whole ACCOUNT, so OpenRouter (daily quota) and Groq (41
+    cooldowns x 90s) spend most of a fast batch benched, and the live pool
+    collapses to Gemini alone. Gemini has FIVE models in the pool and
+    `_model_family` folds them into one family, so a perfectly healthy Gemini
+    contributed exactly ONE generator — and one candidate means nothing to
+    adjudicate, no critic verdict, and a planning-laced body surviving to the
+    hard gates.
+
+    Two models from one family is weaker diversity than two families. It is
+    much stronger than no comparison at all, which is what the strict rule
+    delivers when the pool is degraded. The preference is unchanged: pass one
+    still takes distinct families, so a healthy pool behaves exactly as before
+    and this fills only what would otherwise be missing.
+
+    Off by default, because the critic slot must NOT use it: a critic from the
+    family that generated is not an independent reviewer, and
+    `select_critics` already has its own explicit fallback for that case.
     """
     exclude_families = exclude_families or set()
 
@@ -626,6 +652,25 @@ def _select_diverse_providers(
         result.append(p)
         if len(result) >= n:
             break
+
+    if fill_same_family and len(result) < n:
+        # Same pool, same shuffle, same exclusions — only the one-per-family
+        # rule is lifted. Identity, not equality: two pool entries can serve
+        # the same model id on different hosts and both are usable.
+        chosen = {id(p) for p in result}
+        for p in shuffled:
+            if id(p) in chosen or _model_family(p["model"]) in exclude_families:
+                continue
+            result.append(p)
+            chosen.add(id(p))
+            if len(result) >= n:
+                break
+        if len(result) > len(seen):
+            logger.info(
+                "[ai] only %d distinct famil%s available — filled %d generator "
+                "slot(s) from the same family so there is something to adjudicate",
+                len(seen), "y" if len(seen) == 1 else "ies", len(result) - len(seen),
+            )
     return result
 
 
