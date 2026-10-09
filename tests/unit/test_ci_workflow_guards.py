@@ -374,3 +374,111 @@ def test_the_integration_floor_is_neither_vacuous_nor_unsatisfiable():
         f"floor is {floor} but only {defined} integration tests are defined, so "
         "the gate can never be satisfied"
     )
+
+
+# --- deploy is gated on what CI checks, not a subset of it ------------------
+#
+# deploy.yml used to run only `pytest tests/unit/ tests/contract/` before
+# `sam deploy`, with no branch protection on main. Lint, the integration,
+# security and quality suites, the web build and `sam validate --lint` could
+# all be red on main and the deploy would still go out. It now runs
+# scripts/verify_like_ci.sh, the script developers run, which is kept
+# identical to test.yml.
+
+def _deploy_steps():
+    return yaml.safe_load(DEPLOY.read_text())["jobs"]["deploy"]["steps"]
+
+
+def _step_index(steps, needle):
+    for i, step in enumerate(steps):
+        if needle in str(step.get("run", "")):
+            return i
+    return None
+
+
+def test_deploy_runs_the_full_ci_check_before_sam_deploy():
+    steps = _deploy_steps()
+    verify = _step_index(steps, "scripts/verify_like_ci.sh")
+    deploy = _step_index(steps, "sam deploy")
+    assert verify is not None, "deploy.yml never runs scripts/verify_like_ci.sh"
+    assert deploy is not None, "deploy.yml has no sam deploy step"
+    assert verify < deploy, "verify_like_ci.sh must run BEFORE sam deploy"
+    step = steps[verify]
+    assert not step.get("continue-on-error"), "a gate that may fail is not a gate"
+    assert "|| true" not in step["run"]
+
+
+def test_deploy_gate_refuses_to_skip_sam_validate():
+    """verify_like_ci.sh skips `sam validate --lint` when sam is absent.
+
+    Locally that is a convenience; in the deploy job a skipped lint would be
+    a gate reporting green for a check it never ran (CLAUDE.md rule 2).
+    """
+    steps = _deploy_steps()
+    verify = _step_index(steps, "scripts/verify_like_ci.sh")
+    assert verify is not None
+    assert str(steps[verify].get("env", {}).get("VERIFY_REQUIRE_SAM")) == "1"
+    sam_install = _step_index(steps, "aws-sam-cli")
+    assert sam_install is not None and sam_install < verify
+
+
+def test_verify_script_covers_what_ci_and_the_deploy_need():
+    script = (REPO_ROOT / "scripts" / "verify_like_ci.sh").read_text()
+    for needle in (
+        "ruff check lambdas/ tests/ app.py",
+        "pytest tests/unit/ tests/contract/",
+        "pytest tests/integration/",
+        "pytest tests/security/",
+        "pytest tests/quality/",
+        "sam validate --lint",
+        "npm run build",
+    ):
+        assert needle in script, f"verify_like_ci.sh no longer runs: {needle}"
+    assert "VERIFY_REQUIRE_SAM" in script
+
+
+def test_verify_script_fails_when_sam_is_required_but_missing(tmp_path):
+    """Executes the script's own sam block with sam off PATH, flag on and off."""
+    import subprocess
+
+    script = (REPO_ROOT / "scripts" / "verify_like_ci.sh").read_text()
+    m = re.search(r"(?ms)^if command -v sam.*?^fi$", script)
+    assert m, "could not find the sam validate block in verify_like_ci.sh"
+    probe = tmp_path / "probe.sh"
+    probe.write_text(
+        'fail=0\nstep() { shift; "$@" || fail=1; }\n' + m.group(0) + '\nexit "$fail"\n'
+    )
+    env = {"PATH": "/usr/bin:/bin", "VERIFY_REQUIRE_SAM": "1"}
+    assert subprocess.run(["bash", str(probe)], env=env, capture_output=True).returncode != 0
+    env.pop("VERIFY_REQUIRE_SAM")
+    assert subprocess.run(["bash", str(probe)], env=env, capture_output=True).returncode == 0
+
+
+# --- the API image import smoke must not pass when it finds no image --------
+#
+# It greps `docker images` for the sam-built API image and used to print a
+# ::warning:: and `exit 0` when nothing matched. A tag-naming change in SAM
+# would turn the step into a permanent no-op pass (CLAUDE.md rule 2).
+
+def _import_smoke_run() -> str:
+    wf = yaml.safe_load(TEST_WF.read_text())
+    for step in wf["jobs"]["deploy-readiness"]["steps"]:
+        if step.get("name", "").startswith("Runtime import smoke"):
+            return step["run"]
+    raise AssertionError("Runtime import smoke step not found in test.yml")
+
+
+def _no_image_branch(run: str) -> str:
+    m = re.search(r'(?ms)if \[ -z "\$IMAGE" \]; then\n(.*?)\n\s*fi\n', run)
+    assert m, "could not find the no-image branch of the import smoke"
+    return m.group(1)
+
+
+def test_import_smoke_fails_when_no_image_is_found():
+    import subprocess
+
+    branch = _no_image_branch(_import_smoke_run())
+    rc = subprocess.run(["bash", "-c", 'IMAGE=""\nif [ -z "$IMAGE" ]; then\n' + branch + "\nfi\nexit 0"],
+                        capture_output=True).returncode
+    assert rc != 0, f"the no-image branch exits {rc}: a smoke that found nothing passed"
+    assert "::error::" in branch

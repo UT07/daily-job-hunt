@@ -14,6 +14,7 @@ import boto3
 import httpx
 
 from shared.location_policy import build_location_policy
+from request_tally import RequestTally
 from shared.scrape_budget import cache_ttl_hours as _ttl, enrichment_budget_left
 
 logger = logging.getLogger()
@@ -258,6 +259,7 @@ def handler(event, context):
     from normalizers import normalize_job
     all_jobs = []
     login_wall_hit = False
+    tally = RequestTally("glassdoor")
 
     for query in queries:
         encoded_query = quote_plus(query)
@@ -273,16 +275,23 @@ def handler(event, context):
         url = f"https://www.glassdoor.com/Job/jobs.htm?sc.keyword={encoded_query}&locT=N&locId=104"
 
         try:
-            resp = httpx.get(url, proxy=proxy_url, timeout=30, follow_redirects=True, verify=False)
+            try:
+                resp = httpx.get(url, proxy=proxy_url, timeout=30, follow_redirects=True, verify=False)
+            except Exception as e:
+                tally.exception(e)
+                raise
             if resp.status_code != 200:
+                tally.http_failure(resp.status_code)
                 logger.warning(f"[glassdoor] Search returned HTTP {resp.status_code}")
                 continue
 
             if _has_login_wall(resp.text):
+                tally.blocked("login wall")
                 logger.warning("[glassdoor] Login wall detected on search page, stopping")
                 login_wall_hit = True
                 break
 
+            tally.ok()
             cards = _parse_search_page(resp.text)
             logger.info(f"[glassdoor] Query '{query}': {len(cards)} cards found")
 
@@ -360,5 +369,7 @@ def handler(event, context):
         db.table("jobs_raw").upsert(all_jobs, on_conflict="job_hash").execute()
 
     logger.info(f"[glassdoor] {len(all_jobs)} jobs saved")
-    return {"count": len(all_jobs), "source": "glassdoor",
-            "new_job_hashes": [j["job_hash"] for j in all_jobs]}
+    if tally.error():
+        logger.error(f"[glassdoor] {tally.error()}")
+    return tally.annotate({"count": len(all_jobs), "source": "glassdoor",
+                           "new_job_hashes": [j["job_hash"] for j in all_jobs]})

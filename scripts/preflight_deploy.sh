@@ -53,33 +53,38 @@ if [ ! -d "layer/python" ]; then
 fi
 echo "      ok"
 echo ""
-
 # ---------------------------------------------------------------------------
-# Check 2/4 -- every first-party package layer/build.sh copies is actually
-# sitting in layer/python/. Parsed straight out of build.sh's own
-# FIRST_PARTY="pkg1 pkg2" assignment (anchored to start-of-line so it can't
-# also match the later `-e FIRST_PARTY="$FIRST_PARTY"` docker arg further
-# down that same file) so this can never silently drift from what build.sh
-# actually copies.
+# Check 2/4 -- NO first-party code in the layer, and shared/ reaches the zip
+# Lambdas through their CodeUri instead.
+#
+# Inverted on 2026-10-08. shared/ used to ship only in this layer, and a
+# shared/-only change then produced a byte-identical function artifact
+# (sam build + SAM's dir_checksum: 13ef36ce... before and after the edit), so
+# AutoPublishAlias could leave `live` on old code. shared/ now ships via the
+# lambdas/pipeline/shared and lambdas/scrapers/shared symlinks, which sam
+# build copies as real files. A leftover layer/python/shared means the layer
+# was not rebuilt, and would put a second, stale copy on sys.path, so it fails.
 # ---------------------------------------------------------------------------
-echo "[2/4] first-party packages present in layer/python/..."
+echo "[2/4] layer is third-party only; shared/ ships in the CodeUri..."
 FIRST_PARTY_LINE="$(grep -m1 -oE '^FIRST_PARTY="[^"]*"' layer/build.sh || true)"
 if [ -z "$FIRST_PARTY_LINE" ]; then
   fail "layer/build.sh has no top-level FIRST_PARTY=\"...\" assignment to parse" "first-party-parse"
 fi
 FIRST_PARTY_PKGS="${FIRST_PARTY_LINE#FIRST_PARTY=\"}"
 FIRST_PARTY_PKGS="${FIRST_PARTY_PKGS%\"}"
-if [ -z "$FIRST_PARTY_PKGS" ]; then
-  fail "parsed an empty package list out of layer/build.sh's FIRST_PARTY assignment" "first-party-parse"
+if [ -n "$FIRST_PARTY_PKGS" ]; then
+  fail "layer/build.sh FIRST_PARTY is '${FIRST_PARTY_PKGS}' -- first-party code must ship in the function CodeUri, not the layer" "first-party-not-in-layer"
 fi
-for pkg in $FIRST_PARTY_PKGS; do
-  if [ ! -d "layer/python/${pkg}" ]; then
-    fail "layer/python/${pkg}/ is missing (layer/build.sh's FIRST_PARTY list expects it) -- rebuild with ./layer/build.sh" "first-party-present:${pkg}"
+if [ -e "layer/python/shared" ]; then
+  fail "layer/python/shared exists -- stale layer build; rerun ./layer/build.sh" "first-party-not-in-layer:shared"
+fi
+for code_dir in lambdas/pipeline lambdas/scrapers; do
+  if [ ! -f "${code_dir}/shared/__init__.py" ]; then
+    fail "${code_dir}/shared does not resolve to the shared package -- it must be a symlink to ../../shared" "shared-in-codeuri:${code_dir}"
   fi
-  echo "      ${pkg}/ ok"
+  echo "      ${code_dir}/shared ok"
 done
 echo ""
-
 # ---------------------------------------------------------------------------
 # Check 3/4 -- langgraph + langchain_core present in layer/python/.
 #
@@ -146,6 +151,9 @@ fi
 IMPORT_PROBE='
 import sys
 print("[container] sys.path:", sys.path)
+print("[container] importing shared from the task root ...")
+import shared.tex_utils
+assert shared.__file__.startswith("/repo/lambdas/pipeline/shared/"), shared.__file__
 print("[container] importing ai_helper ...")
 import ai_helper
 print("[container] importing agents.graph ...")

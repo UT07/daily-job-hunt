@@ -44,8 +44,12 @@ step "pytest quality"         $PY -m pytest tests/quality/ -q
 
 # deploy readiness: `sam build` is not `sam deploy`, and plain `sam validate`
 # does not catch dependency cycles — only --lint does (cfn-lint E3004).
+# VERIFY_REQUIRE_SAM=1 (set by deploy.yml) turns the skip into a failure: the
+# deploy gate must not report green for a lint it never ran (CLAUDE.md #2).
 if command -v sam >/dev/null; then
   step "sam validate --lint" sam validate --lint
+elif [ "${VERIFY_REQUIRE_SAM:-0}" = "1" ]; then
+  printf '\n\033[31mFAILED: sam not installed but VERIFY_REQUIRE_SAM=1\033[0m\n'; fail=1
 else
   printf '\n\033[33mskipped: sam not installed (CI still runs it)\033[0m\n'
 fi

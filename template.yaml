@@ -17,6 +17,11 @@ Globals:
     # version and the `live` alias silently keeps the OLD layer — exactly
     # why prod kept raising `ModuleNotFoundError: No module named 'agents'`
     # even after a successful, UPDATE_COMPLETE deploy (2026-09-23).
+    # This setting alone did NOT prove sufficient, so first-party code no
+    # longer ships in a layer at all: agents/ moved into lambdas/pipeline/
+    # (2026-09-23) and shared/ reaches each zip function through a CodeUri
+    # symlink (2026-10-08), so a change to either changes the function
+    # artifact's own hash. See layer/build.sh.
     AutoPublishAliasAllProperties: true
 
 Parameters:
@@ -1289,7 +1294,8 @@ Resources:
               "MaxConcurrency": 8,
               "ResultPath": "$.processed_jobs",
               "Next": "PostScoreTailoredJobs",
-              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "PostScoreTailoredJobs"}],
+              "Comment": "Catch goes to NotifyError, not onward. It used to continue to PostScoreTailoredJobs with $.processed_jobs never written, and SavePipelineMetrics dereferences that path: a States.Runtime error, which States.ALL cannot catch, so the run failed anyway from the wrong state. Every per-job Task now has a Catch, so this fires only on a Map-level failure, which should fail the run. See tests/unit/test_sfn_catch_paths.py.",
+              "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "NotifyError"}],
               "ItemProcessor": {
                 "ProcessorConfig": {
                   "Mode": "INLINE"
@@ -1385,6 +1391,13 @@ Resources:
                   "SaveJobAfterError": {
                     "Type": "Task",
                     "Resource": "${SaveJobFunction.Alias}",
+                    "End": true,
+                    "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SaveJobFailed"}]
+                  },
+                  "SaveJobFailed": {
+                    "Type": "Pass",
+                    "Comment": "Static Result on purpose: naming an item field here would make it mandatory for every item (sfn_pass_state_contract). save_metrics counts failed=true as a resume failure, so a lost save is visible rather than absent.",
+                    "Result": {"saved": false, "has_resume": false, "failed": true, "error": "save_job_failed"},
                     "End": true
                   }
                 }
@@ -1634,13 +1647,13 @@ Resources:
       Name: naukribaba-daily-pipeline-schedule
       Description: Run daily pipeline on weekdays at 7:00 UTC
       ScheduleExpression: "cron(0 7 ? * MON-FRI *)"
-      # RETIRED 2026-09-02. The automated pipeline is parked: the product is now
-      # the website plus on-demand "paste a JD, get a tailored resume". The
-      # scrapers drive per-request spend on Bright Data (PROXY_URL) and Apify,
-      # which is the actual cost - NaukriBaba's whole AWS footprint is ~$3/mo
-      # (Lambda $0.0001, Step Functions $0). Re-enable by flipping to ENABLED;
-      # every Lambda, layer and state machine is left deployed and idle, and
-      # idle Lambda costs nothing.
+      # ENABLED since 2026-09-26 (#93, commit 339ccb3), after being disabled
+      # 2026-09-02 (#87) while the pipeline was parked. Kept in the template,
+      # not the console, so a deploy cannot silently flip it either way.
+      # Cost: the AWS side is negligible (~$3/mo for all of NaukriBaba), but
+      # every daily run drives per-request spend on Bright Data (PROXY_URL)
+      # and Apify through the scrapers, plus LLM calls. To park it again, set
+      # all four rules to DISABLED here; nothing else needs to change.
       State: ENABLED
       Targets:
         - Arn: !GetAtt DailyPipelineStateMachine.Arn
@@ -1654,13 +1667,13 @@ Resources:
       Name: naukribaba-expiry-check
       Description: Check job expiry weekly on Sundays at 6:00 UTC
       ScheduleExpression: "cron(0 6 ? * SUN *)"
-      # RETIRED 2026-09-02. The automated pipeline is parked: the product is now
-      # the website plus on-demand "paste a JD, get a tailored resume". The
-      # scrapers drive per-request spend on Bright Data (PROXY_URL) and Apify,
-      # which is the actual cost - NaukriBaba's whole AWS footprint is ~$3/mo
-      # (Lambda $0.0001, Step Functions $0). Re-enable by flipping to ENABLED;
-      # every Lambda, layer and state machine is left deployed and idle, and
-      # idle Lambda costs nothing.
+      # ENABLED since 2026-09-26 (#93, commit 339ccb3), after being disabled
+      # 2026-09-02 (#87) while the pipeline was parked. Kept in the template,
+      # not the console, so a deploy cannot silently flip it either way.
+      # Cost: the AWS side is negligible (~$3/mo for all of NaukriBaba), but
+      # every daily run drives per-request spend on Bright Data (PROXY_URL)
+      # and Apify through the scrapers, plus LLM calls. To park it again, set
+      # all four rules to DISABLED here; nothing else needs to change.
       State: ENABLED
       Targets:
         - Arn: !Ref CheckExpiryFunctionAliaslive
@@ -1702,13 +1715,13 @@ Resources:
       Name: naukribaba-stale-nudge
       Description: Weekly stale job nudges (Monday 9:00 UTC)
       ScheduleExpression: "cron(0 9 ? * MON *)"
-      # RETIRED 2026-09-02. The automated pipeline is parked: the product is now
-      # the website plus on-demand "paste a JD, get a tailored resume". The
-      # scrapers drive per-request spend on Bright Data (PROXY_URL) and Apify,
-      # which is the actual cost - NaukriBaba's whole AWS footprint is ~$3/mo
-      # (Lambda $0.0001, Step Functions $0). Re-enable by flipping to ENABLED;
-      # every Lambda, layer and state machine is left deployed and idle, and
-      # idle Lambda costs nothing.
+      # ENABLED since 2026-09-26 (#93, commit 339ccb3), after being disabled
+      # 2026-09-02 (#87) while the pipeline was parked. Kept in the template,
+      # not the console, so a deploy cannot silently flip it either way.
+      # Cost: the AWS side is negligible (~$3/mo for all of NaukriBaba), but
+      # every daily run drives per-request spend on Bright Data (PROXY_URL)
+      # and Apify through the scrapers, plus LLM calls. To park it again, set
+      # all four rules to DISABLED here; nothing else needs to change.
       State: ENABLED
       Targets:
         - Arn: !Ref StaleNudgeFunctionAliaslive
@@ -1732,13 +1745,13 @@ Resources:
       Name: naukribaba-followup-reminder
       Description: Daily follow-up reminders (10:00 UTC weekdays)
       ScheduleExpression: "cron(0 10 ? * MON-FRI *)"
-      # RETIRED 2026-09-02. The automated pipeline is parked: the product is now
-      # the website plus on-demand "paste a JD, get a tailored resume". The
-      # scrapers drive per-request spend on Bright Data (PROXY_URL) and Apify,
-      # which is the actual cost - NaukriBaba's whole AWS footprint is ~$3/mo
-      # (Lambda $0.0001, Step Functions $0). Re-enable by flipping to ENABLED;
-      # every Lambda, layer and state machine is left deployed and idle, and
-      # idle Lambda costs nothing.
+      # ENABLED since 2026-09-26 (#93, commit 339ccb3), after being disabled
+      # 2026-09-02 (#87) while the pipeline was parked. Kept in the template,
+      # not the console, so a deploy cannot silently flip it either way.
+      # Cost: the AWS side is negligible (~$3/mo for all of NaukriBaba), but
+      # every daily run drives per-request spend on Bright Data (PROXY_URL)
+      # and Apify through the scrapers, plus LLM calls. To park it again, set
+      # all four rules to DISABLED here; nothing else needs to change.
       State: ENABLED
       Targets:
         - Arn: !Ref FollowUpReminderFunctionAliaslive
@@ -1951,16 +1964,50 @@ Resources:
         cleanly, score writes ~50 jobs, but ArtifactsCompiled=0 because
         compile_latex silently fell back to "tectonic_not_available". The
         alarm fires regardless of execution-success/fail status.
-      Namespace: Naukribaba/Pipeline
-      MetricName: ArtifactsCompiled
-      Dimensions:
-        - Name: DocType
-          Value: resume
-      Statistic: Sum
-      Period: 86400  # 24h
+      Metrics:
+        - Id: m1
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: Naukribaba/Pipeline
+              MetricName: ArtifactsCompiled
+              Dimensions:
+                - Name: DocType
+                  Value: resume
+            Period: 86400  # 24h
+            Stat: Sum
+        - Id: weekday
+          Label: ArtifactsCompiled on 24h windows that should contain a weekday run (1 = not judged)
+          ReturnData: true
+          Expression: "IF(HOUR(m1) < 12 OR DAY(m1) == 5 OR DAY(m1) == 6, 1, FILL(m1, 0))"
       EvaluationPeriods: 1
       Threshold: 1
       ComparisonOperator: LessThanThreshold
+      # Weekday-aware. The schedule is cron(0 7 ? * MON-FRI *), so a plain
+      # Sum < 1 either pages every weekend (missing = breaching) or misses a
+      # weekday on which the schedule never fired (missing = notBreaching).
+      # The expression judges only the 24h windows that should contain a run:
+      #
+      #   IF(HOUR(m1) < 12 OR DAY(m1) == 5 OR DAY(m1) == 6, 1, FILL(m1, 0))
+      #
+      # Alarms use a SLIDING 24h window, not midnight-to-midnight ("the
+      # boundaries of the window are not aligned to the wall clock"), and
+      # the datapoint is stamped with the window's START. A window starting
+      # at or after 12:00 UTC on day D runs to D+1 12:00 and so contains
+      # exactly D+1's run; it is judged only when D+1 is Mon-Fri, i.e. D is
+      # not Fri (5) or Sat (6). Windows starting before 12:00 straddle the
+      # run time and are not judged. FILL turns "no datapoint" into 0, so a
+      # weekday with no run breaches on its value rather than on
+      # TreatMissingData. Assumes a run publishes its metrics within 5h of
+      # the 07:00 start; a later publish is reported, which is also signal.
+      # A plain DAY() guard is not enough: the window starting Fri 10:00
+      # holds no run and is stamped Friday, so it would page every Friday.
+      # TreatMissingData stays breaching: HOUR/DAY/FILL make the series
+      # non-sparse, so a missing datapoint means the expression itself
+      # broke, and that must be loud, not silent.
+      # EvaluationWindow: WallClockWindow (midnight-aligned) would allow a
+      # DAY()-only guard, but cfn-lint 1.43.4 rejects the property (E3002).
+      # Pinned by tests/unit/test_weekday_daily_alarms.py.
       TreatMissingData: breaching
       AlarmActions: [!Ref PipelineAlarmTopicArn]
 
@@ -2000,13 +2047,26 @@ Resources:
         these are genuinely different failure points (34 matched, 0
         artifacts that day, due to the ArtifactsCompiled bug fixed
         alongside this alarm).
-      Namespace: Naukribaba/Pipeline
-      MetricName: JobsMatched
-      Statistic: Sum
-      Period: 86400  # 24h
+      Metrics:
+        - Id: m1
+          ReturnData: false
+          MetricStat:
+            Metric:
+              Namespace: Naukribaba/Pipeline
+              MetricName: JobsMatched
+            Period: 86400  # 24h
+            Stat: Sum
+        - Id: weekday
+          Label: JobsMatched on 24h windows that should contain a weekday run (1 = not judged)
+          ReturnData: true
+          Expression: "IF(HOUR(m1) < 12 OR DAY(m1) == 5 OR DAY(m1) == 6, 1, FILL(m1, 0))"
       EvaluationPeriods: 1
       Threshold: 1
       ComparisonOperator: LessThanThreshold
+      # Same weekday-aware expression and reasoning as
+      # DailyPipelineNoArtifactsAlarm above. Replaces the 2026-10-08
+      # notBreaching fix, which stopped the weekend pages but let a weekday
+      # with no run at all pass silently.
       TreatMissingData: breaching
       AlarmActions: [!Ref PipelineAlarmTopicArn]
 

@@ -34,7 +34,7 @@ jobs:
           python-version: "3.11"
       - name: Install SAM CLI
         run: pip install aws-sam-cli
-      - name: Build shared-deps layer (catches Docker permission / shared/ packaging bugs)
+      - name: Build shared-deps layer (third-party deps only; catches Docker permission / wheel bugs)
         run: ./layer/build.sh
       # --lint matters, and its absence cost six consecutive failed deploys on
       # 2026-09-30. Plain `sam validate` accepts a template CloudFormation will
@@ -59,9 +59,13 @@ jobs:
         run: |
           set -eo pipefail
           IMAGE=$(docker images --format '{{.Repository}}:{{.Tag}}' | grep -E 'jobhuntapi|JobHuntApi' | head -1)
+          # No image is a FAILURE, not a skip. This used to warn and exit 0,
+          # so a change in how SAM tags the image would have made the step a
+          # permanent no-op pass (CLAUDE.md rule 2).
           if [ -z "$IMAGE" ]; then
-            echo "::warning::No API container image found from sam build; skipping import smoke"
-            exit 0
+            echo "::error::No API container image matching jobhuntapi|JobHuntApi after sam build; the import smoke checked nothing"
+            docker images --format '{{.Repository}}:{{.Tag}}'
+            exit 1
           fi
           echo "Smoke-testing import resolution inside $IMAGE"
           # Real Lambda runtime sets AWS_DEFAULT_REGION automatically; bare

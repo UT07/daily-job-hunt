@@ -53,13 +53,32 @@ def _first_party_packages_in_layer_build_sh():
 
 
 @pytest.mark.parametrize("pkg", APP_PACKAGES)
-def test_package_in_layer_build_script(pkg):
+def test_package_not_in_layer_build_script(pkg):
+    """shared/ must NOT ship in the layer — it ships inside each CodeUri.
+
+    Until 2026-10-08 it was the opposite: shared/ lived ONLY in the layer, so
+    a shared/-only change produced a byte-identical function artifact.
+    Measured with `sam build CompileLatexFunction` before and after appending
+    one comment line to shared/tex_utils.py, hashed with SAM's own
+    dir_checksum (the md5 that becomes the packaged CodeUri S3 key):
+
+        before edit  13ef36ce60befc93d7518dcf35f0ebcd
+        after edit   13ef36ce60befc93d7518dcf35f0ebcd   <- identical
+
+    An identical CodeUri means AutoPublishAlias may publish no new version,
+    and the `live` alias stays pinned to the old layer (the 2026-09-23
+    incident; see the agents/ tests below). PRs #180, #184, #191, #200 and
+    #202 changed only shared/. With shared/ in the CodeUri the same edit
+    gives 018c4ddc... -> 48ff37b4..., and an unedited rebuild reproduces
+    018c4ddc..., so the hash moves on the change and only on the change.
+    """
     packages = _first_party_packages_in_layer_build_sh()
-    assert pkg in packages, (
-        f"{pkg}/ missing from layer/build.sh FIRST_PARTY list — it will "
-        f"ModuleNotFoundError at runtime for zip-based pipeline Lambdas, "
-        f"which get first-party packages from /opt/python (this layer), "
-        f"not from a Docker COPY"
+    assert pkg not in packages, (
+        f"{pkg}/ is back in layer/build.sh's FIRST_PARTY list. First-party "
+        f"code in a layer does not change the function artifact, so a "
+        f"{pkg}/-only change can deploy without moving the `live` alias. "
+        f"Ship it through the CodeUri symlinks instead (see "
+        f"test_zip_functions_importing_shared_carry_it_in_their_codeuri)."
     )
 
 
@@ -566,29 +585,85 @@ def _imports_shared_at_module_level(path):
     return False
 
 
-def test_functions_importing_shared_attach_the_shared_layer():
-    template = _load_template_tolerant_of_cfn_tags()
-    offenders = []
-    for name, resource in template["Resources"].items():
-        if not isinstance(resource, dict):
+def _codeuri_imports_shared(code_dir):
+    """True if any .py under code_dir (not under its own shared/) imports shared."""
+    for path in code_dir.rglob("*.py"):
+        rel = path.relative_to(code_dir)
+        if rel.parts and rel.parts[0] == "shared":
             continue
-        if resource.get("Type") != "AWS::Serverless::Function":
+        try:
+            tree = ast.parse(path.read_text())
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] == "shared" and node.level == 0:
+                return True
+            if isinstance(node, ast.Import) and any(a.name.split(".")[0] == "shared" for a in node.names):
+                return True
+    return False
+
+
+def _zip_function_code_dirs():
+    template = _load_template_tolerant_of_cfn_tags()
+    dirs = {}
+    for name, resource in template["Resources"].items():
+        if not isinstance(resource, dict) or resource.get("Type") != "AWS::Serverless::Function":
             continue
         props = resource.get("Properties", {})
         if props.get("PackageType") == "Image":
             continue  # Dockerfile.lambda COPYs shared/ directly
-        path = _handler_module_path(props)
-        if path is None or not _imports_shared_at_module_level(path):
+        code_uri = props.get("CodeUri")
+        if isinstance(code_uri, str):
+            dirs.setdefault(code_uri, []).append(name)
+    return dirs
+
+
+def test_zip_function_population_is_not_empty():
+    # Rule 10: a parity check over an empty population passes vacuously.
+    dirs = _zip_function_code_dirs()
+    assert "lambdas/pipeline/" in dirs and "lambdas/scrapers/" in dirs, sorted(dirs)
+    assert len(dirs["lambdas/pipeline/"]) >= 15, dirs["lambdas/pipeline/"]
+
+
+def test_zip_functions_importing_shared_carry_it_in_their_codeuri():
+    """Every zip CodeUri whose code imports `shared` must contain it.
+
+    It is a symlink to the repo-root shared/, not a copy: a copy would drift.
+    `sam build` copies a symlinked directory as real files and SAM packages
+    with os.walk(followlinks=True), so the built artifact (and its md5, the
+    CodeUri S3 key) contains shared/ and changes when shared/ does. Docker's
+    `COPY lambdas/` keeps the link, which resolves to /var/task/shared in the
+    API image.
+    """
+    offenders = []
+    for code_uri, functions in _zip_function_code_dirs().items():
+        code_dir = REPO / code_uri
+        if not _codeuri_imports_shared(code_dir):
             continue
-        layers = " ".join(str(x) for x in (props.get("Layers") or []))
-        if "SharedDepsLayer" not in layers:
-            offenders.append(f"{name} ({path.relative_to(REPO)})")
+        link = code_dir / "shared"
+        if not link.is_symlink():
+            offenders.append(f"{code_uri}shared is not a symlink ({len(functions)} functions)")
+        elif link.resolve() != (REPO / "shared").resolve():
+            offenders.append(f"{code_uri}shared -> {link.resolve()} (want repo shared/)")
     assert not offenders, (
-        "these zip Lambdas import `shared` at module level but do not attach "
-        "SharedDepsLayer, which is where /opt/python/shared comes from — the "
-        "deploy succeeds and every invocation ModuleNotFoundErrors:\n  "
-        + "\n  ".join(offenders)
+        "zip Lambdas import `shared` but their CodeUri does not carry it, so "
+        "the deploy succeeds and every invocation ModuleNotFoundErrors (or, "
+        "if the layer still has a copy, runs stale code):\n  " + "\n  ".join(offenders)
     )
+
+
+def test_codeuri_shared_link_packages_real_files():
+    """The link must yield real module files when walked the way SAM zips."""
+    import os
+
+    for code_uri in ("lambdas/pipeline", "lambdas/scrapers"):
+        seen = set()
+        for root, _, files in os.walk(REPO / code_uri, followlinks=True):
+            rel = pathlib.Path(root).relative_to(REPO / code_uri)
+            if rel.parts[:1] == ("shared",):
+                seen.update(f for f in files if f.endswith(".py"))
+        expected = {p.name for p in (REPO / "shared").glob("*.py")}
+        assert expected and expected <= seen, (code_uri, sorted(expected - seen))
 
 
 # ---------------------------------------------------------------------------

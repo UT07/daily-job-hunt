@@ -9,6 +9,7 @@ Runs AFTER scoring — only finds contacts for matched jobs (10-15/day).
 import json
 import logging
 import re
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote_plus
 
 import boto3
@@ -24,6 +25,25 @@ SEARCH_ROLES = [
     ("Technical Recruiter", "recruiter"),
     ("Senior Software Engineer", "team_member"),
 ]
+
+
+# A job whose searches ran and found nobody is not searched again for this
+# long. Without a stamp the select below (linkedin_contacts IS NULL, top N by
+# score) returned the same N jobs on every run, re-searched them through the
+# paid proxy, found nothing again, and never reached job N+1.
+RETRY_AFTER_DAYS = 7
+
+# Column added by supabase/migrations/20261008120000_jobs_contacts_attempted_at.sql.
+_ATTEMPT_COL = "contacts_attempted_at"
+
+
+def _missing_attempt_column(exc: Exception) -> bool:
+    """True if exc is PostgREST/Postgres saying the stamp column is absent.
+
+    PostgREST reports a missing column as PGRST204 "...schema cache", never
+    "does not exist", so match on the column name rather than the wording.
+    """
+    return _ATTEMPT_COL in str(exc)
 
 
 def get_param(name):
@@ -133,6 +153,7 @@ def _extract_profiles(html_text: str, role_name: str, role_type: str, company: s
 def handler(event, context):
     user_id = event.get("user_id", "")
     max_jobs = event.get("max_jobs", 15)
+    retry_after_days = event.get("retry_after_days", RETRY_AFTER_DAYS)
 
     if not user_id:
         return {"count": 0, "error": "no user_id"}
@@ -140,22 +161,50 @@ def handler(event, context):
     db = get_supabase()
     proxy_url = get_param("/naukribaba/PROXY_URL")
 
-    # Get matched jobs that need contacts (S+A tier, no contacts yet)
-    result = db.table("jobs").select("job_id, title, company, location, score_tier") \
-        .eq("user_id", user_id) \
-        .in_("score_tier", ["S", "A"]) \
-        .is_("linkedin_contacts", "null") \
-        .order("match_score", desc=True) \
-        .limit(max_jobs) \
-        .execute()
+    # Matched jobs that need contacts (S+A, none yet), skipping any searched
+    # inside the retry window so the run moves down the list.
+    # 'Z' rather than isoformat()'s "+00:00": a literal '+' inside a query
+    # string can arrive as a space, and the filter would then fail to parse.
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retry_after_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _select(with_stamp: bool):
+        q = db.table("jobs").select("job_id, title, company, location, score_tier") \
+            .eq("user_id", user_id) \
+            .in_("score_tier", ["S", "A"]) \
+            .is_("linkedin_contacts", "null")
+        if with_stamp:
+            q = q.or_(f"{_ATTEMPT_COL}.is.null,{_ATTEMPT_COL}.lt.{cutoff}")
+        return q.order("match_score", desc=True).limit(max_jobs).execute()
+
+    # Deployed before the migration is applied, the stamp column does not
+    # exist. Fall back to the legacy select so contacts still get found, but
+    # say so in the result: this run cannot make progress past jobs with no
+    # findable contacts.
+    stamp_ok = True
+    try:
+        result = _select(with_stamp=True)
+    except Exception as e:
+        if not _missing_attempt_column(e):
+            raise
+        stamp_ok = False
+        logger.error(f"[contacts] {_ATTEMPT_COL} missing ({e}); apply the migration. "
+                     f"Falling back to the legacy select, which re-searches the same jobs.")
+        result = _select(with_stamp=False)
+
+    def _done(payload):
+        if not stamp_ok:
+            payload["error"] = (f"migration_missing: jobs.{_ATTEMPT_COL} does not exist, so "
+                                f"jobs without contacts are re-searched every run")
+        return payload
 
     jobs = result.data or []
     if not jobs:
         logger.info("[contacts] No S+A jobs need contacts")
-        return {"count": 0, "source": "contacts"}
+        return _done({"count": 0, "attempted": 0, "source": "contacts"})
 
     logger.info(f"[contacts] Finding contacts for {len(jobs)} S+A jobs")
     updated = 0
+    attempted = 0
 
     for job in jobs:
         company = job["company"]
@@ -163,6 +212,7 @@ def handler(event, context):
         # Extract city/region for location-filtered search (e.g. "Dublin" from "Dublin, Ireland")
         location_hint = location.split(",")[0].strip() if location else "Ireland"
         all_contacts = []
+        searched = 0  # searches that returned a page we could read
 
         for role_name, role_type in SEARCH_ROLES:
             query = f'site:linkedin.com/in "{company}" "{role_name}" "{location_hint}"'
@@ -171,6 +221,7 @@ def handler(event, context):
             try:
                 resp = httpx.get(url, proxy=proxy_url, timeout=20, follow_redirects=True, verify=False)
                 if resp.status_code == 200:
+                    searched += 1
                     profiles = _extract_profiles(resp.text, role_name, role_type, company)
                     all_contacts.extend(profiles)
             except Exception as e:
@@ -184,15 +235,30 @@ def handler(event, context):
                 seen.add(c["profile_url"])
                 deduped.append(c)
 
+        # Stamp only if a search actually ran. If every request failed (proxy
+        # down) nothing was looked at, and stamping would push the job back a
+        # whole retry window for an outage. An empty result is NOT written to
+        # linkedin_contacts: "searched, nobody found" must not read as a
+        # contact list.
+        payload = {}
         if deduped:
+            payload["linkedin_contacts"] = json.dumps(deduped)
+        if searched and stamp_ok:
+            payload[_ATTEMPT_COL] = datetime.now(timezone.utc).isoformat()
+        if searched:
+            attempted += 1
+        if payload:
             try:
-                db.table("jobs").update({
-                    "linkedin_contacts": json.dumps(deduped)
-                }).eq("job_id", job["job_id"]).execute()
-                updated += 1
-                logger.info(f"[contacts] {company}: {len(deduped)} contacts saved")
+                db.table("jobs").update(payload).eq("job_id", job["job_id"]).execute()
+                if deduped:
+                    updated += 1
+                    logger.info(f"[contacts] {company}: {len(deduped)} contacts saved")
+                else:
+                    logger.info(f"[contacts] {company}: searched, none found; "
+                                f"not retried for {retry_after_days}d")
             except Exception as e:
                 logger.error(f"[contacts] Save failed for {job['job_id']}: {e}")
 
-    logger.info(f"[contacts] Done: {updated}/{len(jobs)} jobs got contacts")
-    return {"count": updated, "source": "contacts"}
+    logger.info(f"[contacts] Done: {updated}/{len(jobs)} jobs got contacts, "
+                f"{attempted}/{len(jobs)} searched")
+    return _done({"count": updated, "attempted": attempted, "source": "contacts"})
