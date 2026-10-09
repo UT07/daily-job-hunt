@@ -543,13 +543,19 @@ class SupabaseClient:
             # Also fold in the current status — older jobs may have a current
             # status without any matching timeline event (e.g. PATCH-only
             # updates from StatusDropdown that bypass the timeline insert).
-            jobs_with_status = (
-                self.client.table("jobs")
+            #
+            # Paginated: unpaginated, a user with more than 1000 jobs had the
+            # rest silently missing from the funnel. Deliberately NO is_expired
+            # filter: applied rows carry is_expired=True once the posting 404s
+            # (see get_jobs' hide_expired), so filtering here would erase the
+            # applications this fold exists to count.
+            jobs_with_status = self._all_rows(
+                lambda lo, hi: self.client.table("jobs")
                 .select("job_id, application_status")
                 .eq("user_id", user_id)
-                .execute()
+                .range(lo, hi)
             )
-            for r in jobs_with_status.data or []:
+            for r in jobs_with_status:
                 jid = r.get("job_id")
                 cur = r.get("application_status")
                 if jid and cur:

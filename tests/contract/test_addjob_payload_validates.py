@@ -48,7 +48,6 @@ def app_module():
 
 @pytest.mark.parametrize("model_name,endpoint", [
     ("ScoreRequest", "/api/score"),
-    ("TailorRequest", "/api/tailor"),
     ("CoverLetterRequest", "/api/cover-letter"),
     ("ContactsRequest", "/api/contacts"),
 ])

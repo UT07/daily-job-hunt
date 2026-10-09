@@ -6,7 +6,6 @@ Endpoints:
 - GET  /api/pipeline/status         — latest pipeline metrics
 - GET  /api/pipeline/status/{name}  — poll specific execution
 - POST /api/score                   — score a JD against base resumes
-- POST /api/tailor                  — tailor resume + compile PDF
 - POST /api/cover-letter            — generate cover letter PDF
 - POST /api/contacts                — find LinkedIn contacts
 - GET  /api/profile                 — user profile
@@ -95,6 +94,7 @@ from tailorer import tailor_resume
 from types import SimpleNamespace
 
 from utils.canonical_hash import canonical_hash
+from shared.tailor_hash import resolve_tailor_hash
 
 logger = logging.getLogger(__name__)
 
@@ -295,16 +295,6 @@ class ScoreResponse(BaseModel):
     # True when these numbers came from the stored row rather than a fresh AI
     # call. The UI can then say so instead of implying a re-evaluation.
     reused: bool = False
-
-
-class TailorRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    job_description: str = Field(..., min_length=20)
-    job_title: str = "Software Engineer"
-    company: str = "Unknown"
-    location: str = Field("", description="Job location (city/country/Remote)")
-    apply_url: str = Field("", description="Direct apply URL (used by auto-apply)")
-    resume_type: str = "sre_devops"
 
 
 class TailorResponse(BaseModel):
@@ -648,7 +638,7 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
                 "location": req.location,
                 "apply_url": req.apply_url,
             })
-            _db.client.table("jobs").update({
+            written = _db.client.table("jobs").update({
                 "match_score": j.match_score,
                 "ats_score": j.ats_score,
                 "hiring_manager_score": j.hiring_manager_score,
@@ -656,13 +646,15 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
                 "match_reasoning": j.match_reasoning,
                 "matched_resume": j.matched_resume or req.resume_type,
                 "score_tier": _score_tier(j.match_score),
-            }).eq("job_id", job_id).execute()
-            # saved must mean SAVED. It was set unconditionally, so when
-            # `_find_or_create_job` returned "" the UPDATE ran as `job_id=eq.`,
-            # matched nothing, raised nothing, and this reported success for a
-            # job that does not exist. CLAUDE.md #2: a status that cannot
-            # distinguish "did the work" from "did nothing" is a lie.
-            saved = bool(job_id)
+            }).eq("job_id", job_id).eq("user_id", user.id).execute() if job_id else None
+            # saved must mean SAVED: the UPDATE returned the row it wrote.
+            # `bool(job_id)` was not enough -- an UPDATE that matches nothing
+            # raises nothing and returns an empty list, so a job_id for a row
+            # that does not exist still read as success. CLAUDE.md #2: a status
+            # that cannot distinguish "did the work" from "did nothing" is a lie.
+            saved = bool(getattr(written, "data", None))
+            if not saved:
+                job_id = None
             if not job_id:
                 logger.error(
                     "Scored %s/%s but no row was created — the dashboard will "
@@ -1014,6 +1006,9 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
     title = payload.get("job_title") or payload.get("title") or "Software Engineer"
     description = payload.get("job_description") or payload.get("description") or ""
     location = payload.get("location", "") or ""
+    # Save & Score sends apply_url; auto-apply reads it. It was accepted here
+    # and written nowhere. Blank means "not given", never "erase".
+    apply_url = (payload.get("apply_url") or "").strip()
 
     # A job with no description cannot be scored or tailored — there is nothing
     # to work against — so creating a row for one produces a permanent stub:
@@ -1056,15 +1051,21 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
                 "title": title,
                 "company": company,
                 "source": "manual",
+                "apply_url": apply_url,
             }
             merged = merge_manual_job(existing, manual_data)
             # Update the existing row with merged data
-            _db.client.table("jobs").update({
+            merged_update = {
                 "description": merged["description"],
                 "title": merged["title"],
                 "company": merged["company"],
                 "source": merged["source"],
-            }).eq("job_id", existing["job_id"]).execute()
+            }
+            # merge_manual_job only takes a non-empty manual value, so this is
+            # the new URL, or the stored one, and never "" over a real link.
+            if merged.get("apply_url"):
+                merged_update["apply_url"] = merged["apply_url"]
+            _db.client.table("jobs").update(merged_update).eq("job_id", existing["job_id"]).eq("user_id", user_id).execute()
             logger.info("Merged manual JD into existing job %s (hash=%s)", existing["job_id"], chash)
             return existing["job_id"]
     except Exception as e:
@@ -1081,22 +1082,53 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
         "description": description,
         "location": location,
         "source": "manual",
+        "apply_url": apply_url or None,
         "application_status": "New",
         "first_seen": datetime.datetime.now(datetime.timezone.utc).isoformat(),
     }
+    # The id is returned only when a row is known to exist. This used to log a
+    # failed INSERT and return chash anyway, so /api/score's follow-up UPDATE
+    # matched zero rows, PostgREST answered 200 with an empty list, and the
+    # endpoint reported saved=True for a job that was never written.
     try:
-        _db.client.table("jobs").insert(row).execute()
+        inserted = _db.client.table("jobs").insert(row).execute()
+        if getattr(inserted, "data", None):
+            return chash
+        logger.error("Job insert for %s/%s returned no row", company, title)
     except Exception as e:
-        logger.warning("Job creation failed: %s", e)
-    return chash
+        logger.error("Job creation failed for %s/%s: %s", company, title, e)
+    # A failed INSERT can still mean the row exists: an identical request won
+    # the race and the primary key collided. Look, rather than guess.
+    try:
+        again = (
+            _db.client.table("jobs").select("job_id")
+            .eq("job_id", chash).eq("user_id", user_id)
+            .maybe_single().execute()
+        )
+        if again and getattr(again, "data", None):
+            return chash
+    except Exception as e:  # noqa: BLE001 — falls through to "not created"
+        logger.warning("Re-check after failed insert failed: %s", e)
+    return ""
 
 
-def _update_job_artifacts(job_id: str, updates: dict):
-    """Update a job row with tailor/cover-letter/contacts results."""
-    if not _db or not job_id:
+def _update_job_artifacts(user_id: str, job_id: str, updates: dict):
+    """Update the CALLER'S job row with tailor/cover-letter/contacts results.
+
+    Scoped by user_id as well as job_id because job_id alone is not a row: the
+    primary key is (job_id, user_id), and a manually added job's job_id is the
+    canonical hash of its company/title/description, so two users who paste
+    the same JD share one. Filtered by job_id only, this wrote one user's
+    résumé link onto the other's row. With no user_id there is no safe scope,
+    so it writes nothing rather than everything.
+    """
+    if not _db or not job_id or not user_id:
+        if job_id and not user_id:
+            logger.error("Refusing an unscoped artifact update for job %s", job_id)
         return
     try:
-        _db.client.table("jobs").update(updates).eq("job_id", job_id).execute()
+        (_db.client.table("jobs").update(updates)
+         .eq("job_id", job_id).eq("user_id", user_id).execute())
     except Exception as e:
         logger.warning(f"Job artifact update failed: {e}")
 
@@ -1116,11 +1148,16 @@ def _dispatch_task(task_type: str, payload: dict, user_id: str = "") -> dict:
     if task_type == "tailor":
         resume_type = payload.get("resume_type", "sre_devops")
         base_tex = _resumes.get(resume_type, "")
-        result = _do_tailor(job, base_tex, resume_type, payload.get("company", "Unknown"), payload.get("job_title", "Software Engineer"))
+        result = _do_tailor(job, base_tex, resume_type, payload.get("company", "Unknown"),
+                            payload.get("job_title", "Software Engineer"), user_id)
         # Save artifacts to dashboard job — use actual model that won the council vote
         tailoring_model = f"{getattr(job, 'tailoring_provider', 'council')}:{getattr(job, 'tailoring_model', 'consensus')}"
-        _update_job_artifacts(job_id, {
+        _update_job_artifacts(user_id, job_id, {
             "resume_s3_url": result.get("pdf_url", ""),
+            # The key, not just the URL: the URL's signature expires in 7
+            # days and the key is what every later reader re-signs from
+            # (CLAUDE.md #9).
+            "resume_s3_key": result.get("s3_key", ""),
             "ats_score": result.get("ats_score", 0),
             "hiring_manager_score": result.get("hiring_manager_score", 0),
             "tech_recruiter_score": result.get("tech_recruiter_score", 0),
@@ -1146,15 +1183,19 @@ def _dispatch_task(task_type: str, payload: dict, user_id: str = "") -> dict:
     elif task_type == "cover_letter":
         resume_type = payload.get("resume_type", "sre_devops")
         resume_tex = _resumes.get(resume_type, "")
-        result = _do_cover_letter(job, resume_tex, payload.get("company", "Unknown"), payload.get("job_title", "Software Engineer"))
-        _update_job_artifacts(job_id, {"cover_letter_s3_url": result.get("pdf_url", "")})
+        result = _do_cover_letter(job, resume_tex, payload.get("company", "Unknown"),
+                                  payload.get("job_title", "Software Engineer"), user_id)
+        _update_job_artifacts(user_id, job_id, {
+            "cover_letter_s3_url": result.get("pdf_url", ""),
+            "cover_letter_s3_key": result.get("s3_key", ""),
+        })
         result["job_id"] = job_id
         return result
     elif task_type == "contacts":
         result = _do_contacts(job)
         if result.get("contacts"):
             import json as _json
-            _update_job_artifacts(job_id, {"linkedin_contacts": _json.dumps(result["contacts"])})
+            _update_job_artifacts(user_id, job_id, {"linkedin_contacts": _json.dumps(result["contacts"])})
         result["job_id"] = job_id
         return result
     elif task_type == "rebuild_sections":
@@ -1223,7 +1264,20 @@ def _process_sqs_task(event, context):
 # Synchronous worker functions (called from background threads)
 # ---------------------------------------------------------------------------
 
-def _do_tailor(job, base_tex, resume_type, company, job_title):
+def _user_artifact_key(user_id: str, kind: str, company: str, job_title: str, suffix: str) -> str:
+    """S3 key for an on-demand artifact, namespaced by the user who asked.
+
+    These were `web/{date}/{kind}/{company}_{title}_{suffix}`: two users
+    tailoring for the same company and title on the same day wrote the same
+    object, and each got the other's document behind their link.
+    """
+    import datetime
+    date_str = datetime.date.today().isoformat()
+    safe_name = f"{company}_{job_title}_{suffix}".replace(" ", "_").replace("/", "_")
+    return f"users/{user_id or 'anonymous'}/web/{date_str}/{kind}/{safe_name}"
+
+
+def _do_tailor(job, base_tex, resume_type, company, job_title, user_id=""):
     with tempfile.TemporaryDirectory() as tmpdir:
         tex_path = tailor_resume(job, base_tex, _ai_client, Path(tmpdir))
         if not tex_path or not Path(tex_path).exists():
@@ -1246,11 +1300,8 @@ def _do_tailor(job, base_tex, resume_type, company, job_title):
             raise RuntimeError("LaTeX compilation failed")
 
         # Upload to S3
-        import datetime
-        date_str = datetime.date.today().isoformat()
-        safe_name = f"{company}_{job_title}_resume.pdf".replace(" ", "_")
         bucket = os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt")
-        s3_key = f"web/{date_str}/resumes/{safe_name}"
+        s3_key = _user_artifact_key(user_id, "resumes", company, job_title, "resume.pdf")
         pdf_url = s3_upload_file(pdf_path, s3_key, bucket) or ""
 
         ats = scores.get("ats_score", 0)
@@ -1260,24 +1311,22 @@ def _do_tailor(job, base_tex, resume_type, company, job_title):
             "ats_score": ats, "hiring_manager_score": hm,
             "tech_recruiter_score": tr, "avg_score": round((ats + hm + tr) / 3),
             "pdf_url": pdf_url,
+            "s3_key": s3_key if pdf_url else "",
             "scoring_failed": scoring_failed,
         }
 
 
-def _do_cover_letter(job, resume_tex, company, job_title):
+def _do_cover_letter(job, resume_tex, company, job_title, user_id=""):
     with tempfile.TemporaryDirectory() as tmpdir:
         tex_path = generate_cover_letter(job, resume_tex, _ai_client, Path(tmpdir))
         pdf_path = compile_tex_to_pdf(tex_path, tmpdir)
         if not pdf_path:
             raise RuntimeError("LaTeX compilation failed")
 
-        import datetime
-        date_str = datetime.date.today().isoformat()
-        safe_name = f"{company}_{job_title}_cover_letter.pdf".replace(" ", "_")
         bucket = os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt")
-        s3_key = f"web/{date_str}/cover_letters/{safe_name}"
+        s3_key = _user_artifact_key(user_id, "cover_letters", company, job_title, "cover_letter.pdf")
         pdf_url = s3_upload_file(pdf_path, s3_key, bucket) or ""
-        return {"pdf_url": pdf_url}
+        return {"pdf_url": pdf_url, "s3_key": s3_key if pdf_url else ""}
 
 
 def _do_contacts(job):
@@ -1303,7 +1352,13 @@ def _tailored_tex_key(user_id: str, job_id: str) -> str:
     endpoints had already drifted into hard-coding the same wrong string, so
     fixing one would have left the other broken.
 
-    Falls back to job_id when the hash cannot be read — a wrong key yields the
+    The hash is `resolve_tailor_hash(row)` -- job_hash, else canonical_hash --
+    because that is exactly what the single-job pipeline is started with and
+    what tailor_resume.py names the object after. Manual rows have job_hash
+    NULL; falling straight to job_id only worked where job_id happened to be
+    the canonical hash.
+
+    Falls back to job_id when the row cannot be read — a wrong key yields the
     404 callers already handle, which is a better failure than None raising
     somewhere less obvious.
     """
@@ -1311,11 +1366,11 @@ def _tailored_tex_key(user_id: str, job_id: str) -> str:
     if _db is not None:
         try:
             row = (
-                _db.client.table("jobs").select("job_hash")
+                _db.client.table("jobs").select("job_hash, canonical_hash")
                 .eq("job_id", job_id).eq("user_id", user_id)
                 .maybe_single().execute()
             )
-            job_hash = ((row.data if row else None) or {}).get("job_hash")
+            job_hash = resolve_tailor_hash((row.data if row else None) or {})
         except Exception as e:
             logger.warning("[s3] could not read job_hash for %s: %s", job_id, e)
     return f"users/{user_id}/resumes/{job_hash or job_id}_tailored.tex"
@@ -1488,7 +1543,7 @@ def _do_rebuild_sections(job_id: str, sections: dict, user_id: str) -> dict:
         pdf_url = ""
 
     # Update job row in Supabase
-    _update_job_artifacts(job_id, {"resume_s3_url": pdf_url})
+    _update_job_artifacts(user_id, job_id, {"resume_s3_url": pdf_url})
 
     # Score the document we just produced, so the Studio's number describes
     # what is on screen rather than the resume as it was before the edit.
@@ -1508,30 +1563,10 @@ def _do_rebuild_sections(job_id: str, sections: dict, user_id: str) -> dict:
 # POST endpoints — return 202 Accepted with task_id for long-running ops
 # ---------------------------------------------------------------------------
 
-@app.post("/api/tailor", status_code=202)
-def tailor_job(req: TailorRequest, user: AuthUser = Depends(get_current_user)):
-    if req.resume_type not in _resumes:
-        raise HTTPException(400, f"Unknown resume type: {req.resume_type}")
-
-    task_id = str(uuid.uuid4())
-    payload = {
-        "job_description": req.job_description,
-        "job_title": req.job_title,
-        "company": req.company,
-        "location": req.location,
-        "resume_type": req.resume_type,
-    }
-    _enqueue_task(task_id, user.id, "tailor", payload)
-    if _posthog:
-        _posthog.capture(
-            distinct_id=user.id,
-            event="resume_tailor_started",
-            properties={
-                "resume_type": req.resume_type,
-                "jd_length": len(req.job_description),
-            },
-        )
-    return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
+# POST /api/tailor was removed 2026-10-08. Nothing in web/src called it (Add
+# Job uses /api/pipeline/run-single), and it wrote an un-namespaced S3 key,
+# stored only an expiring presigned URL, and tailored the repo-bundled owner
+# résumé whoever asked. See tests/unit/test_legacy_tailor_removed.py.
 
 
 @app.post("/api/cover-letter", status_code=202)
@@ -2751,17 +2786,19 @@ def get_dashboard_skills(user: AuthUser = Depends(get_current_user)):
         return {"skills": []}
 
     from collections import Counter
-    jobs = (
-        _db.client.table("jobs")
+    # Every page, not PostgREST's first 1000 rows: these are frequency counts,
+    # and a truncated read undercounts silently (db_client._all_rows).
+    jobs = _db._all_rows(
+        lambda lo, hi: _db.client.table("jobs")
         .select("key_matches")
         .eq("user_id", user.id)
         .eq("is_expired", False)
         .not_.is_("key_matches", "null")
-        .execute()
+        .range(lo, hi)
     )
 
     counts: Counter = Counter()
-    for j in jobs.data:
+    for j in jobs:
         for s in j.get("key_matches") or []:
             counts[s.strip()] += 1
 
@@ -2973,9 +3010,12 @@ def re_tailor_jobs(req: RetailorRequest, user: AuthUser = Depends(get_current_us
         raise HTTPException(503, "Database not configured")
 
     tiers = ["S", "A"] if req.tier == "SA" else [req.tier]
+    # canonical_hash as well as job_hash: manual rows have job_hash NULL and
+    # are tailored under canonical_hash. Selecting only job_hash made every
+    # manual row raise TypeError at `job['job_hash'][:12]` below.
     jobs = (
         _db.client.table("jobs")
-        .select("job_id, job_hash, match_score, score_tier")
+        .select("job_id, job_hash, canonical_hash, match_score, score_tier")
         .eq("user_id", user.id)
         .in_("score_tier", tiers)
         .eq("is_expired", False)
@@ -2986,7 +3026,8 @@ def re_tailor_jobs(req: RetailorRequest, user: AuthUser = Depends(get_current_us
     )
 
     if not jobs.data:
-        return {"queued": 0, "message": "No jobs need re-tailoring"}
+        return {"queued": 0, "started": 0, "failed": 0, "skipped": 0,
+                "message": "No jobs need re-tailoring"}
 
     # Start single-job pipeline for each
     sfn = _get_sfn()
@@ -2994,16 +3035,37 @@ def re_tailor_jobs(req: RetailorRequest, user: AuthUser = Depends(get_current_us
     if not single_arn:
         raise HTTPException(500, "Single-job pipeline not configured")
 
-    queued = 0
-    errors = 0
-    for job in jobs.data:
+    # Rows that cannot possibly tailor are reported, not started: no hash at
+    # all, or a hash whose posting text was never stored in jobs_raw. The
+    # second used to start, run for minutes and die inside TailorResume with
+    # "Job ... not found in jobs_raw" -- re_tailor_job prechecks the same way.
+    resolved = [(job, resolve_tailor_hash(job)) for job in jobs.data]
+    hashes = sorted({h for _, h in resolved if h})
+    known: set = set(hashes)
+    if hashes:
+        try:
+            known = {r["job_hash"] for r in (
+                _db.client.table("jobs_raw").select("job_hash")
+                .in_("job_hash", hashes).execute().data or [])}
+        except Exception as e:  # noqa: BLE001 — a precheck failure must not block valid runs
+            logger.warning("jobs_raw precheck failed for bulk re-tailor: %s", e)
+            known = set(hashes)
+
+    started, failed, skipped = [], [], []
+    for job, job_hash in resolved:
+        if not job_hash:
+            skipped.append({"job_id": job["job_id"], "reason": "no job hash"})
+            continue
+        if job_hash not in known:
+            skipped.append({"job_id": job["job_id"], "reason": "posting text never stored"})
+            continue
         try:
             sfn.start_execution(
                 stateMachineArn=single_arn,
-                name=f"retailor-{job['job_hash'][:12]}-{int(__import__('time').time())}",
+                name=f"retailor-{job_hash[:12]}-{int(__import__('time').time())}",
                 input=json.dumps({
                     "user_id": user.id,
-                    "job_hash": job["job_hash"],
+                    "job_hash": job_hash,
                     "job_id": job["job_id"],
                     "skip_scoring": True,
                     # SkipToTailor references $.resume_only with .$, so it must
@@ -3011,16 +3073,29 @@ def re_tailor_jobs(req: RetailorRequest, user: AuthUser = Depends(get_current_us
                     "resume_only": False,
                 }),
             )
-            queued += 1
+            started.append(job["job_id"])
         except Exception as e:
-            logger.warning(f"Failed to start re-tailor for {job['job_hash']}: {e}")
-            errors += 1
+            logger.warning("Failed to start re-tailor for %s: %s", job_hash, e)
+            failed.append(job["job_id"])
 
+    # The message counts what STARTED, out of how many were found, and names
+    # the rest -- it used to open "Started re-tailoring N" whatever happened.
+    total = len(resolved)
+    message = f"Started re-tailoring {len(started)} of {total} jobs via single-job pipeline"
+    if failed:
+        message += f"; {len(failed)} failed to start"
+    if skipped:
+        message += f"; {len(skipped)} skipped (cannot be re-tailored)"
     return {
-        "queued": queued,
-        "errors": errors,
+        "queued": len(started),
+        "errors": len(failed),
+        "started": len(started),
+        "failed": len(failed),
+        "skipped": len(skipped),
+        "failed_jobs": failed,
+        "skipped_jobs": skipped,
         "tier": req.tier,
-        "message": f"Started re-tailoring {queued} jobs via single-job pipeline",
+        "message": message,
     }
 
 
@@ -3043,17 +3118,26 @@ def pipeline_status(user: AuthUser = Depends(get_current_user)):
                 "DAILY_PIPELINE_ARN",
                 "arn:aws:states:eu-west-1:385017713886:stateMachine:naukribaba-daily-pipeline",
             )
-            # Get last 5 executions, pick the most recent SUCCEEDED one (or last overall)
+            # Last few executions, filtered to the CALLER's: the daily pipeline
+            # is started per user (its input carries user_id), and this used to
+            # show whichever user's run was newest to everyone. list_executions
+            # does not return input, so each candidate is described once and the
+            # description is reused for the counts below.
             executions = sfn.list_executions(
-                stateMachineArn=state_machine_arn, maxResults=5
+                stateMachineArn=state_machine_arn, maxResults=10
             ).get("executions", [])
-            ex = None
+            mine = []
             for e in executions:
-                if e["status"] == "SUCCEEDED":
-                    ex = e
-                    break
-            if not ex and executions:
-                ex = executions[0]  # fallback to most recent regardless of status
+                try:
+                    d = sfn.describe_execution(executionArn=e["executionArn"])
+                except Exception as err:  # noqa: BLE001 — unreadable means not shown
+                    logger.warning("describe_execution failed for %s: %s", e.get("executionArn"), err)
+                    continue
+                if _execution_owner(d) == user.id:
+                    mine.append((e, d))
+            # Most recent SUCCEEDED one of the caller's, else their most recent.
+            ex, detail = next(((e, d) for e, d in mine if e["status"] == "SUCCEEDED"),
+                              mine[0] if mine else (None, None))
 
             if ex:
                 latest = {
@@ -3068,7 +3152,6 @@ def pipeline_status(user: AuthUser = Depends(get_current_user)):
 
                 # Try to extract job counts from execution output
                 try:
-                    detail = sfn.describe_execution(executionArn=ex["executionArn"])
                     if detail.get("output"):
                         output = _json.loads(detail["output"])
                         # Scraper results are in scraper_results array
@@ -3104,6 +3187,65 @@ def pipeline_status(user: AuthUser = Depends(get_current_user)):
         "latest_run": latest,
         "today_metrics": metrics,
     }
+
+
+def _execution_owner(desc: dict) -> Optional[str]:
+    """The user_id an execution was started for, read from its INPUT.
+
+    Every start_execution in this file and the EventBridge rules put user_id
+    in the input. Anything unreadable owns nothing, so it is shown to no one.
+    """
+    try:
+        data = json.loads(desc.get("input") or "")
+    except (TypeError, ValueError):
+        return None
+    owner = data.get("user_id") if isinstance(data, dict) else None
+    return owner if isinstance(owner, str) and owner else None
+
+
+_FAILURE_DEFAULTS = {
+    "FAILED": ("PipelineFailed", "The pipeline failed."),
+    "TIMED_OUT": ("TimedOut", "The pipeline exceeded its time limit."),
+    "ABORTED": ("Aborted", "The pipeline was stopped before it finished."),
+}
+
+_REDACTIONS = [
+    (re.compile(r"https?://\S+"), "[url]"),
+    (re.compile(r"arn:aws[\w-]*:\S+"), "[arn]"),
+    (re.compile(r"\busers/\S+"), "[s3-key]"),
+    (re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+"), "[email]"),
+    (re.compile(r"\b\d{12}\b"), "[account]"),
+    # API keys, signatures, and UUIDs (36 chars of this class) alike.
+    (re.compile(r"[A-Za-z0-9_+/=-]{32,}"), "[redacted]"),
+]
+
+
+def _sanitised_failure(status: str, error: Optional[str], cause: Optional[str]) -> tuple[str, str]:
+    """`error` and `cause` for a failed execution, safe to show the user.
+
+    Step Functions' cause is frequently a Lambda error JSON carrying a
+    stackTrace, file paths, ARNs, S3 keys and presigned URLs. Only the message
+    is kept, cut at any Python traceback, with identifiers redacted and the
+    length capped. The error name is kept only if it looks like one
+    (States.TaskFailed, JobFailed); anything else becomes the generic name.
+    """
+    default_error, default_cause = _FAILURE_DEFAULTS.get(status, _FAILURE_DEFAULTS["FAILED"])
+    err = error if isinstance(error, str) and re.fullmatch(r"[A-Za-z][\w.\-]{0,79}", error) else default_error
+
+    text = cause if isinstance(cause, str) else ""
+    try:
+        parsed = json.loads(text) if text.strip().startswith("{") else None
+    except ValueError:
+        parsed = None
+    if isinstance(parsed, dict):
+        text = next((str(parsed[k]) for k in ("errorMessage", "Cause", "cause", "message", "Error")
+                     if parsed.get(k)), "")
+    text = text.split("Traceback (most recent call last)")[0]
+    text = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    for pattern, repl in _REDACTIONS:
+        text = pattern.sub(repl, text)
+    text = " ".join(text.split())[:300]
+    return err, text or default_cause
 
 
 def _state_machine_arn_to_execution_arn(state_machine_arn: str, execution_name: str) -> str:
@@ -3176,6 +3318,14 @@ def pipeline_execution_status(execution_name: str, user: AuthUser = Depends(get_
         )
         raise HTTPException(404, f"Execution not found: {execution_name}")
 
+    # Ownership. The output carries user_id, the JD and S3 keys, and this
+    # endpoint used to hand it to any authenticated caller who knew (or
+    # guessed) an execution name. Someone else's execution gets the SAME 404
+    # as a missing one, so the response does not confirm it exists.
+    if _execution_owner(result) != user.id:
+        logger.warning("pipeline_execution_status: %s is not owned by the caller", execution_name)
+        raise HTTPException(404, f"Execution not found: {execution_name}")
+
     output = None
     if result.get("output"):
         try:
@@ -3183,13 +3333,19 @@ def pipeline_execution_status(execution_name: str, user: AuthUser = Depends(get_
         except (json.JSONDecodeError, TypeError):
             output = result["output"]
 
-    return {
+    response = {
         "name": result.get("name"),
         "status": result["status"],  # RUNNING, SUCCEEDED, FAILED, TIMED_OUT, ABORTED
         "startDate": result["startDate"].isoformat(),
         "stopDate": result.get("stopDate", "").isoformat() if result.get("stopDate") else None,
         "output": output,
     }
+    # Why it failed, so the frontend can say something better than "failed".
+    # Only on failure: the success shape is unchanged.
+    if result["status"] in _FAILURE_DEFAULTS:
+        response["error"], response["cause"] = _sanitised_failure(
+            result["status"], result.get("error"), result.get("cause"))
+    return response
 
 
 @app.post("/api/pipeline/re-tailor/{job_id}", status_code=202)
@@ -3250,7 +3406,7 @@ def re_tailor_job(
     # scope or not. CLAUDE.md #17 -- the null-hash fix stacked a worse bug on
     # top of the one it fixed, and only the scope test's 500-instead-of-400
     # caught it.
-    job_hash = job.get("job_hash") or job.get("canonical_hash")
+    job_hash = resolve_tailor_hash(job)
     if not job_hash:
         raise HTTPException(
             409,
@@ -3299,7 +3455,7 @@ def re_tailor_job(
     next_version = current_version + 1
     _db.client.table("jobs").update({
         "resume_version": next_version,
-    }).eq("job_id", job_id).execute()
+    }).eq("job_id", job_id).eq("user_id", user.id).execute()
 
     single_arn = os.environ.get("SINGLE_JOB_PIPELINE_ARN")
     if single_arn:
