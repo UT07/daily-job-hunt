@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useAuth } from '../auth/useAuth'
+import { useUserProfile } from '../hooks/useUserProfile'
 import { apiGet, apiPut, apiUpload, apiDelete } from '../api'
 import Card, { CardHeader, CardBody } from '../components/ui/Card'
 import Input from '../components/ui/Input'
@@ -102,6 +103,7 @@ const isLoaded = (state) => state === 'loaded'
 const loadError = (state) => (state && typeof state === 'object' ? state.error : null)
 
 function ProfileSection({ profile, setProfile, loadState = 'loaded', onRetry }) {
+  const { refresh: refreshProfileContext } = useUserProfile()
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState(null)
 
@@ -152,6 +154,10 @@ function ProfileSection({ profile, setProfile, loadState = 'loaded', onRetry }) 
         work_authorizations: workAuthObj,
       })
       setStatus({ type: 'success', message: 'Profile saved.' })
+      // The shell (FinishSetupBanner, the onboarding gate) reads
+      // ProfileContext, not this form. Without this the banner kept saying
+      // the profile was incomplete until a reload.
+      await refreshProfileContext()
     } catch (e) {
       setStatus({ type: 'error', message: `Save failed: ${e.message}` })
     } finally {
