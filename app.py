@@ -3657,6 +3657,19 @@ def re_tailor_job(
         logger.warning("jobs_raw precheck failed for %s: %s", job_hash, e)
         known = [{"job_hash": job_hash}]
     if not known:
+        # Repair from the user's OWN row before refusing. Manual jobs added by
+        # Save & Score before #221 have a `jobs` row carrying the posting text
+        # and no `jobs_raw` row (measured 2026-10-09: Accenture A/84, Viatel A,
+        # one D stub). Writing it through the shared `_upsert_jobs_raw` stores
+        # hash-bound fields only and never overwrites an existing shared row,
+        # so this cannot be used to tamper with another user's posting.
+        # Stored verbatim, like every other writer; stripped only to test emptiness.
+        description = job.get("description") or ""
+        if description.strip() and _upsert_jobs_raw(
+                job_hash, job.get("title") or "", job.get("company") or "", description):
+            logger.info("Repaired missing jobs_raw row %s from job %s", job_hash, job_id)
+            known = [{"job_hash": job_hash}]
+    if not known:
         raise HTTPException(
             409,
             "The original posting text for this job was never stored, so there "
