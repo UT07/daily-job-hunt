@@ -362,6 +362,12 @@ class ProfileResponse(BaseModel):
     notice_period_text: str = ""
     onboarding_completed_at: Optional[str] = None
     profile_complete: bool = False  # NEW — set by handlers via check_profile_completeness()
+    # WHICH required fields are missing, in the names the frontend uses. Before
+    # this the API said only `profile_complete: false`, and a one-word full
+    # name (last_name derives empty, and auto-apply needs a surname) left the
+    # profile incomplete forever with the UI re-deriving why from a mirror of
+    # the split rule. See `_missing_profile_fields`.
+    missing_required_fields: list[str] = Field(default_factory=list)
 
 
 class ProfileUpdateRequest(BaseModel):
@@ -2095,19 +2101,31 @@ def find_contacts_for_job(job_id: str, user: AuthUser = Depends(get_current_user
     return {"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"}
 
 
+# check_profile_completeness speaks in `users` columns; ProfileResponse in
+# form fields. Only linkedin differs. first_name/last_name have no input of
+# their own (PUT derives both from full_name), so they are reported as
+# themselves: "last_name" is the precise fact for a one-word name, and the UI
+# can say "add your last name" rather than "full name is missing".
+_PROFILE_FIELD_NAMES = {"linkedin": "linkedin_url"}
+
+
+def _missing_profile_fields(row: Optional[dict]) -> list[str]:
+    from shared.profile_completeness import check_profile_completeness
+
+    return [_PROFILE_FIELD_NAMES.get(f, f) for f in check_profile_completeness(row)]
+
+
 @app.get("/api/profile", response_model=ProfileResponse)
 def get_profile(
     user: AuthUser = Depends(get_current_user),
     db: SupabaseClient = Depends(require_db),
 ):
-    from shared.profile_completeness import check_profile_completeness
-
     row = db.get_user(user.id)
     if row is None:
         # Auto-create user on first profile fetch (just-in-time provisioning)
         row = db.create_user({"id": user.id, "email": user.email})
 
-    missing = check_profile_completeness(row)
+    missing = _missing_profile_fields(row)
     return ProfileResponse(
         id=row["id"],
         email=row["email"],
@@ -2127,6 +2145,7 @@ def get_profile(
         notice_period_text=row.get("notice_period_text") or "",
         onboarding_completed_at=row.get("onboarding_completed_at"),
         profile_complete=not missing,
+        missing_required_fields=missing,
     )
 
 
@@ -2136,8 +2155,6 @@ def update_profile(
     user: AuthUser = Depends(get_current_user),
     db: SupabaseClient = Depends(require_db),
 ):
-    from shared.profile_completeness import check_profile_completeness
-
     # Ensure user row exists (JIT provisioning for first-time users)
     existing = db.get_user(user.id)
     if existing is None:
@@ -2154,6 +2171,12 @@ def update_profile(
             # answer generator reads these directly per shared/answer_generator.py).
             # Without this, only pre-migration rows have first_name/last_name and
             # every NEW user has profile_complete=False forever.
+            #
+            # A one-word name leaves last_name "" ON PURPOSE. Auto-apply puts
+            # last_name into ATS "Last name" fields, so inventing one (the
+            # first name again, a placeholder) would send a false surname to
+            # employers. The profile stays incomplete and
+            # `missing_required_fields` says ["last_name"] so the UI can ask.
             if v and isinstance(v, str):
                 parts = v.strip().split(" ", 1)
                 update_data["first_name"] = parts[0] if parts else ""
@@ -2182,7 +2205,7 @@ def update_profile(
             event="profile_updated",
             properties={"fields_updated": list(update_data.keys())},
         )
-    missing = check_profile_completeness(row)
+    missing = _missing_profile_fields(row)
     return ProfileResponse(
         id=row["id"],
         email=row["email"],
@@ -2202,6 +2225,7 @@ def update_profile(
         notice_period_text=row.get("notice_period_text") or "",
         onboarding_completed_at=row.get("onboarding_completed_at"),
         profile_complete=not missing,
+        missing_required_fields=missing,
     )
 
 
