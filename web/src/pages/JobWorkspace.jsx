@@ -73,6 +73,14 @@ import Badge from '../components/ui/Badge';
 import ResumeEditor from '../components/ResumeEditor';
 import { pollRegeneration } from './regenPoll';
 
+function RegenNotice({ message }) {
+  return (
+    <div className="mb-4 p-3 border-2 border-yellow-dark bg-yellow-light text-xs font-bold text-yellow-dark font-mono">
+      {message}
+    </div>
+  );
+}
+
 // ---- Contacts tab ----
 function ContactItem({ contact }) {
   const [copied, setCopied] = useState(false);
@@ -135,7 +143,7 @@ function ContactItem({ contact }) {
   );
 }
 
-function ContactsTab({ job }) {
+function ContactsTab({ job, onContactsFound }) {
   // Surface find-contacts errors instead of just console.error'ing them —
   // before this the spinner stopped and nothing happened, with no clue why.
   //
@@ -155,6 +163,9 @@ function ContactsTab({ job }) {
     ),
   );
   const findingContacts = findContacts.loading;
+  // A finished search that found nobody must read differently from one that
+  // never ran: the worker only writes linkedin_contacts when it found some.
+  const [foundNone, setFoundNone] = useState(false);
 
   let contacts = [];
   if (job.linkedin_contacts) {
@@ -169,7 +180,19 @@ function ContactsTab({ job }) {
   }
 
   async function handleFindContacts() {
-    await findContacts.run();
+    setFoundNone(false);
+    const result = await findContacts.run();
+    if (result === undefined) return; // error is in findContacts.error
+    // app.py's contacts task resolves to { contacts: [...], job_id } and has
+    // already written jobs.linkedin_contacts. The list above renders from the
+    // `job` prop, so without handing this back up nothing changed on screen
+    // until a reload.
+    const found = Array.isArray(result?.contacts) ? result.contacts : [];
+    if (found.length === 0) {
+      setFoundNone(true);
+      return;
+    }
+    await onContactsFound?.(found);
   }
 
   return (
@@ -191,6 +214,11 @@ function ContactsTab({ job }) {
       {findContacts.error && (
         <div className="mb-3 p-3 border-2 border-error bg-error-light text-xs font-bold text-error font-mono">
           Find contacts failed: {findContacts.error}
+        </div>
+      )}
+      {foundNone && (
+        <div className="mb-3 p-3 border-2 border-stone-300 bg-stone-50 text-xs font-bold text-stone-600 font-mono">
+          Search finished: no contacts found for {job.company}.
         </div>
       )}
       {contacts.length > 0 ? (
@@ -821,6 +849,7 @@ export default function JobWorkspace() {
   async function handleRegen(type) {
     setRegenLoading(type);
     setRegenError(null);
+    setRegenNotice(null);
     try {
       // handleRegen already knows which artifact was asked for; it used to
       // use `type` only for the spinner and POST an empty body, so the
@@ -932,6 +961,22 @@ export default function JobWorkspace() {
       .catch((err) => console.warn('Failed to load timeline:', err.message))
       .finally(() => setTimelineLoading(false));
   }, [jobId]);
+
+  async function handleContactsFound(found) {
+    // Re-read the row: it is the source of truth (the worker wrote it). If
+    // that read fails, show what the task returned rather than nothing — the
+    // worker REPLACES linkedin_contacts, so replace here too.
+    try {
+      const updated = await apiGet(`/api/dashboard/jobs/${job.job_id}`);
+      if (updated) {
+        setJob(updated);
+        return;
+      }
+    } catch (err) {
+      console.warn('Contacts found, but reloading the job failed:', err.message);
+    }
+    setJob((prev) => ({ ...prev, linkedin_contacts: found }));
+  }
 
   function handleTimelineEventAdded(event, newStatus) {
     setTimeline((prev) => [event, ...prev]);
@@ -1225,10 +1270,13 @@ export default function JobWorkspace() {
             {(regenError || restoreError) && (
               <div className="mb-4 p-3 border-2 border-error bg-error-light text-xs font-bold text-error font-mono">
                 {regenError && <div>Regenerate failed: {regenError}</div>}
-                  {regenNotice && <div className="text-yellow-dark">{regenNotice}</div>}
                 {restoreError && <div>Restore failed: {restoreError}</div>}
               </div>
             )}
+            {/* A notice is the SUCCESS path (regenerated, view stale), so it
+                must not be gated on an error being present. It was nested
+                inside the error block above and so never rendered. */}
+            {regenNotice && <RegenNotice message={regenNotice} />}
             {job.resume_s3_url ? (
               <div>
                 {/* Version selector — only shown when there are saved older versions */}
@@ -1392,6 +1440,14 @@ export default function JobWorkspace() {
         )}
         {activeTab === 'cover-letter' && (
           <div>
+            {/* Regenerate on this tab sets the same state as the Resume tab;
+                without this block a failed cover-letter run showed nothing. */}
+            {regenError && (
+              <div className="mb-4 p-3 border-2 border-error bg-error-light text-xs font-bold text-error font-mono">
+                Regenerate failed: {regenError}
+              </div>
+            )}
+            {regenNotice && <RegenNotice message={regenNotice} />}
             {job.cover_letter_s3_url ? (
               <div>
                 <div className="flex items-center justify-end gap-2 mb-4">
@@ -1441,7 +1497,7 @@ export default function JobWorkspace() {
           </div>
         )}
         {activeTab === 'contacts' && (
-          <ContactsTab job={job} />
+          <ContactsTab job={job} onContactsFound={handleContactsFound} />
         )}
         {activeTab === 'research' && (
           <ResearchTab job={job} />
