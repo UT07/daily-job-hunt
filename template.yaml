@@ -220,8 +220,6 @@ Resources:
       Timeout: 600
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -237,8 +235,6 @@ Resources:
       Timeout: 120
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -254,8 +250,6 @@ Resources:
       Timeout: 120
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -271,8 +265,6 @@ Resources:
       Timeout: 120
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -290,8 +282,6 @@ Resources:
       Timeout: 300
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -307,8 +297,6 @@ Resources:
       Timeout: 300
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -324,8 +312,6 @@ Resources:
       Timeout: 300
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -341,8 +327,6 @@ Resources:
       Timeout: 300
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -358,8 +342,6 @@ Resources:
       Timeout: 120
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -375,8 +357,6 @@ Resources:
       Timeout: 120
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -392,8 +372,6 @@ Resources:
       Timeout: 300
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -410,8 +388,6 @@ Resources:
       Timeout: 60
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -427,8 +403,6 @@ Resources:
       Timeout: 300
       MemorySize: 512
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Environment:
         Variables:
@@ -447,8 +421,6 @@ Resources:
       Timeout: 900
       MemorySize: 512
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Environment:
         Variables:
@@ -469,8 +441,6 @@ Resources:
       Timeout: 10
       MemorySize: 128
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: AllAtOnce
 
   AggregateScoresFunction:
     Type: AWS::Serverless::Function
@@ -482,8 +452,6 @@ Resources:
       Timeout: 30
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: Linear10PercentEvery1Minute
 
   TailorResumeFunction:
     Type: AWS::Serverless::Function
@@ -595,8 +563,6 @@ Resources:
       Timeout: 120
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -635,8 +601,6 @@ Resources:
       Timeout: 60
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -653,8 +617,6 @@ Resources:
       Timeout: 60
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -670,8 +632,6 @@ Resources:
       Timeout: 300
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       # Without this block COUNCIL_ENGINE is unset and ai_helper.py:746 falls to
       # its "legacy" default — the frozen serial engine, which never imports
@@ -703,8 +663,6 @@ Resources:
       Timeout: 300
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Environment:
         Variables:
@@ -725,8 +683,6 @@ Resources:
       Timeout: 60
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: AllAtOnce
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -742,8 +698,6 @@ Resources:
       Timeout: 120
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -760,8 +714,6 @@ Resources:
       Timeout: 60
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
@@ -777,8 +729,6 @@ Resources:
       Timeout: 60
       MemorySize: 256
       AutoPublishAlias: live
-      DeploymentPreference:
-        Type: Linear10PercentEvery1Minute
       Layers: [!Ref SharedDepsLayer]
       Policies:
         - SSMParameterReadPolicy:
