@@ -18,6 +18,13 @@ bytes written to S3 and the return value that describes them.
 
 Nothing here widens the detector (CLAUDE.md #16). Same `_check_fabrication`,
 same union baseline the council's guard uses.
+
+UPDATED 2026-10-09. A fabrication that is a plain list entry is now STRIPPED
+and the tailored body ships (tests/unit/test_fabrication_is_stripped.py). The
+corpus fallback is the last resort for a claim that cannot be cut out cleanly,
+so the fallback tests below use `_UNSTRIPPABLE` -- the same Rust claim written
+as prose inside the Skills section -- where they used to use `_FABRICATED`,
+whose ", Rust" list entry the stripper now removes.
 """
 from __future__ import annotations
 
@@ -49,6 +56,10 @@ def _with_rust(b: str) -> str:
 
 
 _FABRICATED = _with_rust(realistic_body(summary="Payments engineer on the council."))
+# The same claim, but in a sentence: no list entry to remove, so it cannot be
+# stripped and the corpus fallback must still fire.
+_UNSTRIPPABLE = realistic_body(summary="Payments engineer on the council.").replace(
+    "Python, AWS, Docker", "Python, AWS, Docker; built payment services in Rust daily")
 _CLEAN = realistic_body(summary="Payments engineer from the retry.")
 
 
@@ -107,17 +118,26 @@ class TestTheDoubleIsSound:
     def test_and_not_on_the_clean_body(self):
         assert tailor_resume._check_fabrication(_BASE_TEX, _CLEAN) == []
 
+    def test_the_unstrippable_body_clears_every_hard_gate_and_still_fabricates(self):
+        tex = tailor_resume._assemble(_PREAMBLE, _UNSTRIPPABLE)
+        assert tailor_resume._validation_errors(
+            tex, _UNSTRIPPABLE, ["Utkarsh Singh", "254utkarsh@gmail.com"]) == []
+        assert tailor_resume._check_fabrication(_BASE_TEX, _UNSTRIPPABLE)
+
+    def test_and_the_stripper_refuses_it(self):
+        assert tailor_resume._strip_fabrications(_BASE_TEX, _UNSTRIPPABLE).tex is None
+
 
 class TestWhatShipsWhenItFires:
     def test_a_fabrication_the_retry_cannot_remove_ships_the_corpus(self):
-        written, out, ai = _run(_FABRICATED, [_retry(_FABRICATED)])
+        written, out, ai = _run(_UNSTRIPPABLE, [_retry(_UNSTRIPPABLE)])
         assert ai.call_count >= 1, "the corrective retry never ran"
         assert "Rust" not in written, "a fabricated claim reached S3"
         assert "THE UNTAILORED CORPUS SUMMARY" in written
         assert out["used_fallback"] is True
 
     def test_it_is_not_reported_as_a_clean_or_warn_grade_tailor(self):
-        _, out, _ = _run(_FABRICATED, [_retry(_FABRICATED)])
+        _, out, _ = _run(_UNSTRIPPABLE, [_retry(_UNSTRIPPABLE)])
         assert out["quality_warnings"] is None, (
             "the corpus shipped; nothing was measured on it, and reporting the "
             "refused body's findings would describe a document that did not ship")
@@ -126,7 +146,7 @@ class TestWhatShipsWhenItFires:
 
     def test_the_summary_line_names_the_fabrication(self, caplog):
         with caplog.at_level(logging.INFO):
-            _run(_FABRICATED, [_retry(_FABRICATED)])
+            _run(_UNSTRIPPABLE, [_retry(_UNSTRIPPABLE)])
         summary = [r.getMessage() for r in caplog.records
                    if "tailor for abc123" in r.getMessage()]
         assert len(summary) == 1

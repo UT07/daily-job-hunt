@@ -53,6 +53,7 @@ both are documented at their own definitions with the measured
 false-positive rate and the denominator.
 """
 import re
+from typing import NamedTuple
 
 from guardrails.policy import policy_for
 from guardrails.types import GuardResult, Violation
@@ -296,9 +297,18 @@ def _mentions(skill: str, text: str) -> bool:
     and every tailored resume a blocking fabrication. A test caught exactly
     that while this was being written.
     """
-    return re.search(
-        rf"(?<![a-z0-9]){re.escape(skill.lower())}(?![a-z0-9])", text.lower()
-    ) is not None
+    return _mention_re(skill).search(text.lower()) is not None
+
+
+def _mention_re(skill: str) -> "re.Pattern[str]":
+    """The boundary pattern `_mentions` searches with, for callers that need
+    WHERE a mention is rather than whether there is one (`strip_fabrications`).
+
+    Factored out rather than copied so the stripper can never remove a token
+    the detector would not have flagged, or miss one it would (CLAUDE.md #10).
+    Like `_mentions`, it expects LOWERCASED text.
+    """
+    return re.compile(rf"(?<![a-z0-9]){re.escape(skill.lower())}(?![a-z0-9])")
 
 
 def _claims(text: str) -> set[str]:
@@ -378,14 +388,23 @@ def _fabrication_regions(tailored_tex: str) -> list[tuple[str, str]]:
     repair round that is told "in the header subtitle" can fix the right line;
     "somewhere in the document" invites the model to rewrite the whole thing.
     """
-    regions = []
+    return [(name, _plain(tailored_tex[start:end]))
+            for name, start, end in _fabrication_spans(tailored_tex)]
+
+
+def _fabrication_spans(tailored_tex: str) -> list[tuple[str, int, int]]:
+    """(region name, start, end) of every region this guard inspects, in the
+    RAW text. The one locator both the detector (`_fabrication_regions`) and
+    the stripper (`strip_fabrications`) read, so the stripper edits exactly the
+    text the detector judged and nothing else."""
+    spans = []
     header = _HEADER_SUBTITLE_RE.search(tailored_tex)
     if header:
-        regions.append(("header subtitle", _plain(header.group(1))))
+        spans.append(("header subtitle", header.start(1), header.end(1)))
     skills = _SKILLS_SECTION_RE.search(tailored_tex)
     if skills:
-        regions.append(("Skills section", _plain(skills.group(1))))
-    return regions
+        spans.append(("Skills section", skills.start(1), skills.end(1)))
+    return spans
 
 
 def check_fabrication(base_skills_text: str, tailored_tex: str) -> list[str]:
@@ -420,15 +439,223 @@ def check_fabrication(base_skills_text: str, tailored_tex: str) -> list[str]:
     740 the gate wants; re-run it with `--source loader` wherever the real
     corpus is reachable before treating the false-positive rate as measured.
     """
-    errors = []
+    return [f"fabrication: '{skill.title()}' not in base resume ({region})"
+            for skill, region in _fabrications(base_skills_text, tailored_tex)]
+
+
+def _fabrications(base_skills_text: str, tailored_tex: str) -> list[tuple[str, str]]:
+    """(blocklist token, first region it is claimed in) for every unsupported
+    claim -- the findings `check_fabrication` words, and the exact set
+    `strip_fabrications` is allowed to remove. One function, so the two can
+    never disagree about what was flagged."""
+    found = []
     seen = set()
     for region, text in _fabrication_regions(tailored_tex):
         for skill in sorted(_claims(text)):
             if skill in seen or _supported_by_base(skill, base_skills_text):
                 continue
             seen.add(skill)
-            errors.append(f"fabrication: '{skill.title()}' not in base resume ({region})")
-    return errors
+            found.append((skill, region))
+    return found
+
+
+# --- stripping a flagged claim ---------------------------------------------
+#
+# The user's requirement, verbatim: "I don't want fabricated shit but at the
+# same time I do want the tailored resumes". Until 2026-10-09 a fabrication
+# that survived every repair swapped the whole document for the corpus, which
+# threw away the tailoring for one token in a comma list. What this detector
+# flags is, by construction, one of 17 technology names in the header subtitle
+# or the Skills section -- nearly always a list entry -- so it can be cut out.
+#
+# Conservative by design: anything that is not plainly a list entry (prose,
+# a decorated token, a claim repeated outside the inspected regions, an edit
+# that would leave an empty list or a dangling separator) returns `tex=None`
+# and the caller keeps the corpus fallback. A wrong strip ships either a
+# fabrication or a mangled line; a refused strip costs only the tailoring,
+# which is exactly what happened before this existed.
+
+# List separators. "tight" ones bind a pair ("Rust/TypeScript", "AWS \& GCP")
+# and are removed in preference to a looser neighbour, so "A, Rust/TS, B"
+# becomes "A, TS, B" rather than "A, Rust..."-shaped debris.
+_TIGHT_SEP = r"(?:/|\\&|and)"
+_LOOSE_SEP = r"(?:,|;|\||\\textbar(?:\{\})?)"
+_SEP_BODY = (rf"(?:\s*{_LOOSE_SEP}(?:\s+and)?\s*|\s*(?:/|\\&)\s*|\s+and\s+)")
+_LEFT_SEP_RE = re.compile(_SEP_BODY + r"\Z")
+_RIGHT_SEP_RE = re.compile(_SEP_BODY)
+# Where a list starts: an opening paren or brace, a category label's colon
+# (`\textbf{Languages:}` or `Languages:`), a bare `\item`, or the region start.
+_LEFT_OPEN_RE = re.compile(r"(?:\(|\{|:\}?|\\item)\s*\Z|\A\s*\Z")
+# Where a list ends: a closing paren or brace, a full stop, or the next
+# `\item` / `\end{...}` / line break / section / end of region.
+_RIGHT_CLOSE_RE = re.compile(
+    r"\s*(?:\)|\}|\.(?=\s|\Z|\\)|(?=\\item\b|\\end\{|\\\\|\\section|\Z))")
+# A single-entry category line: `\item`, an optional label, then the token.
+_ITEM_LABEL_RE = re.compile(r"\\item\s*(?:\\textbf\{[^{}]*:\}|[^\\{}\n:]*:)?\s*\Z")
+
+# Shapes an edit must never CREATE. Counted before and after; any increase
+# refuses the strip. Pre-existing occurrences are the model's, not ours.
+_DAMAGE = tuple(re.compile(p) for p in (
+    r"[,;|/]\s*[,;|/]",                       # doubled separator
+    r"\(\s*\)",                                # empty parenthesis
+    r"\(\s*(?:[,;|/]|and\s)",                  # list opening on a separator
+    r"(?:[,;|/]|\sand)\s*\)",                  # list closing on a separator
+    r":\}?[ \t]*[,;|/]",                       # category label then separator
+    r"(?:[,;|/]|\\&)\s*(?=\\item\b|\\end\{|\Z)",  # dangling separator
+    r"\\begin\{itemize\}\s*\\end\{itemize\}",     # emptied list
+    r"\\item\s*(?:\\textbf\{[^{}]*\}\s*)?(?=\\item\b|\\end\{)",  # empty item
+))
+
+
+class StrippedFabrications(NamedTuple):
+    """`tex` is the document with every flagged claim removed, or None when
+    that cannot be done cleanly (then `reason` says why). `removed` holds each
+    claim as it was written in the document, once."""
+    tex: str | None
+    removed: tuple[str, ...]
+    reason: str
+
+
+# What may trail a flagged token and still be part of the SAME list entry --
+# the claim's own qualifier, never another claim. Measured on 740 real tailored
+# résumés (2026-10-09): of the flagged documents the bare-token rule could not
+# strip, the commonest shapes were "Rust (learning)", "Angular (familiar)",
+# "Kotlin (learning)", "Angular 12+", "Angular.js" and "Ruby on Rails". The
+# qualifier states something about the fabricated technology, so it goes with
+# it; a parenthesis that nests, or holds markup, is not a plain qualifier.
+_VERSION_TAIL = re.compile(r"(?:\.js\b)?(?:[ \t]*\d+(?:\.\d+)*(?:\+|\.x)?(?![\w.]))?")
+_QUALIFIER_TAIL = re.compile(r"[ \t]*\([^(){}\\\n]*\)")
+_ON = re.compile(r"\s+on\s+")
+
+
+def _entry_span(region: str, start: int, end: int, flagged) -> tuple[int, int]:
+    """Extend [start, end) over a "Ruby on Rails" compound of flagged tokens
+    and the token's own version / parenthetical qualifier."""
+    lower = region.lower()
+    # Leftwards over "<flagged> on " and rightwards over " on <flagged>": both
+    # halves are claims the detector flags, so nothing unflagged is removed.
+    compound_left = re.compile(rf"(?:{flagged.pattern})\s+on\s+\Z")
+    while (left := compound_left.search(lower, 0, start)) is not None:
+        start = left.start()
+    while True:
+        on = _ON.match(lower, end)
+        after = on and flagged.match(lower, on.end())
+        if not after:
+            break
+        end = after.end()
+    end = _VERSION_TAIL.match(region, end).end()
+    qualifier = _QUALIFIER_TAIL.match(region, end)
+    if qualifier:
+        end = qualifier.end()
+    return start, end
+
+
+def _strip_one(region: str, start: int, end: int, flagged) -> str | None:
+    """`region` with the list entry at [start, end) removed, or None.
+
+    `flagged` matches any claim being stripped (lowercased), so an entry may
+    span a compound of them but never an unflagged word."""
+    if start and region[start - 1] == "\\":
+        return None  # part of a macro name, not a word
+    start, end = _entry_span(region, start, end, flagged)
+    prefix, suffix = region[:start], region[end:]
+    left_sep = _LEFT_SEP_RE.search(prefix)
+    left_open = None if left_sep else _LEFT_OPEN_RE.search(prefix)
+    right_sep = _RIGHT_SEP_RE.match(suffix)
+    right_close = None if right_sep else _RIGHT_CLOSE_RE.match(suffix)
+
+    if left_sep and right_sep:
+        tight_left = re.fullmatch(rf"\s*{_TIGHT_SEP}\s*", left_sep.group(0))
+        tight_right = re.fullmatch(rf"\s*{_TIGHT_SEP}\s*", right_sep.group(0))
+        if tight_left and not tight_right:
+            return region[:left_sep.start()] + suffix
+        return prefix + suffix[right_sep.end():]
+    if left_open and right_sep:
+        return prefix + suffix[right_sep.end():]
+    if left_sep and right_close:
+        return region[:left_sep.start()] + suffix
+    if left_open and right_close:
+        opener, closer = left_open.group(0).strip(), right_close.group(0).strip()
+        if opener == "(" and closer == ")":
+            head = prefix[:left_open.start()].rstrip()
+            return head + suffix[right_close.end():]
+        if closer == "" and (opener.startswith(":") or opener == "\\item"):
+            item = _ITEM_LABEL_RE.search(prefix)
+            if item is not None:
+                return region[:item.start()] + suffix[right_close.end():]
+        return None
+    return None  # prose, or a decorated token: not a list entry
+
+
+def _as_written(tex: str, skill: str) -> str:
+    """The first spelling of `skill` in the inspected regions, e.g. "Vue.js"."""
+    pattern = _mention_re(skill)
+    for _name, start, end in _fabrication_spans(tex):
+        match = pattern.search(tex[start:end].lower())
+        if match:
+            return tex[start + match.start():start + match.end()]
+    return skill.title()
+
+
+def strip_fabrications(base_skills_text: str, tailored_tex: str) -> StrippedFabrications:
+    """Remove every claim `check_fabrication` flags, from the regions it reads.
+
+    Precise: the claims are `_fabrications`' (the detector's own findings), the
+    regions are `_fabrication_spans` (the detector's own locator) and each
+    occurrence is found with `_mention_re` (the detector's own boundary
+    matcher), so "Java" never touches "JavaScript" and "Scala" never touches
+    "Scalable". Nothing about what counts as a fabrication changes (#16).
+
+    Conservative: refuses (tex=None) when any occurrence is not a plain list
+    entry, when the claim is also made outside the inspected regions, or when
+    the edit would leave an empty list, empty parenthesis or dangling
+    separator. The caller must still re-run every gate on the result -- this
+    function does not, on purpose, so there is one place that judges.
+    """
+    claims = _fabrications(base_skills_text, tailored_tex)
+    if not claims:
+        return StrippedFabrications(tailored_tex, (), "")
+    if len(tailored_tex.lower()) != len(tailored_tex):
+        return StrippedFabrications(None, (), "case folding changes offsets")
+
+    tex = tailored_tex
+    removed: list[str] = []
+    flagged = re.compile("|".join(_mention_re(skill).pattern for skill, _ in claims))
+    for skill, _region in claims:
+        pattern = _mention_re(skill)
+        # As written in the document, read BEFORE any edit: a compound entry
+        # ("Ruby on Rails") can remove one claim while stripping another.
+        written = _as_written(tailored_tex, skill)
+        for _ in range(100):
+            hit = None
+            for _name, start, end in _fabrication_spans(tex):
+                match = pattern.search(tex[start:end].lower())
+                if match:
+                    hit = (start, end, match)
+                    break
+            if hit is None:
+                break
+            start, end, match = hit
+            region = tex[start:end]
+            edited = _strip_one(region, match.start(), match.end(), flagged)
+            if edited is None:
+                return StrippedFabrications(
+                    None, (), f"'{region[match.start():match.end()]}' is not a "
+                              f"plain list entry")
+            tex = tex[:start] + edited + tex[end:]
+        else:
+            return StrippedFabrications(None, (), f"'{skill}' did not converge")
+        if _mentions(skill, tex):
+            return StrippedFabrications(
+                None, (), f"'{written}' is also claimed outside the regions "
+                          f"the detector inspects")
+        removed.append(written)
+
+    for shape in _DAMAGE:
+        if len(shape.findall(tex)) > len(shape.findall(tailored_tex)):
+            return StrippedFabrications(
+                None, (), f"the edit would leave a broken list ({shape.pattern})")
+    return StrippedFabrications(tex, tuple(removed), "")
 
 
 # --- prompt echo -----------------------------------------------------------

@@ -513,3 +513,33 @@ def test_an_engine_with_no_guard_nodes_records_nothing_rather_than_nothing_wrong
                            "page_violations": [], "ats_violations": []},
     })
     assert "guard_violations" not in update["resume_verdict"]
+
+
+def test_stripped_fabrications_are_stored_beside_the_grade():
+    """tailor_resume now cuts a flagged list entry out of the tailored body
+    rather than discarding the tailoring. What was cut is recorded inside the
+    resume_verdict JSON (no new column), and the grade is `warn` -- the strip
+    note is a measured, advisory writing finding -- never a clean `pass`."""
+    note = "fabrication stripped: 'Rust' removed from the header/Skills list"
+    update = _captured_update({
+        **BASE_EVENT,
+        "tailor_result": {"composition_violations": [], "quality_warnings": [note],
+                          "fabrications_stripped": ["Rust"]},
+        "compile_result": {"pdf_s3_key": "resumes/hash-abc.pdf",
+                           "page_violations": [], "ats_violations": []},
+    })
+    verdict = update["resume_verdict"]
+    assert verdict["fabrications_stripped"] == ["Rust"]
+    assert verdict["grade"] == "warn"
+
+
+def test_a_legacy_tailor_result_records_no_strip_field():
+    """Absent is not `[]`: a tailor result from before stripping existed did
+    not claim that nothing was stripped."""
+    update = _captured_update({
+        **BASE_EVENT,
+        "tailor_result": {"composition_violations": [], "quality_warnings": []},
+        "compile_result": {"pdf_s3_key": "resumes/hash-abc.pdf",
+                           "page_violations": [], "ats_violations": []},
+    })
+    assert "fabrications_stripped" not in update["resume_verdict"]

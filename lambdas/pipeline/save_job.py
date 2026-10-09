@@ -187,6 +187,16 @@ def handler(event, context):
         guard_violations = (event.get("tailor_result") or {}).get("guard_violations")
         if guard_violations is not None:
             row["guard_violations"] = list(guard_violations)
+        # What tailor_resume cut out of the shipped body because the
+        # fabrication detector flagged it (tailor_resume._recover_by_stripping).
+        # Beside the grade for the same reason as guard_violations: the grade
+        # already reflects it -- the strip is an advisory `writing` finding, so
+        # the document grades `warn`, not `pass` -- and this is the countable
+        # record of exactly which claims were removed. No new column: it lives
+        # inside the resume_verdict JSON.
+        stripped = (event.get("tailor_result") or {}).get("fabrications_stripped")
+        if stripped is not None:
+            row["fabrications_stripped"] = list(stripped)
         update["resume_verdict"] = row
         log = logger.warning if verdict.grade in ("fail", "unmeasured") else logger.info
         log("[save_job] %s resume verdict: %s%s", job_hash, verdict.grade,

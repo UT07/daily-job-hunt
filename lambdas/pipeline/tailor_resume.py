@@ -26,6 +26,7 @@ from guardrails.output_guards import check_weak_bullet_openers as _check_weak_op
 from guardrails.output_guards import check_brace_balance as _check_brace_balance
 from guardrails.output_guards import check_required_sections as _check_required_sections
 from guardrails.output_guards import check_fabrication as _check_fabrication
+from guardrails.output_guards import strip_fabrications as _strip_fabrications
 from guardrails.output_guards import check_unquantified_bullets as _check_unquantified
 from guardrails.output_guards import check_header_present as _check_header_present
 from guardrails.output_guards import check_near_empty as _check_near_empty
@@ -405,6 +406,60 @@ def _rank(warnings) -> tuple[int, int]:
     comparison, so neither side can weigh a check the other does not.
     """
     return len(_blocking_findings(warnings)), len(warnings or [])
+
+
+_STRIPPED_PREFIX = "fabrication stripped:"
+
+
+def _stripped_notes(removed) -> list[str]:
+    """One advisory `quality_warnings` entry per stripped claim.
+
+    Deliberately NOT prefixed `fabrication:` -- that prefix is what
+    `_blocking_findings` treats as block-severity, and the claim is gone from
+    this document. It is still a finding: the document that ships is not the
+    one any model or reviewer judged, and shared.resume_verdict grades a
+    measured, non-blocking `writing` finding `warn`, never `pass`.
+    """
+    return [f"{_STRIPPED_PREFIX} '{name}' removed from the header/Skills list "
+            f"(not in any base resume)" for name in removed]
+
+
+def _recover_by_stripping(ai_body: str, *, job_hash: str, base_preamble: str,
+                          base_body: str, header_markers, fabrication_baseline):
+    """Cut every flagged claim out of `ai_body`; re-judge; return it or None.
+
+    Returns `(body, tex, quality, removed)` when the stripped body passes the
+    SAME gates that judged the original -- `_validation_errors` on the
+    assembled document and `_quality_warnings` (which carries the fabrication
+    check) with no blocking finding left -- and None otherwise, in which case
+    the caller's corpus fallback stands exactly as before. One builder per
+    side, as everywhere in this module (CLAUDE.md #14).
+
+    WHY. "I don't want fabricated shit but at the same time I do want the
+    tailored resumes." Until 2026-10-09 a surviving fabrication finding sent
+    the job to the corpus, throwing away the whole tailoring for one token in
+    a list; the detector only ever flags one of 17 technology names in the
+    header subtitle or Skills section, which is nearly always a list entry.
+    """
+    if not fabrication_baseline:
+        return None
+    result = _strip_fabrications(fabrication_baseline, ai_body)
+    if result.tex is None:
+        logger.warning("[tailor] %s: fabrication could not be stripped cleanly (%s)",
+                       job_hash, result.reason)
+        return None
+    body = result.tex
+    tex = _assemble(base_preamble, body)
+    invalid = _validation_errors(tex, body, header_markers)
+    quality = _quality_warnings(body, base_body, fabrication_baseline)
+    still = invalid + _blocking_findings(quality)
+    if still:
+        logger.warning("[tailor] %s: stripped body refused by the re-check (%s)",
+                       job_hash, "; ".join(still[:3]))
+        return None
+    logger.info("[tailor] %s: stripped fabricated %s; shipping the tailored body",
+                job_hash, ", ".join(result.removed))
+    return body, tex, quality, result.removed
 
 
 def _enforce_composition(
@@ -1067,6 +1122,10 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
 
 
     shipped_quality: list[str] | None = None
+    # Each fabricated claim deterministically removed from the shipped body,
+    # as written in it. Empty when nothing was stripped, including on every
+    # fallback (the corpus was not edited).
+    fabrications_stripped: list[str] = []
 
     # Everything below runs only on a body that cleared the hard gates, and
     # each stage may ADD to `validation_errors`. The corpus swap happens in
@@ -1197,7 +1256,8 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         # council rounds (the guard folds it into the repair prompt verbatim)
         # and the quality retry above, which is told "FIX: fabrication: ..."
         # and now prefers any retry that drops it. What survives all of that
-        # is refused: the reasons join `validation_errors`, the corpus — every
+        # is first STRIPPED (below); only what cannot be stripped cleanly is
+        # refused: the reasons join `validation_errors`, the corpus — every
         # claim in it is the candidate's own — is composed and shipped below,
         # and `used_fallback` and the summary line say why.
         #
@@ -1205,6 +1265,15 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         # (`_check_fabrication` via `_quality_warnings`); nothing here widens
         # what counts as a fabrication (CLAUDE.md #16).
         validation_errors = _blocking_findings(shipped_quality)
+        if validation_errors:
+            stripped = _recover_by_stripping(
+                ai_body, job_hash=job_hash, base_preamble=base_preamble,
+                base_body=base_body, header_markers=header_markers,
+                fabrication_baseline=fabrication_baseline)
+            if stripped is not None:
+                ai_body, tailored_tex, shipped_quality, removed = stripped
+                fabrications_stripped = list(removed)
+                validation_errors = []
 
         # A COMPOSITION PREFERENCE BREAK REPLACES THE TAILORING. A generated
         # body that broke a preference picked the wrong entries, not merely
@@ -1243,6 +1312,7 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         )
         tailored_tex = base_tex
         shipped_from = "corpus_fallback"
+        fabrications_stripped = []
         # Nothing was measured on the corpus: `None`, which the verdict grades
         # `unmeasured`, never the refused body's findings.
         shipped_quality = None
@@ -1361,7 +1431,8 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
     logger.info(
         f"[tailor] {tailoring_depth.capitalize()} tailor for {job_hash} "
         + (f"(fallback: {'; '.join(validation_errors)})" if validation_errors
-           else "(ok)")
+           else f"(ok; fabrication stripped: {', '.join(fabrications_stripped)})"
+           if fabrications_stripped else "(ok)")
     )
     return {
         "job_hash": job_hash,
@@ -1387,10 +1458,19 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         # could see it. `None` means it was never measured (the fallback path)
         # and is graded as such by shared.resume_verdict -- an empty list is
         # the stronger claim that the shipped body was checked and is clean.
+        #
+        # A stripped fabrication is reported here too, as an advisory finding:
+        # the shipped body was edited after the model wrote it, so it must not
+        # grade `pass` as though nothing happened. See `_stripped_notes`.
         "quality_warnings": (
             None if shipped_quality is None
-            else shipped_quality + _check_unquantified(ai_body)
+            else shipped_quality + _stripped_notes(fabrications_stripped)
+            + _check_unquantified(ai_body)
         ),
+        # What was cut out of the shipped body because the fabrication detector
+        # flagged it and no repair removed it. save_job stores it on
+        # jobs.resume_verdict beside the grade.
+        "fabrications_stripped": fabrications_stripped,
         # What the council's guard still objected to when it gave up. Recorded
         # rather than graded, for now: `shared.resume_verdict` does not take it
         # as a grading input because its false-positive rate at this position

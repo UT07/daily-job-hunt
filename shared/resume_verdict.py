@@ -55,11 +55,16 @@ UNMEASURED = "unmeasured"
 #                rate is not characterised (CLAUDE.md #16). The one genuinely
 #                disqualifying member of that family — fabrication — is
 #                enforced in tailor_resume.handler, not here: a generated body
-#                still carrying a fabrication finding after every repair is
-#                refused, the composed corpus ships, `used_fallback` is True
-#                and `quality_warnings` is None (graded `unmeasured`). So a
-#                fabrication never reaches this check on a shipped tailored
-#                body. Until 2026-10-08 this comment claimed it "already
+#                still carrying a fabrication finding after every repair has
+#                the flagged list entries STRIPPED and, if the stripped body
+#                passes every gate again, ships tailored with an advisory
+#                "fabrication stripped: ..." finding here (graded `warn`, never
+#                `pass`: the shipped body is not the one any model or reviewer
+#                judged). If it cannot be stripped cleanly it is refused, the
+#                composed corpus ships, `used_fallback` is True and
+#                `quality_warnings` is None (graded `unmeasured`). Either way
+#                a fabrication finding never reaches this check on a shipped
+#                tailored body. Until 2026-10-08 this comment claimed it "already
 #                blocks upstream in guardrails.output_guards"; it did not —
 #                the council finalizes best-effort once its repair budget is
 #                spent (41% of runs), and the handler only reported it.
