@@ -272,6 +272,16 @@ def assign_model_for_ab_test(available_providers: list[str], ab_ratio: float = 0
     return available_providers[0]  # Primary
 
 
+class ScoreBatchError(RuntimeError):
+    """Raised, never returned, when a batch cannot have done its work.
+
+    Step Functions treats a RETURNED dict as a successful invocation, so
+    `{"error": "no_resume"}` never reached a Catch. In the single-job machine a
+    raise routes to JobFailed; in the daily machine to ScoreChunkFailed, and
+    AggregateScores raises when every chunk failed (see aggregate_scores.py).
+    """
+
+
 def handler(event, context):
     user_id = event["user_id"]
     job_hashes = event.get("new_job_hashes", [])
@@ -300,9 +310,9 @@ def handler(event, context):
             "the same row the tailorer will use", base.skipped,
         )
     if base.row is None:
-        logger.warning("[score_batch] no tailorable resume for user %s: %s",
-                       user_id, base.why_unusable(user_id))
-        return {"matched_items": [], "matched_count": 0, "error": "no_resume"}
+        raise ScoreBatchError(
+            f"no_resume: no tailorable resume for user {user_id}: "
+            f"{base.why_unusable(user_id)}")
 
     resume_row = base.row
     resume_tex = resume_row.get("tex_content", "")
@@ -314,8 +324,7 @@ def handler(event, context):
     # config path, which made it look abandoned rather than broken.
     resume_type = resume_row.get("resume_key", "")
     if not resume_tex:
-        logger.warning(f"[score_batch] Resume tex_content is empty for user {user_id}")
-        return {"matched_items": [], "matched_count": 0, "error": "no_resume"}
+        raise ScoreBatchError(f"no_resume: resume tex_content is empty for user {user_id}")
 
     # Load user profile for geo / work-auth cap (cheap, single row)
     try:
@@ -336,6 +345,12 @@ def handler(event, context):
     skipped_count = 0
     inserted = 0
     insert_failures = 0
+    # Counted, not skipped in silence. `if score_result is None: continue` made
+    # a run where every AI call failed return exactly what a run over
+    # uninteresting jobs returns -- 0 matched, 0 inserted, 0 failures -- and
+    # the all-inserts-failed guard below could not fire with nothing inserted.
+    scored = 0
+    score_failures = 0
     for job in jobs:
         skip_status = should_skip_scoring(job)
         if skip_status:
@@ -346,7 +361,11 @@ def handler(event, context):
         score_result = score_single_job_deterministic(job, resume_tex)
 
         if score_result is None:
+            score_failures += 1
+            logger.warning("[score_batch] %s could not be scored (every AI call "
+                           "failed) — counted as a scoring failure", job["job_hash"])
             continue
+        scored += 1
 
         # Geo + work-auth aware cap. Caps non-IE jobs at A-tier max (89);
         # caps IE-only candidates' US/UK jobs without sponsor signal at
@@ -501,6 +520,7 @@ def handler(event, context):
 
     logger.info(
         f"[score_batch] {len(jobs)} fetched, {skipped_count} skipped, "
+        f"{scored} scored, {score_failures} score-failed, "
         f"{inserted} inserted, {insert_failures} insert-failed, "
         f"{len(matched_items)} queued for tailoring (min_score={min_score})"
     )
@@ -508,6 +528,14 @@ def handler(event, context):
     # shape means something systemic -- an unapplied migration, an RLS change,
     # bad credentials -- and swallowing it is how a run scores 58 jobs, writes
     # none of them, and still reports SUCCEEDED to Step Functions.
+    # Same rule one step earlier: jobs to score, and not one scored, is an
+    # outage (providers down, quota gone, the parser broken), not an empty day.
+    if score_failures and scored == 0:
+        raise ScoreBatchError(
+            f"[score_batch] {score_failures} job(s) to score and scored none — "
+            "every AI scoring call failed; refusing to report success. See the "
+            "[score_batch] AI scoring failed lines above for the provider errors."
+        )
     if insert_failures and inserted == 0:
         raise RuntimeError(
             f"[score_batch] all {insert_failures} inserts into jobs failed; "
@@ -520,6 +548,8 @@ def handler(event, context):
         "skipped_count": skipped_count,
         "inserted": inserted,
         "insert_failures": insert_failures,
+        "scored": scored,
+        "score_failures": score_failures,
     }
 
 

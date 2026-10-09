@@ -17,12 +17,29 @@ def handler(event, context):
     total_matched = 0
     total_skipped = 0
 
+    failed_chunks = 0
     for chunk in chunks:
         if not isinstance(chunk, dict):
             continue
+        if chunk.get("error"):
+            failed_chunks += 1
         all_matched.extend(chunk.get("matched_items", []))
         total_matched += chunk.get("matched_count", 0)
         total_skipped += chunk.get("skipped_count", 0)
+
+    # A ScoreChunk that raised is caught into the ScoreChunkFailed Pass state,
+    # whose Result carries `error`. Ignoring that key turned every scoring
+    # outage into an empty, SUCCEEDED run: a raise in score_batch ended in
+    # PipelineComplete. Raising here when EVERY chunk failed routes through
+    # this state's own Catch to NotifyError -> PipelineFailedAfterError (Fail).
+    # A partial failure is tolerated and counted.
+    if chunks and failed_chunks == len(chunks):
+        raise RuntimeError(
+            f"[aggregate_scores] every one of {len(chunks)} scoring chunk(s) "
+            "failed; refusing to report an empty run as success")
+    if failed_chunks:
+        logger.warning("[aggregate_scores] %d of %d chunk(s) failed scoring",
+                       failed_chunks, len(chunks))
 
     logger.info(
         f"[aggregate_scores] {len(chunks)} chunks → "
@@ -32,4 +49,5 @@ def handler(event, context):
         "matched_items": all_matched,
         "matched_count": total_matched,
         "skipped_count": total_skipped,
+        "failed_chunks": failed_chunks,
     }

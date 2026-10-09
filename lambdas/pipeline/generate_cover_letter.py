@@ -5,6 +5,11 @@ import re
 import boto3
 
 from ai_helper import ai_complete, council_complete, get_supabase
+# The one plain-text -> LaTeX escaper in this CodeUri (lambdas/pipeline/). It
+# escapes all ten specials and never double-escapes, so prose that already
+# carries `\&` is left alone. Reused rather than copied: the local escaper this
+# replaces handled four characters and a `$` in a letter broke the compile.
+from parse_sections import _escape_tex
 from utils.keyword_extractor import extract_keywords
 
 logger = logging.getLogger()
@@ -123,6 +128,19 @@ def _check_metric_fabrication(text: str) -> list[str]:
     return errors
 
 
+def _letter_errors(text: str, company: str) -> list[str]:
+    """Every check a letter is judged by, in one place.
+
+    ONE builder for the first attempt AND every retry (CLAUDE.md #14). Until
+    2026-10-08 the first attempt was judged by all three checks and each retry
+    by `_validate_cover_letter` alone, so a retry claiming a metric the resume
+    does not contain was "valid", replaced the first attempt and shipped.
+    """
+    return (_validate_cover_letter(text)["errors"]
+            + _check_opening_quality(text, company)
+            + _check_metric_fabrication(text))
+
+
 def _check_opening_quality(text: str, company: str) -> list[str]:
     """Check that the cover letter doesn't open by describing the company generically."""
     errors = []
@@ -155,11 +173,7 @@ COVER_LETTER_TEMPLATE = r"""\documentclass[10pt,a4paper]{article}
 
 \begin{document}
 
-\begin{center}
-{\Large \textbf{Utkarsh Singh}}\\[0.3em]
-Dublin, Ireland \textbar\ +353 892515620 \textbar\ \href{mailto:254utkarsh@gmail.com}{254utkarsh@gmail.com}\\
-\href{https://github.com/UT07}{github.com/UT07} \textbar\ \href{https://www.linkedin.com/in/utkarshsingh2001/}{linkedin.com/in/utkarshsingh2001}
-\end{center}
+%(header)s
 
 \vspace{0.5em}
 \hrule
@@ -179,19 +193,79 @@ Re: %(job_title)s
 \vspace{0.8em}
 
 Best regards,\\
-Utkarsh Singh
+%(signature)s
 
 \end{document}"""
 
 
-def _escape_latex(text: str) -> str:
-    """Escape characters that are special in LaTeX."""
-    return (
-        text.replace("&", r"\&")
-            .replace("%", r"\%")
-            .replace("#", r"\#")
-            .replace("_", r"\_")
-    )
+# EXPLICIT FALLBACK, used only when the user's row cannot supply the header.
+# These are the values this template hardcoded for every user until 2026-10-08
+# (the repository owner's). They are used whole when there is no `users` row,
+# and to fill gaps only for the owner's own row (matched by email) -- never to
+# fill another user's missing phone or links with the owner's.
+_OWNER_FALLBACK = {
+    "name": "Utkarsh Singh",
+    "email": "254utkarsh@gmail.com",
+    "phone": "+353 892515620",
+    "location": "Dublin, Ireland",
+    "github": "https://github.com/UT07",
+    "linkedin": "https://www.linkedin.com/in/utkarshsingh2001/",
+}
+_PROFILE_FIELDS = ("name", "email", "phone", "location", "github", "linkedin")
+
+
+def _fetch_contact(db, user_id: str) -> dict:
+    """The header fields for THIS user, from `users`, with the documented fallback."""
+    row = None
+    # PostgREST fails the whole select on one unknown column, so retry with the
+    # two NOT-NULL-ish columns before giving up: falling back to the owner's
+    # header for another user over a missing `github` column would be worse
+    # than a header without links.
+    for columns in (", ".join(_PROFILE_FIELDS), "name, email"):
+        try:
+            resp = db.table("users").select(columns).eq("id", user_id).limit(1).execute()
+            row = resp.data[0] if resp.data else None
+            break
+        except Exception as exc:
+            logger.warning("[cover_letter] could not read users(%s) for %s: %s",
+                           columns, user_id, exc)
+    if not row or not ((row.get("name") or "").strip() or (row.get("email") or "").strip()):
+        logger.warning("[cover_letter] no usable profile for %s; using the owner "
+                       "fallback header", user_id)
+        return dict(_OWNER_FALLBACK)
+    contact = {k: (row.get(k) or "").strip() for k in _PROFILE_FIELDS}
+    if contact["email"].lower() == _OWNER_FALLBACK["email"]:
+        contact = {k: contact[k] or _OWNER_FALLBACK[k] for k in _PROFILE_FIELDS}
+    return contact
+
+
+def _url(value: str) -> str:
+    """A URL safe inside \\href's first argument: no braces, backslashes or spaces."""
+    v = "".join(ch for ch in value if ch not in "{}\\ ")
+    if v and not v.startswith(("http://", "https://")):
+        v = "https://" + v
+    return v.replace("%", r"\%").replace("#", r"\#")
+
+
+def _render_header(contact: dict) -> str:
+    """The centred contact block, with only the fields the user actually has."""
+    line1 = [_escape_tex(x) for x in (contact.get("location"), contact.get("phone")) if x]
+    if contact.get("email"):
+        line1.append(r"\href{mailto:%s}{%s}" % (_url(contact["email"]).removeprefix("https://"),
+                                                 _escape_tex(contact["email"])))
+    links = []
+    for key in ("github", "linkedin"):
+        if contact.get(key):
+            url = _url(contact[key])
+            shown = url.removeprefix("https://").removeprefix("http://").removeprefix("www.")
+            links.append(r"\href{%s}{%s}" % (url, _escape_tex(shown.rstrip("/"))))
+    rows = [r"{\Large \textbf{%s}}" % _escape_tex(contact.get("name") or "")]
+    for parts in (line1, links):
+        if parts:
+            rows.append(r" \textbar\ ".join(parts))
+    # Same spacing the hardcoded header had: 0.3em under the name.
+    body = rows[0] + ("\\\\[0.3em]\n" + "\\\\\n".join(rows[1:]) if rows[1:] else "")
+    return "\\begin{center}\n" + body + "\n\\end{center}"
 
 
 # ── Handler ───────────────────────────────────────────────────────────────────
@@ -226,6 +300,7 @@ def handler(event, context):
             "from the same row the tailorer will use", base.skipped,
         )
     resume_tex = base.tex
+    contact = _fetch_contact(db, user_id)
 
     description = job.get("description", "") or ""
 
@@ -252,11 +327,11 @@ CANDIDATE'S RESUME (for reference — use real details only):
 {resume_tex[:4000]}
 
 CANDIDATE INFO:
-- Name: Utkarsh Singh
-- Location: Dublin, Ireland
+- Name: {contact.get('name') or ''}
+- Location: {contact.get('location') or ''}
 - Visa: Stamp 1G (authorized for full-time employment in Ireland)
 - Fresh MSc Cloud Computing graduate with 2+ years industry experience
-- Email: 254utkarsh@gmail.com{keyword_hint}
+- Email: {contact.get('email') or ''}{keyword_hint}
 
 Write ONLY the body paragraphs of the cover letter (3-4 paragraphs).
 Do NOT include the header, date, salutation, or closing — I'll add those from my template.
@@ -298,60 +373,44 @@ Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
     best_body, best_provider, best_model = body_text, provider, model
     best_errors: list[str] = []
 
-    validation = _validate_cover_letter(body_text)
-    # Also check opening quality and metric fabrication
-    opening_issues = _check_opening_quality(body_text, job.get("company", ""))
-    metric_issues = _check_metric_fabrication(body_text)
-    if opening_issues or metric_issues:
-        validation["errors"].extend(opening_issues)
-        validation["errors"].extend(metric_issues)
-        validation["valid"] = False
-    if not validation["valid"]:
-        best_errors = validation["errors"]
-        logger.warning(f"[cover_letter] Validation failed for {job_hash}: {validation['errors']}")
+    company = job.get("company", "")
+    errors = _letter_errors(body_text, company)
+    if errors:
+        best_errors = errors
+        logger.warning(f"[cover_letter] Validation failed for {job_hash}: {errors}")
 
         for retry in range(2):
-            correction_lines = "\n".join(f"- FIX: {e}" for e in validation["errors"])
+            correction_lines = "\n".join(f"- FIX: {e}" for e in errors)
             retry_prompt = (
                 user_prompt
                 + f"\n\nYour previous attempt had these problems:\n{correction_lines}"
                 + "\nPlease fix ALL of them in this attempt. Return ONLY the corrected body paragraphs."
             )
             body_text, provider, model = _generate_body(retry_prompt)
-            validation = _validate_cover_letter(body_text)
+            errors = _letter_errors(body_text, company)
 
-            if validation["valid"]:
+            if not errors:
                 best_body, best_provider, best_model = body_text, provider, model
                 best_errors = []
                 logger.info(f"[cover_letter] Validation passed on retry {retry + 1} for {job_hash}")
                 break
-            elif len(validation["errors"]) < len(best_errors):
+            elif len(errors) < len(best_errors):
                 best_body, best_provider, best_model = body_text, provider, model
-                best_errors = validation["errors"]
-                logger.warning(f"[cover_letter] Retry {retry + 1} still invalid for {job_hash}: {validation['errors']}")
+                best_errors = errors
+                logger.warning(f"[cover_letter] Retry {retry + 1} still invalid for {job_hash}: {errors}")
             else:
-                logger.warning(f"[cover_letter] Retry {retry + 1} no improvement for {job_hash}: {validation['errors']}")
+                logger.warning(f"[cover_letter] Retry {retry + 1} no improvement for {job_hash}: {errors}")
 
     if best_errors:
         logger.warning(f"[cover_letter] Accepting best attempt for {job_hash} with issues: {best_errors}")
 
-    # Escape LaTeX special characters in body text
-    body_escaped = (
-        best_body
-        .replace("&", r"\&")
-        .replace("%", r"\%")
-        .replace("#", r"\#")
-        .replace("_", r"\_")
-    )
-
-    # Assemble the full LaTeX document
-    company_escaped = _escape_latex(job.get("company", ""))
-    title_escaped = _escape_latex(job.get("title", ""))
-
+    # Every LaTeX special in the prose, the job fields and the profile values.
     full_tex = COVER_LETTER_TEMPLATE % {
-        "company_name": company_escaped,
-        "job_title": title_escaped,
-        "body": body_escaped,
+        "header": _render_header(contact),
+        "signature": _escape_tex(contact.get("name") or ""),
+        "company_name": _escape_tex(company),
+        "job_title": _escape_tex(job.get("title", "")),
+        "body": _escape_tex(best_body),
     }
 
     tex_key = f"users/{user_id}/cover_letters/{job_hash}_cover.tex"
@@ -365,4 +424,7 @@ Do NOT use any LaTeX commands in the body — just plain text paragraphs."""
         "doc_type": "cover_letter",
         "provider": best_provider,
         "model": best_model,
+        # What is still wrong with the shipped letter, by the same builder that
+        # judged every attempt. Empty means it passed all of them.
+        "validation_errors": best_errors,
     }

@@ -5,6 +5,9 @@ import re
 import boto3
 
 from ai_helper import ai_complete, council_complete, get_supabase, rewrite_budget
+# Same CodeUri (lambdas/pipeline/). One implementation of "update this job's
+# row and say whether it hit one", shared with save_job.
+from save_job import update_job_row
 
 try:
     from retrieval.bullets import retrieve_evidence
@@ -23,6 +26,7 @@ from guardrails.output_guards import check_weak_bullet_openers as _check_weak_op
 from guardrails.output_guards import check_brace_balance as _check_brace_balance
 from guardrails.output_guards import check_required_sections as _check_required_sections
 from guardrails.output_guards import check_fabrication as _check_fabrication
+from guardrails.output_guards import strip_fabrications as _strip_fabrications
 from guardrails.output_guards import check_unquantified_bullets as _check_unquantified
 from guardrails.output_guards import check_header_present as _check_header_present
 from guardrails.output_guards import check_near_empty as _check_near_empty
@@ -109,6 +113,29 @@ def _split_tex(tex: str) -> tuple[str, str]:
 
 def _splice_tex(preamble: str, body: str) -> str:
     return f"{preamble}\n\\begin{{document}}\n{body}\n\\end{{document}}\n"
+
+
+# Common AI LaTeX typos, repaired wherever a body becomes a document.
+_TYPO_FIXES = {
+    "\\emphergencystretch": "\\emergencystretch",
+    "\\emergecystretch": "\\emergencystretch",
+    "\\emergenystretch": "\\emergencystretch",
+}
+
+
+def _assemble(preamble: str, body: str) -> str:
+    """The ONE way a generated body becomes the document that is judged and shipped.
+
+    Splice, repair the known typos, escape the body's specials. Every attempt —
+    the council's, the corrective retry, the quality retry, the composition
+    repair — goes through here, so the text `_validation_errors` judges is the
+    text that would be written to S3, whichever attempt produced it. The typo
+    fixes used to run on the council's body only.
+    """
+    tex = _splice_tex(preamble, body)
+    for typo, fix in _TYPO_FIXES.items():
+        tex = tex.replace(typo, fix)
+    return escape_body_specials(tex)
 
 
 def _count_macro_args(tex: str, start: int) -> int:
@@ -325,7 +352,7 @@ def _recover_past_validation(validation_errors, job_hash, user_prompt, system_pr
     if "\\begin{document}" in fix_body:
         _, fix_body = _split_tex(fix_body)
     fix_body = fix_body.removesuffix("\\end{document}").strip()
-    fix_tex = escape_body_specials(_splice_tex(base_preamble, fix_body))
+    fix_tex = _assemble(base_preamble, fix_body)
 
     still = _validation_errors(fix_tex, fix_body, header_markers)
     # Checked explicitly: a body cut off at max_tokens can lose a section
@@ -360,15 +387,95 @@ def _quality_warnings(body: str, base_body: str, fabrication_baseline) -> list[s
     return warnings
 
 
+# Severity lives in guardrails.output_guards.check_output: of the writing
+# rubric's members, fabrication is the only one raised at "block" for the tailor
+# task. Its findings are prefixed with exactly this (asserted in tests against
+# the real detector, so a reworded message fails CI instead of disarming this).
+_BLOCKING_PREFIX = "fabrication:"
+
+
+def _blocking_findings(warnings) -> list[str]:
+    """The members of a `_quality_warnings` list whose severity is `block`."""
+    return [w for w in (warnings or []) if w.startswith(_BLOCKING_PREFIX)]
+
+
+def _rank(warnings) -> tuple[int, int]:
+    """Order two `_quality_warnings` lists: blocking findings first, then all.
+
+    Lower is better. One function for both sides of the quality retry's
+    comparison, so neither side can weigh a check the other does not.
+    """
+    return len(_blocking_findings(warnings)), len(warnings or [])
+
+
+_STRIPPED_PREFIX = "fabrication stripped:"
+
+
+def _stripped_notes(removed) -> list[str]:
+    """One advisory `quality_warnings` entry per stripped claim.
+
+    Deliberately NOT prefixed `fabrication:` -- that prefix is what
+    `_blocking_findings` treats as block-severity, and the claim is gone from
+    this document. It is still a finding: the document that ships is not the
+    one any model or reviewer judged, and shared.resume_verdict grades a
+    measured, non-blocking `writing` finding `warn`, never `pass`.
+    """
+    return [f"{_STRIPPED_PREFIX} '{name}' removed from the header/Skills list "
+            f"(not in any base resume)" for name in removed]
+
+
+def _recover_by_stripping(ai_body: str, *, job_hash: str, base_preamble: str,
+                          base_body: str, header_markers, fabrication_baseline):
+    """Cut every flagged claim out of `ai_body`; re-judge; return it or None.
+
+    Returns `(body, tex, quality, removed)` when the stripped body passes the
+    SAME gates that judged the original -- `_validation_errors` on the
+    assembled document and `_quality_warnings` (which carries the fabrication
+    check) with no blocking finding left -- and None otherwise, in which case
+    the caller's corpus fallback stands exactly as before. One builder per
+    side, as everywhere in this module (CLAUDE.md #14).
+
+    WHY. "I don't want fabricated shit but at the same time I do want the
+    tailored resumes." Until 2026-10-09 a surviving fabrication finding sent
+    the job to the corpus, throwing away the whole tailoring for one token in
+    a list; the detector only ever flags one of 17 technology names in the
+    header subtitle or Skills section, which is nearly always a list entry.
+    """
+    if not fabrication_baseline:
+        return None
+    result = _strip_fabrications(fabrication_baseline, ai_body)
+    if result.tex is None:
+        logger.warning("[tailor] %s: fabrication could not be stripped cleanly (%s)",
+                       job_hash, result.reason)
+        return None
+    body = result.tex
+    tex = _assemble(base_preamble, body)
+    invalid = _validation_errors(tex, body, header_markers)
+    quality = _quality_warnings(body, base_body, fabrication_baseline)
+    still = invalid + _blocking_findings(quality)
+    if still:
+        logger.warning("[tailor] %s: stripped body refused by the re-check (%s)",
+                       job_hash, "; ".join(still[:3]))
+        return None
+    logger.info("[tailor] %s: stripped fabricated %s; shipping the tailored body",
+                job_hash, ", ".join(result.removed))
+    return body, tex, quality, result.removed
+
+
 def _enforce_composition(
     *,
     ai_body: str,
+    quality: list[str] | None,
     policy: dict | None,
     user_prompt: str,
     system_prompt: str,
     max_tokens: int,
     job_hash: str,
-) -> str:
+    base_preamble: str,
+    base_body: str,
+    header_markers,
+    fabrication_baseline,
+) -> tuple[str, list[str] | None, dict | None]:
     r"""Count the composition rules in the generated body; repair once if broken.
 
     This is the half that was missing. `_validate_macro_arities` checks that
@@ -376,19 +483,28 @@ def _enforce_composition(
     `\jobentry` calls the model emitted, so "EXACTLY 3 PROJECTS" was a request
     the model could decline in silence.
 
-    Returns the body to ship: the repaired one if the repair landed, otherwise
-    the original. A repair is accepted ONLY when it is structurally intact AND
-    fully compliant. Swapping in a body that still breaks the rules would cost
-    the quality-retry work already done on the original for no compliance gain,
-    and a body that complied by being truncated is not a repair at all — the
-    same "structure before style" rule the quality retry applies.
+    Returns `(body, quality, response)`: the repaired body, ITS writing
+    measurement and the provider response that produced it if the repair
+    landed; otherwise exactly what it was given and `None`. Returning the
+    measurement with the body is what keeps the reported warnings describing
+    the document that ships; they used to be measured before this swap.
+
+    A repair is accepted ONLY when it clears every hard gate the body it
+    replaces cleared (`_validation_errors` on the assembled document — braces,
+    arity, sections, header markers, prompt echo, near-empty), is fully
+    compliant, and adds no block-severity writing finding (fabrication). Until
+    2026-10-08 it was checked for braces, arity and sections only, so a repair
+    narrating "Let's start by…" or claiming a tool the corpus never mentions
+    replaced a clean body. Style findings do not reject a repair — composition
+    is a blocking check in shared.resume_verdict and writing style is not — but
+    they are measured and reported.
 
     The caller re-counts whatever ends up being shipped, so the returned body
     is never assumed compliant.
     """
     violations = _check_composition(ai_body, policy)
     if not violations:
-        return ai_body
+        return ai_body, quality, None
 
     logger.warning(
         "[tailor] composition rules broken for %s (%s) — repairing once",
@@ -404,7 +520,7 @@ def _enforce_composition(
             "[tailor] composition repair call failed for %s (%s); shipping a "
             "document that breaks: %s", job_hash, exc, "; ".join(violations),
         )
-        return ai_body
+        return ai_body, quality, None
 
     repaired = (repair.get("content") or "").strip()
     if "\\begin{document}" in repaired:
@@ -412,30 +528,33 @@ def _enforce_composition(
     repaired = repaired.removesuffix("\\end{document}").strip()
 
     rejected = ""
+    repaired_quality: list[str] | None = None
     if repair.get("truncated"):
         rejected = "cut off at max_tokens"
     elif not repaired:
         rejected = "empty body"
-    elif not _check_brace_balance(repaired):
-        rejected = "brace imbalance"
-    elif arity_issues := _validate_macro_arities(repaired):
-        rejected = f"arity: {'; '.join(arity_issues[:3])}"
-    elif missing := _check_required_sections(repaired):
-        rejected = f"missing sections {missing}"
+    elif invalid := _validation_errors(
+            _assemble(base_preamble, repaired), repaired, header_markers):
+        rejected = "; ".join(invalid[:3])
     elif remaining := _check_composition(repaired, policy):
         rejected = f"still breaks {'; '.join(remaining)}"
+    else:
+        repaired_quality = _quality_warnings(repaired, base_body, fabrication_baseline)
+        added = len(_blocking_findings(repaired_quality)) - len(_blocking_findings(quality))
+        if added > 0:
+            rejected = "; ".join(_blocking_findings(repaired_quality)[:3])
 
     if rejected:
         logger.error(
             "[tailor] composition repair did not land for %s (%s); shipping a "
             "document that breaks: %s", job_hash, rejected, "; ".join(violations),
         )
-        return ai_body
+        return ai_body, quality, None
 
     logger.info(
         "[tailor] composition repair fixed %s (was: %s)", job_hash, "; ".join(violations),
     )
-    return repaired
+    return repaired, repaired_quality, repair
 
 
 # ---------------------------------------------------------------------------
@@ -867,6 +986,11 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         logger.error(f"[tailor] Council failed: {e}")
         raise TailorError(f"council failed for {job_hash}: {e}") from e
     ai_response = response_dict["content"]
+    # Provenance. The fields reported at the end (critique_outcome,
+    # guard_violations, tailoring_model) describe the COUNCIL's body; if any
+    # later stage replaces that body, they must stop describing it.
+    council_response = response_dict
+    shipped_from = "council"
     # Block-severity violations that SURVIVED the council's bounded repair
     # loop, i.e. what `quality_gate` finalized best-effort with. `None` when
     # the engine reports no guard verdict at all, which is a different fact
@@ -913,28 +1037,14 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         logger.error(f"[tailor] AI returned empty body for job {job_hash}")
         raise TailorError(f"AI returned empty body for {job_hash}")
 
-    # Splice: base preamble (known-good) + AI body + \end{document}
-    tailored_tex = _splice_tex(base_preamble, ai_body)
-
-    # Fix common AI LaTeX typos and unescaped special characters
-    _TYPO_FIXES = {
-        "\\emphergencystretch": "\\emergencystretch",
-        "\\emergecystretch": "\\emergencystretch",
-        "\\emergenystretch": "\\emergencystretch",
-    }
-    for typo, fix in _TYPO_FIXES.items():
-        if typo in tailored_tex:
-            tailored_tex = tailored_tex.replace(typo, fix)
-
-    # Escape unescaped special characters in the BODY only (not preamble).
-    # The preamble uses #1, #2 etc as macro parameters — escaping those breaks everything.
-    # (`re` is the module imported at the top of this file -- a redundant
-    # local `import re` used to live on this line. Harmless on its own, but
-    # it makes `re` a local name for the ENTIRE function body per Python's
-    # scoping rules, which broke as soon as this function gained an earlier
-    # module-level `re.search` call above -- see the base_skills_text block
-    # near the top of this function. Removed rather than worked around.)
-    tailored_tex = escape_body_specials(tailored_tex)
+    # Splice: base preamble (known-good) + AI body + \end{document}, with the
+    # typo fixes and BODY-only escaping (the preamble uses #1, #2 as macro
+    # parameters — escaping those breaks everything). `_assemble` is shared
+    # with every retry so all attempts are judged as the document they would
+    # ship as. (`re` is the module imported at the top of this file -- a
+    # redundant local `import re` used to live here; it made `re` a local name
+    # for the ENTIRE function body and broke the earlier `re.search` above.)
+    tailored_tex = _assemble(base_preamble, ai_body)
 
     # REMOVED here: a `word_count < 500` fallback that sat on this line and
     # swapped `tailored_tex = base_tex` WITHOUT appending to the
@@ -1007,17 +1117,22 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         validation_errors, job_hash, user_prompt, system_prompt, tailor_max_tokens,
         base_preamble, header_markers, ai_body, tailored_tex, response_dict,
     )
+    if response_dict is not council_response:
+        shipped_from = "single_call_retry"
 
 
     shipped_quality: list[str] | None = None
+    # Each fabricated claim deterministically removed from the shipped body,
+    # as written in it. Empty when nothing was stripped, including on every
+    # fallback (the corpus was not edited).
+    fabrications_stripped: list[str] = []
 
-    if validation_errors:
-        logger.warning(
-            f"[tailor] validation failed for {job_hash}: {'; '.join(validation_errors)} "
-            f"— falling back to base resume"
-        )
-        tailored_tex = base_tex
-    else:
+    # Everything below runs only on a body that cleared the hard gates, and
+    # each stage may ADD to `validation_errors`. The corpus swap happens in
+    # exactly one place afterwards — the `if validation_errors:` branch — so
+    # every reason a generated body is refused reaches `used_fallback` and the
+    # summary line (tests/unit/test_tailor_fallback_is_recorded.py pins that).
+    if not validation_errors:
         # Quality validation — writing quality, not just structure
         quality_warnings = _quality_warnings(ai_body, base_body, fabrication_baseline)
         shipped_quality = quality_warnings
@@ -1045,18 +1160,25 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
                 retry_body = retry_body.removesuffix("\\end{document}").strip()
                 # Structure before style. "Fewer warnings" is not an
                 # improvement if the retry got there by dropping half the
-                # document: a shorter body trivially contains fewer banned
-                # phrases, so an incomplete retry scores BETTER on the count
-                # below than the complete body it would replace. The hard
-                # gates above already ran on `ai_body`; nothing re-ran them on
-                # `retry_body`, so this is where a truncated retry used to be
-                # able to overwrite a valid tailored resume.
-                retry_missing = _check_required_sections(retry_body)
-                if retry_dict.get("truncated") or retry_missing:
+                # document, or by narrating its plan into it: a shorter body
+                # trivially contains fewer banned phrases, and so does one that
+                # opens "Let's start by reordering the skills". The retry must
+                # clear EVERY hard gate that judged the body it would replace —
+                # the same `_validation_errors` builder, on the document as it
+                # would ship (CLAUDE.md #14). Until 2026-10-08 only sections and
+                # truncation were re-checked here, so a prompt echo, a missing
+                # header or unbalanced braces could replace a valid body and
+                # ship with used_fallback False. Truncation is checked on top:
+                # a body cut off at max_tokens can lose content without
+                # tripping any other gate.
+                retry_tex = _assemble(base_preamble, retry_body)
+                retry_invalid = _validation_errors(retry_tex, retry_body, header_markers)
+                if retry_dict.get("truncated"):
+                    retry_invalid = ["cut off at max_tokens", *retry_invalid]
+                if retry_invalid:
                     logger.warning(
                         f"[tailor] Discarding quality retry for {job_hash}: "
-                        + ("cut off at max_tokens" if retry_dict.get("truncated")
-                           else f"missing sections {retry_missing}")
+                        + "; ".join(retry_invalid[:3])
                     )
                     raise _RetryRejected
                 # Re-check quality. The two sides of this comparison MUST count
@@ -1074,13 +1196,19 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
                 # reject.
                 retry_quality = _quality_warnings(
                     retry_body, base_body, fabrication_baseline)
-                if len(retry_quality) < len(quality_warnings):
+                # Ranked, not merely counted: a block-severity finding
+                # (fabrication) outweighs any number of style findings, so a
+                # retry that drops a fabricated skill is an improvement even if
+                # it picks up a banned phrase, and one that keeps it is not
+                # rescued by losing two. Both sides go through `_rank` over the
+                # same builder's output.
+                if _rank(retry_quality) < _rank(quality_warnings):
                     logger.info(f"[tailor] Retry improved quality: {len(quality_warnings)} -> {len(retry_quality)} warnings")
                     ai_body = retry_body
                     shipped_quality = retry_quality
                     response_dict = retry_dict
-                    tailored_tex = _splice_tex(base_preamble, ai_body)
-                    tailored_tex = escape_body_specials(tailored_tex)
+                    shipped_from = "single_call_retry"
+                    tailored_tex = retry_tex
                 else:
                     logger.info("[tailor] Retry did not improve quality, keeping original")
             except _RetryRejected:
@@ -1088,24 +1216,106 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
             except RuntimeError:
                 logger.warning("[tailor] Quality retry failed, keeping original")
 
-    # Composition enforcement — the rules above are COUNTED, not just asked
-    # for. Runs last so it has the final word on whichever body the quality
-    # retry settled on, and only when a generated document is what ships:
-    # `tailored_tex is base_tex` means an earlier fallback (short body, or a
-    # failed hard gate) already chose the corpus, and re-splicing a repaired
-    # body over that deliberate fallback would undo it.
-    if tailored_tex is not base_tex:
-        repaired_body = _enforce_composition(
+        # Composition enforcement — the rules above are COUNTED, not just
+        # asked for. Runs after the quality retry so it has the final word on
+        # whichever body that settled on. Inside this block, so it never runs
+        # on a body the hard gates already refused.
+        repaired_body, repaired_quality, repair_dict = _enforce_composition(
             ai_body=ai_body,
+            quality=shipped_quality,
             policy=composition_policy,
             user_prompt=user_prompt,
             system_prompt=system_prompt,
             max_tokens=tailor_max_tokens,
             job_hash=job_hash,
+            base_preamble=base_preamble,
+            base_body=base_body,
+            header_markers=header_markers,
+            fabrication_baseline=fabrication_baseline,
         )
         if repaired_body != ai_body:
             ai_body = repaired_body
-            tailored_tex = escape_body_specials(_splice_tex(base_preamble, ai_body))
+            # The repair's own measurement, so the reported warnings describe
+            # the body that ships rather than the one it replaced.
+            shipped_quality = repaired_quality
+            response_dict = repair_dict or response_dict
+            shipped_from = "single_call_retry"
+            tailored_tex = _assemble(base_preamble, ai_body)
+
+        # FABRICATION BLOCKS. A claimed technology the candidate's resume rows
+        # never mention is the one finding output_guards raises at "block"
+        # for this task, and CLAUDE.md #13 says a block must stop the
+        # document. Until 2026-10-08 nothing did: the council finalizes
+        # best-effort once its repair budget is spent (41% of runs in the
+        # 2026-10-07 batch), and this handler only REPORTED the finding in
+        # `quality_warnings`, which shared.resume_verdict grades as a
+        # non-blocking style note. So a résumé claiming Kotlin shipped as a
+        # warn-grade tailor.
+        #
+        # By here the finding has had every repair this pipeline offers: two
+        # council rounds (the guard folds it into the repair prompt verbatim)
+        # and the quality retry above, which is told "FIX: fabrication: ..."
+        # and now prefers any retry that drops it. What survives all of that
+        # is first STRIPPED (below); only what cannot be stripped cleanly is
+        # refused: the reasons join `validation_errors`, the corpus — every
+        # claim in it is the candidate's own — is composed and shipped below,
+        # and `used_fallback` and the summary line say why.
+        #
+        # Same detector, same union baseline as the council's guard
+        # (`_check_fabrication` via `_quality_warnings`); nothing here widens
+        # what counts as a fabrication (CLAUDE.md #16).
+        validation_errors = _blocking_findings(shipped_quality)
+        if validation_errors:
+            stripped = _recover_by_stripping(
+                ai_body, job_hash=job_hash, base_preamble=base_preamble,
+                base_body=base_body, header_markers=header_markers,
+                fabrication_baseline=fabrication_baseline)
+            if stripped is not None:
+                ai_body, tailored_tex, shipped_quality, removed = stripped
+                fabrications_stripped = list(removed)
+                validation_errors = []
+
+        # A COMPOSITION PREFERENCE BREAK REPLACES THE TAILORING. A generated
+        # body that broke a preference picked the wrong entries, not merely
+        # too many, and composing can only delete: measured on 385ba44d33e6,
+        # the council emitted 3 experience entries -- within the cap -- having
+        # chosen Seattle Kraken and omitted UT Arlington IT. Trimming that body
+        # would leave two entries, still without the role the user asked for.
+        # The corpus holds all three, so the corpus is composed instead.
+        #
+        # That is a fallback, and until 2026-10-08 it was not reported as one:
+        # the swap happened in the trimming block below, after this branch,
+        # with validation_errors empty -- so the run said used_fallback False
+        # and "(ok)" for a document whose tailoring had been thrown away. It is
+        # decided here now, so the single recording branch below does the swap.
+        # Only when the corpus itself composes to a compliant document: if it
+        # cannot, the generated body (tailored, wrong entries) still beats an
+        # uncomposable corpus, exactly as before.
+        if not validation_errors:
+            pref_broken = _check_preferences(tailored_tex, composition_policy)
+            if pref_broken:
+                composed, _ = compose_from_corpus(base_tex, composition_policy)
+                if not _check_composition(composed, composition_policy):
+                    validation_errors = [
+                        "composition preference broken; composed from the corpus: "
+                        + "; ".join(pref_broken)]
+                else:
+                    logger.warning(
+                        "[tailor] %s broke a composition PREFERENCE (%s) and the "
+                        "corpus cannot be composed to the policy either; "
+                        "shipping the generated body", job_hash, "; ".join(pref_broken))
+
+    if validation_errors:
+        logger.warning(
+            f"[tailor] validation failed for {job_hash}: {'; '.join(validation_errors)} "
+            f"— falling back to base resume"
+        )
+        tailored_tex = base_tex
+        shipped_from = "corpus_fallback"
+        fabrications_stripped = []
+        # Nothing was measured on the corpus: `None`, which the verdict grades
+        # `unmeasured`, never the refused body's findings.
+        shipped_quality = None
 
     # Count the document that is ACTUALLY being shipped, whichever branch
     # produced it. An empty list on the return value is therefore a claim that
@@ -1130,26 +1340,11 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         # fallback or a generated body whose two AI repair rounds did not
         # converge — and the result is accepted only if it FULLY complies.
         # A partial trim would mean mangling the document for nothing.
-        # WHICH document to compose from is the decision here. A generated
-        # body that broke a PREFERENCE picked the wrong entries, not merely too
-        # many, and composing can only delete: measured on 385ba44d33e6, the
-        # council emitted 3 experience entries -- within the cap, so nothing
-        # fired -- having chosen Seattle Kraken and omitted UT Arlington IT.
-        # Trimming that body would drop Kraken and leave two entries, still
-        # without the role the user asked for. The corpus holds all three, so a
-        # preference break composes from the corpus instead.
-        #
-        # Cap-only violations keep the generated body: its tailoring is real
-        # work and the only thing wrong with it is length.
-        pref_broken = _check_preferences(tailored_tex, composition_policy)
-        seed = base_tex if (tailored_tex is not base_tex and pref_broken) else tailored_tex
-        if seed is not tailored_tex:
-            logger.warning(
-                "[tailor] %s broke a composition PREFERENCE (%s); composing "
-                "from the corpus instead of trimming the generated body",
-                job_hash, "; ".join(pref_broken),
-            )
-        trimmed, actions = compose_from_corpus(seed, composition_policy)
+        # A preference break was already routed to the corpus above, through
+        # the recording branch. What reaches here is the corpus (fallback) or
+        # a generated body whose only problem is length; cap-only violations
+        # keep the generated body, because its tailoring is real work.
+        trimmed, actions = compose_from_corpus(tailored_tex, composition_policy)
         still_wrong = _check_composition(trimmed, composition_policy)
         if actions and not still_wrong:
             source = "base-resume fallback" if tailored_tex is base_tex else "generated body"
@@ -1176,15 +1371,35 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
     # adjudicated this result or fell back to the first candidate — measured at
     # 26% adjudication over 80 rounds, and previously discoverable only by
     # grepping CloudWatch. Recording it makes the rate one SQL query.
-    outcome = response_dict.get("critique_outcome", "unknown")
+    #
+    # Every field describes the document that SHIPPED. When a later stage
+    # replaced the council's body, the council's outcome and guard verdict
+    # describe a discarded document, so they are not reported:
+    #   single_call_retry  a corrective/quality retry or composition repair
+    #                      shipped -- one model, no critic, no council guard
+    #   corpus_fallback    the corpus shipped; no model wrote it
+    # Before 2026-10-08 a retry recorded "unknown" here (its response has no
+    # critique_outcome) and a corpus fallback recorded the council's outcome,
+    # e.g. "adjudicated", for a document no council produced.
+    if shipped_from == "council":
+        outcome = response_dict.get("critique_outcome", "unknown")
+        reported_guard_violations = surviving_guard_violations
+        tailoring_model = (f"{response_dict.get('provider', 'council')}:"
+                           f"{response_dict.get('model', 'consensus')}")
+    else:
+        outcome = shipped_from
+        # None, not []: no guard ran on this document (see _surviving_blocking).
+        reported_guard_violations = None
+        tailoring_model = (
+            "corpus:composed" if shipped_from == "corpus_fallback"
+            else f"{response_dict.get('provider', 'retry')}:{response_dict.get('model', 'unknown')}")
     update = {
         "resume_version": 1,
-        "tailoring_model": f"{response_dict.get('provider', 'council')}:{response_dict.get('model', 'consensus')}",
+        "tailoring_model": tailoring_model,
         "critique_outcome": outcome,
     }
     try:
-        db.table("jobs").update(update).eq("user_id", user_id) \
-            .eq("job_hash", job_hash).execute()
+        job_row_saved = update_job_row(db, user_id, job_hash, update) > 0
     except Exception as exc:
         # PostgREST fails the WHOLE update on an unknown column, with PGRST204
         # and the wording "schema cache" — never "does not exist", which is raw
@@ -1198,12 +1413,14 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
             "supabase/migrations/20260930020000_jobs_critique_outcome.sql"
         )
         update.pop("critique_outcome")
-        db.table("jobs").update(update).eq("user_id", user_id) \
-            .eq("job_hash", job_hash).execute()
+        job_row_saved = update_job_row(db, user_id, job_hash, update) > 0
+    if not job_row_saved:
+        logger.error("[tailor] %s: the jobs update matched no row (by job_hash or "
+                     "canonical_hash); tailoring_model and critique_outcome were "
+                     "not recorded", job_hash)
 
     if outcome != "adjudicated":
-        logger.warning("[tailor] %s was NOT adjudicated (outcome=%s) — the "
-                       "winner is candidate 1, unreviewed", job_hash, outcome)
+        logger.warning("[tailor] %s was NOT adjudicated (outcome=%s)", job_hash, outcome)
 
     # Both this line and `used_fallback` below read `validation_errors`, and
     # they must keep reading it: the defect this replaced was a fallback that
@@ -1214,7 +1431,8 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
     logger.info(
         f"[tailor] {tailoring_depth.capitalize()} tailor for {job_hash} "
         + (f"(fallback: {'; '.join(validation_errors)})" if validation_errors
-           else "(ok)")
+           else f"(ok; fabrication stripped: {', '.join(fabrications_stripped)})"
+           if fabrications_stripped else "(ok)")
     )
     return {
         "job_hash": job_hash,
@@ -1240,10 +1458,19 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         # could see it. `None` means it was never measured (the fallback path)
         # and is graded as such by shared.resume_verdict -- an empty list is
         # the stronger claim that the shipped body was checked and is clean.
+        #
+        # A stripped fabrication is reported here too, as an advisory finding:
+        # the shipped body was edited after the model wrote it, so it must not
+        # grade `pass` as though nothing happened. See `_stripped_notes`.
         "quality_warnings": (
             None if shipped_quality is None
-            else shipped_quality + _check_unquantified(ai_body)
+            else shipped_quality + _stripped_notes(fabrications_stripped)
+            + _check_unquantified(ai_body)
         ),
+        # What was cut out of the shipped body because the fabrication detector
+        # flagged it and no repair removed it. save_job stores it on
+        # jobs.resume_verdict beside the grade.
+        "fabrications_stripped": fabrications_stripped,
         # What the council's guard still objected to when it gave up. Recorded
         # rather than graded, for now: `shared.resume_verdict` does not take it
         # as a grading input because its false-positive rate at this position
@@ -1251,5 +1478,11 @@ PRESERVE all \\textbf{{}} formatting from the base resume."""
         # detector's FP rate is measured BEFORE it blocks, not after. Storing
         # it is what makes that measurement possible -- the 41% figure above
         # was only obtainable from CloudWatch, for one batch, by hand.
-        "guard_violations": surviving_guard_violations,
+        "guard_violations": reported_guard_violations,
+        # Which stage produced the shipped body: "council", "single_call_retry"
+        # or "corpus_fallback". The last always coincides with used_fallback.
+        "shipped_from": shipped_from,
+        # Whether the jobs row was actually found and updated. A zero-row
+        # update is a success to PostgREST; it is not one here.
+        "job_row_saved": job_row_saved,
     }

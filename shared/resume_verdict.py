@@ -52,10 +52,23 @@ UNMEASURED = "unmeasured"
 #   composition  the hard rules the user asked to state once and for all
 #   ats          a resume an ATS cannot parse is worth nothing, however it reads
 #   writing      NOT blocking: these are style findings whose false-positive
-#                rate is not characterised (CLAUDE.md #16), and the one
-#                genuinely disqualifying member of that family — fabrication —
-#                already blocks upstream in guardrails.output_guards. Blocking
-#                here too would double-count it and let a banned phrase sink a
+#                rate is not characterised (CLAUDE.md #16). The one genuinely
+#                disqualifying member of that family — fabrication — is
+#                enforced in tailor_resume.handler, not here: a generated body
+#                still carrying a fabrication finding after every repair has
+#                the flagged list entries STRIPPED and, if the stripped body
+#                passes every gate again, ships tailored with an advisory
+#                "fabrication stripped: ..." finding here (graded `warn`, never
+#                `pass`: the shipped body is not the one any model or reviewer
+#                judged). If it cannot be stripped cleanly it is refused, the
+#                composed corpus ships, `used_fallback` is True and
+#                `quality_warnings` is None (graded `unmeasured`). Either way
+#                a fabrication finding never reaches this check on a shipped
+#                tailored body. Until 2026-10-08 this comment claimed it "already
+#                blocks upstream in guardrails.output_guards"; it did not —
+#                the council finalizes best-effort once its repair budget is
+#                spent (41% of runs), and the handler only reported it.
+#                Blocking `writing` wholesale would let a banned phrase sink a
 #                document, which is a repair, not a rejection.
 CHECKS: dict[str, bool] = {
     "pages": True,
