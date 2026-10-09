@@ -112,6 +112,20 @@ class Query:
                              else r.get(col) == target)
         return self
 
+    def or_(self, expr):
+        # Only the shape the app sends: "colA.eq.v1,colB.eq.v2" (no nesting,
+        # no other operators). Anything else is refused rather than guessed,
+        # so a new filter cannot silently match everything.
+        terms = []
+        for part in expr.split(","):
+            col, op, val = (part.split(".", 2) + ["", ""])[:3]
+            if op != "eq" or not col or val == "":
+                raise NotImplementedError(f"or_ term not modelled: {part!r}")
+            terms.append((col, val))
+        self._filters.append(lambda r: any(str(r.get(c)) == v for c, v in terms
+                                           if r.get(c) is not None))
+        return self
+
     @property
     def not_(self):
         return _Not(self)

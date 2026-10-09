@@ -99,9 +99,12 @@ def test_the_jobs_raw_row_carries_the_posting(world):
     assert raw[0]["description"] == JD
     assert raw[0]["title"] == BODY["job_title"]
     assert raw[0]["company"] == "Acme"
-    assert raw[0]["location"] == "Dublin"
-    assert raw[0]["apply_url"] == BODY["apply_url"]
     assert raw[0]["source"] == "manual"
+    # The submitter's own fields go on THEIR row, never on the shared one
+    # (test_jobs_raw_holds_no_submitter_fields.py).
+    assert "location" not in raw[0] and "apply_url" not in raw[0]
+    assert job["location"] == "Dublin"
+    assert job["apply_url"] == BODY["apply_url"]
 
 
 def test_a_reused_score_also_repairs_an_older_row(world):

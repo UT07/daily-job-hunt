@@ -74,7 +74,7 @@ def test_a_first_submission_still_creates_the_row(world):
     client, db, _ = world
     assert client.post("/api/score", json=A).status_code == 202
     rows = db.rows("jobs_raw", job_hash=HASH)
-    assert len(rows) == 1 and rows[0]["location"] == "Dublin"
+    assert len(rows) == 1 and rows[0]["description"] == JD
 
 
 @pytest.mark.parametrize("route", ["/api/score", "/api/pipeline/run-single"])

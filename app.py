@@ -645,8 +645,7 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
     # Score again on a job saved before the fix (a reuse, no model call) also
     # repairs it. Same key as the `jobs` row: `_find_or_create_job` stores
     # canonical_hash of these same three fields.
-    _upsert_jobs_raw(chash, req.job_title, req.company, req.job_description,
-                     req.location, req.apply_url)
+    _upsert_jobs_raw(chash, req.job_title, req.company, req.job_description)
     if not req.force:
         prior = _stored_score(user.id, chash, matched_resume)
         if prior:
@@ -1171,25 +1170,32 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
     # Compute canonical hash for dedup
     chash = canonical_hash(company, title, description)
 
-    # Look up by canonical_hash for this user
+    # Look up this user's row by EITHER key. Rows this function creates carry
+    # the hash in canonical_hash; rows score_batch creates (scraped jobs, and
+    # Add Job before 2026-10-09) carry the same value in job_hash. Matching
+    # canonical_hash alone missed the second kind and inserted a duplicate of
+    # a job the user already had. chash is hex from canonical_hash, so it is
+    # safe inside the or= expression.
     try:
         result = (
             _db.client.table("jobs")
             .select("*")
             .eq("user_id", user_id)
-            .eq("canonical_hash", chash)
-            .maybe_single()
+            .or_(f"job_hash.eq.{chash},canonical_hash.eq.{chash}")
+            .limit(1)
             .execute()
         )
-        if result and result.data:
+        found = getattr(result, "data", None) if result else None
+        existing = found[0] if isinstance(found, list) and found else None
+        if isinstance(existing, dict) and existing.get("job_id"):
             # Found existing job — merge manual data (manual wins)
-            existing = result.data
             manual_data = {
                 "description": description,
                 "title": title,
                 "company": company,
                 "source": "manual",
                 "apply_url": apply_url,
+                "location": location,
             }
             merged = merge_manual_job(existing, manual_data)
             # Update the existing row with merged data
@@ -1203,6 +1209,9 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
             # the new URL, or the stored one, and never "" over a real link.
             if merged.get("apply_url"):
                 merged_update["apply_url"] = merged["apply_url"]
+            # Same rule for location: the caller's own value, on their own row.
+            if merged.get("location"):
+                merged_update["location"] = merged["location"]
             _db.client.table("jobs").update(merged_update).eq("job_id", existing["job_id"]).eq("user_id", user_id).execute()
             logger.info("Merged manual JD into existing job %s (hash=%s)", existing["job_id"], chash)
             return existing["job_id"]
@@ -1250,8 +1259,7 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
     return ""
 
 
-def _upsert_jobs_raw(job_hash: str, title: str, company: str, description: str,
-                     location: str = "", apply_url: str = "") -> bool:
+def _upsert_jobs_raw(job_hash: str, title: str, company: str, description: str) -> bool:
     """Store a manually supplied posting in `jobs_raw` under `job_hash`.
 
     Every generator (TailorResume, GenerateCoverLetter, ScoreSingleJob) reads
@@ -1277,8 +1285,17 @@ def _upsert_jobs_raw(job_hash: str, title: str, company: str, description: str,
     first user's tailoring and geo cap read: cross-tenant tampering, flagged by
     a security review on 2026-10-09. `ignore_duplicates=True` is ON CONFLICT
     DO NOTHING. Nothing is lost by it: a matching hash means the same company,
-    title and description up to case and whitespace. The caller's own
-    location and apply_url still live on their own `jobs` row.
+    title and description up to case and whitespace.
+
+    And ONLY hash-bound content is stored: job_hash, title, company,
+    description, source. Never the submitter's location or apply_url. The
+    same review re-flagged insert-if-absent alone as incomplete: the hash does
+    not cover those two fields, and score_batch copied jobs_raw's apply_url and
+    location into the scoring user's own row -- so the FIRST submitter of a JD
+    chose the Apply link (phishing) and the location (the geo score cap) for
+    every later user who added it. A submitter's own location and apply_url go
+    to THEIR `jobs` row only (`_find_or_create_job`), and score_batch prefers
+    that row's values over jobs_raw's.
 
     Returns True when the row exists afterwards -- inserted now, or already
     there (DO NOTHING returns no representation for a skipped row, so an empty
@@ -1294,8 +1311,6 @@ def _upsert_jobs_raw(job_hash: str, title: str, company: str, description: str,
             "title": (title or "")[:500],
             "company": (company or "")[:200],
             "description": description,
-            "location": location or "",
-            "apply_url": apply_url or "",
             "source": "manual",
         }, on_conflict="job_hash", ignore_duplicates=True).execute()
         return True
@@ -3108,8 +3123,26 @@ def run_single_job(req: SingleJobRunRequest, user: AuthUser = Depends(get_curren
     # Upsert into jobs_raw so ScoreBatchFunction can find the row.
     # Without this, ScoreSingleJob queries jobs_raw by job_hash and gets 0 rows,
     # which collapses to matched_count=0 and CheckScoreExists routes to JobFailed.
-    _upsert_jobs_raw(job_hash, req.job_title, req.company, req.job_description,
-                     req.location, req.apply_url)
+    _upsert_jobs_raw(job_hash, req.job_title, req.company, req.job_description)
+
+    # The caller's OWN apply_url and location go on the caller's OWN row, never
+    # on the shared jobs_raw row above (see _upsert_jobs_raw). Created here,
+    # before the execution, because the state machine cannot carry them: its
+    # ScoreSingleJob Parameters name only user_id/job_hash, and naming a new
+    # field in a Pass/Task state makes it mandatory for every caller (two
+    # outages, test_single_job_sfn_contract.py). score_batch._write_job_row
+    # then finds this row by canonical_hash and updates it -- no second row --
+    # and score_batch prefers this row's apply_url/location over jobs_raw's.
+    if not _find_or_create_job(user.id, {
+        "title": req.job_title, "company": req.company,
+        "description": req.job_description, "location": req.location,
+        "apply_url": req.apply_url,
+    }):
+        logger.error(
+            "run-single: could not create the job row for %s/%s; the pipeline "
+            "will create it without the caller's apply_url and location",
+            req.company, req.job_title,
+        )
 
     sfn = _get_sfn()
     execution = sfn.start_execution(

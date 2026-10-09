@@ -131,6 +131,24 @@ def test_upsert_ignore_duplicates_still_inserts_a_new_row():
     assert res.data == [_raw()]
 
 
+def test_or_matches_either_column_and_still_ands_with_eq():
+    db = FakeSupabase({"jobs": [
+        {"job_id": "1", "user_id": "u", "job_hash": "h1", "canonical_hash": None},
+        {"job_id": "2", "user_id": "u", "job_hash": None, "canonical_hash": "h1"},
+        {"job_id": "3", "user_id": "v", "job_hash": "h1", "canonical_hash": None},
+        {"job_id": "4", "user_id": "u", "job_hash": "h2", "canonical_hash": "h2"},
+    ]})
+    got = (db.table("jobs").select("*").eq("user_id", "u")
+           .or_("job_hash.eq.h1,canonical_hash.eq.h1").execute().data)
+    assert sorted(r["job_id"] for r in got) == ["1", "2"]
+
+
+def test_or_refuses_shapes_it_does_not_model():
+    db = FakeSupabase({"jobs": []})
+    with pytest.raises(NotImplementedError):
+        db.table("jobs").select("*").or_("job_hash.ilike.h%,canonical_hash.eq.h1")
+
+
 def test_upsert_rejects_keywords_supabase_py_does_not_have():
     db = FakeSupabase({"jobs_raw": []})
     with pytest.raises(TypeError):

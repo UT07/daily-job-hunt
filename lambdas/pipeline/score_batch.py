@@ -69,8 +69,55 @@ _USER_OWNED = frozenset({
     "job_id", "user_id", "job_hash", "application_status", "first_seen",
 })
 
+# Fields the USER may have supplied for their own row (Add Job / Save & Score
+# send apply_url and location). jobs_raw is SHARED and keyed by a hash that
+# does not cover them, so its values are never allowed to overwrite the
+# user's: 2026-10-09 security review -- the first submitter of a JD chose the
+# Apply link and the geo-capped location for every later user who added it.
+# On an existing row these are written only to FILL an empty value, never to
+# replace or blank a stored one.
+_NEVER_BLANK = ("apply_url", "location")
 
-def _write_job_row(db, job_record: dict) -> None:
+_LOOKUP = object()
+
+
+def _user_job_row(db, user_id: str, job_hash: str) -> dict | None:
+    """This user's existing row for the job, matched by job_hash OR canonical_hash.
+
+    Returns {"job_id", "apply_url", "location"} for a REAL row, else None.
+    Raises if the lookup itself fails; callers decide what that means.
+    """
+    found = (db.table("jobs").select("job_id, apply_url, location")
+             .eq("user_id", user_id)
+             .or_(f"job_hash.eq.{job_hash},canonical_hash.eq.{job_hash}")
+             .limit(1).execute())
+    rows = found.data if isinstance(found.data, list) else []
+    candidate = rows[0] if rows else None
+    # A REAL row, not merely something truthy. `(found.data or [None])[0]`
+    # accepted anything a client might hand back -- and a shape that is not
+    # a row would route a new job into the UPDATE branch, where its
+    # `.eq("job_id", ...)` matches nothing and the score is silently lost.
+    if isinstance(candidate, dict) and isinstance(candidate.get("job_id"), str):
+        return candidate
+    return None
+
+
+def _prefer_users_own(job: dict, own: dict | None) -> dict:
+    """`job` (a jobs_raw row) with the user's own apply_url/location on top.
+
+    The user's non-empty value wins; jobs_raw's is the fallback, which is how a
+    scraped job still reaches the user with the scraper's link. Used for the
+    record AND for the geo cap, so the cap judges the location the user sees.
+    """
+    view = dict(job)
+    for field in _NEVER_BLANK:
+        mine = (own or {}).get(field)
+        if mine:
+            view[field] = mine
+    return view
+
+
+def _write_job_row(db, job_record: dict, existing=_LOOKUP) -> None:
     """Update the row for this (user_id, job_hash) if one exists, else insert.
 
     A plain insert with a fresh `job_id = uuid4()` produced a SECOND row for a
@@ -106,31 +153,25 @@ def _write_job_row(db, job_record: dict) -> None:
 
     A failed lookup falls through to insert rather than raising — scoring a job
     and losing the result is worse than one duplicate row.
+
+    `existing` may be passed in when the caller already looked the row up
+    (the handler does, to prefer the user's own apply_url/location); the
+    default looks it up here. _NEVER_BLANK fields only fill an empty stored
+    value: never replace it, never blank it.
     """
-    existing = None
-    try:
-        h = job_record["job_hash"]
-        found = (db.table("jobs").select("job_id")
-                 .eq("user_id", job_record["user_id"])
-                 .or_(f"job_hash.eq.{h},canonical_hash.eq.{h}")
-                 .limit(1).execute())
-        rows = found.data if isinstance(found.data, list) else []
-        candidate = rows[0] if rows else None
-        # A REAL row, not merely something truthy. `(found.data or [None])[0]`
-        # accepted anything a client might hand back — and a shape that is not
-        # a row would route a new job into the UPDATE branch, where its
-        # `.eq("job_id", ...)` matches nothing and the score is silently lost.
-        # Losing a score is strictly worse than a duplicate row, which is the
-        # whole failure this function exists to avoid, so the check is strict.
-        if isinstance(candidate, dict) and isinstance(candidate.get("job_id"), str):
-            existing = candidate
-    except Exception:  # noqa: BLE001 — see docstring
-        existing = None
+    if existing is _LOOKUP:
+        try:
+            existing = _user_job_row(db, job_record["user_id"], job_record["job_hash"])
+        except Exception:  # noqa: BLE001 — see docstring
+            existing = None
 
     if not existing:
         db.table("jobs").insert(job_record).execute()
         return
     update = {k: v for k, v in job_record.items() if k not in _USER_OWNED}
+    for field in _NEVER_BLANK:
+        if not update.get(field) or existing.get(field):
+            update.pop(field, None)
     db.table("jobs").update(update).eq("job_id", existing["job_id"]).execute()
 
 
@@ -358,6 +399,15 @@ def handler(event, context):
             skipped_count += 1
             continue
 
+        # The user's own row, if any: its apply_url/location win over the
+        # shared jobs_raw row's (see _NEVER_BLANK). A failed lookup means
+        # "no row" here, as it always has in _write_job_row.
+        try:
+            own = _user_job_row(db, user_id, job["job_hash"])
+        except Exception:  # noqa: BLE001
+            own = None
+        job = _prefer_users_own(job, own)
+
         score_result = score_single_job_deterministic(job, resume_tex)
 
         if score_result is None:
@@ -454,7 +504,7 @@ def handler(event, context):
             "trace_id": score_result.get("trace_id"),
         }
         try:
-            _write_job_row(db, job_record)
+            _write_job_row(db, job_record, existing=own)
             inserted += 1
         except Exception as e:
             # Retry without the column the error actually names.
