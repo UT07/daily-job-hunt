@@ -94,6 +94,7 @@ from tailorer import tailor_resume
 from types import SimpleNamespace
 
 from utils.canonical_hash import canonical_hash
+from shared import s3_presign
 from shared.tailor_hash import resolve_tailor_hash
 
 logger = logging.getLogger(__name__)
@@ -877,6 +878,29 @@ def _save_task(task_id: str, user_id: str, data: dict):
     _db.client.table("pipeline_tasks").upsert(row, on_conflict="task_id").execute()
 
 
+def _with_fresh_pdf_url(result):
+    """Mint the result's `pdf_url` now, from the key the task stored.
+
+    A task result is persisted through `_sanitize_aws_creds`, which rewrites
+    anything shaped like an ASIA key id or an IQoJ session token -- and a
+    presigned URL carries both by design. Stored, the Studio's compile link
+    came back as `AWSAccessKeyId=<REDACTED_AWS_KEY>&...` and S3 answered 403
+    InvalidAccessKeyId (live run, 2026-10-09). So tasks store the KEY, and the
+    URL is signed here, at the moment it is handed to the browser, by the same
+    helper the dashboard uses.
+    """
+    if not isinstance(result, dict):
+        return result
+    key = result.get("pdf_s3_key") or result.get("s3_key")
+    if not key:
+        return result
+    try:
+        return {**result, "pdf_url": s3_presign.presign_get(key, client=_get_s3())}
+    except Exception as e:
+        logger.warning("Could not presign %s for a task result: %s", key, e)
+        return {**result, "pdf_url": ""}
+
+
 def _load_task(task_id: str, *, user_id: str) -> dict | None:
     """Load one of `user_id`'s tasks from Supabase; None if absent OR not theirs.
 
@@ -897,20 +921,16 @@ def _load_task(task_id: str, *, user_id: str) -> dict | None:
     row = result.data
     task = {"status": row["status"]}
     if row.get("result"):
-        task["result"] = row["result"]
+        task["result"] = _with_fresh_pdf_url(row["result"])
     if row.get("error"):
         task["error"] = row["error"]
     return task
 
 
-_s3_client = None
-
-
 def _get_s3():
-    global _s3_client
-    if _s3_client is None:
-        _s3_client = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
-    return _s3_client
+    """The process's S3 client -- the same one every presigned URL is signed
+    with (shared/s3_presign.py). One client, default credential chain."""
+    return s3_presign.s3_client()
 
 
 _FILENAME_SAFE = re.compile(r"[^A-Za-z0-9]+")
@@ -1048,14 +1068,9 @@ def _refresh_s3_urls(jobs: list) -> list:
                     fname = artifact_filename(kind, job.get("company"), job.get("title"), owner)
 
                     def _url(disposition):
-                        return s3.generate_presigned_url(
-                            "get_object",
-                            Params={
-                                "Bucket": bucket,
-                                "Key": s3_key,
-                                "ResponseContentDisposition": f'{disposition}; filename="{fname}"',
-                            },
-                            ExpiresIn=7 * 24 * 3600,  # 7 days
+                        return s3_presign.presign_get(
+                            s3_key, bucket=bucket, client=s3,
+                            disposition=f'{disposition}; filename="{fname}"',
                         )
 
                     # TWO urls, because one header cannot serve both uses.
@@ -1685,14 +1700,15 @@ def _do_rebuild_sections(job_id: str, sections: dict, user_id: str) -> dict:
     4. Upload updated .tex and .pdf to S3 (overwrite in place)
     5. Update the job row with the new resume_s3_url
 
-    Returns dict with pdf_url and tex_s3_key.
+    Returns dict with pdf_s3_key and tex_s3_key; the poll endpoint signs
+    pdf_url from the key when the browser asks for it.
     """
     from lambdas.pipeline.parse_sections import rebuild_tex_from_sections
 
     bucket = os.environ.get("S3_BUCKET", os.environ.get("S3_BUCKET_NAME", "utkarsh-job-hunt"))
     tex_s3_key = _tailored_tex_key(user_id, job_id)
 
-    s3 = boto3.client("s3", region_name=os.environ.get("AWS_REGION", "eu-west-1"))
+    s3 = _get_s3()
 
     # Fetch base .tex (for preamble)
     try:
@@ -1727,11 +1743,7 @@ def _do_rebuild_sections(job_id: str, sections: dict, user_id: str) -> dict:
 
     # Generate a presigned URL for the new PDF (7-day expiry)
     try:
-        pdf_url = s3.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": bucket, "Key": pdf_s3_key},
-            ExpiresIn=7 * 24 * 60 * 60,
-        )
+        pdf_url = s3_presign.presign_get(pdf_s3_key, bucket=bucket, client=s3)
     except Exception:
         pdf_url = ""
 
@@ -1743,11 +1755,13 @@ def _do_rebuild_sections(job_id: str, sections: dict, user_id: str) -> dict:
     # Returns None on any failure — see _score_rebuilt_resume.
     scores = _score_rebuilt_resume(job_id, user_id, new_tex)
 
+    # No `pdf_url` in the task result: it would be persisted, scrubbed into a
+    # dead link, and expire besides. GET /api/tasks/{id} mints it from
+    # pdf_s3_key on every poll (_with_fresh_pdf_url).
     return {
         "job_id": job_id,
         "tex_s3_key": tex_s3_key,
         "pdf_s3_key": pdf_s3_key,
-        "pdf_url": pdf_url,
         "scores": scores,
     }
 

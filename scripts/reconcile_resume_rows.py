@@ -231,9 +231,9 @@ def _reconcile(rows, *, url, headers, user_id, commit, verbose,
         update = {} if links_only else {"resume_verdict": verdict.to_row()}
         if needs_link:
             update["resume_s3_key"] = pdf_key
-            update["resume_s3_url"] = s3.generate_presigned_url(
-                "get_object", Params={"Bucket": bucket, "Key": pdf_key},
-                ExpiresIn=PRESIGN_SECONDS)
+            from shared.s3_presign import presign_get
+            update["resume_s3_url"] = presign_get(
+                pdf_key, bucket=bucket, expires=PRESIGN_SECONDS, client=s3)
         # Match on EITHER hash column, and count what was actually changed.
         #
         # This matched `job_hash=eq.{h}` alone. Rows created by
