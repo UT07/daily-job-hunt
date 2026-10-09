@@ -531,6 +531,16 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
 
     # Same job, same resume, already scored -> the stored numbers, every time.
     chash = canonical_hash(req.company, req.job_title, req.job_description)
+
+    # Store the posting where the generators read it, on BOTH paths. Before
+    # this, a Save-&-Score'd job had a `jobs` row and no `jobs_raw` row, so
+    # Generate Resume / Regenerate / Cover Letter on it answered 409 "never
+    # stored". Done here rather than in `_score_fresh` so that pressing Save &
+    # Score again on a job saved before the fix (a reuse, no model call) also
+    # repairs it. Same key as the `jobs` row: `_find_or_create_job` stores
+    # canonical_hash of these same three fields.
+    _upsert_jobs_raw(chash, req.job_title, req.company, req.job_description,
+                     req.location, req.apply_url)
     if not req.force:
         prior = _stored_score(user.id, chash, req.resume_type)
         if prior:
@@ -1124,6 +1134,51 @@ def _find_or_create_job(user_id: str, payload: dict) -> str:
     except Exception as e:  # noqa: BLE001 — falls through to "not created"
         logger.warning("Re-check after failed insert failed: %s", e)
     return ""
+
+
+def _upsert_jobs_raw(job_hash: str, title: str, company: str, description: str,
+                     location: str = "", apply_url: str = "") -> bool:
+    """Store a manually supplied posting in `jobs_raw` under `job_hash`.
+
+    Every generator (TailorResume, GenerateCoverLetter, ScoreSingleJob) reads
+    the posting text from `jobs_raw` by hash, never from `jobs`. A job that has
+    a `jobs` row and no `jobs_raw` row therefore cannot be tailored, and the
+    re-tailor endpoints answer 409 "never stored".
+
+    ONE writer for both manual entry points -- /api/pipeline/run-single and
+    /api/score -- so they cannot drift on the key or the columns. Before
+    2026-10-09 only run-single wrote it, and every job created by Save & Score
+    was permanently untailorable (CLAUDE.md #10: the code existed, in the
+    wrong one of two places).
+
+    `job_hash` must be `canonical_hash(company, title, description)`, which is
+    what `_find_or_create_job` stores as `jobs.canonical_hash` and what
+    `resolve_tailor_hash` falls back to for a manual row.
+
+    Returns whether the write was acknowledged. A failure is logged at ERROR
+    and does not raise: the caller's own work (starting the pipeline, saving a
+    score) is still worth doing, and the re-tailor precheck turns the missing
+    row into a 409 that says what to do instead of a three-minute failure.
+    """
+    if _db is None or not job_hash or not (description or "").strip():
+        return False
+    try:
+        res = _db.client.table("jobs_raw").upsert({
+            "job_hash": job_hash,
+            "title": (title or "")[:500],
+            "company": (company or "")[:200],
+            "description": description,
+            "location": location or "",
+            "apply_url": apply_url or "",
+            "source": "manual",
+        }, on_conflict="job_hash").execute()
+        return bool(getattr(res, "data", None))
+    except Exception as e:  # noqa: BLE001 -- see docstring
+        logger.error(
+            "jobs_raw upsert failed for job_hash=%s: %s; this job cannot be "
+            "tailored until its posting is stored", job_hash, e,
+        )
+        return False
 
 
 def _update_job_artifacts(user_id: str, job_id: str, updates: dict):
@@ -2909,22 +2964,8 @@ def run_single_job(req: SingleJobRunRequest, user: AuthUser = Depends(get_curren
     # Upsert into jobs_raw so ScoreBatchFunction can find the row.
     # Without this, ScoreSingleJob queries jobs_raw by job_hash and gets 0 rows,
     # which collapses to matched_count=0 and CheckScoreExists routes to JobFailed.
-    if _db is not None:
-        try:
-            _db.client.table("jobs_raw").upsert({
-                "job_hash": job_hash,
-                "title": req.job_title[:500],
-                "company": req.company[:200],
-                "description": req.job_description,
-                "location": req.location or "",
-                "apply_url": req.apply_url or "",
-                "source": "manual",
-            }, on_conflict="job_hash").execute()
-        except Exception as e:
-            logger.warning(
-                "jobs_raw upsert failed for job_hash=%s: %s; SFN will likely fail at ScoreSingleJob",
-                job_hash, e,
-            )
+    _upsert_jobs_raw(job_hash, req.job_title, req.company, req.job_description,
+                     req.location, req.apply_url)
 
     sfn = _get_sfn()
     execution = sfn.start_execution(
