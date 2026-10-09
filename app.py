@@ -36,6 +36,7 @@ All endpoints except /api/health and /api/templates require a valid Supabase JWT
 This includes /mcp/* (RequireSupabaseJWT wraps the mounted MCP transport).
 """
 
+import hashlib
 import io
 import json
 import logging
@@ -293,6 +294,12 @@ class ScoreResponse(BaseModel):
     # True when these numbers came from the stored row rather than a fresh AI
     # call. The UI can then say so instead of implying a re-evaluation.
     reused: bool = False
+    # Which document was scored: "upload" (the caller's own tailorable
+    # résumé, the one Generate Resume tailors from -- matched_resume is then
+    # "<resume_key>@<sha256[:8]>") or "bundled" (they have none, so the
+    # repo-bundled résumé for resume_type was used -- matched_resume is then
+    # resume_type). See `_score_base_resume`.
+    resume_source: str = "bundled"
 
 
 class TailorResponse(BaseModel):
@@ -492,6 +499,51 @@ def get_templates():
 # the request, so scores remain comparable within a job and only roughly
 # comparable across jobs. Fixing that needs the response cache moved off
 # per-container disk, which is infrastructure, not a patch.
+def _score_base_resume(user_id: str, resume_type: str) -> tuple[str, str, str]:
+    """The résumé Save & Score scores against: (tex, matched_resume, source).
+
+    The CALLER'S résumé, chosen by the same validated selector every generator
+    uses (`fetch_tailorable_resume`: newest row that is real LaTeX). Until
+    2026-10-09 this endpoint scored `_resumes[resume_type]` -- the .tex files
+    bundled in the repo, which are the owner's résumé -- while Generate Resume
+    tailored from the caller's upload, so every other user's score described
+    someone else's CV. CLAUDE.md #10: the validated reader existed and this was
+    the fourth module not using it.
+
+    FALLBACK, deliberate and labelled: a user with no tailorable upload is
+    scored against the bundled résumé for `resume_type`, and `source` says
+    "bundled" so the response and the stored row are honest about it.
+
+    `matched_resume` is the reuse key `_stored_score` compares, so it must
+    identify the DOCUMENT, not just the slot. An upload is
+    "<resume_key>@<sha256[:8]>": upload_resume upserts on (user_id,
+    resume_key), so re-uploading an edited résumé keeps resume_key='default',
+    and a key-only label would reuse the old résumé's score forever.
+
+    A failure to READ the résumé raises 503. Falling back to the bundled
+    résumé on a DB blip would silently produce the exact wrong answer this
+    function exists to stop.
+    """
+    from shared.resume_format import fetch_tailorable_resume
+
+    if _db is not None and user_id:
+        try:
+            base = fetch_tailorable_resume(_db.client, user_id)
+        except Exception as e:  # noqa: BLE001 -- surfaced as 503, see docstring
+            logger.error("Could not read the base résumé for %s: %s", user_id, e)
+            raise HTTPException(
+                503, "Could not read your résumé to score against. Try again shortly.")
+        if base.row is not None and base.tex:
+            if base.skipped:
+                logger.warning(
+                    "[score] skipped %d newer resume(s) that are not LaTeX -- scoring "
+                    "the same row the tailorer will use", base.skipped)
+            key = base.row.get("resume_key") or "default"
+            digest = hashlib.sha256(base.tex.encode("utf-8")).hexdigest()[:8]
+            return base.tex, f"{key}@{digest}", "upload"
+    return _resumes[resume_type], resume_type, "bundled"
+
+
 def _stored_score(user_id: str, chash: str, resume_type: str) -> Optional[dict]:
     """The score already on record for this job, if it can be reused as-is.
 
@@ -514,8 +566,11 @@ def _stored_score(user_id: str, chash: str, resume_type: str) -> Optional[dict]:
         return None
     if data.get("match_score") is None:
         return None
-    # A row scored against another resume, or before matched_resume was
-    # recorded, is not interchangeable with this request.
+    # A row scored against another resume is not interchangeable with this
+    # request. `resume_type` here is `_score_base_resume`'s matched_resume,
+    # which names the document (an upload carries its content hash), so a
+    # score against the bundled résumé, or against an earlier upload, is not
+    # reused after the caller's résumé changes.
     if (data.get("matched_resume") or resume_type) != resume_type:
         return None
     return data
@@ -531,6 +586,8 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
 
     # Same job, same resume, already scored -> the stored numbers, every time.
     chash = canonical_hash(req.company, req.job_title, req.job_description)
+    # Which résumé "same resume" means: the caller's, as tailoring reads it.
+    _, matched_resume, resume_source = _score_base_resume(user.id, req.resume_type)
 
     # Store the posting where the generators read it, on BOTH paths. Before
     # this, a Save-&-Score'd job had a `jobs` row and no `jobs_raw` row, so
@@ -542,7 +599,7 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
     _upsert_jobs_raw(chash, req.job_title, req.company, req.job_description,
                      req.location, req.apply_url)
     if not req.force:
-        prior = _stored_score(user.id, chash, req.resume_type)
+        prior = _stored_score(user.id, chash, matched_resume)
         if prior:
             logger.info("Reusing the stored score for %s/%s", req.company, req.job_title)
             return ScoreResponse(
@@ -551,10 +608,11 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
                 tech_recruiter_score=prior.get("tech_recruiter_score") or 0,
                 avg_score=prior.get("match_score") or 0,
                 reasoning=prior.get("match_reasoning") or "",
-                matched_resume=prior.get("matched_resume") or req.resume_type,
+                matched_resume=prior.get("matched_resume") or matched_resume,
                 job_id=prior.get("job_id"),
                 saved=bool(prior.get("job_id")),
                 reused=True,
+                resume_source=resume_source,
             )
 
     # A FRESH score is a background task, never an in-request one.
@@ -584,6 +642,10 @@ def _score_fresh(user_id: str, req: ScoreRequest) -> dict:
     /api/tasks/{id} hands the browser as `result`.
     """
     chash = canonical_hash(req.company, req.job_title, req.job_description)
+    # Re-read here, not carried in the task payload: the résumé may have
+    # changed between the request and the task, and what is scored must be
+    # what is labelled.
+    resume_tex, matched_resume, resume_source = _score_base_resume(user_id, req.resume_type)
     # Scored as the MEDIAN of three calls, not one.
     #
     # Measured 2026-10-08 by tests/quality/test_score_determinism.py, which had
@@ -614,7 +676,7 @@ def _score_fresh(user_id: str, req: ScoreRequest) -> dict:
                 "description": req.job_description,
                 "location": req.location,
             },
-            _resumes[req.resume_type],
+            resume_tex,
             num_calls=3,
             skip_cache=True,
         )
@@ -625,7 +687,8 @@ def _score_fresh(user_id: str, req: ScoreRequest) -> dict:
     if not scored:
         return ScoreResponse(
             ats_score=0, hiring_manager_score=0, tech_recruiter_score=0,
-            avg_score=0, reasoning="Job did not match any criteria.", matched_resume=req.resume_type,
+            avg_score=0, reasoning="Job did not match any criteria.",
+            matched_resume=matched_resume, resume_source=resume_source,
         ).model_dump()
 
     # `_Job`-shaped view of the result, so the persistence block below is
@@ -636,7 +699,7 @@ def _score_fresh(user_id: str, req: ScoreRequest) -> dict:
         hiring_manager_score=scored.get("hiring_manager_score") or 0,
         tech_recruiter_score=scored.get("tech_recruiter_score") or 0,
         match_reasoning=scored.get("reasoning") or "",
-        matched_resume=req.resume_type,
+        matched_resume=matched_resume,
     )
     if _posthog:
         _posthog.capture(
@@ -644,6 +707,7 @@ def _score_fresh(user_id: str, req: ScoreRequest) -> dict:
             event="job_scored",
             properties={
                 "resume_type": req.resume_type,
+                "resume_source": resume_source,
                 "avg_score": j.match_score,
                 "jd_length": len(req.job_description),
             },
@@ -668,7 +732,7 @@ def _score_fresh(user_id: str, req: ScoreRequest) -> dict:
                 "hiring_manager_score": j.hiring_manager_score,
                 "tech_recruiter_score": j.tech_recruiter_score,
                 "match_reasoning": j.match_reasoning,
-                "matched_resume": j.matched_resume or req.resume_type,
+                "matched_resume": j.matched_resume,
                 "score_tier": _score_tier(j.match_score),
             }).eq("job_id", job_id).eq("user_id", user_id).execute() if job_id else None
             # saved must mean SAVED: the UPDATE returned the row it wrote.
@@ -695,9 +759,10 @@ def _score_fresh(user_id: str, req: ScoreRequest) -> dict:
         tech_recruiter_score=j.tech_recruiter_score,
         avg_score=j.match_score,
         reasoning=j.match_reasoning,
-        matched_resume=j.matched_resume or req.resume_type,
+        matched_resume=j.matched_resume,
         job_id=job_id,
         saved=saved,
+        resume_source=resume_source,
     ).model_dump()
 
 
