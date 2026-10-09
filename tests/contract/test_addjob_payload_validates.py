@@ -82,3 +82,18 @@ def test_addjob_payload_does_not_have_unknown_fields():
         "AddJob.jsx getPayload() shape changed — update ADDJOB_PAYLOAD "
         "above + every Request model in app.py to match."
     )
+
+
+def test_the_score_task_payload_rebuilds_on_the_worker(app_module):
+    """Save & Score's fresh path is a task: the request stores
+    `ScoreRequest.model_dump()` in pipeline_tasks (jsonb) and the SQS worker
+    rebuilds it with `ScoreRequest(**payload)` (app._dispatch_task). A field
+    that does not survive that trip -- or one extra='forbid' rejects on the way
+    back -- would fail every fresh score on the worker, after the browser had
+    already been told 202."""
+    import json
+
+    for extra in ({}, {"force": True}):
+        req = app_module.ScoreRequest(**ADDJOB_PAYLOAD, **extra)
+        stored = json.loads(json.dumps(req.model_dump()))
+        assert app_module.ScoreRequest(**stored) == req

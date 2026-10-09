@@ -17,6 +17,16 @@ Verifies that:
 # `patch` validating that the attribute exists is what caught the switch: all
 # 29 of these failed loudly with AttributeError rather than silently patching
 # a name nothing calls.
+#
+# A fresh score is a 202 task since the 72.6s/503 fix (three sequential LLM
+# calls against API Gateway's ~30s). 202 is therefore a success status here
+# alongside 200. Every test that can reach the fresh path takes `inline_tasks`
+# (tests/conftest.py), which runs the task inside the request: the scorer patch
+# is still in force when it runs (rather than on a thread after the patch is
+# undone), and an exception in the task still arrives as a 500 and still fails
+# "never 500" -- stricter than production, which would record it on the task.
+
+import json
 
 import pytest
 from unittest.mock import patch
@@ -36,7 +46,7 @@ XSS_PAYLOADS = [
 
 @pytest.mark.parametrize("xss_payload", XSS_PAYLOADS,
                          ids=[f"xss_{i}" for i in range(len(XSS_PAYLOADS))])
-def test_xss_in_job_description_does_not_execute(client, auth_headers, xss_payload):
+def test_xss_in_job_description_does_not_execute(client, auth_headers, inline_tasks, xss_payload):
     """XSS payloads in job_description must not be reflected raw.
 
     The API should either escape them, strip them, or process them safely.
@@ -56,14 +66,18 @@ def test_xss_in_job_description_does_not_execute(client, auth_headers, xss_paylo
         })
 
     # The endpoint should not crash (500 from unhandled error)
-    # 200 (processed safely) or 400/422 (validation rejected it) are both OK
-    assert resp.status_code in (200, 400, 422), (
+    # 200 (reused), 202 (scoring task accepted) or 400/422 (validation
+    # rejected it) are all OK
+    assert resp.status_code in (200, 202, 400, 422), (
         f"XSS payload caused unexpected status {resp.status_code}: {resp.text[:200]}"
     )
 
-    # If 200, verify the raw script tag is not reflected as-is in JSON
-    if resp.status_code == 200 and "<script>" in xss_payload.lower():
+    # Whatever the browser reads -- the response itself, or for a 202 the task
+    # result it polls -- must not reflect the raw script tag.
+    if resp.status_code in (200, 202) and "<script>" in xss_payload.lower():
         body = resp.text
+        if resp.status_code == 202:
+            body = json.dumps(inline_tasks[resp.json()["task_id"]]["result"])
         # The response should not contain an unescaped script tag
         assert "<script>" not in body.lower() or "\\u003c" in body or "&lt;" in body or \
             body.count("<script>") == 0, (
@@ -73,7 +87,7 @@ def test_xss_in_job_description_does_not_execute(client, auth_headers, xss_paylo
 
 @pytest.mark.parametrize("xss_payload", XSS_PAYLOADS[:3],
                          ids=[f"xss_title_{i}" for i in range(3)])
-def test_xss_in_job_title_handled(client, auth_headers, xss_payload):
+def test_xss_in_job_title_handled(client, auth_headers, inline_tasks, xss_payload):
     """XSS in job_title should not cause a server error."""
     with patch("app.score_single_job_deterministic") as mock_match:
         mock_match.return_value = None
@@ -92,7 +106,7 @@ def test_xss_in_job_title_handled(client, auth_headers, xss_payload):
 
 @pytest.mark.parametrize("xss_payload", XSS_PAYLOADS[:3],
                          ids=[f"xss_company_{i}" for i in range(3)])
-def test_xss_in_company_handled(client, auth_headers, xss_payload):
+def test_xss_in_company_handled(client, auth_headers, inline_tasks, xss_payload):
     """XSS in company field should not cause a server error."""
     with patch("app.score_single_job_deterministic") as mock_match:
         mock_match.return_value = None
@@ -155,7 +169,7 @@ def test_sql_injection_in_status_filter(client, auth_headers, sqli_payload):
 
 # ── Oversized payloads ───────────────────────────────────────────────────────
 
-def test_oversized_job_description_rejected(client, auth_headers):
+def test_oversized_job_description_rejected(client, auth_headers, inline_tasks):
     """A job_description larger than 1MB should be rejected.
 
     FastAPI / Starlette may reject it with 400 or 422 (validation error),
@@ -164,12 +178,17 @@ def test_oversized_job_description_rejected(client, auth_headers):
     """
     huge_description = "A" * (1024 * 1024 + 1)  # 1MB + 1 byte
 
-    resp = client.post("/api/score", headers=auth_headers, json={
-        "job_description": huge_description,
-        "job_title": "Software Engineer",
-        "company": "TestCo",
-        "resume_type": "sre_devops",
-    })
+    # The scorer is patched like every other test here. It was not, and this
+    # test sent a 1MB prompt to real providers (keys come from .env) on every
+    # local run -- found 2026-10-09 by the provider HTTP calls in its log.
+    with patch("app.score_single_job_deterministic") as mock_match:
+        mock_match.return_value = None
+        resp = client.post("/api/score", headers=auth_headers, json={
+            "job_description": huge_description,
+            "job_title": "Software Engineer",
+            "company": "TestCo",
+            "resume_type": "sre_devops",
+        })
 
     # 400, 413, or 422 are all valid rejection codes.
     # The server must handle this gracefully — a 200 that processes a 1MB
@@ -216,7 +235,7 @@ SPECIAL_CHAR_STRINGS = [
 
 @pytest.mark.parametrize("special", SPECIAL_CHAR_STRINGS,
                          ids=[f"special_{i}" for i in range(len(SPECIAL_CHAR_STRINGS))])
-def test_special_chars_in_job_title(client, auth_headers, special):
+def test_special_chars_in_job_title(client, auth_headers, inline_tasks, special):
     """Special characters in job_title must not crash the API."""
     with patch("app.score_single_job_deterministic") as mock_match:
         mock_match.return_value = None
@@ -234,7 +253,7 @@ def test_special_chars_in_job_title(client, auth_headers, special):
 
 @pytest.mark.parametrize("special", SPECIAL_CHAR_STRINGS,
                          ids=[f"special_{i}" for i in range(len(SPECIAL_CHAR_STRINGS))])
-def test_special_chars_in_company(client, auth_headers, special):
+def test_special_chars_in_company(client, auth_headers, inline_tasks, special):
     """Special characters in company must not crash the API."""
     with patch("app.score_single_job_deterministic") as mock_match:
         mock_match.return_value = None

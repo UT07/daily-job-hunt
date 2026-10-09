@@ -113,7 +113,7 @@ class TestTheStubGuardStillWorks:
 # nothing" is a lie. Fixing the mismatch without fixing this would leave the
 # next mismatch just as silent.
 
-def test_saved_is_false_when_no_row_was_created(monkeypatch):
+def test_saved_is_false_when_no_row_was_created(monkeypatch, inline_tasks):
     from fastapi.testclient import TestClient
 
     with patch.dict(os.environ, {"SUPABASE_JWT_SECRET": "test-secret"}):
@@ -152,8 +152,10 @@ def test_saved_is_false_when_no_row_was_created(monkeypatch):
             "company": "Accenture", "resume_type": "sre_devops"})
         app_module.app.dependency_overrides.clear()
 
-    assert r.status_code == 200, r.text
-    body = r.json()
+    # A fresh score is a 202 task since the 72.6s/503 fix; `saved` is in the
+    # result the browser polls, which inline_tasks recorded.
+    assert r.status_code == 202, r.text
+    body = inline_tasks[r.json()["task_id"]]["result"]
     assert body.get("saved") is False, (
         "the endpoint reported saved=True for a job it did not create — the "
         "exact reason three dropped Accenture submissions looked like successes")

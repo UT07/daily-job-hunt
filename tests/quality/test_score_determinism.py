@@ -104,8 +104,10 @@ class TestScoreDeterminism:
     def test_the_median_of_three_is_steadier_than_one_call(self):
         """The property production actually relies on.
 
-        /api/score scores with `score_single_job_deterministic(num_calls=3,
-        skip_cache=True)` precisely because one sample was 15 points wide. This
+        /api/score's fresh path (a background "score" task since three
+        sequential calls took 72.6s against API Gateway's ~30s) scores with
+        `score_single_job_deterministic(num_calls=3, skip_cache=True)`
+        precisely because one sample was 15 points wide. This
         asserts the median path reports its own spread, so a caller can show a
         band rather than claim a precision the measurement does not have.
         """

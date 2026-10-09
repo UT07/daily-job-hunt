@@ -33,8 +33,11 @@ def db(monkeypatch):
 
 
 def _score():
+    # The fresh path's body, called directly: since the 72.6s/503 fix it runs
+    # as a "score" task rather than inside POST /api/score, and returns
+    # ScoreResponse(...).model_dump().
     req = app_module.ScoreRequest(job_description=JD, job_title="SRE", company="Acme", force=True)
-    return app_module.score_job(req, USER)
+    return app_module.ScoreResponse(**app_module._score_fresh(USER.id, req))
 
 
 def test_a_fresh_job_is_saved_and_says_so(db):
