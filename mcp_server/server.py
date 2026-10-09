@@ -87,6 +87,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from lambdas.pipeline import ai_helper as _ai_helper
+from mcp_server.identity import caller_user_id, set_caller
 
 sys.modules.setdefault("ai_helper", _ai_helper)  # see wrinkle above
 
@@ -104,15 +105,15 @@ logger = logging.getLogger(__name__)
 # issuing an unbounded query; MAX_LIMIT itself stays far below that ceiling.
 MAX_LIMIT = 50
 
-# Single-tenant today (CLAUDE.md "Scaling Vision": get it working for one
-# user first). Neither MCP transport carries a per-tool-call identity: stdio
-# has no auth at all, and the SSE mount's Supabase JWT (mcp_server.http_auth)
-# authenticates the HTTP connection, not an individual tool argument. Every
-# tool below is therefore pinned server-side to this one known account
-# rather than trusting a client-supplied user_id, which would otherwise let
-# any connected MCP client read (or score against) an arbitrary tenant's
-# private job-hunt data.
-DEFAULT_USER_ID = "7b28f6d3-46c9-4c46-a3a8-d5d7b3480e39"
+# Every tool acts as the authenticated caller, read from mcp_server.identity.
+# Until 2026-10-08 every tool was pinned to one hard-coded owner account, and
+# the HTTP mount only checked that a JWT was *valid* -- so any signed-up user
+# read the owner's jobs and spent the owner's LLM budget against the owner's
+# resume. There is no default now: a tool with no caller raises
+# NoCallerIdentity. Over HTTP the caller is the verified JWT `sub`
+# (mcp_server.http_auth); over stdio it is STDIO_USER_ENV, which `main()`
+# requires explicitly.
+STDIO_USER_ENV = "NAUKRIBABA_MCP_USER_ID"
 
 _JOB_COLUMNS = "job_hash, title, company, location, match_score, ats_score, score_tier, application_status"
 
@@ -202,7 +203,7 @@ def _is_missing_function(exc: Exception) -> bool:
     return "pgrst202" in text or "could not find the function" in text
 
 
-def _semantic_search_available(db) -> bool:
+def _semantic_search_available(db, user_id: str) -> bool:
     """Is the semantic RPC there? Asked without paying for an embedding.
 
     A zero vector and `p_k=0` reach the same PostgREST function-resolution
@@ -219,7 +220,7 @@ def _semantic_search_available(db) -> bool:
     try:
         db.rpc(
             SEMANTIC_RPC,
-            {"p_user_id": DEFAULT_USER_ID, "p_embedding": [0.0] * EMBED_DIM, "p_k": 0},
+            {"p_user_id": user_id, "p_embedding": [0.0] * EMBED_DIM, "p_k": 0},
         ).execute()
     except Exception as exc:
         if _is_missing_function(exc):
@@ -259,18 +260,19 @@ async def search_jobs(query: str, limit: int = 10) -> list[dict]:
     """
     global _semantic_rpc_available
 
+    user_id = caller_user_id()
     if limit < 1 or limit > MAX_LIMIT:
         raise ValueError(f"limit must be between 1 and {MAX_LIMIT}")
 
     db = _db()
-    if not _semantic_search_available(db):
-        return _keyword_search_jobs(db, query, limit)
+    if not _semantic_search_available(db, user_id):
+        return _keyword_search_jobs(db, user_id, query, limit)
 
     try:
         rows = (
             db.rpc(
                 SEMANTIC_RPC,
-                {"p_user_id": DEFAULT_USER_ID, "p_embedding": embed(query), "p_k": limit},
+                {"p_user_id": user_id, "p_embedding": embed(query), "p_k": limit},
             )
             .execute()
             .data
@@ -283,7 +285,7 @@ async def search_jobs(query: str, limit: int = 10) -> list[dict]:
         if _is_missing_function(exc):
             _semantic_rpc_available = False
         logger.warning("[mcp] %s failed (%s) — falling back to keyword search", SEMANTIC_RPC, exc)
-        return _keyword_search_jobs(db, query, limit)
+        return _keyword_search_jobs(db, user_id, query, limit)
 
     return [
         {
@@ -299,7 +301,7 @@ async def search_jobs(query: str, limit: int = 10) -> list[dict]:
     ]
 
 
-def _keyword_search_jobs(db, query: str, limit: int) -> list[dict]:
+def _keyword_search_jobs(db, user_id: str, query: str, limit: int) -> list[dict]:
     """Title/description substring search over the live `jobs` table.
 
     Two separate `ilike` queries (rather than one `.or_()` filter) so a
@@ -310,7 +312,7 @@ def _keyword_search_jobs(db, query: str, limit: int) -> list[dict]:
     by_title = (
         db.table("jobs")
         .select(cols)
-        .eq("user_id", DEFAULT_USER_ID)
+        .eq("user_id", user_id)
         .ilike("title", f"%{query}%")
         .order("match_score", desc=True)
         .limit(limit)
@@ -325,7 +327,7 @@ def _keyword_search_jobs(db, query: str, limit: int) -> list[dict]:
         by_description = (
             db.table("jobs")
             .select(cols)
-            .eq("user_id", DEFAULT_USER_ID)
+            .eq("user_id", user_id)
             .ilike("description", f"%{query}%")
             .order("match_score", desc=True)
             .limit(remaining + len(seen))
@@ -384,7 +386,7 @@ async def score_job(
     candidate cannot get came back S-tier where the pipeline records B.
 
     `resume_tex` is optional — when omitted, the latest resume on file for
-    the single known user (DEFAULT_USER_ID) is loaded from `user_resumes`,
+    the authenticated caller is loaded from `user_resumes`,
     the same source `/api/score` reads. It is never defaulted to an empty
     string.
 
@@ -393,8 +395,9 @@ async def score_job(
     refused, not silently scored), PII-scrubbed and fenced. See
     `score_batch._guard_untrusted_scoring_input`.
     """
+    user_id = caller_user_id()
     if resume_tex is None:
-        resume_tex = _load_base_resume(DEFAULT_USER_ID)
+        resume_tex = _load_base_resume(user_id)
 
     job = {
         "job_hash": "mcp:score_job",
@@ -416,7 +419,7 @@ async def score_job(
     )
     # The same post-hoc cap score_batch.handler applies to every row it writes.
     # Without it this tool and the dashboard disagree about the same job.
-    result = apply_geo_score_cap(result, job, _load_work_auth(DEFAULT_USER_ID))
+    result = apply_geo_score_cap(result, job, _load_work_auth(user_id))
 
     match_score = result.get("match_score", 0.0)
     return {
@@ -437,12 +440,13 @@ async def get_job(job_hash: str) -> dict | None:
     Selects only live columns — `final_score` and `score_status` are dead
     (see module docstring) and are deliberately never surfaced here.
     """
+    user_id = caller_user_id()
     rows = (
         _db()
         .table("jobs")
         .select(_JOB_COLUMNS)
         .eq("job_hash", job_hash)
-        .eq("user_id", DEFAULT_USER_ID)
+        .eq("user_id", user_id)
         .limit(1)
         .execute()
         .data
@@ -478,9 +482,28 @@ def build_server() -> FastMCP:
     return mcp
 
 
+def main() -> None:
+    """stdio entry point. Acts as the user named in STDIO_USER_ENV, and only
+    that user; refuses to start without one rather than guessing.
+
+    stdio has no authentication: whoever launches the process chooses the
+    user, and also holds the service key the process reads. That is the trust
+    boundary of a local tool, so naming the user explicitly is the honest
+    contract; silently defaulting to one account is what this replaced.
+    """
+    user_id = os.environ.get(STDIO_USER_ENV, "").strip()
+    if not user_id:
+        raise SystemExit(
+            f"{STDIO_USER_ENV} is not set. The stdio MCP server acts as exactly one "
+            "user and will not guess which; see docs/runbooks/mcp-client-setup.md."
+        )
+    # Set before run(): anyio.run copies the current context into the event
+    # loop, so every tool call handled by this process sees this identity.
+    set_caller(user_id)
+    build_server().run()
+
+
 if __name__ == "__main__":
     # stdio. This is the transport a local Claude Code / Claude Desktop entry
-    # uses; see docs/mcp-client-setup.md for the config block and for why the
-    # deployed SSE endpoint needs one more piece of infrastructure before a
-    # remote client can complete a handshake through it.
-    build_server().run()
+    # uses; see docs/runbooks/mcp-client-setup.md for the config block.
+    main()

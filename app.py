@@ -5,7 +5,6 @@ Endpoints:
 - POST /api/pipeline/run-single     — start single-job pipeline (Add Job)
 - GET  /api/pipeline/status         — latest pipeline metrics
 - GET  /api/pipeline/status/{name}  — poll specific execution
-- POST /api/compile-latex           — compile LaTeX to PDF
 - POST /api/score                   — score a JD against base resumes
 - POST /api/tailor                  — tailor resume + compile PDF
 - POST /api/cover-letter            — generate cover letter PDF
@@ -175,7 +174,8 @@ app.add_middleware(AuditMiddleware)
 # applies that same JWT check at the ASGI level instead, so `/mcp/*` isn't
 # an unauthenticated hole onto search_jobs/score_job's private job-hunt
 # data. See mcp_server/http_auth.py for why a mount specifically needs this
-# rather than a route dependency.
+# rather than a route dependency. The gate also passes the verified JWT `sub`
+# to the tools (mcp_server/identity.py), which act as that caller only.
 app.mount("/mcp", RequireSupabaseJWT(build_server().sse_app()))
 
 # Global state (initialized on startup)
@@ -748,11 +748,21 @@ def _save_task(task_id: str, user_id: str, data: dict):
     _db.client.table("pipeline_tasks").upsert(row, on_conflict="task_id").execute()
 
 
-def _load_task(task_id: str) -> dict | None:
-    """Load task state from Supabase."""
+def _load_task(task_id: str, *, user_id: str) -> dict | None:
+    """Load one of `user_id`'s tasks from Supabase; None if absent OR not theirs.
+
+    Filtered by owner in the query itself. Until 2026-10-08 this selected by
+    task_id alone, so any signed-in user holding another user's task id read
+    its result and error. The service key bypasses RLS, so this filter is the
+    only thing scoping the read. A row with no user_id is nobody's: 404.
+    """
     if not _db:
         return None
-    result = _db.client.table("pipeline_tasks").select("*").eq("task_id", task_id).maybe_single().execute()
+    result = (
+        _db.client.table("pipeline_tasks").select("*")
+        .eq("task_id", task_id).eq("user_id", user_id)
+        .maybe_single().execute()
+    )
     if not result or not result.data:
         return None
     row = result.data
@@ -960,8 +970,12 @@ def _enqueue_task(task_id: str, user_id: str, task_type: str, payload: dict):
 
 @app.get("/api/tasks/{task_id}")
 def get_task(task_id: str, user: AuthUser = Depends(get_current_user)):
-    """Poll for the result of an async task."""
-    task = _load_task(task_id)
+    """Poll for the result of one of the caller's async tasks.
+
+    Another user's task is indistinguishable from a missing one (404), so a
+    task id confirms nothing about tasks the caller does not own.
+    """
+    task = _load_task(task_id, user_id=user.id)
     if not task:
         raise HTTPException(404, "Task not found")
     return task
@@ -3331,32 +3345,6 @@ def re_tailor_job(
         }
 
 
-class CompileLatexRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    tex_source: str = Field(..., min_length=10)
-
-
-@app.post("/api/compile-latex")
-def compile_latex(req: CompileLatexRequest, user: AuthUser = Depends(get_current_user)):
-    """Compile LaTeX source to PDF and return the binary."""
-    try:
-        pdf_path = compile_tex_to_pdf(req.tex_source)
-        if not pdf_path or not Path(pdf_path).exists():
-            raise HTTPException(500, "LaTeX compilation failed — no PDF produced")
-
-        pdf_bytes = Path(pdf_path).read_bytes()
-        return StreamingResponse(
-            io.BytesIO(pdf_bytes),
-            media_type="application/pdf",
-            headers={"Content-Disposition": "attachment; filename=output.pdf"},
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("LaTeX compile error: %s", e)
-        raise HTTPException(500, f"Compilation error: {str(e)}")
-
-
 # ---------------------------------------------------------------------------
 # Resume CRUD endpoints
 # ---------------------------------------------------------------------------
@@ -3400,6 +3388,15 @@ async def upload_resume(
                 raise HTTPException(400, "Could not read the .tex file as text")
         if not text.strip():
             raise HTTPException(400, "The .tex file is empty")
+        # TeX can read any file the server can (tectonic only warns), and an
+        # uploaded preamble survives into every tailored resume. Refuse here,
+        # before parsing spends a model call. shared/latex_safety.py.
+        from shared.latex_safety import find_unsafe_latex
+
+        unsafe = find_unsafe_latex(text)
+        if unsafe:
+            raise HTTPException(400, "This .tex file uses commands that are not allowed in an "
+                                     "uploaded resume: " + "; ".join(unsafe))
     else:
         text = extract_text_from_pdf(contents)
         if not text:
@@ -3498,6 +3495,16 @@ async def upload_resume(
         converted_from_pdf = bool(converted)
 
     tailorable = is_latex_document(tex_content)
+    # Whatever is stored as LaTeX gets compiled later, whichever branch made
+    # it: a PDF whose extracted text is itself a LaTeX document is stored
+    # verbatim above, and a conversion reuses an earlier resume's preamble.
+    if tailorable:
+        from shared.latex_safety import find_unsafe_latex
+
+        unsafe = find_unsafe_latex(tex_content)
+        if unsafe:
+            raise HTTPException(400, "This resume contains LaTeX commands that are not allowed: "
+                                     + "; ".join(unsafe))
     resume_data = {
         "resume_key": resume_key,
         "label": label or file.filename,

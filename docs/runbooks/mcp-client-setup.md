@@ -5,8 +5,8 @@ data and scoring code that already serves the REST API:
 
 - `search_jobs(query, limit=10)` — semantic search over scraped jobs
   (pgvector, with an automatic keyword fallback — see "search_jobs is keyword
-  search until one migration is applied"), scoped to the single configured
-  account. Each result carries `match_mode`, so you can always tell which
+  search until one migration is applied"), scoped to the calling
+  user (see "Whose data the tools see"). Each result carries `match_mode`, so you can always tell which
   path served it.
 - `score_job(jd_text, title="", company="", location=None, remote=None, resume_tex=None)`
   — 3-perspective AI score of a job description against the account's base
@@ -25,6 +25,22 @@ data and scoring code that already serves the REST API:
 untrusted: injection-checked (the call is **refused**, not quietly scored),
 PII-scrubbed and fenced, with the instruction hierarchy declared in the
 system prompt. See `score_batch._guard_untrusted_scoring_input`.
+
+## Whose data the tools see
+
+Every tool acts as exactly one user, and there is no default
+(`mcp_server/identity.py`; a tool with no caller raises `NoCallerIdentity`).
+Until 2026-10-08 every tool ran as one hard-coded owner account while the
+HTTP gate only checked that a JWT was valid, so any signed-up user could read
+the owner's jobs and spend the owner's model budget.
+
+- **Remote (SSE):** the caller is the `sub` of the verified Supabase JWT.
+  The session is also bound to that user: a `POST /mcp/messages/` carrying
+  another user's token gets 404 for a session it did not open.
+- **Local (stdio):** set `NAUKRIBABA_MCP_USER_ID` to the Supabase user id the
+  process should act as. The server refuses to start without it. For
+  `scripts/mcp_client_check.py --stdio`, put it in `.env`, which that script
+  loads and passes to the child process.
 
 ## Verify it before you trust it
 
@@ -50,6 +66,7 @@ Last run, 2026-09-30, on this branch:
 
 ```bash
 claude mcp add naukribaba \
+  --env NAUKRIBABA_MCP_USER_ID=<your supabase user id> \
   --env SUPABASE_URL=... --env SUPABASE_SERVICE_KEY=... --env GEMINI_API_KEY=... \
   -- /Users/ut/code/naukribaba/.venv/bin/python -m mcp_server.server
 ```
@@ -71,7 +88,8 @@ Add to `claude_desktop_config.json`:
         "AWS_DEFAULT_REGION": "eu-west-1",
         "SUPABASE_URL": "https://<project>.supabase.co",
         "SUPABASE_SERVICE_KEY": "<service key>",
-        "GEMINI_API_KEY": "<key>"
+        "GEMINI_API_KEY": "<key>",
+        "NAUKRIBABA_MCP_USER_ID": "<your supabase user id>"
       }
     }
   }

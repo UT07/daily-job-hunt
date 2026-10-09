@@ -17,7 +17,18 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from mcp_server import server
+from mcp_server import identity, server
+
+
+TEST_CALLER = "11111111-2222-3333-4444-555555555555"
+
+
+@pytest.fixture(autouse=True)
+def _authenticated_caller():
+    """Tools refuse to run without a caller (mcp_server.identity); act as one.
+    test_mcp_caller_identity.py owns the cross-user and no-caller cases."""
+    with identity.acting_as(TEST_CALLER):
+        yield
 
 
 @pytest.fixture(autouse=True)
@@ -71,7 +82,7 @@ async def test_score_job_loads_base_resume_when_not_supplied():
     ) as scorer, patch.object(server, "_db", return_value=_work_auth_db()):
         await server.score_job("Some JD", location="Dublin, Ireland")
 
-    load.assert_called_once_with(server.DEFAULT_USER_ID)
+    load.assert_called_once_with(TEST_CALLER)
     assert scorer.call_args.args[1] == "a real base resume"
     assert scorer.call_args.args[1] != ""
 

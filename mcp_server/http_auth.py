@@ -30,6 +30,9 @@ from fastapi.security import HTTPAuthorizationCredentials
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from auth import get_current_user
+from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+from mcp.server.auth.provider import AccessToken
+from mcp_server.identity import acting_as
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +58,7 @@ class RequireSupabaseJWT:
         credentials = HTTPAuthorizationCredentials(scheme="Bearer", credentials=token) if token else None
 
         try:
-            get_current_user(credentials=credentials)
+            user = get_current_user(credentials=credentials)
         except HTTPException as exc:
             logger.warning("[mcp-auth] rejected %s %s: %s", scope.get("method"), scope.get("path"), exc.detail)
             await _send_json_error(send, exc.status_code, exc.detail)
@@ -65,7 +68,24 @@ class RequireSupabaseJWT:
             await _send_json_error(send, 401, "Invalid or expired token")
             return
 
-        await self._app(scope, receive, _single_response(send))
+        # Validity alone is not authorisation. Until 2026-10-08 this gate
+        # discarded the verified user and every tool ran as one hard-coded
+        # owner account, so any signed-up user read the owner's data. Two
+        # things carry the verified `sub` onward:
+        #
+        # - `acting_as`: the tools read the caller from mcp_server.identity.
+        #   The SSE session's task group is created inside the GET /sse
+        #   request, so the session's tool calls inherit this identity.
+        # - `scope["user"]`: the MCP SDK records it as the session's owner and
+        #   answers 404 to a POST /messages from anyone else
+        #   (mcp/server/sse.py `_session_owners`). Without it the owner is
+        #   None for everyone, and user B could inject tool calls into user
+        #   A's open session — measured: 202 Accepted before this change.
+        scope["user"] = AuthenticatedUser(
+            AccessToken(token=token or "", client_id=user.id, subject=user.id, scopes=[])
+        )
+        with acting_as(user.id):
+            await self._app(scope, receive, _single_response(send))
 
 
 def _single_response(send: Send) -> Send:
