@@ -48,5 +48,7 @@ def test_score_endpoint_calls_the_shared_save_path():
     tailor/cover-letter actions use -- so scoring one JD twice updates a single
     row instead of creating a duplicate."""
     import inspect
-    src = inspect.getsource(app_module.score_job)
+    # The save lives in _score_fresh, which the "score" task runs, since a
+    # fresh score moved out of the request (72.6s measured vs ~30s gateway).
+    src = inspect.getsource(app_module._score_fresh)
     assert "_find_or_create_job" in src

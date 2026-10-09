@@ -58,14 +58,26 @@ def test_an_empty_url_never_erases_a_stored_one(db):
     assert db.rows("jobs", user_id="alice")[0]["apply_url"] == "https://old.example"
 
 
-def test_save_and_score_end_to_end(db, monkeypatch):
-    from auth import AuthUser
+def test_save_and_score_end_to_end(db, monkeypatch, inline_tasks):
+    """POST /api/score -> 202 -> the "score" task -> the row. apply_url has to
+    survive the task payload's trip through pipeline_tasks, which is the hop
+    the 72.6s/503 fix added between the request and the write."""
+    from fastapi.testclient import TestClient
+
+    from auth import AuthUser, get_current_user
     monkeypatch.setattr(app_module, "_resumes", {"sre_devops": "x"})
+    monkeypatch.setattr(app_module, "_posthog", None)
     monkeypatch.setattr(app_module, "score_single_job_deterministic", lambda *a, **k: {
         "match_score": 80, "ats_score": 80, "hiring_manager_score": 80,
         "tech_recruiter_score": 80, "reasoning": "ok"})
-    req = app_module.ScoreRequest(job_description=JD, job_title="SRE", company="Acme",
-                                  apply_url="https://acme.example/apply", force=True)
-    out = app_module.score_job(req, AuthUser(id="alice", email="a@x"))
-    assert out.saved is True
+    app_module.app.dependency_overrides[get_current_user] = lambda: AuthUser(id="alice", email="a@x")
+    try:
+        r = TestClient(app_module.app).post("/api/score", json={
+            "job_description": JD, "job_title": "SRE", "company": "Acme",
+            "apply_url": "https://acme.example/apply", "force": True})
+    finally:
+        app_module.app.dependency_overrides.clear()
+    assert r.status_code == 202, r.text
+    out = inline_tasks[r.json()["task_id"]]["result"]
+    assert out["saved"] is True
     assert db.rows("jobs", user_id="alice")[0]["apply_url"] == "https://acme.example/apply"

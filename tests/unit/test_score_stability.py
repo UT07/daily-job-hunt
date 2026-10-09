@@ -37,6 +37,22 @@ def _env():
         yield
 
 
+@pytest.fixture(autouse=True)
+def tasks(inline_tasks):
+    """A fresh score is a 202 task since the 72.6s/503 fix; run it inline."""
+    return inline_tasks
+
+
+def _fresh_result(r, tasks):
+    """The ScoreResponse a fresh score's task produced, after checking that the
+    request itself answered 202 with a poll URL rather than scoring inline."""
+    assert r.status_code == 202, r.text
+    task_id = r.json()["task_id"]
+    assert r.json()["poll_url"] == f"/api/tasks/{task_id}"
+    assert tasks[task_id]["task_type"] == "score"
+    return tasks[task_id]["result"]
+
+
 def _client(monkeypatch, stored_row, scorer=None):
     """A client whose `jobs` table answers with `stored_row`.
 
@@ -114,32 +130,31 @@ def test_a_reused_score_says_it_was_reused(monkeypatch):
 
 # ---- when reuse must be REFUSED ----
 
-def test_force_rescores_and_does_not_reuse(monkeypatch):
+def test_force_rescores_and_does_not_reuse(monkeypatch, tasks):
     client, calls = _client(monkeypatch, SCORED)
     r = client.post("/api/score", json={**BODY, "force": True})
-    assert r.status_code == 200, r.text
-    assert r.json()["avg_score"] == 71, "force returned the stored score"
-    assert r.json()["reused"] is False
+    out = _fresh_result(r, tasks)
+    assert out["avg_score"] == 71, "force returned the stored score"
+    assert out["reused"] is False
     assert calls["n"] == 1
 
 
-def test_a_score_against_a_different_resume_is_not_reused(monkeypatch):
+def test_a_score_against_a_different_resume_is_not_reused(monkeypatch, tasks):
     # A score for the SRE resume does not answer "how does the full-stack
     # resume do against this job". Reusing it would be a wrong answer
     # delivered confidently, which is worse than the drift.
     client, calls = _client(monkeypatch, SCORED)
     r = client.post("/api/score", json={**BODY, "resume_type": "fullstack"})
-    assert r.status_code == 200, r.text
-    assert r.json()["reused"] is False
+    assert _fresh_result(r, tasks)["reused"] is False
     assert calls["n"] == 1
 
 
-def test_an_unscored_row_is_not_reused(monkeypatch):
+def test_an_unscored_row_is_not_reused(monkeypatch, tasks):
     # The row exists (the job was added) but was never scored. match_score is
     # NULL, and 0 is a real score -- so the check must be `is None`, not falsy.
     client, calls = _client(monkeypatch, {**SCORED, "match_score": None})
     r = client.post("/api/score", json=BODY)
-    assert r.json()["reused"] is False
+    assert _fresh_result(r, tasks)["reused"] is False
     assert calls["n"] == 1
 
 
@@ -149,19 +164,19 @@ def test_a_genuine_zero_score_is_reused(monkeypatch):
         **SCORED, "match_score": 0, "ats_score": 0,
         "hiring_manager_score": 0, "tech_recruiter_score": 0})
     r = client.post("/api/score", json=BODY)
+    assert r.status_code == 200, r.text
     assert r.json()["reused"] is True, "a real 0 was treated as unscored"
     assert calls["n"] == 0
 
 
-def test_no_row_at_all_scores_normally(monkeypatch):
+def test_no_row_at_all_scores_normally(monkeypatch, tasks):
     client, calls = _client(monkeypatch, None)
     r = client.post("/api/score", json=BODY)
-    assert r.status_code == 200, r.text
-    assert r.json()["reused"] is False
+    assert _fresh_result(r, tasks)["reused"] is False
     assert calls["n"] == 1
 
 
-def test_a_failed_lookup_scores_rather_than_erroring(monkeypatch):
+def test_a_failed_lookup_scores_rather_than_erroring(monkeypatch, tasks):
     # Reuse is an optimisation. If the read fails, score the job; refusing
     # would turn a transient DB blip into a broken button.
     import app as app_module
@@ -188,11 +203,10 @@ def test_a_failed_lookup_scores_rather_than_erroring(monkeypatch):
     client = TestClient(app_module.app, raise_server_exceptions=False)
     r = client.post("/api/score", json=BODY)
     app_module.app.dependency_overrides.clear()
-    assert r.status_code == 200, r.text
-    assert r.json()["reused"] is False
+    assert _fresh_result(r, tasks)["reused"] is False
 
 
-def test_reuse_is_keyed_on_this_request_s_own_text(monkeypatch):
+def test_reuse_is_keyed_on_this_request_s_own_text(monkeypatch, tasks):
     """The lookup must use the hash of the JD in THIS request.
 
     The double answers with the same row whatever it is asked, so a hash built
@@ -211,18 +225,18 @@ def test_reuse_is_keyed_on_this_request_s_own_text(monkeypatch):
                         lambda uid, ch, rt: asked.append((uid, ch, rt)) or None)
     r = client.post("/api/score", json=BODY)
 
-    assert r.status_code == 200, r.text
+    out = _fresh_result(r, tasks)
     assert len(asked) == 1
     user_id, chash, resume_type = asked[0]
     assert user_id == "user-1"
     assert resume_type == "sre_devops"
     assert chash == canonical_hash("Acme", "Site Reliability Engineer", JD)
     # _stored_score returned None, so the job was scored rather than reused.
-    assert r.json()["reused"] is False
+    assert out["reused"] is False
     assert calls["n"] == 1
 
 
-def test_a_fresh_score_is_a_median_of_three_uncached_calls(monkeypatch):
+def test_a_fresh_score_is_a_median_of_three_uncached_calls(monkeypatch, tasks):
     """The reason this endpoint stopped scoring through match_jobs.
 
     Measured 2026-10-08 against real providers, by a test whose skip had been
@@ -238,13 +252,13 @@ def test_a_fresh_score_is_a_median_of_three_uncached_calls(monkeypatch):
     """
     client, calls = _client(monkeypatch, None)
     r = client.post("/api/score", json=BODY)
-    assert r.status_code == 200, r.text
+    _fresh_result(r, tasks)
     assert calls["n"] == 1, "the deterministic scorer was not the engine used"
     assert calls["kwargs"].get("num_calls") == 3, calls["kwargs"]
     assert calls["kwargs"].get("skip_cache") is True, calls["kwargs"]
 
 
-def test_the_scorer_is_given_this_request_s_own_job(monkeypatch):
+def test_the_scorer_is_given_this_request_s_own_job(monkeypatch, tasks):
     """score_single_job reads job['job_hash'] in its own error paths, so a
     missing key fails inside the scorer rather than here, where the message
     would make sense."""
@@ -260,7 +274,7 @@ def test_the_scorer_is_given_this_request_s_own_job(monkeypatch):
             "tech_recruiter_score": 71, "reasoning": "fresh"})
     r = client.post("/api/score", json=BODY)
 
-    assert r.status_code == 200, r.text
+    _fresh_result(r, tasks)
     job = captured["job"]
     assert job["job_hash"] == canonical_hash("Acme", "Site Reliability Engineer", JD)
     assert job["title"] == "Site Reliability Engineer"

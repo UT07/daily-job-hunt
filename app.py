@@ -68,7 +68,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from auth import AuthUser, get_current_user
@@ -537,7 +537,10 @@ def _stored_score(user_id: str, chash: str, resume_type: str) -> Optional[dict]:
     return data
 
 
-@app.post("/api/score", response_model=ScoreResponse)
+# response_model=None because this route answers with two shapes: a 200
+# ScoreResponse when it can reuse a stored score, and a 202 task envelope when
+# it has to ask the model. A ScoreResponse response_model would reject the 202.
+@app.post("/api/score", response_model=None)
 def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
     if req.resume_type not in _resumes:
         raise HTTPException(400, f"Unknown resume type: {req.resume_type}. Available: {list(_resumes.keys())}")
@@ -560,6 +563,33 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
                 reused=True,
             )
 
+    # A FRESH score is a background task, never an in-request one.
+    #
+    # Measured in production CloudWatch logs: a fresh Save & Score request
+    # took 72.6s, because the median-of-three change below (2026-10-08) made
+    # it three sequential LLM calls. API Gateway's integration timeout is
+    # ~30s, so the user got a 503 while the Lambda went on to finish with 200
+    # and save the row -- a failure message for work that succeeded. The
+    # reuse path above makes no AI call and stays synchronous; this one is
+    # enqueued like every other slow endpoint and polled via /api/tasks/{id}.
+    # The scoring itself is `_score_fresh`, unchanged.
+    task_id = str(uuid.uuid4())
+    _enqueue_task(task_id, user.id, "score", req.model_dump())
+    return JSONResponse(
+        status_code=202,
+        content={"task_id": task_id, "poll_url": f"/api/tasks/{task_id}"},
+    )
+
+
+def _score_fresh(user_id: str, req: ScoreRequest) -> dict:
+    """Score `req` with the model and save it to `user_id`'s job row.
+
+    Runs as the "score" task (see `_dispatch_task`), outside the HTTP request,
+    because three sequential LLM calls do not fit API Gateway's ~30s window.
+    Returns `ScoreResponse(...).model_dump()`, which is what GET
+    /api/tasks/{id} hands the browser as `result`.
+    """
+    chash = canonical_hash(req.company, req.job_title, req.job_description)
     # Scored as the MEDIAN of three calls, not one.
     #
     # Measured 2026-10-08 by tests/quality/test_score_determinism.py, which had
@@ -602,7 +632,7 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
         return ScoreResponse(
             ats_score=0, hiring_manager_score=0, tech_recruiter_score=0,
             avg_score=0, reasoning="Job did not match any criteria.", matched_resume=req.resume_type,
-        )
+        ).model_dump()
 
     # `_Job`-shaped view of the result, so the persistence block below is
     # unchanged. Attribute access is what it already expected from match_jobs.
@@ -616,7 +646,7 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
     )
     if _posthog:
         _posthog.capture(
-            distinct_id=user.id,
+            distinct_id=user_id,
             event="job_scored",
             properties={
                 "resume_type": req.resume_type,
@@ -629,9 +659,9 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
     # which dedupes by canonical_hash -- scoring the same JD twice updates one
     # row rather than creating a second.
     job_id, saved = None, False
-    if _db and user.id:
+    if _db and user_id:
         try:
-            job_id = _find_or_create_job(user.id, {
+            job_id = _find_or_create_job(user_id, {
                 "title": req.job_title,
                 "company": req.company,
                 "description": req.job_description,
@@ -646,7 +676,7 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
                 "match_reasoning": j.match_reasoning,
                 "matched_resume": j.matched_resume or req.resume_type,
                 "score_tier": _score_tier(j.match_score),
-            }).eq("job_id", job_id).eq("user_id", user.id).execute() if job_id else None
+            }).eq("job_id", job_id).eq("user_id", user_id).execute() if job_id else None
             # saved must mean SAVED: the UPDATE returned the row it wrote.
             # `bool(job_id)` was not enough -- an UPDATE that matches nothing
             # raises nothing and returns an empty list, so a job_id for a row
@@ -674,7 +704,7 @@ def score_job(req: ScoreRequest, user: AuthUser = Depends(get_current_user)):
         matched_resume=j.matched_resume or req.resume_type,
         job_id=job_id,
         saved=saved,
-    )
+    ).model_dump()
 
 
 # ---------------------------------------------------------------------------
@@ -1135,6 +1165,13 @@ def _update_job_artifacts(user_id: str, job_id: str, updates: dict):
 
 def _dispatch_task(task_type: str, payload: dict, user_id: str = "") -> dict:
     """Route a task to the appropriate worker function based on task_type."""
+    # "score" first, BEFORE the generic _find_or_create_job below: the score
+    # payload is a ScoreRequest dump (job_title/job_description), and
+    # _score_fresh creates and keys its own row. Falling through would create
+    # the row twice, from a payload the generic path was not written for.
+    if task_type == "score":
+        return _score_fresh(user_id, ScoreRequest(**payload))
+
     job = _Job(
         title=payload.get("job_title", "Software Engineer"),
         company=payload.get("company", "Unknown"),

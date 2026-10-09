@@ -513,6 +513,51 @@ class TestAddJob:
         expect(page.get_by_label("Job Description")).to_be_visible()
 
     def test_paste_jd_and_score(self, page, api_stub):
+        """A fresh score: 202 + poll, then the polled result on the card.
+
+        POST /api/score answers 202 {task_id, poll_url} for anything it has to
+        ask the model about -- three sequential LLM calls took 72.6s in
+        production against API Gateway's ~30s, so it is a task. The poll body
+        is `_save_task`'s row around `_score_fresh`'s ScoreResponse dump.
+        """
+        api_stub.on(
+            "POST",
+            "/api/score",
+            {"task_id": "t-score", "poll_url": "/api/tasks/t-score"},
+            status=202,
+        )
+        api_stub.on(
+            "GET",
+            "/api/tasks/t-score",
+            {
+                "status": "done",
+                "result": {
+                    "ats_score": 88.0,
+                    "hiring_manager_score": 82.0,
+                    "tech_recruiter_score": 91.0,
+                    "avg_score": 87.0,
+                    "reasoning": "Strong AWS and Kubernetes overlap.",
+                    "matched_resume": "sre_devops",
+                    "job_id": "job-scored",
+                    "saved": True,
+                    "reused": False,
+                },
+            },
+        )
+        self.open_add_job(page)
+
+        page.get_by_label("Job Description").fill(self.LONG_JD)
+        page.get_by_role("button", name="Save & Score").click()
+
+        call = api_stub.assert_called("POST", "/api/score")
+        assert call["body"]["job_description"] == self.LONG_JD
+        assert call["body"]["resume_type"] == "sre_devops"
+        api_stub.assert_called("GET", "/api/tasks/t-score")
+        expect(page.get_by_text("Strong AWS and Kubernetes overlap.")).to_be_visible()
+        expect(page.get_by_text("Saved to your dashboard.")).to_be_visible()
+
+    def test_a_stored_score_comes_back_at_once(self, page, api_stub):
+        """The reuse path makes no AI call and stays a synchronous 200."""
         api_stub.on(
             "POST",
             "/api/score",
@@ -525,6 +570,7 @@ class TestAddJob:
                 "matched_resume": "sre_devops",
                 "job_id": "job-scored",
                 "saved": True,
+                "reused": True,
             },
         )
         self.open_add_job(page)
@@ -532,10 +578,10 @@ class TestAddJob:
         page.get_by_label("Job Description").fill(self.LONG_JD)
         page.get_by_role("button", name="Save & Score").click()
 
-        call = api_stub.assert_called("POST", "/api/score")
-        assert call["body"]["job_description"] == self.LONG_JD
-        assert call["body"]["resume_type"] == "sre_devops"
+        api_stub.assert_called("POST", "/api/score")
         expect(page.get_by_text("Strong AWS and Kubernetes overlap.")).to_be_visible()
+        expect(page.get_by_text(re.compile("Already scored"))).to_be_visible()
+        assert not [c for c in api_stub.calls if c["path"].startswith("/api/tasks/")]
 
     def test_empty_jd_disables_the_action_buttons(self, page, api_stub):
         """There is no validation *message* -- the buttons are disabled.

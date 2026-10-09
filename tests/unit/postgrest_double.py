@@ -79,6 +79,14 @@ class Query:
         self._op = "delete"
         return self
 
+    def upsert(self, row, on_conflict=None):
+        # PostgREST `Prefer: resolution=merge-duplicates`: a row whose
+        # on_conflict columns match an existing row UPDATES it (only the keys
+        # sent are written); any other row is INSERTED. Returns what it wrote.
+        self._op, self._payload = "upsert", row
+        self._conflict = tuple(c.strip() for c in (on_conflict or "").split(",") if c.strip())
+        return self
+
     # ── filters ───────────────────────────────────────────────────
     def eq(self, col, val):
         self._filters.append(lambda r: r.get(col) == val)
@@ -140,6 +148,22 @@ class Query:
             for r in new:
                 rows.append(copy.deepcopy(r))
             return SimpleNamespace(data=copy.deepcopy(new), count=None)
+
+        if self._op == "upsert":
+            new = self._payload if isinstance(self._payload, list) else [self._payload]
+            keys = self._conflict or PRIMARY_KEYS.get(self._table) or ()
+            if not keys:
+                raise ValueError(f"upsert on {self._table} needs on_conflict")
+            written = []
+            for r in new:
+                existing = next((e for e in rows if all(e.get(k) == r.get(k) for k in keys)), None)
+                if existing is None:
+                    existing = copy.deepcopy(r)
+                    rows.append(existing)
+                else:
+                    existing.update(copy.deepcopy(r))
+                written.append(copy.deepcopy(existing))
+            return SimpleNamespace(data=written, count=None)
 
         if self._op in ("update", "delete") and not self._filters:
             raise MissingWhere(f"{self._op.upper()} requires a WHERE clause")

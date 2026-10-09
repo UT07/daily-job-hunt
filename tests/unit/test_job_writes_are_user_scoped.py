@@ -89,8 +89,10 @@ def test_score_writes_only_the_callers_row(db, monkeypatch):
         "tech_recruiter_score": 91, "reasoning": "fit",
     })
     req = app_module.ScoreRequest(job_description=JD, job_title="SRE", company="Acme", force=True)
-    out = app_module.score_job(req, AuthUser(id="alice", email="a@x"))
-    assert out.saved is True
+    # The fresh path runs as a "score" task (_score_fresh) since the 72.6s/503
+    # fix; its UPDATE is the write being scoped.
+    out = app_module._score_fresh("alice", req)
+    assert out["saved"] is True
     assert db.rows("jobs", user_id="alice")[0]["match_score"] == 91
     assert _bob(db)["match_score"] == 50
 

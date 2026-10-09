@@ -134,3 +134,37 @@ Senior Software Engineer | Dublin, Ireland
 \section*{Skills}
 Python, TypeScript, React, AWS, PostgreSQL, Docker, Kubernetes
 \end{document}"""
+
+
+@pytest.fixture
+def inline_tasks(monkeypatch):
+    """Run app._enqueue_task's work inline, inside the request, and record it.
+
+    Slow endpoints (POST /api/score's fresh path among them) answer 202 and
+    hand the work to `_enqueue_task`, which in tests would otherwise either
+    try SQS or start a daemon thread that outlives the test -- and that thread
+    calls whatever scorer is patched in at the time it runs, which may be the
+    real one after the test's patches are undone (a live LLM call from a unit
+    test). This runs `_dispatch_task` synchronously instead, so patches are
+    still in force, and records each task by id:
+
+        {task_id: {"task_type", "user_id", "payload", "result"}}
+
+    The payload is round-tripped through JSON first because production stores
+    it in pipeline_tasks (jsonb) and the worker reads it back from there.
+    Exceptions propagate: production would record them as status "error", and
+    a test that wants that must say so rather than have it swallowed here.
+    """
+    import json
+
+    import app as app_module
+
+    ran: dict = {}
+
+    def _inline(task_id, user_id, task_type, payload):
+        stored = json.loads(json.dumps(payload))
+        ran[task_id] = {"task_type": task_type, "user_id": user_id, "payload": stored}
+        ran[task_id]["result"] = app_module._dispatch_task(task_type, stored, user_id=user_id)
+
+    monkeypatch.setattr(app_module, "_enqueue_task", _inline)
+    return ran
