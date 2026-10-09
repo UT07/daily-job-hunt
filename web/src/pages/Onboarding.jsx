@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Navigate, useNavigate } from 'react-router-dom'
 import { useAuth } from '../auth/useAuth'
 import { useUserProfile } from '../hooks/useUserProfile'
 import { apiPut, apiUpload, apiGet } from '../api'
@@ -8,6 +8,7 @@ import Button from '../components/ui/Button'
 import { NoticePeriodPicker } from '../components/ui/NoticePeriodPicker'
 import useApiMutation from '../hooks/useApiMutation'
 import { isAcceptedResumeFile, resumeRejectionMessage } from '../lib/resumeUploadFile'
+import { isOnboarded } from '../lib/onboarding'
 
 // ─── Step Indicator ─────────────────────────────────────────────
 function StepIndicator({ current, steps }) {
@@ -344,7 +345,24 @@ function StepDone() {
 // ─── Main Wizard ────────────────────────────────────────────────
 const STEPS = ['Welcome', 'Resume', 'Profile', 'Preferences', 'Done']
 
+// /onboarding is routed outside AppLayout (it must not redirect to itself), so
+// it does not inherit AppLayout's auth gate. Without this a signed-out visitor
+// saw the wizard and every request it made 401'd. Same gate as AppLayout:
+// wait for auth, then send a missing session to /login.
 export default function Onboarding() {
+  const { user, loading } = useAuth()
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-cream flex items-center justify-center">
+        <span className="spinner" />
+      </div>
+    )
+  }
+  if (!user) return <Navigate to="/login" replace />
+  return <OnboardingWizard />
+}
+
+function OnboardingWizard() {
   const navigate = useNavigate()
   const { user } = useAuth()
   // After Complete Setup writes onboarding_completed_at, ProfileContext is stale;
@@ -360,9 +378,9 @@ export default function Onboarding() {
   // step 0 and have no way out.
   useEffect(() => {
     if (ctxLoading) return
-    const onboarded =
-      !!(ctxProfile?.onboarding_completed_at || ctxProfile?.full_name)
-    if (onboarded) {
+    // Not `full_name`: step 1's résumé upload writes it, so a reload
+    // mid-wizard used to bounce the user out to the Dashboard half set up.
+    if (isOnboarded(ctxProfile)) {
       navigate('/', { replace: true })
     }
   }, [ctxProfile, ctxLoading, navigate])

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useAuth } from '../auth/useAuth'
+import { useUserProfile } from '../hooks/useUserProfile'
 import { apiGet, apiPut, apiUpload, apiDelete } from '../api'
 import Card, { CardHeader, CardBody } from '../components/ui/Card'
 import Input from '../components/ui/Input'
@@ -102,6 +103,7 @@ const isLoaded = (state) => state === 'loaded'
 const loadError = (state) => (state && typeof state === 'object' ? state.error : null)
 
 function ProfileSection({ profile, setProfile, loadState = 'loaded', onRetry }) {
+  const { refresh: refreshProfileContext } = useUserProfile()
   const [saving, setSaving] = useState(false)
   const [status, setStatus] = useState(null)
 
@@ -152,6 +154,10 @@ function ProfileSection({ profile, setProfile, loadState = 'loaded', onRetry }) 
         work_authorizations: workAuthObj,
       })
       setStatus({ type: 'success', message: 'Profile saved.' })
+      // The shell (FinishSetupBanner, the onboarding gate) reads
+      // ProfileContext, not this form. Without this the banner kept saying
+      // the profile was incomplete until a reload.
+      await refreshProfileContext()
     } catch (e) {
       setStatus({ type: 'error', message: `Save failed: ${e.message}` })
     } finally {
@@ -380,12 +386,29 @@ export function ResumeSection() {
       .catch((e) => console.warn('Failed to load resumes:', e))
   }, [])
 
-  async function handleDelete(id) {
+  // Deleting is two clicks: the row being deleted may be the résumé every
+  // tailoring starts from. And a failure is SHOWN -- it used to go only to
+  // console.warn, so a failed delete looked like a click that did nothing.
+  const [confirmingId, setConfirmingId] = useState(null)
+  const [deletingId, setDeletingId] = useState(null)
+  const [deleteError, setDeleteError] = useState(null)
+
+  const resumeName = (resume) =>
+    resume.label || resume.filename || resume.name || `Resume ${resume.id}`
+
+  async function handleDelete(resume) {
+    setDeletingId(resume.id)
+    setDeleteError(null)
     try {
-      await apiDelete(`/api/resumes/${id}`)
-      setResumes((prev) => prev.filter((r) => r.id !== id))
+      await apiDelete(`/api/resumes/${resume.id}`)
+      setResumes((prev) => prev.filter((r) => r.id !== resume.id))
+      setConfirmingId(null)
     } catch (e) {
       console.warn('Failed to delete resume:', e)
+      setDeleteError(`Could not delete ${resumeName(resume)}: ${e?.message || 'request failed'}`)
+      setConfirmingId(null)
+    } finally {
+      setDeletingId(null)
     }
   }
 
@@ -453,21 +476,48 @@ export function ResumeSection() {
         </div>
       </CardHeader>
       <CardBody>
+        {deleteError && (
+          <div role="alert" className="mb-3">
+            <StatusMessage status={{ type: 'error', message: deleteError }} />
+          </div>
+        )}
         {resumes.length > 0 ? (
           <ul className="mb-4 divide-y divide-stone-200 border-2 border-black overflow-hidden">
             {resumes.map((resume) => (
               <li key={resume.id} className="flex items-center justify-between px-4 py-3 bg-white hover:bg-yellow-light transition-colors">
                 <div>
-                  <p className="text-sm font-bold text-black">{resume.label || resume.filename || resume.name || `Resume ${resume.id}`}</p>
+                  <p className="text-sm font-bold text-black">{resumeName(resume)}</p>
                   {resume.uploaded_at && (
                     <p className="text-xs text-stone-400 mt-0.5 font-mono">
                       {new Date(resume.uploaded_at).toLocaleDateString()}
                     </p>
                   )}
                 </div>
+                {confirmingId === resume.id ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-bold text-error">Delete {resumeName(resume)}?</span>
+                    <Button
+                      size="sm"
+                      variant="danger"
+                      loading={deletingId === resume.id}
+                      disabled={deletingId === resume.id}
+                      onClick={() => handleDelete(resume)}
+                    >
+                      Delete
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={deletingId === resume.id}
+                      onClick={() => setConfirmingId(null)}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                ) : (
                 <button
                   type="button"
-                  onClick={() => handleDelete(resume.id)}
+                  onClick={() => { setDeleteError(null); setConfirmingId(resume.id) }}
                   className="text-stone-400 hover:text-error p-1.5 transition"
                   title="Delete resume"
                 >
@@ -475,6 +525,7 @@ export function ResumeSection() {
                     <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                   </svg>
                 </button>
+                )}
               </li>
             ))}
           </ul>
@@ -946,6 +997,13 @@ export default function Settings() {
         <JobSourcesSection />
         <PreferencesSection prefs={prefs} setPrefs={editPrefs} loadState={prefsLoad} onRetry={() => { setPrefsLoad('loading'); loadPrefs() }} />
       </div>
+      {/* On mobile, "More" lands here and the Sidebar's Account links are
+          hidden, so the data pages need a way in from this page too. Plain
+          anchors: Settings is also rendered outside a router (its tests). */}
+      <footer className="mt-8 pt-4 border-t-2 border-black flex flex-wrap gap-4 text-sm font-bold">
+        <a href="/data-export" className="underline hover:no-underline">Data &amp; Privacy (export or delete my data)</a>
+        <a href="/privacy" className="underline hover:no-underline">Privacy Policy</a>
+      </footer>
     </div>
   )
 }

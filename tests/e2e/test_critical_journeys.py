@@ -193,7 +193,15 @@ class TestLoginFlow:
         # The control's only accessible name is its title attribute, and the
         # sidebar holding it is `hidden md:flex`, so it needs a >=768px
         # viewport -- pytest-playwright's default is 1280x720.
-        page.get_by_title("Sign out").click()
+        #
+        # There are TWO "Sign out" controls in the DOM: the sidebar's, and
+        # MobileNav's (added because mobile had no way to sign out), which is
+        # `md:hidden`. Exactly one is visible per viewport, so the test asserts
+        # that and clicks the visible one -- rather than `.first`, which would
+        # silently pick a hidden button if the order ever changed.
+        sign_out = page.get_by_title("Sign out").filter(visible=True)
+        expect(sign_out).to_have_count(1)
+        sign_out.click()
 
         page.wait_for_url("**/login", timeout=15_000)
         assert any(c.startswith("POST /auth/v1/logout") for c in auth_stub.calls), auth_stub.calls

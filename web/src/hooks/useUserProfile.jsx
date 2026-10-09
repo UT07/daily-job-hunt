@@ -4,7 +4,9 @@ import { useAuth } from '../auth/useAuth'
 
 // Default `refetch: async-noop` so consumers calling refetch outside the Provider
 // don't crash AND can await the call (matches Provider's promise-returning shape).
-const ProfileContext = createContext({ profile: null, isLoading: true, refetch: async () => {} })
+const ProfileContext = createContext({
+  profile: null, isLoading: true, refetch: async () => {}, refresh: async () => false,
+})
 
 export function ProfileProvider({ children }) {
   const { user, loading: authLoading } = useAuth()
@@ -57,13 +59,32 @@ export function ProfileProvider({ children }) {
     fetchProfile()
   }, [fetchProfile])
 
+  // Background re-read after the user changed their profile (Settings save).
+  // NOT `refetch`: that sets isLoading, and AppLayout swaps the whole page for
+  // a spinner while `user && profileLoading` -- unmounting the page that
+  // asked. And a failed background read keeps the profile we have rather than
+  // setting `error`, which would replace the page with "Could not load your
+  // profile" over a save that succeeded. Returns true when it refreshed.
+  const refresh = useCallback(async () => {
+    if (authLoading || !user) return false
+    try {
+      const data = await apiGet('/api/profile')
+      setProfile(data)
+      setError(null)
+      return true
+    } catch (err) {
+      console.warn('Profile refresh failed; keeping the current profile:', err?.message)
+      return false
+    }
+  }, [user, authLoading])
+
   // Same class of bug AuthProvider had: an object literal here is a new
   // identity on every render, so every useUserProfile() consumer re-rendered
   // whenever ProfileProvider did — and any consumer listing `refetch` or the
   // context object in an effect dep array re-ran with it.
   const value = useMemo(
-    () => ({ profile, isLoading, error, refetch: fetchProfile }),
-    [profile, isLoading, error, fetchProfile],
+    () => ({ profile, isLoading, error, refetch: fetchProfile, refresh }),
+    [profile, isLoading, error, fetchProfile, refresh],
   )
 
   return (

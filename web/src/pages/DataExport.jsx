@@ -7,6 +7,13 @@ import Button from '../components/ui/Button'
 import Input from '../components/ui/Input'
 import LoginPage from './LoginPage'
 import { hasLocalConsent, clearLocalConsent } from '../lib/userStorage'
+import { useUserProfile } from '../hooks/useUserProfile'
+
+// DELETE /api/gdpr/delete is a SOFT delete: gdpr.request_deletion only sets
+// users.gdpr_deletion_requested_at. The permanent delete is a separate job
+// (scripts/data_retention.py hard_delete_expired_users, grace_days=30). The
+// copy must say what happened, not what may happen later.
+const GRACE_COPY = 'a 30-day grace period'
 
 export default function DataExport() {
   const { user, loading: authLoading, signOut } = useAuth()
@@ -20,7 +27,13 @@ export default function DataExport() {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deleteConfirmText, setDeleteConfirmText] = useState('')
 
-  const consentGiven = hasLocalConsent(user?.id)
+  // The server's gdpr_consent_at is the record. Reading only localStorage
+  // told a user on a fresh browser they had not consented when they had. The
+  // local flag is kept as a second source because ConsentBanner writes it only
+  // AFTER the server accepted consent, and the profile context is not re-read
+  // at that moment.
+  const { profile } = useUserProfile()
+  const consentGiven = !!profile?.gdpr_consent_at || hasLocalConsent(user?.id)
 
   async function handleExport() {
     setExporting(true)
@@ -50,7 +63,12 @@ export default function DataExport() {
     try {
       await apiDelete('/api/gdpr/delete')
       clearLocalConsent(user?.id)
-      setDeleteStatus({ type: 'success', message: 'Your account and all data have been permanently deleted.' })
+      setDeleteStatus({
+        type: 'success',
+        message:
+          `Deletion requested. Your account and data are marked for permanent deletion after ${GRACE_COPY}; ` +
+          'contact support before then to cancel. You are being signed out.',
+      })
       // Sign out and redirect after a short delay
       setTimeout(async () => {
         await signOut()
@@ -144,9 +162,10 @@ export default function DataExport() {
             <div>
               <h2 className="text-base font-heading font-bold text-error">Delete My Account</h2>
               <p className="text-sm text-stone-500 mt-0.5">
-                Permanently delete your account and all associated data. This action is
-                irreversible and fulfills your GDPR Article 17 right to erasure. All your
-                profile data, job history, resumes, and scores will be permanently removed.
+                Request deletion of your account and all associated data under your GDPR
+                Article 17 right to erasure. Your account is marked for deletion and signed
+                out now; after {GRACE_COPY} your profile data, job history, resumes, and
+                scores are permanently removed. Contact support within that period to cancel.
               </p>
             </div>
           </CardHeader>
@@ -161,7 +180,7 @@ export default function DataExport() {
             ) : (
               <div className="border-2 border-error bg-error-light p-4">
                 <p className="text-sm text-error font-bold mb-3">
-                  This will permanently delete all your data. Type <strong className="text-black">DELETE</strong> to confirm.
+                  This marks your account and all your data for permanent deletion after {GRACE_COPY}. Type <strong className="text-black">DELETE</strong> to confirm.
                 </p>
                 <div className="flex items-center gap-3">
                   <Input

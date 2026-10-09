@@ -5,6 +5,7 @@ import { ProfileProvider } from './hooks/useUserProfile';
 import AppLayout from './layouts/AppLayout';
 import AuthLayout from './layouts/AuthLayout';
 import PreviewBanner from './components/PreviewBanner';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // Lazy-loaded pages
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -48,6 +49,10 @@ export default function App() {
       <AuthProvider>
         {/* ProfileProvider must be inside AuthProvider — it calls useAuth() */}
         <ProfileProvider>
+          {/* Outer net for the pages outside AppLayout (login, onboarding,
+              reset-password) and for a failed lazy chunk load. AppLayout has
+              its own boundary inside the shell for the app pages. */}
+          <ErrorBoundary>
           <Suspense fallback={<PageLoader />}>
             <Routes>
               {/* Standalone pages — outside layouts so they don't redirect */}
@@ -78,6 +83,7 @@ export default function App() {
               </Route>
             </Routes>
           </Suspense>
+          </ErrorBoundary>
         </ProfileProvider>
       </AuthProvider>
     </BrowserRouter>

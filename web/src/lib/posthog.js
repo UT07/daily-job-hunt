@@ -28,6 +28,18 @@ export function identifyUser(user) {
   })
 }
 
+// For errors the app CATCHES (e.g. a React error boundary). capture_exceptions
+// above only sees uncaught ones. No-op until initialised, like the helpers
+// around it, so tests and key-less builds need no stub.
+export function captureException(error, properties = {}) {
+  if (!initialised) return
+  try {
+    posthog.captureException(error, properties)
+  } catch {
+    // Reporting must never be the second failure on an error screen.
+  }
+}
+
 export function resetUser() {
   if (!initialised) return
   posthog.reset()

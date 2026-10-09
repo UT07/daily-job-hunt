@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import { Upload, Download } from 'lucide-react';
+import { Download } from 'lucide-react';
 import Button from './ui/Button';
 import SectionEditor from './SectionEditor';
-import { apiGet, apiCall, apiUpload } from '../api';
+import { apiGet, apiCall } from '../api';
 
 const SECTION_LABELS = {
   summary: 'Summary',
@@ -31,9 +31,10 @@ export default function ResumeEditor({ job, onGenerateResume, generating }) {
   const [pdfUrl, setPdfUrl] = useState(job.resume_s3_url || null);
   const [pdfKey, setPdfKey] = useState(0); // increment to force iframe refresh
 
-  const [uploading, setUploading] = useState(false);
-  const [uploadError, setUploadError] = useState(null);
-  const fileInputRef = useRef(null);
+  // No "Upload PDF" here. It posted to /api/resumes/upload, which replaces the
+  // user's BASE résumé (resume_key "default") and overwrites profile fields
+  // from it -- and no endpoint replaces a job's tailored PDF. Base-résumé
+  // upload lives in Settings and Onboarding.
 
   // Why a ref and not state: the loader below re-runs whenever
   // `job.resume_s3_url` changes, and EVERY save changes it -- the backend mints
@@ -135,27 +136,6 @@ export default function ResumeEditor({ job, onGenerateResume, generating }) {
     }
   }
 
-  async function handleUploadPdf(e) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setUploading(true);
-    setUploadError(null);
-    try {
-      const result = await apiUpload('/api/resumes/upload', file);
-      const newUrl = result?.pdf_url || result?.resume_s3_url || null;
-      if (newUrl) {
-        setPdfUrl(newUrl);
-        setPdfKey((k) => k + 1);
-      }
-    } catch (err) {
-      setUploadError(err.message);
-    } finally {
-      setUploading(false);
-      // Clear input so same file can be re-uploaded if needed
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
-  }
-
   const sectionAnalysis = (key) =>
     jdAnalysis?.sections?.[key] || null;
 
@@ -241,32 +221,11 @@ export default function ResumeEditor({ job, onGenerateResume, generating }) {
               variant="accent"
               size="md"
               loading={saving}
-              disabled={saving || uploading}
+              disabled={saving}
               onClick={handleSaveAndCompile}
             >
               {saving ? 'Compiling...' : 'Save & Compile'}
             </Button>
-
-            <div>
-              <input
-                type="file"
-                accept=".tex,.latex,application/pdf"
-                ref={fileInputRef}
-                onChange={handleUploadPdf}
-                className="hidden"
-                id="pdf-upload-input"
-              />
-              <Button
-                variant="secondary"
-                size="md"
-                loading={uploading}
-                disabled={saving || uploading}
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <Upload size={14} />
-                {uploading ? 'Uploading...' : 'Upload PDF'}
-              </Button>
-            </div>
 
             {pdfUrl && (
               <a href={pdfUrl} target="_blank" rel="noopener noreferrer" className="ml-auto">
@@ -278,9 +237,6 @@ export default function ResumeEditor({ job, onGenerateResume, generating }) {
             )}
           </div>
 
-          {uploadError && (
-            <p className="mt-2 text-xs text-error font-mono">{uploadError}</p>
-          )}
         </div>
       </div>
 

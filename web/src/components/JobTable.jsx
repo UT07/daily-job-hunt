@@ -243,18 +243,21 @@ function DeleteButton({ jobId, onDelete }) {
     }
   }
 
+  // Every button here stops propagation, not just the trash icon: this
+  // renders inside clickable cards (JobTable's mobile stack navigates on
+  // click), and an unstopped Yes/No navigated away mid-delete.
   if (confirming) {
     return (
       <div className="flex items-center gap-1">
         <button
-          onClick={handleDelete}
+          onClick={(e) => { e.stopPropagation(); handleDelete(); }}
           disabled={deleting}
           className="text-[10px] font-bold text-white bg-error border border-error px-1.5 py-0.5 hover:opacity-80 transition-opacity cursor-pointer disabled:opacity-50"
         >
           {deleting ? '...' : 'Yes'}
         </button>
         <button
-          onClick={() => setConfirming(false)}
+          onClick={(e) => { e.stopPropagation(); setConfirming(false); }}
           className="text-[10px] font-bold text-stone-500 border border-stone-300 px-1.5 py-0.5 hover:bg-stone-100 transition-colors cursor-pointer"
         >
           No
@@ -266,7 +269,7 @@ function DeleteButton({ jobId, onDelete }) {
   if (deleteError) {
     return (
       <button
-        onClick={() => { setDeleteError(null); setConfirming(true); }}
+        onClick={(e) => { e.stopPropagation(); setDeleteError(null); setConfirming(true); }}
         title={`Delete failed: ${deleteError}. Click to retry.`}
         className="inline-flex items-center justify-center text-error w-5 h-5 transition-colors cursor-pointer"
       >
