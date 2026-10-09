@@ -33,9 +33,13 @@ export default function PipelineStatus({ onComplete }) {
   const [pollError, setPollError] = useState(null);
   // User's configured search queries — fetched from /api/search-config so we
   // don't ship hardcoded keywords that have nothing to do with the user's
-  // profile. Empty array means "let the backend pick up the user's saved
-  // config server-side"; we surface a hint to the user if so.
+  // profile. A run is only possible once they have LOADED and are non-empty:
+  // app.py forwards `queries` verbatim into the Step Functions input
+  // (PipelineRunRequest's default applies only when the key is absent), so
+  // posting [] starts a run that can scrape nothing.
   const [userQueries, setUserQueries] = useState([]);
+  // 'loading' | 'loaded' | 'error'
+  const [queriesState, setQueriesState] = useState('loading');
   const pollRef = useRef(null);
 
   useEffect(() => {
@@ -60,15 +64,19 @@ export default function PipelineStatus({ onComplete }) {
       const data = await apiGet('/api/search-config');
       const queries = Array.isArray(data?.queries) ? data.queries.filter(Boolean) : [];
       setUserQueries(queries);
+      setQueriesState('loaded');
     } catch (err) {
-      // Non-fatal — backend will fall back to user's saved config when we
-      // post an empty queries array, and we'll just disable the run button
-      // with a "configure search first" hint.
+      // The run button stays disabled: without the user's queries there is
+      // nothing correct to send.
       console.warn('Failed to load search config for pipeline run:', err);
+      setQueriesState('error');
     }
   }
 
+  const canRun = !running && queriesState === 'loaded' && userQueries.length > 0;
+
   async function handleRunPipeline() {
+    if (!canRun) return;
     setRunning(true);
     setRunError(null);
     setPollError(null);
@@ -210,7 +218,7 @@ export default function PipelineStatus({ onComplete }) {
           size="sm"
           onClick={handleRunPipeline}
           loading={running}
-          disabled={running}
+          disabled={!canRun}
         >
           {running ? 'Running...' : '▶ Run Pipeline'}
         </Button>
@@ -227,7 +235,12 @@ export default function PipelineStatus({ onComplete }) {
           {pollError}
         </div>
       )}
-      {!runError && !running && userQueries.length === 0 && !loading && (
+      {!runError && !running && queriesState === 'error' && (
+        <div className="px-4 py-2 bg-yellow-light text-stone-700 text-xs">
+          Could not load your search queries, so the pipeline cannot run. Reload to try again.
+        </div>
+      )}
+      {!runError && !running && queriesState === 'loaded' && userQueries.length === 0 && (
         <div className="px-4 py-2 bg-yellow-light text-stone-700 text-xs">
           No search queries configured.{' '}
           <a href="/settings" className="font-bold underline">Set them in Settings</a>{' '}
